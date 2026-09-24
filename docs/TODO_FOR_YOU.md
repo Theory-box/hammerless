@@ -17,7 +17,8 @@ To playtest: open `demo/demo_level.blend`, turn **off** *Debug > Bot Walkthrough
 9. [ ] Anything that looks wrong, feels wrong, or gets you stuck (write down roughly where)
 
 ## Newer features to try in Blender (no rush)
-- [ ] **Texture previews:** switch the viewport to *Material Preview*. Game materials show their real textures (use *Refresh Texture Previews* in a material's box for older materials)
+- [ ] **Texture previews:** switch the viewport to *Material Preview*. Game materials show their real textures
+- [ ] **3D model previews:** press *Refresh Previews* (Advanced, or any material's box) once in your demo: survivors, weapons, items, doors, Witch and Tank become real models. New entities get them automatically
 - [ ] **Material browser:** 🔍 next to *Game Material* searches all 8,000+ L4D2 materials
 - [ ] **Props:** *Shift+A > L4D2 > Props*, then 🔍 next to *Model* to pick any of 5,500 models (the box resizes to the model)
 - [ ] **Ladder preset:** *Shift+A > L4D2 > Ladder*, put it against a wall or roof edge, climb it in-game (climb from the side the arrow points to). Not tested in-game yet

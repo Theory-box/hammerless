@@ -10,7 +10,7 @@ from mathutils import Vector
 from ..core import compile as cc
 from ..core.build import Report, build_vmf, validate
 from ..core.ir import Entity
-from ..core.entities import CATALOG, CATEGORIES, PRESET_BUILDERS, PRESETS, default_keyvalues
+from ..core.entities import CATALOG, CATEGORIES, PRESET_BUILDERS, PRESETS, default_keyvalues, preview_model
 from ..core.gamefiles import game_files
 from ..core.nav import collect_regions
 from ..core.vpk import GameContent
@@ -133,6 +133,9 @@ def preview_mesh(classname: str, scale: float, model: str = ""):
     With a model path, the box is the model's real bounds (read from the game)."""
     bounds = None
     if model:
+        full = real_model_mesh(model, scale)
+        if full is not None:
+            return full
         name = f"HL_model_{model}"
         mesh = bpy.data.meshes.get(name)
         if mesh:
@@ -146,6 +149,29 @@ def preview_mesh(classname: str, scale: float, model: str = ""):
         d = CATALOG.get(classname)
         bounds = d.preview_bounds() if d else ((-8, -8, -8), (8, 8, 8))
     return box_arrow_mesh(name, bounds, scale)
+
+
+def real_model_mesh(model: str, scale: float):
+    """The game model itself as a textured mesh, if model previews are on and it can be read."""
+    ctx = bpy.context
+    if not ctx.scene.hammerless.model_previews:
+        return None
+    root = game_root(ctx)
+    content = game_content(root)
+    if content is None:
+        return None
+    from .preview import model_mesh
+    return model_mesh(model, content, os.path.join(root, "left4dead2"), scale)
+
+
+def style_entity_object(obj) -> None:
+    """Real models draw solid and textured; placeholder boxes draw as wireframes."""
+    if obj.data is not None and obj.data.get("hl_model"):
+        obj.display_type = "TEXTURED"
+        obj.show_in_front = False
+    else:
+        obj.display_type = "WIRE"
+        obj.show_in_front = True
 
 
 def model_bounds_from_game(model: str):
@@ -180,11 +206,9 @@ def box_arrow_mesh(name, bounds, scale):
 def make_entity_object(context, classname: str, location, collection=None, rotation=(0, 0, 0),
                        keyvalues: dict | None = None, name: str | None = None):
     s = context.scene.hammerless
-    model = (keyvalues or {}).get("model") or next(
-        (k.default for k in CATALOG[classname].keys if k.key == "model"), "") if classname in CATALOG else ""
+    model = preview_model(classname, {**default_keyvalues(classname), **(keyvalues or {})})
     obj = bpy.data.objects.new(name or classname, preview_mesh(classname, s.units_per_meter, model))
-    obj.display_type = "WIRE"
-    obj.show_in_front = True
+    style_entity_object(obj)
     obj.hide_render = True
     obj.location = location
     obj.rotation_euler = rotation
@@ -626,6 +650,7 @@ class HL_OT_pick_model(bpy.types.Operator):
             kv.key, kv.value = "model", self.model
             if obj.type == "MESH" and hs.role in ("ENTITY", "AUTO"):
                 obj.data = preview_mesh(hs.classname, s.units_per_meter, self.model)
+                style_entity_object(obj)
         self.report({"INFO"}, self.model)
         return {"FINISHED"}
 
@@ -664,9 +689,9 @@ class HL_OT_pick_material(bpy.types.Operator):
 
 class HL_OT_refresh_previews(bpy.types.Operator):
     bl_idname = "hammerless.refresh_previews"
-    bl_label = "Refresh Texture Previews"
-    bl_description = ("Show the real game textures on game materials (Material Preview view). "
-                      "Materials named like a game path are linked up too")
+    bl_label = "Refresh Previews"
+    bl_description = ("Show real game textures on game materials (Material Preview view) and real "
+                      "3D models on props and items")
 
     def execute(self, context):
         done = failed = 0
@@ -680,8 +705,23 @@ class HL_OT_refresh_previews(bpy.types.Operator):
                 done += 1
             else:
                 failed += 1
+        models = 0
+        s = context.scene.hammerless
+        for obj in context.scene.objects:
+            hs = obj.hammerless
+            if obj.type != "MESH" or hs.role != "ENTITY" or not hs.classname:
+                continue
+            model = preview_model(hs.classname, {kv.key: kv.value for kv in hs.keyvalues})
+            if not model:
+                continue
+            mesh = preview_mesh(hs.classname, s.units_per_meter, model)
+            if mesh is not obj.data:
+                obj.data = mesh
+                style_entity_object(obj)
+                models += 1
         self.report({"INFO"} if not failed else {"WARNING"},
-                    f"Previewed {done} material(s)" + (f", {failed} not found in the game" if failed else ""))
+                    f"Previewed {done} material(s), {models} model(s)"
+                    + (f"; {failed} material(s) not found in the game" if failed else ""))
         return {"FINISHED"}
 
 

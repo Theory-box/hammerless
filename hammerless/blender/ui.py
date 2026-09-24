@@ -193,6 +193,7 @@ class HL_PT_advanced(_SubPanel, bpy.types.Panel):
         col.prop(s, "default_material")
         col.prop(s, "auto_seal")
         col.prop(s, "check_game_content")
+        col.prop(s, "model_previews")
         col.separator()
         col.prop(s, "game_root")
         col.prop(s, "output_dir")

@@ -96,3 +96,72 @@ def update_mapping(mat, units_per_meter: float) -> None:
     s = max(mat.hammerless.texture_scale, 0.001)
     mapping.inputs["Scale"].default_value = (units_per_meter / (w * s), units_per_meter / (h * s),
                                              units_per_meter / (w * s))
+
+
+# ---------------------------------------------------------------- 3D model previews
+
+def _model_material(material_path: str, content, game_dir):
+    """Blender material showing a model's texture through its UVs (cached)."""
+    name = f"HL_mdl_{material_path}"
+    mat = bpy.data.materials.get(name)
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    texture = base_texture(content, material_path, game_dir)
+    if texture:
+        try:
+            img, _w, _h = _image_for_texture(texture, content, game_dir)
+        except Exception:
+            img = None
+        if img is not None:
+            nt = mat.node_tree
+            bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+            tex = nt.nodes.new("ShaderNodeTexImage")
+            tex.image = img
+            tex.location = (-400, 300)
+            nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+            bsdf.inputs["Roughness"].default_value = 0.8
+            avg = img.get("hl_average")
+            if avg:
+                mat.diffuse_color = (*avg, 1.0)
+    return mat
+
+
+def model_mesh(model_path: str, content, game_dir, units_per_meter: float):
+    """Blender mesh of a game model (LOD 0, textured), cached per model. None if unreadable."""
+    from ..core.mdl import find_material, load_model
+    name = f"HL_mdl_{model_path}"
+    mesh = bpy.data.meshes.get(name)
+    if mesh is not None:
+        return mesh
+    try:
+        mm = load_model(content, model_path)
+    except Exception:
+        return None
+    if mm is None or not mm.triangles:
+        return None
+    # keep only vertices that triangles use (body groups can leave unused ones)
+    tris = np.array(mm.triangles, dtype=np.int64)
+    used, inverse = np.unique(tris, return_inverse=True)
+    tris = inverse.reshape(-1, 3)
+    verts = mm.positions[used] / units_per_meter
+    uvs = mm.uvs[used]
+
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(verts.tolist(), [], tris.tolist())
+    uv_layer = mesh.uv_layers.new(name="UVMap")
+    loop_uv = uvs[tris.ravel()]
+    uv_layer.data.foreach_set("uv", loop_uv.astype(np.float32).ravel())
+
+    slot_of: dict[int, int] = {}
+    for tex_index in sorted(set(mm.triangle_materials)):
+        tex_name = mm.materials[tex_index] if tex_index < len(mm.materials) else ""
+        path = find_material(content, mm, tex_name) if tex_name else None
+        slot_of[tex_index] = len(mesh.materials)
+        mesh.materials.append(_model_material(path, content, game_dir) if path else None)
+    mesh.polygons.foreach_set("material_index", [slot_of[t] for t in mm.triangle_materials])
+    mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))
+    mesh.update()
+    mesh["hl_model"] = model_path
+    return mesh

@@ -466,6 +466,23 @@ class TestGameContent(unittest.TestCase):
             missing = [w for w in rep.warnings if "not found" in w]
             self.assertEqual(missing, [], preset.key)
 
+    def test_models_load(self):
+        import numpy as np
+        from hammerless.core.mdl import find_material, load_model
+        from hammerless.core.entities import PREVIEW_MODELS
+        # v44 / v48 / v49 models, both VTX strip-group layouts, characters stood upright
+        for path, height in [("models/props_junk/dumpster.mdl", 53), ("models/props_doors/doormain01.mdl", 104),
+                             ("models/props_vehicles/car001a_hatchback.mdl", 56),
+                             ("models/infected/witch.mdl", 68), ("models/infected/hulk.mdl", 87)]:
+            mesh = load_model(self.content, path)
+            tris = np.array(mesh.triangles)
+            self.assertLess(tris.max(), len(mesh.positions), path)
+            p = mesh.positions[np.unique(tris)]
+            self.assertAlmostEqual(p[:, 2].max() - p[:, 2].min(), height, delta=2, msg=path)
+            self.assertTrue(all(find_material(self.content, mesh, t) for t in mesh.materials[:1]), path)
+        for cls, path in PREVIEW_MODELS.items():
+            self.assertTrue(self.content.has_model(path), (cls, path))
+
     def test_default_sky_exists(self):
         self.assertTrue(self.content.has_material("skybox/sky_day01_09_hdrbk"))
 

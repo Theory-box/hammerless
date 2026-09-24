@@ -20,9 +20,9 @@ Status: **v0.1, early.** Tested end-to-end in L4D2: compile, spawns, nav, safe r
 | Spawns, items, weapons, Witch/Tank | **Shift+A > L4D2 >** pick a category, or *Search Entities…* |
 | Safe rooms | **Shift+A > L4D2 > Start Safe Room / End Safe Room**: room, door, spawns, items, landmark and change-level volume, all wired up |
 | func_detail, triggers, player blockers | Select meshes, then use the 🔍 next to *Class* in the panel (or *Make Brush Entity*) |
-| Game textures | 🔍 next to **Game Material** searches all 8,000+ L4D2 materials. The real texture shows in Blender's Material Preview view, world-aligned at Hammer scale (*Refresh Texture Previews* updates older materials) |
+| Game textures | 🔍 next to **Game Material** searches all 8,000+ L4D2 materials. The real texture shows in Blender's Material Preview view, world-aligned at Hammer scale (*Refresh Previews* updates older materials and models) |
 | Your own textures | A material with an Image Texture in Base Color is converted automatically (to `left4dead2/materials/hammerless/<map>/`) |
-| Props & doors | **Shift+A > L4D2 > Props**: Static/Dynamic/Physics Prop and Door. 🔍 next to *Model* searches all 5,500 game models; the preview box takes the model's real size |
+| Props & doors | **Shift+A > L4D2 > Props**: Static/Dynamic/Physics Prop and Door. 🔍 next to *Model* searches all 5,500 game models. Props, items, weapons, survivor spawns and Witch/Tank spawns show as their **real textured 3D models** in Blender (*Advanced > 3D Model Previews*) |
 | Friction & footsteps | Material panel > **Surface** (104 surfaces from the game, e.g. `ice` = slippery). Works on game materials too |
 | Crescendo (hordes in waves) | **Shift+A > L4D2 > Crescendo Button**, then edit the stages on its *Crescendo Definition* (e.g. `PANIC 1, DELAY 10, PANIC 2`) |
 | Hordes, Tank ambushes, buttons | **Shift+A > L4D2 > Horde Trigger / Horde Button / Tank Ambush**. Wire your own with the **Outputs** list. See [docs/HORDE_EVENTS.md](docs/HORDE_EVENTS.md) |

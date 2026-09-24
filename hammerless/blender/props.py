@@ -245,6 +245,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                      description="Used for faces without a material")
     auto_seal: BoolProperty(name="Auto Seal (skybox shell)", default=True,
                             description="Wrap the map in a skybox box so it can never leak")
+    model_previews: BoolProperty(name="3D Model Previews", default=True,
+                                 description="Show props and items as their real game models (textured). "
+                                             "Off = simple boxes (faster in huge scenes)")
     check_game_content: BoolProperty(name="Check Materials/Models", default=True,
                                      description="Warn about materials and models missing from the game")
     last_log: StringProperty()

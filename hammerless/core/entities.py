@@ -450,3 +450,49 @@ PRESET_BUILDERS = {"START_SAFE_ROOM": start_safe_room, "END_SAFE_ROOM": end_safe
                    "TANK_AMBUSH": tank_ambush, "CRESCENDO_BUTTON": crescendo_button,
                    "ZOMBIE_SPAWN_AREA": zombie_spawn_area, "LADDER": ladder}
 PRESETS = {k: f() for k, f in PRESET_BUILDERS.items()}  # default instances (labels, tests)
+
+
+# ---------------------------------------------------------------- preview models
+# What the game shows for entities that have no "model" keyvalue. Used only for
+# previews in Blender; never written to the map.
+W = "models/w_models/weapons/"
+PREVIEW_MODELS = {
+    "info_player_start": "models/survivors/survivor_gambler.mdl",
+    "info_survivor_rescue": "models/survivors/survivor_gambler.mdl",
+    "weapon_first_aid_kit_spawn": W + "w_eq_medkit.mdl",
+    "weapon_pain_pills_spawn": W + "w_eq_painpills.mdl",
+    "weapon_adrenaline_spawn": W + "w_eq_adrenaline.mdl",
+    "weapon_defibrillator_spawn": W + "w_eq_defibrillator.mdl",
+    "weapon_molotov_spawn": W + "w_eq_molotov.mdl",
+    "weapon_pipe_bomb_spawn": W + "w_eq_pipebomb.mdl",
+    "weapon_vomitjar_spawn": W + "w_eq_bile_flask.mdl",
+    "weapon_spawn": W + "w_rifle_ak47.mdl",
+    "weapon_melee_spawn": "models/weapons/melee/w_crowbar.mdl",
+    "weapon_pistol_spawn": W + "w_pistol_b.mdl",
+    "weapon_pistol_magnum_spawn": W + "w_desert_eagle.mdl",
+    "weapon_smg_spawn": W + "w_smg_uzi.mdl",
+    "weapon_pumpshotgun_spawn": W + "w_shotgun.mdl",
+    "weapon_autoshotgun_spawn": W + "w_autoshot_m4super.mdl",
+    "weapon_rifle_spawn": W + "w_rifle_m16a2.mdl",
+    "weapon_hunting_rifle_spawn": W + "w_sniper_mini14.mdl",
+    "commentary_zombie_spawner": "models/infected/common_male01.mdl",
+}
+SURVIVOR_BY_ORDER = {"1": "survivor_gambler", "2": "survivor_producer", "3": "survivor_coach", "4": "survivor_mechanic"}
+INFECTED_BY_POPULATION = {
+    "tank": "hulk", "witch": "witch", "witch_bride": "witch_bride", "hunter": "hunter", "boomer": "boomer",
+    "smoker": "smoker", "charger": "charger", "jockey": "jockey", "spitter": "spitter",
+}
+
+
+def preview_model(classname: str, keyvalues: dict[str, str]) -> str:
+    """Model to show in Blender for an entity ('' = use a box)."""
+    if keyvalues.get("model", "").endswith(".mdl"):
+        return keyvalues["model"]
+    if classname == "info_survivor_position":
+        return f"models/survivors/{SURVIVOR_BY_ORDER.get(keyvalues.get('Order', '1'), 'survivor_gambler')}.mdl"
+    if classname == "info_zombie_spawn":
+        pop = keyvalues.get("population", "default").lower()
+        return f"models/infected/{INFECTED_BY_POPULATION.get(pop, 'common_male01')}.mdl"
+    d = CATALOG.get(classname)
+    default = next((k.default for k in d.keys if k.key == "model"), "") if d else ""
+    return default or PREVIEW_MODELS.get(classname, "")
