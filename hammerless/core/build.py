@@ -7,7 +7,7 @@ from . import geometry as g
 from .displacement import build_patches
 from .entities import default_keyvalues
 from .entities import PSEUDO_ENTITIES
-from .gamefiles import collect_crescendos, script_path
+from .gamefiles import collect_crescendos, director_input_script, script_path
 from .ir import Entity, MapIR, Output, Vec3
 from .nav import collect_regions
 from .vmf import Block, VMFWriter
@@ -70,11 +70,9 @@ def validate(ir: MapIR, content=None) -> Report:
     r.errors += collect_crescendos(ir)
     for e in ir.entities:
         for o in e.outputs:
-            if o.input.lower() == "scriptedpanicevent":
-                name = o.parameter.split("/")[-1].removeprefix("crescendo_")
-                if name not in ir.crescendos:
-                    r.warnings.append(f"'{e.source or e.classname}' starts crescendo '{o.parameter}', "
-                                      "but no Crescendo Definition has that name.")
+            if o.input.lower() == "scriptedpanicevent" and resolve_crescendo(ir, o.parameter) is None:
+                r.warnings.append(f"'{e.source or e.classname}' starts crescendo '{o.parameter}', "
+                                  "but no Crescendo Definition has that name.")
     if "info_changelevel" in classes and not any(x.bits & 128 for x in regions)             and "info_survivor_position" in classes:
         r.info.append("No PLAYER_START nav region. Survivors may not spawn in the start safe room. "
                       "The Start Safe Room preset includes one.")
@@ -86,6 +84,8 @@ def validate(ir: MapIR, content=None) -> Report:
     if content is not None:
         mats = {f.material for b in ir.brushes for f in b.faces} | {t.material for t in ir.terrains}
         for m in sorted(mats):
+            if m.startswith("hammerless/"):
+                continue  # written by Hammerless into the game folder at export
             if not content.has_material(m):
                 r.warnings.append(f"Material '{m}' not found in game files (will show as purple/black checkers).")
         for e in ir.entities:
@@ -99,6 +99,16 @@ def validate(ir: MapIR, content=None) -> Report:
         if min(mins) < -16000 or max(maxs) > 16000:
             r.errors.append("Map extends beyond ±16000 units. Check your scale setting.")
     return r
+
+
+def resolve_crescendo(ir: MapIR, parameter: str) -> str | None:
+    """Crescendo name an output refers to. Accepts 'crescendo_1' and the v0.1 form
+    'hammerless/crescendo_crescendo_1'."""
+    name = parameter.split("/")[-1].removeprefix(f"hammerless_{ir.settings.name}_")  # already resolved
+    for candidate in (name, name.removeprefix("crescendo_")):
+        if candidate in ir.crescendos:
+            return candidate
+    return None
 
 
 def _all_points(ir: MapIR) -> list[Vec3]:
@@ -160,6 +170,13 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
         report.info.append("Sealed the map in an automatic skybox shell.")
 
     entities = [e for e in ir.entities if e.classname not in PSEUDO_ENTITIES]
+    # point crescendo outputs at the map-specific script file
+    for e in entities:
+        for o in e.outputs:
+            if o.input.lower() == "scriptedpanicevent":
+                name = resolve_crescendo(ir, o.parameter)
+                if name:
+                    o.parameter = director_input_script(s.name, name)
     classes = {e.classname for e in entities}
     if s.auto_director and "info_director" not in classes:
         entities.append(Entity("info_director", (0, 0, 0), (0, 0, 0), default_keyvalues("info_director")))
@@ -181,9 +198,17 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
             "targetname": "hammerless_debug", "vscripts": script_path(f"debug_{s.name}"),
             "thinkfunction": "HL_Think"}))
         report.info.append("Debug log on: Director events and stats go to the console (HAMMERLESS_DEBUG).")
+    if s.autotest:
+        from .autotest import plan_route
+        route, _ = plan_route(ir)   # also names unnamed buttons so the script can press them
+        entities.append(Entity("logic_script", (0, 0, 40), (0, 0, 0), {
+            "targetname": "hammerless_autotest", "vscripts": script_path(f"autotest_{s.name}"),
+            "thinkfunction": "HLT_Think"}))
+        report.info.append(f"Bot Walkthrough Test on: {len(route)} waypoint(s). Watch for HAMMERLESS_AUTOTEST "
+                           "in the console.")
     if s.director_enabled:
         entities.append(Entity("logic_auto", (0, 0, 48), (0, 0, 0), {"spawnflags": "1"}, outputs=[
-            Output("OnMapSpawn", "director", "BeginScript", script_path(f"director_{s.name}"), 1.0, 1)]))
+            Output("OnMapSpawn", "director", "BeginScript", director_input_script(s.name, "director"), 1.0, 1)]))
     if "info_player_start" not in classes:
         first = next((e for e in entities if e.classname == "info_survivor_position"), None)
         origin = first.origin if first else (0.0, 0.0, 0.0)

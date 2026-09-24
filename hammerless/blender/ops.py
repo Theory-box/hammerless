@@ -127,14 +127,41 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
 
 # ---------------------------------------------------------------- preview meshes
 
-def preview_mesh(classname: str, scale: float):
-    """Shared wireframe box + forward arrow showing an entity's size and facing."""
-    name = f"HL_preview_{classname}"
-    mesh = bpy.data.meshes.get(name)
-    if mesh:
-        return mesh
-    d = CATALOG.get(classname)
-    (x0, y0, z0), (x1, y1, z1) = d.preview_bounds() if d else ((-8, -8, -8), (8, 8, 8))
+def preview_mesh(classname: str, scale: float, model: str = ""):
+    """Shared wireframe box + forward arrow showing an entity's size and facing.
+    With a model path, the box is the model's real bounds (read from the game)."""
+    bounds = None
+    if model:
+        name = f"HL_model_{model}"
+        mesh = bpy.data.meshes.get(name)
+        if mesh:
+            return mesh
+        bounds = model_bounds_from_game(model)
+    if bounds is None:
+        name = f"HL_preview_{classname}"
+        mesh = bpy.data.meshes.get(name)
+        if mesh:
+            return mesh
+        d = CATALOG.get(classname)
+        bounds = d.preview_bounds() if d else ((-8, -8, -8), (8, 8, 8))
+    return box_arrow_mesh(name, bounds, scale)
+
+
+def model_bounds_from_game(model: str):
+    from ..core.vpk import model_bounds
+    root = game_root(bpy.context)
+    content = game_content(root)
+    data = content.read(model) if content else None
+    if not data:
+        return None
+    try:
+        return model_bounds(data)
+    except Exception:
+        return None
+
+
+def box_arrow_mesh(name, bounds, scale):
+    (x0, y0, z0), (x1, y1, z1) = bounds
     x0, y0, z0, x1, y1, z1 = (c / scale for c in (x0, y0, z0, x1, y1, z1))
     verts = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
              (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
@@ -152,7 +179,9 @@ def preview_mesh(classname: str, scale: float):
 def make_entity_object(context, classname: str, location, collection=None, rotation=(0, 0, 0),
                        keyvalues: dict | None = None, name: str | None = None):
     s = context.scene.hammerless
-    obj = bpy.data.objects.new(name or classname, preview_mesh(classname, s.units_per_meter))
+    model = (keyvalues or {}).get("model") or next(
+        (k.default for k in CATALOG[classname].keys if k.key == "model"), "") if classname in CATALOG else ""
+    obj = bpy.data.objects.new(name or classname, preview_mesh(classname, s.units_per_meter, model))
     obj.display_type = "WIRE"
     obj.show_in_front = True
     obj.hide_render = True
@@ -203,7 +232,19 @@ def game_material(path: str):
                   "tools/toolsskybox": (0.4, 0.7, 1.0, 1), "tools/toolsclip": (0.6, 0.2, 0.8, 0.5),
                   "tools/toolsplayerclip": (0.8, 0.2, 0.8, 0.5)}
         mat.diffuse_color = colors.get(path, (0.55, 0.55, 0.55, 1))
+        if not path.startswith("tools/"):
+            refresh_material_preview(mat)
     return mat
+
+
+def refresh_material_preview(mat) -> bool:
+    from .preview import apply_preview
+    ctx = bpy.context
+    root = game_root(ctx)
+    content = game_content(root)
+    if content is None:
+        return False
+    return apply_preview(mat, content, os.path.join(root, "left4dead2"), ctx.scene.hammerless.units_per_meter)
 
 
 # ---------------------------------------------------------------- operators
@@ -523,6 +564,116 @@ class HL_OT_pick_sky(bpy.types.Operator):
         return {"FINISHED"}
 
 
+_MODEL_ITEMS: list[tuple[str, str, str]] = []
+_MATERIAL_ITEMS: list[tuple[str, str, str]] = []
+
+
+def _model_items(self, context):
+    if not _MODEL_ITEMS:
+        content = game_content(game_root(context))
+        if content:
+            for f in sorted(f for f in content.files if f.endswith(".mdl")):
+                _MODEL_ITEMS.append((f, f[len("models/"):], f))
+    return _MODEL_ITEMS or [("", "(Left 4 Dead 2 not found)", "")]
+
+
+def _material_items(self, context):
+    if not _MATERIAL_ITEMS:
+        content = game_content(game_root(context))
+        if content:
+            for m in content.materials():
+                _MATERIAL_ITEMS.append((m, m, m))
+    return _MATERIAL_ITEMS or [("", "(Left 4 Dead 2 not found)", "")]
+
+
+class HL_OT_pick_model(bpy.types.Operator):
+    bl_idname = "hammerless.pick_model"
+    bl_label = "Pick Game Model"
+    bl_description = "Search all Left 4 Dead 2 models and use one for this entity"
+    bl_property = "model"
+    bl_options = {"REGISTER", "UNDO"}
+
+    model: EnumProperty(name="Model", items=_model_items)
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        if not self.model:
+            return {"CANCELLED"}
+        s = context.scene.hammerless
+        for obj in context.selected_objects or [context.object]:
+            hs = obj.hammerless
+            if not hs.classname:
+                continue
+            kv = next((x for x in hs.keyvalues if x.key == "model"), None) or hs.keyvalues.add()
+            kv.key, kv.value = "model", self.model
+            if obj.type == "MESH" and hs.role in ("ENTITY", "AUTO"):
+                obj.data = preview_mesh(hs.classname, s.units_per_meter, self.model)
+        self.report({"INFO"}, self.model)
+        return {"FINISHED"}
+
+
+class HL_OT_pick_material(bpy.types.Operator):
+    bl_idname = "hammerless.pick_material"
+    bl_label = "Pick Game Material"
+    bl_description = "Search all Left 4 Dead 2 materials and use one on the active material slot"
+    bl_property = "material"
+    bl_options = {"REGISTER", "UNDO"}
+
+    material: EnumProperty(name="Material", items=_material_items)
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None and context.object.type == "MESH"
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        if not self.material:
+            return {"CANCELLED"}
+        mat = game_material(self.material)
+        for obj in context.selected_objects or [context.object]:
+            if obj.type != "MESH":
+                continue
+            if not obj.material_slots:
+                obj.data.materials.append(mat)
+            else:
+                obj.material_slots[obj.active_material_index].material = mat
+        self.report({"INFO"}, self.material)
+        return {"FINISHED"}
+
+
+class HL_OT_refresh_previews(bpy.types.Operator):
+    bl_idname = "hammerless.refresh_previews"
+    bl_label = "Refresh Texture Previews"
+    bl_description = ("Show the real game textures on game materials (Material Preview view). "
+                      "Materials named like a game path are linked up too")
+
+    def execute(self, context):
+        done = failed = 0
+        for mat in bpy.data.materials:
+            hs = mat.hammerless
+            if not hs.source_material and "/" in mat.name and not mat.name.startswith("hammerless/"):
+                hs.source_material = mat.name.lower()
+            if not hs.source_material or hs.source_material.startswith("tools/"):
+                continue
+            if refresh_material_preview(mat):
+                done += 1
+            else:
+                failed += 1
+        self.report({"INFO"} if not failed else {"WARNING"},
+                    f"Previewed {done} material(s)" + (f", {failed} not found in the game" if failed else ""))
+        return {"FINISHED"}
+
+
 class HL_OT_load_game_data(bpy.types.Operator):
     bl_idname = "hammerless.load_game_data"
     bl_label = "Load Game Data"
@@ -599,7 +750,7 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (HL_OT_pick_sky, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
+CLASSES = (HL_OT_pick_sky, HL_OT_pick_model, HL_OT_pick_material, HL_OT_refresh_previews, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
            HL_OT_export_vmf, HL_OT_build, HL_OT_launch, HL_OT_load_leak,
            HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues)
 

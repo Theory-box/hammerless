@@ -110,6 +110,42 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               bounds=((-4.0, 0.0, -53.0), (4.0, 56.0, 53.0)),
               model="models/props_doors/checkpoint_door_01.mdl"),
 
+    # --- props (game models; pick one with the model browser)
+    EntityDef("prop_static", "Static Prop", "Props",
+              "A game model that never moves (cars, dumpsters, fences, rubble). Cheapest kind of prop.",
+              (KeyDef("model", "models/props_junk/dumpster.mdl", "Model"),
+               KeyDef("solid", "6", "Collision", (("6", "Use model's collision"), ("0", "Not solid"), ("2", "Bounding box"))),
+               KeyDef("skin", "0", "Skin"),
+               KeyDef("disableshadows", "0", "Disable shadows", (("0", "No"), ("1", "Yes"))),
+               KeyDef("fademaxdist", "0", "Fade out distance (0 = never)")),
+              model="models/props_junk/dumpster.mdl"),
+    EntityDef("prop_dynamic", "Dynamic Prop", "Props",
+              "A game model that can animate, be hidden/shown or moved by outputs.",
+              (KeyDef("model", "models/props_junk/dumpster.mdl", "Model"),
+               KeyDef("solid", "6", "Collision", (("6", "Use model's collision"), ("0", "Not solid"), ("2", "Bounding box"))),
+               KeyDef("targetname", "", "Name"),
+               KeyDef("DefaultAnim", "", "Default animation"),
+               KeyDef("skin", "0", "Skin")),
+              model="models/props_junk/dumpster.mdl"),
+    EntityDef("prop_physics", "Physics Prop", "Props",
+              "A game model that falls, can be pushed and shot around (barrels, crates, cans).",
+              (KeyDef("model", "models/props_c17/oildrum001.mdl", "Model"),
+               KeyDef("skin", "0", "Skin"),
+               KeyDef("spawnflags", "0", "Spawn flags", (("0", "Normal"), ("8", "Start asleep (motion disabled until hit)")))),
+              model="models/props_c17/oildrum001.mdl"),
+    EntityDef("prop_door_rotating", "Door", "Props",
+              "An ordinary door that opens with Use. Infected can break it.",
+              (KeyDef("model", "models/props_doors/doormain01.mdl", "Model"),
+               KeyDef("spawnflags", "8192", "Spawn flags", (("8192", "Use closes (normal)"), ("10240", "Starts locked"))),
+               KeyDef("distance", "90", "Open angle"),
+               KeyDef("speed", "200", "Speed"),
+               KeyDef("returndelay", "-1", "Auto-close delay (-1 = never)"),
+               KeyDef("hardware", "1", "Handle", (("0", "None"), ("1", "Lever"), ("2", "Push bar"))),
+               KeyDef("opendir", "0", "Open direction", (("0", "Both"), ("1", "Forward only"), ("2", "Backward only"))),
+               KeyDef("targetname", "", "Name")),
+              bounds=((-2.0, 0.0, -54.0), (2.0, 52.0, 54.0)),
+              model="models/props_doors/doormain01.mdl"),
+
     # --- infected
     EntityDef("info_zombie_spawn", "Infected Spawn", "Infected",
               "A spot the Director may use when it spawns this type of infected. It is not a "
@@ -128,7 +164,7 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
     # --- logic
     EntityDef(CRESCENDO, "Crescendo Definition", "Logic",
               "Defines a crescendo (a horde in stages, e.g. 'hold out until the lift arrives'). "
-              "Start it with an output: director > ScriptedPanicEvent > hammerless/crescendo_<name>. "
+              "Start it with an output: target director, input ScriptedPanicEvent, parameter = this name. "
               "Stages: PANIC n (n hordes), DELAY s (wait s seconds), TANK n.",
               (KeyDef("name", "crescendo_1", "Name"),
                KeyDef("stages", "PANIC 1, DELAY 10, PANIC 1, DELAY 10, PANIC 2", "Stages")),
@@ -215,7 +251,7 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
                KeyDef("pitch", "-50", "Sun pitch")), floor_origin=False),
 ]}
 
-CATEGORIES = ["Players", "Director", "Infected", "Items", "Weapons", "Logic", "Brush Entities", "Lights"]
+CATEGORIES = ["Players", "Director", "Props", "Infected", "Items", "Weapons", "Logic", "Brush Entities", "Lights"]
 
 
 def default_keyvalues(classname: str) -> dict[str, str]:
@@ -369,7 +405,7 @@ def tank_ambush() -> Preset:
 def crescendo_button(name: str = "crescendo_1") -> Preset:
     btn = g.box_brush((-4, -16, 40), (4, 16, 72), "dev/dev_hazzardstripe01a", "crescendo_button")
     ent = Entity("func_button", None, (0, 0, 0), {"spawnflags": "1025", "wait": "-1"}, [btn],
-                 outputs=[Output("OnPressed", "director", "ScriptedPanicEvent", f"hammerless/crescendo_{name}", times=1)])
+                 outputs=[Output("OnPressed", "director", "ScriptedPanicEvent", name, times=1)])
     definition = Entity(CRESCENDO, (0, 0, 96), (0, 0, 0), {
         "name": name, "stages": "PANIC 1, DELAY 10, PANIC 1, DELAY 10, PANIC 2"})
     return Preset("CRESCENDO_BUTTON", "Crescendo Button",

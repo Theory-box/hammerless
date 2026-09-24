@@ -348,7 +348,7 @@ def scene_settings_to_ir(s) -> MapSettings:
         dir_max_specials=s.dir_max_specials, dir_special_interval=s.dir_special_interval,
         dir_tank_limit=s.dir_tank_limit, dir_witch_limit=s.dir_witch_limit,
         dir_no_mobs=s.dir_no_mobs, dir_no_wanderers=s.dir_no_wanderers,
-        debug_log=s.debug_log, debug_interval=s.debug_interval,
+        debug_log=s.debug_log, debug_interval=s.debug_interval, autotest=s.autotest,
     )
 
 

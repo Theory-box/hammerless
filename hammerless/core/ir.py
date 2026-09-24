@@ -114,6 +114,7 @@ class MapSettings:
     # debug
     debug_log: bool = False
     debug_interval: float = 5.0
+    autotest: bool = False
 
 
 @dataclass

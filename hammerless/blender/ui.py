@@ -177,6 +177,7 @@ class HL_PT_debug(_SubPanel, bpy.types.Panel):
         sub = col.column()
         sub.enabled = s.debug_log
         sub.prop(s, "debug_interval")
+        col.prop(s, "autotest")
         col.label(text="Log goes to left4dead2/console.log", icon="TEXT")
 
 
@@ -195,6 +196,7 @@ class HL_PT_advanced(_SubPanel, bpy.types.Panel):
         col.prop(s, "game_root")
         col.prop(s, "output_dir")
         col.operator("hammerless.load_game_data", icon="FILE_REFRESH")
+        col.operator("hammerless.refresh_previews", icon="SHADING_TEXTURE")
 
 
 class HL_PT_object(bpy.types.Panel):
@@ -228,6 +230,11 @@ class HL_PT_object(bpy.types.Panel):
                 box = col.box()
                 for line in _wrap(d.description, 44):
                     box.label(text=line)
+            if any(kv.key == "model" for kv in hs.keyvalues):
+                row = col.row(align=True)
+                mkv = next(kv for kv in hs.keyvalues if kv.key == "model")
+                row.prop(mkv, "value", text="Model")
+                row.operator("hammerless.pick_model", text="", icon="VIEWZOOM")
             col.label(text="Keyvalues")
             row = col.row()
             row.template_list("HL_UL_keyvalues", "", hs, "keyvalues", hs, "keyvalues_index", rows=4)
@@ -264,12 +271,15 @@ class HL_PT_object(bpy.types.Panel):
         if mat is not None and eff in ("BRUSH", "BRUSH_ENTITY", "TERRAIN"):
             box = col.box()
             box.label(text=f"Material: {mat.name}", icon="MATERIAL")
-            box.prop(mat.hammerless, "source_material")
+            row = box.row(align=True)
+            row.prop(mat.hammerless, "source_material")
+            row.operator("hammerless.pick_material", text="", icon="VIEWZOOM")
             if not mat.hammerless.source_material:
                 box.label(text="Empty = convert image texture", icon="IMAGE_DATA")
             box.prop(mat.hammerless, "surface")
             box.prop(mat.hammerless, "texture_scale")
             box.prop(mat.hammerless, "lightmap_scale")
+            box.operator("hammerless.refresh_previews", icon="SHADING_TEXTURE")
 
 
 class HL_PT_collection(bpy.types.Panel):

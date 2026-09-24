@@ -18,6 +18,13 @@ def script_path(name: str) -> str:
     return f"hammerless/{name}"
 
 
+# The Director's script inputs (BeginScript, ScriptedPanicEvent) only look in the top
+# scripts/vscripts folder - a sub-folder path silently does nothing (verified in-game).
+# These scripts get map-specific names there instead.
+def director_input_script(map_name: str, name: str) -> str:
+    return f"hammerless_{map_name}_{name}"
+
+
 # ---------------------------------------------------------------- debug log
 
 DEBUG_SCRIPT = r'''// Hammerless debug log: prints Director events and stats to the console.
@@ -94,12 +101,7 @@ def director_script(ir: MapIR) -> str:
     lines = ["// Hammerless map-wide Director settings. Started by a logic_auto at map spawn",
              "// (director > BeginScript). Values come from the Director panel in Blender.",
              "DirectorOptions <-", "{"]
-    for key, attr in DIRECTOR_OPTION_KEYS:
-        lines.append(f"    {key} = {getattr(s, attr)}")
-    if s.dir_no_mobs:
-        lines.append("    NoMobSpawns = true")
-    if s.dir_no_wanderers:
-        lines.append("    WanderingZombieDensityModifier = 0")
+    lines += director_option_lines(ir)
     lines += ["}", 'printl("HAMMERLESS_DIRECTOR map options active");']
     return "\n".join(lines) + "\n"
 
@@ -109,15 +111,32 @@ def director_script(ir: MapIR) -> str:
 STAGE_TYPES = {"PANIC": 0, "TANK": 1, "DELAY": 2}
 
 
-def crescendo_script(name: str, stages: list[tuple[str, float]]) -> str:
+def director_option_lines(ir: MapIR) -> list[str]:
+    s = ir.settings
+    if not s.director_enabled:
+        return []
+    lines = [f"    {key} = {getattr(s, attr)}" for key, attr in DIRECTOR_OPTION_KEYS]
+    if s.dir_no_mobs:
+        lines.append("    NoMobSpawns = true")
+    if s.dir_no_wanderers:
+        lines.append("    WanderingZombieDensityModifier = 0")
+    return lines
+
+
+def crescendo_script(name: str, stages: list[tuple[str, float]], extra_options: list[str] | None = None) -> str:
     """ScriptedPanicEvent script: stages like [("PANIC", 1), ("DELAY", 10), ("PANIC", 2)].
     PANIC value = number of hordes, DELAY value = seconds, TANK value = number of tanks."""
-    lines = [f"// Hammerless crescendo '{name}'. Started by: director > ScriptedPanicEvent {script_path('crescendo_' + name)}",
+    lines = [f"// Hammerless crescendo '{name}'. Started by an output: director > ScriptedPanicEvent > {name}",
              "PANIC <- 0", "TANK <- 1", "DELAY <- 2", "", "DirectorOptions <-", "{",
              f"    A_CustomFinale_StageCount = {len(stages)}"]
     for i, (kind, value) in enumerate(stages, start=1):
         lines.append(f"    A_CustomFinale{i} = {kind}")
         lines.append(f"    A_CustomFinaleValue{i} = {int(value) if float(value).is_integer() else value}")
+    if extra_options:
+        # a scripted event's options replace the map's while it runs, so repeat the
+        # map-wide Director settings here (e.g. the common infected limit)
+        lines.append("    // map-wide Director settings")
+        lines += extra_options
     lines += ["}", f'printl("HAMMERLESS_CRESCENDO {name} started");']
     return "\n".join(lines) + "\n"
 
@@ -170,7 +189,12 @@ def game_files(ir: MapIR) -> dict[str, str]:
     if s.debug_log:
         files[f"{SCRIPT_DIR}/debug_{s.name}.nut"] = DEBUG_SCRIPT.replace("%INTERVAL%", f"{s.debug_interval:.1f}")
     if s.director_enabled:
-        files[f"{SCRIPT_DIR}/director_{s.name}.nut"] = director_script(ir)
+        files[f"scripts/vscripts/{director_input_script(s.name, 'director')}.nut"] = director_script(ir)
+    if s.autotest:
+        from .autotest import autotest_script, plan_route, start_door
+        route, _ = plan_route(ir)
+        files[f"{SCRIPT_DIR}/autotest_{s.name}.nut"] = autotest_script(route, s.name, start_door(ir))
     for name, stages in ir.crescendos.items():
-        files[f"{SCRIPT_DIR}/crescendo_{name}.nut"] = crescendo_script(name, stages)
+        files[f"scripts/vscripts/{director_input_script(s.name, name)}.nut"] = crescendo_script(
+            name, stages, director_option_lines(ir))
     return files

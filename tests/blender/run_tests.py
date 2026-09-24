@@ -214,7 +214,7 @@ def test_scene_settings_reach_map():
     assert entities(blocks, "logic_script")
     lm = {sd.get("lightmapscale") for sol in world_solids(blocks)[:1] for sd in sol.blocks("side")}
     assert lm == {"32"}, lm
-    nut = os.path.join(FAKE_GAME, "left4dead2", "scripts", "vscripts", "hammerless", "director_test_map.nut")
+    nut = os.path.join(FAKE_GAME, "left4dead2", "scripts", "vscripts", "hammerless_test_map_director.nut")
     assert "CommonLimit = 12" in open(nut).read()
 
 
@@ -227,8 +227,8 @@ def test_crescendo_names_unique():
     blocks, log = export()
     assert blocks, log
     params = sorted(b.blocks("connections")[0].get("OnPressed") for b in entities(blocks, "func_button"))
-    assert params == ["director,ScriptedPanicEvent,hammerless/crescendo_crescendo_1,0,1",
-                      "director,ScriptedPanicEvent,hammerless/crescendo_crescendo_2,0,1"], params
+    assert params == ["director,ScriptedPanicEvent,hammerless_test_map_crescendo_1,0,1",
+                      "director,ScriptedPanicEvent,hammerless_test_map_crescendo_2,0,1"], params
     assert "crescendo" not in log.lower() or "WARNING" not in log, log
 
 
@@ -257,6 +257,19 @@ def test_custom_compile_options():
     s.window_width, s.window_height = 1280, 720
     lo = launch_options(s)
     assert (lo.width, lo.height) == (1280, 720)
+
+
+def test_props_and_doors():
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    for cls in ("prop_static", "prop_physics", "prop_dynamic", "prop_door_rotating"):
+        bpy.ops.hammerless.add_entity(classname=cls)
+    blocks, log = export()
+    assert blocks, log
+    assert entities(blocks, "prop_static")[0].get("model") == "models/props_junk/dumpster.mdl"
+    assert entities(blocks, "prop_physics")[0].get("model") == "models/props_c17/oildrum001.mdl"
+    door = entities(blocks, "prop_door_rotating")[0]
+    assert door.get("spawnflags") == "8192" and door.get("model") == "models/props_doors/doormain01.mdl"
 
 
 def test_brush_entity_func_detail():

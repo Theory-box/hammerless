@@ -113,12 +113,20 @@ def _monitor_items(self, context):
     return _MONITOR_ITEMS
 
 
+def _on_texture_scale(self, context):
+    from .preview import update_mapping
+    for mat in bpy.data.materials:
+        if mat.hammerless == self:
+            update_mapping(mat, context.scene.hammerless.units_per_meter)
+            break
+
+
 class HL_MaterialSettings(bpy.types.PropertyGroup):
     source_material: StringProperty(
         name="Game Material",
         description="L4D2 material path, e.g. concrete/concrete_floor_01. Leave empty to "
                     "convert this material's image texture into a custom material")
-    texture_scale: FloatProperty(name="Texture Scale", default=0.25, min=0.01, max=16.0,
+    texture_scale: FloatProperty(name="Texture Scale", default=0.25, min=0.01, max=16.0, update=_on_texture_scale,
                                  description="Hammer texture scale (0.25 = Hammer default; bigger = larger texture)")
     surface: EnumProperty(name="Surface", items=_surface_items,
                           description="Friction, footstep and impact sounds for faces with this material")
@@ -214,6 +222,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         description="Build a script into the map that logs Director events and stats to the game "
                     "console (lines starting HAMMERLESS_DEBUG). No cheats needed")
     debug_interval: FloatProperty(name="Stats Every (s)", default=5.0, min=1.0, max=60.0)
+    autotest: BoolProperty(
+        name="Bot Walkthrough Test", default=False,
+        description="Build a test into the map: the survivor bots walk through every horde trigger, "
+                    "press every button and finish in the end safe room (survivors can't die meanwhile). "
+                    "Results in the console (HAMMERLESS_AUTOTEST). Turn off for real play")
 
     # --- advanced / paths
     game_root: StringProperty(name="L4D2 Folder", subtype="DIR_PATH",

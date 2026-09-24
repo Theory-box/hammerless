@@ -58,6 +58,10 @@ grid_wall.data.materials.append(mat)
 scene.cursor.location = (12, 0, 0)
 bpy.ops.hammerless.add_entity(classname="weapon_first_aid_kit_spawn")
 
+s.debug_log = True
+s.window_monitor = "0"
+s.window_width, s.window_height = 1856, 1000
+
 out = os.path.join(ROOT, "demo", "demo_level2.blend")
 s.output_dir = "//hammerless_build"
 bpy.ops.wm.save_as_mainfile(filepath=out)

@@ -287,7 +287,10 @@ def _run_console_script(tools: Tools, steps: list[tuple[str, list[str]]], log_st
             send_commands(tools, commands)
 
 
-LOADED = "receiving uncompressed update from server"   # end of every map load
+# Printed in the status block at the end of every map load, both on a fresh game
+# start and when loading into a running game ("Receiving uncompressed update" is
+# only printed in the second case).
+LOADED = "server number:"
 
 
 def nav_steps(map_name: str, mark: bool = True) -> list[tuple[str, list[str]]]:

@@ -1,6 +1,8 @@
 """Builds demo/demo_level.blend: a small playable test level.
 
 Run:  blender --background --factory-startup --python tests/fixtures/demo_level.py
+NOTE: demo/demo_level.blend has been hand-edited since; this script writes
+demo/demo_level_generated.blend unless run with  -- --force.
 
 Layout (Blender meters, +X = forward): start safe room -> hilly field with a few
 buildings, items, a Witch and a Tank spawn -> end safe room.
@@ -73,7 +75,7 @@ t.scale = (72, 30, 1)
 bpy.ops.object.transform_apply(scale=True)
 for v in t.data.vertices:
     x, y = v.co.x, v.co.y                          # local: x in [-36, 36]
-    hills = min(1.0, max(0.0, (36 - abs(x)) / 6))  # flat within a few metres of each safe room
+    hills = min(1.0, max(0.0, (36 - abs(x) - 8) / 10))  # flat for 8 m at each safe room, then a gentle rise
     hills *= min(1.0, max(0.0, (15 - abs(y)) / 3)) # and along the boundary walls
     v.co.z = -0.05 + hills * (0.8 * math.sin(y * 0.35) + 0.6 * math.cos(x * 0.2 + y * 0.1) + 0.6)
 t.data.materials.append(mat("nature/blend_grass_grass_01"))
@@ -123,13 +125,36 @@ bpy.data.objects["Horde Trigger trigger"].scale = (1, 6, 1)
 # ...or when someone presses the button on the shed's west wall
 scene.cursor.location = (20, 6, 0)
 bpy.ops.hammerless.add_preset(preset="HORDE_BUTTON")
+# A crescendo (hordes in waves) from the button on the truck's west side
+scene.cursor.location = (39, 4, 0)
+bpy.ops.hammerless.add_preset(preset="CRESCENDO_BUTTON")
+
+# --- an icy slab near the start (friction test): game texture + "ice" surface
+ice = box("Ice slab", (4, 4, 0.1), (6, -8, 0.05), world, "concrete/concrete_floor_01")
+ice_mat = bpy.data.materials.new("Ice (concrete look)")
+ice_mat.hammerless.source_material = "concrete/concrete_floor_01"
+ice_mat.hammerless.surface = "ice"
+ice.data.materials[0] = ice_mat
 
 # --- sun
 bpy.ops.object.light_add(type="SUN", rotation=(math.radians(40), math.radians(10), math.radians(30)))
 bpy.context.object.data.energy = 4
 
+# --- test-friendly settings
+s.debug_log = True
+s.autotest = True               # bots walk the level (turn off to play it yourself)
+s.director_enabled = True       # custom Director settings (verified via the debug log)
+s.dir_common_limit = 20
+s.window_monitor = "0"          # leftmost monitor
+s.window_width, s.window_height = 1856, 1000
+
 out = os.path.join(ROOT, "demo", "demo_level.blend")
 os.makedirs(os.path.dirname(out), exist_ok=True)
+# The demo has since been hand-edited in Blender (terrain fixed at the safe room exit):
+# never overwrite it unless explicitly asked. Otherwise write a separate copy.
+if os.path.exists(out) and "--force" not in sys.argv:
+    out = os.path.join(ROOT, "demo", "demo_level_generated.blend")
+    print("demo_level.blend exists (hand-edited); writing", out, "instead. Pass -- --force to overwrite.")
 s.output_dir = "//hammerless_build"
 bpy.ops.wm.save_as_mainfile(filepath=out)
 print("Saved", out)

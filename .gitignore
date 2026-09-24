@@ -3,3 +3,5 @@ __pycache__/
 *.blend1
 demo/hammerless_build/
 dist/
+*.blend[0-9]*
+demo/demo_level_generated.blend

@@ -295,10 +295,10 @@ class TestSettingsAndScripts(unittest.TestCase):
         self.assertEqual(ents["env_fog_controller"].get("fogenable"), "1")
         self.assertEqual(ents["logic_script"].get("vscripts"), "hammerless/debug_m")
         self.assertEqual(ents["logic_auto"].blocks("connections")[0].get("OnMapSpawn"),
-                         "director,BeginScript,hammerless/director_m,1,1")
+                         "director,BeginScript,hammerless_m_director,1,1")
         from hammerless.core.gamefiles import game_files
         files = game_files(ir)
-        self.assertIn("CommonLimit = 7", files["scripts/vscripts/hammerless/director_m.nut"])
+        self.assertIn("CommonLimit = 7", files["scripts/vscripts/hammerless_m_director.nut"])
         self.assertIn("RegisterScriptGameEventListener", files["scripts/vscripts/hammerless/debug_m.nut"])
 
     def test_crescendo_preset(self):
@@ -312,10 +312,25 @@ class TestSettingsAndScripts(unittest.TestCase):
         self.assertTrue(rep.ok, rep.errors)
         self.assertEqual(rep.warnings, [])
         self.assertNotIn("hammerless_crescendo", text)
-        self.assertIn("director,ScriptedPanicEvent,hammerless/crescendo_c7,0,1", text)
-        nut = game_files(ir)["scripts/vscripts/hammerless/crescendo_c7.nut"]
+        self.assertIn("director,ScriptedPanicEvent,hammerless_m_c7,0,1", text)
+        nut = game_files(ir)["scripts/vscripts/hammerless_m_c7.nut"]
+        # building again (outputs already rewritten) stays clean
+        text2, rep2 = build_vmf(ir)
+        self.assertEqual(rep2.warnings, [])
         self.assertIn("A_CustomFinale_StageCount = 5", nut)
         self.assertIn("A_CustomFinaleValue2 = 10", nut)
+
+    def test_crescendo_keeps_map_director_limits(self):
+        from hammerless.core.entities import crescendo_button
+        from hammerless.core.gamefiles import game_files
+        ir = box_room_ir()
+        ir.settings.name = "m"
+        ir.settings.director_enabled = True
+        ir.settings.dir_common_limit = 20
+        for part in crescendo_button("c1").parts:
+            ir.entities.append(part.entity)
+        build_vmf(ir)
+        self.assertIn("CommonLimit = 20", game_files(ir)["scripts/vscripts/hammerless_m_c1.nut"])
 
     def test_crescendo_unknown_name_warns(self):
         from hammerless.core.ir import Output
@@ -340,6 +355,79 @@ class TestSettingsAndScripts(unittest.TestCase):
         vmt = patch_vmt("concrete/concrete_floor_01", "ice")
         self.assertIn('"include" "materials/concrete/concrete_floor_01.vmt"', vmt)
         self.assertIn('"$surfaceprop" "ice"', vmt)
+
+
+class TestAutotest(unittest.TestCase):
+    def test_route(self):
+        from hammerless.core.autotest import autotest_script, plan_route
+        from hammerless.core.entities import end_safe_room, horde_button, horde_trigger, start_safe_room
+
+        def place(preset, dx):
+            for part in preset.parts:
+                if part.entity:
+                    e = part.entity
+                    if e.origin is not None:
+                        e.origin = (e.origin[0] + dx, e.origin[1], e.origin[2])
+                    for b in e.brushes:
+                        for f in b.faces:
+                            f.verts = [(x + dx, y, z) for x, y, z in f.verts]
+                    ir.entities.append(e)
+        ir = MapIR()
+        place(start_safe_room("a"), 0)
+        place(horde_button(), 2000)
+        place(horde_trigger(), 800)
+        place(end_safe_room("next", "b"), 4000)
+        route, _ = plan_route(ir)
+        self.assertEqual([w.kind for w in route], ["TRIGGER", "BUTTON", "END"])
+        self.assertEqual(route[-1].target, "checkpoint_exit")
+        self.assertTrue(route[1].target)  # button got a name to press
+        nut = autotest_script(route, "m")
+        self.assertIn('kind = "BUTTON"', nut)
+        ir.settings.autotest = True
+        text, rep = build_vmf(ir)
+        self.assertTrue(rep.ok, rep.errors)
+        self.assertIn(route[1].target, text)   # the name is written onto the button
+        self.assertIn("hammerless/autotest_", text)
+
+
+class TestTexturePreviews(unittest.TestCase):
+    def test_vtf_roundtrip(self):
+        import tempfile
+        import numpy as np
+        from hammerless.core.textures import write_vtf
+        from hammerless.core.vtf_read import read_vtf
+        rgba = np.zeros((64, 128, 4), np.uint8)
+        rgba[..., 0] = np.arange(128)[None, :] * 2       # red ramp left->right
+        rgba[..., 1] = np.arange(64)[:, None] * 4        # green ramp top->bottom
+        rgba[..., 3] = 255
+        path = os.path.join(tempfile.mkdtemp(), "t.vtf")
+        write_vtf(path, rgba)
+        with open(path, "rb") as f:
+            w, h, img = read_vtf(f.read(), 512)
+        self.assertEqual((w, h, img.shape), (128, 64, (64, 128, 4)))
+        self.assertTrue(np.array_equal(img, rgba))
+        with open(path, "rb") as f:
+            _, _, small = read_vtf(f.read(), 32)
+        self.assertEqual(small.shape, (16, 32, 4))
+
+    def test_dxt1_decode(self):
+        import numpy as np
+        from hammerless.core.vtf_read import _decode_dxt
+        # one 4x4 block: colour0 = pure red (0xF800), colour1 = pure blue (0x001F), all indices 0 -> red
+        block = bytes([0x00, 0xF8, 0x1F, 0x00, 0, 0, 0, 0])
+        img = _decode_dxt(block, 13, 4, 4)
+        self.assertTrue(np.all(img[..., 0] == 255) and np.all(img[..., 2] == 0))
+
+    def test_patch_material_base_texture(self):
+        import tempfile
+        from hammerless.core.gamematerials import base_texture
+        from hammerless.core.surfaces import write_patch_material
+        game = tempfile.mkdtemp()
+        os.makedirs(os.path.join(game, "materials", "test"))
+        with open(os.path.join(game, "materials", "test", "floor.vmt"), "w") as f:
+            f.write('"LightmappedGeneric"\n{\n\t"$basetexture" "test/floor_tex"\n}\n')
+        write_patch_material(game, "hammerless/m/patch_floor_ice", "test/floor", "ice")
+        self.assertEqual(base_texture(None, "hammerless/m/patch_floor_ice", game), "test/floor_tex")
 
 
 class TestLogs(unittest.TestCase):
