@@ -176,7 +176,7 @@ Everything below is implemented, tested (43 unit, 19 headless Blender tests) and
 | Browsers: materials (8k), models (5.5k), skies | ✅ |
 | Testing: Debug Log, Bot Walkthrough Test (no cheats), in-game probes in tests/ingame | ✅ |
 
-Known issues / next candidates: **one-load Build & Play** (auto-detect when nav needs regenerating; self-mark nav at map spawn to drop a reload); finales and gauntlets; preview auto-update when Order/population changes; items from outside the end safe room carried to the next map; Blender light brightness tuning; brush tools (clip/hollow); FGD-driven entity panels (all L4D2 entities).
+Known issues / next candidates: **one-load Build & Play** (auto-detect when nav needs regenerating; self-mark nav at map spawn to drop a reload); **non-convex shapes**: per-object Split into brushes / Custom model (studiomdl, auto collision) / Convex hull, with Auto; finales and gauntlets; preview auto-update when Order/population changes; items from outside the end safe room carried to the next map; Blender light brightness tuning; brush tools (clip/hollow); FGD-driven entity panels (all L4D2 entities).
 
 **Deviation from §3:** srctools still isn't bundled; VMF/VPK/VTF (read+write)/MDL are small in-house modules, so nothing is downloaded.
 
