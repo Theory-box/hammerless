@@ -1,0 +1,18 @@
+schema_version = "1.0.0"
+
+id = "hammerless"
+version = "0.1.0"
+name = "Hammerless"
+tagline = "Build and play Left 4 Dead 2 maps straight from Blender"
+maintainer = "Hammerless contributors"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Write map, texture and compile files; read game archives"
+
+[build]
+paths_exclude_pattern = ["__pycache__/", "*.pyc", ".*"]

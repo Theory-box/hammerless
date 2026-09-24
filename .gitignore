@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.blend1
+demo/hammerless_build/
+dist/

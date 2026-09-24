@@ -1,0 +1,372 @@
+"""Curated L4D2 entity catalog and multi-entity presets (safe rooms).
+
+This hand-written catalog covers the entities needed for a playable map. It will
+later be replaced/extended by the full FGD database from srctools, but the
+preset logic here stays.
+
+Values marked VERIFY haven't been confirmed in-game yet.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from . import geometry as g
+from .ir import Brush, Entity, Output, Vec3
+
+
+@dataclass(frozen=True)
+class KeyDef:
+    key: str
+    default: str
+    label: str
+    choices: tuple[tuple[str, str], ...] = ()  # (value, label)
+
+
+@dataclass(frozen=True)
+class EntityDef:
+    classname: str
+    label: str
+    category: str
+    description: str
+    keys: tuple[KeyDef, ...] = ()
+    size: Vec3 = (16.0, 16.0, 16.0)   # preview box in Hammer units (x, y, z)
+    floor_origin: bool = True          # origin sits on the floor (box drawn upward)
+    brush: bool = False                # brush entity (needs mesh)
+    model: str = ""                    # preview model path
+    bounds: tuple[Vec3, Vec3] | None = None  # explicit preview box, overrides size
+
+    def preview_bounds(self) -> tuple[Vec3, Vec3]:
+        if self.bounds:
+            return self.bounds
+        x, y, z = self.size
+        if self.floor_origin:
+            return (-x / 2, -y / 2, 0.0), (x / 2, y / 2, z)
+        return (-x / 2, -y / 2, -z / 2), (x / 2, y / 2, z / 2)
+
+
+NAV_REGION = "hammerless_nav_region"  # pseudo-entity, see nav.py
+
+ITEM_FLAGS = KeyDef("spawnflags", "2", "Spawn flags", (
+    ("0", "None"), ("1", "Enable physics"), ("2", "Must exist"), ("8", "Infinite items"),
+    ("10", "Must exist + infinite"),
+))
+
+POPULATIONS = tuple((p, p.title()) for p in (
+    "default", "tank", "witch", "witch_bride", "church", "infected", "boomer", "hunter",
+    "smoker", "charger", "jockey", "spitter",
+))
+
+
+def _item(cls, label, count="1", size=(16, 16, 8)):
+    return EntityDef(cls, label, "Items",
+                     f"Spawns {label.lower()}.",
+                     (KeyDef("count", count, "Count"), ITEM_FLAGS), size=size)
+
+
+def _weapon(cls, label, count="5"):
+    return EntityDef(cls, label, "Weapons", f"Spawns {label.lower()}.",
+                     (KeyDef("count", count, "Count"), ITEM_FLAGS), size=(32, 8, 8))
+
+
+CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
+    # --- players
+    EntityDef("info_player_start", "Player Start", "Players",
+              "Fallback player spawn. Every map needs one.",
+              size=(32, 32, 72)),
+    EntityDef("info_survivor_position", "Survivor Spawn", "Players",
+              "Where a survivor spawns at map start. Place 4 (Order 1-4).",
+              (KeyDef("Order", "1", "Order", tuple((str(i), str(i)) for i in range(1, 5))),),
+              size=(32, 32, 72)),
+    EntityDef("info_survivor_rescue", "Rescue Closet", "Players",
+              "Where dead survivors can be rescued from.",
+              (KeyDef("rescueEyePos", "0 0 64", "Eye position"),), size=(32, 32, 72)),
+
+    # --- director / flow
+    EntityDef("info_director", "Director", "Director",
+              "The AI Director. Every L4D2 map needs exactly one (auto-added if missing).",
+              (KeyDef("targetname", "director", "Name"),)),
+    EntityDef("info_landmark", "Landmark", "Director",
+              "Pairs the end safe room of one map with the start safe room of the next.",
+              (KeyDef("targetname", "landmark_1", "Name"),)),
+    EntityDef("info_changelevel", "Change Level Volume", "Director",
+              "Brush volume covering the END safe room; survivors inside when the door "
+              "closes go to the next map.",
+              (KeyDef("map", "", "Next map"), KeyDef("landmark", "landmark_1", "Landmark name")),
+              brush=True),
+    EntityDef("prop_door_rotating_checkpoint", "Safe Room Door", "Director",
+              "Safe room door. Start door spawns closed; end door spawns open.",
+              (KeyDef("model", "models/props_doors/checkpoint_door_01.mdl", "Model"),
+               KeyDef("spawnpos", "0", "Spawn position", (("0", "Closed"), ("1", "Open"))),
+               KeyDef("speed", "200", "Speed"),
+               KeyDef("distance", "90", "Open angle"),
+               KeyDef("returndelay", "-1", "Auto-close delay"),
+               KeyDef("hardware", "1", "Hardware"),
+               KeyDef("spawnflags", "8192", "Spawn flags", (
+                   ("8192", "Use closes (normal)"), ("0", "Can't be closed with Use"))),
+               KeyDef("opendir", "0", "Open direction",
+                      (("0", "Both"), ("1", "Forward only"), ("2", "Backward only")))),
+              bounds=((-4.0, 0.0, -53.0), (4.0, 56.0, 53.0)),
+              model="models/props_doors/checkpoint_door_01.mdl"),
+
+    # --- infected
+    EntityDef("info_zombie_spawn", "Infected Spawn", "Infected",
+              "A spot the Director may use when it spawns this type of infected. It is not a "
+              "guaranteed spawn: for 'always spawn here' use a Zombie Spawner. Common infected "
+              "spawn by themselves in places survivors can't see.",
+              (KeyDef("population", "default", "Population", POPULATIONS),
+               KeyDef("offer_tank", "0", "Offer tank to player", (("0", "No"), ("1", "Yes")))),
+              size=(32, 32, 72)),
+
+    EntityDef("commentary_zombie_spawner", "Zombie Spawner", "Infected",
+              "Spawns infected on command, right here, even in plain sight. Send it the input "
+              "SpawnZombie with a parameter: common, tank, witch, hunter, boomer, smoker, charger, "
+              "jockey or spitter.",
+              (KeyDef("targetname", "zombie_spawner", "Name"),), size=(32, 32, 72)),
+
+    # --- logic
+    EntityDef("logic_auto", "Map Start", "Logic",
+              "Fires OnMapSpawn when the map loads. Use it to set things up at the start, e.g. "
+              "tell a Zombie Spawner to SpawnZombie witch.",
+              size=(16, 16, 16), floor_origin=False),
+    EntityDef("logic_relay", "Relay", "Logic",
+              "Passes a signal on: send it Trigger, it fires OnTrigger. Handy for one event that "
+              "should set off several things.",
+              (KeyDef("targetname", "relay", "Name"),), size=(16, 16, 16), floor_origin=False),
+
+    # --- items
+    _item("weapon_first_aid_kit_spawn", "First Aid Kit"),
+    _item("weapon_pain_pills_spawn", "Pain Pills"),
+    _item("weapon_adrenaline_spawn", "Adrenaline"),
+    _item("weapon_defibrillator_spawn", "Defibrillator"),
+    _item("weapon_molotov_spawn", "Molotov"),
+    _item("weapon_pipe_bomb_spawn", "Pipe Bomb"),
+    _item("weapon_vomitjar_spawn", "Bile Jar"),
+    EntityDef("weapon_ammo_spawn", "Ammo Pile", "Items", "Infinite ammo pile.",
+              (KeyDef("model", "models/props/terror/ammo_stack.mdl", "Model"),),
+              size=(26, 34, 8), model="models/props/terror/ammo_stack.mdl"),
+
+    # --- weapons
+    EntityDef("weapon_spawn", "Weapon (random)", "Weapons",
+              "Spawns a weapon from a category.",
+              (KeyDef("weapon_selection", "any_primary", "Weapon", tuple((w, w) for w in (
+                  "any", "any_primary", "tier1_any", "tier2_any", "any_smg", "any_shotgun",
+                  "any_rifle", "any_sniper_rifle", "tier1_shotgun", "tier2_shotgun",
+                  "any_pistol"))),
+               KeyDef("count", "5", "Count"), ITEM_FLAGS), size=(32, 8, 8)),
+    EntityDef("weapon_melee_spawn", "Melee Weapon", "Weapons", "Spawns a melee weapon.",
+              (KeyDef("melee_weapon", "any", "Weapon"), KeyDef("count", "1", "Count"), ITEM_FLAGS),
+              size=(32, 8, 8)),
+    _weapon("weapon_pistol_spawn", "Pistol"),
+    _weapon("weapon_pistol_magnum_spawn", "Magnum"),
+    _weapon("weapon_smg_spawn", "SMG"),
+    _weapon("weapon_pumpshotgun_spawn", "Pump Shotgun"),
+    _weapon("weapon_autoshotgun_spawn", "Auto Shotgun"),
+    _weapon("weapon_rifle_spawn", "Assault Rifle"),
+    _weapon("weapon_hunting_rifle_spawn", "Hunting Rifle"),
+
+    # --- brush entities (the mesh supplies the shape)
+    EntityDef("func_detail", "Detail Brush", "Brush Entities",
+              "Brush that doesn't cut visibility. Use for small/complex world pieces.",
+              brush=True),
+    EntityDef("func_playerinfected_clip", "Infected Clip", "Brush Entities",
+              "Blocks player-controlled infected.", brush=True),
+    EntityDef("env_player_blocker", "Player Blocker", "Brush Entities",
+              "Invisible wall for survivors/infected.",
+              (KeyDef("BlockType", "0", "Blocks", (
+                  ("0", "Everyone"), ("1", "Survivors"), ("2", "Player infected"),
+                  ("3", "All players and PZ"))),), brush=True),
+    EntityDef("trigger_once", "Trigger (once)", "Brush Entities",
+              "Fires its outputs once when touched.", brush=True),
+    EntityDef("trigger_multiple", "Trigger (multiple)", "Brush Entities",
+              "Fires its outputs each time it's touched.",
+              (KeyDef("wait", "1", "Delay before reset"),), brush=True),
+
+    EntityDef("func_button", "Button", "Brush Entities",
+              "Something players press with Use. Wire its OnPressed output to start events "
+              "(e.g. director > ForcePanicEvent for a horde).",
+              (KeyDef("spawnflags", "1025", "Spawn flags", (
+                  ("1025", "Use activates, doesn't move"), ("1", "Doesn't move (touch/damage only)"),
+                  ("1281", "Touch activates"))),
+               KeyDef("wait", "-1", "Reset delay (-1 = press once)"),
+               KeyDef("targetname", "", "Name")), brush=True),
+
+    # --- nav (not written to the map; used to mark the nav mesh after nav_generate)
+    EntityDef(NAV_REGION, "Nav Attribute Region", "Brush Entities",
+              "Marks the nav mesh inside this volume after nav generation. Start safe rooms need "
+              "PLAYER_START CHECKPOINT. Change-level volumes are marked CHECKPOINT automatically.",
+              (KeyDef("attributes", "PLAYER_START CHECKPOINT", "Attributes"),), brush=True),
+
+    # --- lights (basic; full lighting comes later)
+    EntityDef("light", "Point Light", "Lights", "Omni light.",
+              (KeyDef("_light", "255 240 220 300", "Color + brightness"),), floor_origin=False),
+    EntityDef("light_environment", "Sun", "Lights",
+              "Sun + sky ambient light. Auto-added if the map has no lights.",
+              (KeyDef("_light", "255 245 225 400", "Sun color + brightness"),
+               KeyDef("_ambient", "140 160 190 80", "Ambient color + brightness"),
+               KeyDef("pitch", "-50", "Sun pitch")), floor_origin=False),
+]}
+
+CATEGORIES = ["Players", "Director", "Infected", "Items", "Weapons", "Logic", "Brush Entities", "Lights"]
+
+
+def default_keyvalues(classname: str) -> dict[str, str]:
+    d = CATALOG.get(classname)
+    return {k.key: k.default for k in d.keys} if d else {}
+
+
+# ---------------------------------------------------------------- presets
+
+@dataclass
+class PresetPart:
+    """A piece of a preset, positioned relative to the preset origin."""
+    name: str
+    brush: Brush | None = None          # world brush (mins/maxs box)
+    entity: Entity | None = None        # point or brush entity
+
+
+@dataclass
+class Preset:
+    key: str
+    label: str
+    description: str
+    parts: list[PresetPart] = field(default_factory=list)
+
+
+# Safe room interior (Hammer units). The doorway sits in the +X wall.
+ROOM_X, ROOM_Y, ROOM_Z = 320.0, 256.0, 128.0
+WALL = 16.0
+DOOR_W, DOOR_H = 56.0, 104.0
+WALL_MATERIAL = "dev/dev_measuregeneric01b"
+FLOOR_MATERIAL = "dev/dev_measuregeneric01b"
+
+
+def _room_shell(material_walls: str, material_floor: str) -> list[PresetPart]:
+    """Hollow box room, interior from (0,0,0) to (ROOM_X, ROOM_Y, ROOM_Z), with a
+    doorway centred in the +X wall."""
+    x, y, z, w = ROOM_X, ROOM_Y, ROOM_Z, WALL
+    parts = [
+        ("floor", (-w, -w, -w), (x + w, y + w, 0), material_floor),
+        ("ceiling", (-w, -w, z), (x + w, y + w, z + w), material_walls),
+        ("wall_-x", (-w, 0, 0), (0, y, z), material_walls),
+        ("wall_-y", (-w, -w, 0), (x + w, 0, z), material_walls),
+        ("wall_+y", (-w, y, 0), (x + w, y + w, z), material_walls),
+    ]
+    d0 = (y - DOOR_W) / 2
+    d1 = d0 + DOOR_W
+    parts += [
+        ("wall_+x_a", (x, 0, 0), (x + w, d0, z), material_walls),
+        ("wall_+x_b", (x, d1, 0), (x + w, y, z), material_walls),
+        ("wall_+x_top", (x, d0, DOOR_H), (x + w, d1, z), material_walls),
+    ]
+    return [PresetPart(n, brush=g.box_brush(a, b, m, n)) for n, a, b, m in parts]
+
+
+def _ceiling_light() -> PresetPart:
+    return PresetPart("light", entity=Entity(
+        "light", (ROOM_X / 2, ROOM_Y / 2, ROOM_Z - 12), (0, 0, 0), {"_light": "255 225 180 120"}))
+
+
+def _door(end: bool) -> PresetPart:
+    kv = default_keyvalues("prop_door_rotating_checkpoint")
+    kv["model"] = "models/props_doors/checkpoint_door_02.mdl" if end else "models/props_doors/checkpoint_door_01.mdl"
+    kv["spawnpos"] = "1" if end else "0"   # VERIFY: end door starts open
+    kv["targetname"] = "checkpoint_exit" if end else "checkpoint_entrance"
+    # Door model origin is at the hinge, extends along +Y, and is centred vertically.
+    origin = (ROOM_X + WALL / 2, (ROOM_Y - DOOR_W) / 2, 53.0)
+    return PresetPart("door", entity=Entity("prop_door_rotating_checkpoint", origin, (0, 0, 0), kv))
+
+
+def start_safe_room(landmark: str = "landmark_1") -> Preset:
+    parts = _room_shell(WALL_MATERIAL, FLOOR_MATERIAL)
+    parts.append(_door(end=False))
+    parts.append(_ceiling_light())
+    # Same name and same spot as the end room's landmark, so survivors arriving from
+    # the previous map land in the matching position (both rooms share one layout).
+    parts.append(PresetPart("landmark", entity=Entity(
+        "info_landmark", (ROOM_X / 2, ROOM_Y / 2, 32.0), (0, 0, 0), {"targetname": landmark})))
+    region = g.box_brush((0, 0, 0), (ROOM_X, ROOM_Y, ROOM_Z), "tools/toolstrigger", "nav_start")
+    parts.append(PresetPart("nav_region", entity=Entity(
+        NAV_REGION, None, (0, 0, 0), {"attributes": "PLAYER_START CHECKPOINT"}, [region])))
+    for i in range(4):
+        parts.append(PresetPart(f"survivor_{i + 1}", entity=Entity(
+            "info_survivor_position", (64.0 + 48 * i, ROOM_Y / 2, 1.0), (0, 0, 0), {"Order": str(i + 1)})))
+    parts.append(PresetPart("player_start", entity=Entity(
+        "info_player_start", (64.0, ROOM_Y / 2 + 48, 1.0), (0, 0, 0), {})))
+    parts.append(PresetPart("ammo", entity=Entity(
+        "weapon_ammo_spawn", (40.0, 40.0, 1.0), (0, 0, 0), default_keyvalues("weapon_ammo_spawn"))))
+    for i, cls in enumerate(("weapon_smg_spawn", "weapon_pumpshotgun_spawn")):
+        parts.append(PresetPart(cls, entity=Entity(
+            cls, (100.0 + 60 * i, 24.0, 1.0), (0, 90, 0), default_keyvalues(cls))))
+    parts.append(PresetPart("pistol", entity=Entity(
+        "weapon_pistol_spawn", (220.0, 24.0, 1.0), (0, 90, 0), default_keyvalues("weapon_pistol_spawn"))))
+    parts.append(PresetPart("melee", entity=Entity(
+        "weapon_melee_spawn", (260.0, 24.0, 1.0), (0, 90, 0), default_keyvalues("weapon_melee_spawn"))))
+    return Preset("START_SAFE_ROOM", "Start Safe Room",
+                  "Room + closed checkpoint door + 4 survivor spawns + starting weapons/ammo.", parts)
+
+
+def end_safe_room(next_map: str = "", landmark: str = "landmark_1") -> Preset:
+    parts = _room_shell(WALL_MATERIAL, FLOOR_MATERIAL)
+    parts.append(_door(end=True))
+    parts.append(_ceiling_light())
+    for i in range(4):
+        parts.append(PresetPart(f"medkit_{i + 1}", entity=Entity(
+            "weapon_first_aid_kit_spawn", (40.0 + 24 * i, 24.0, 1.0), (0, 0, 0),
+            default_keyvalues("weapon_first_aid_kit_spawn"))))
+    parts.append(PresetPart("ammo", entity=Entity(
+        "weapon_ammo_spawn", (40.0, ROOM_Y - 40, 1.0), (0, 0, 0), default_keyvalues("weapon_ammo_spawn"))))
+    parts.append(PresetPart("landmark", entity=Entity(
+        "info_landmark", (ROOM_X / 2, ROOM_Y / 2, 32.0), (0, 0, 0), {"targetname": landmark})))
+    vol = g.box_brush((0, 0, 0), (ROOM_X, ROOM_Y, ROOM_Z), "tools/toolstrigger", "changelevel")
+    parts.append(PresetPart("changelevel", entity=Entity(
+        "info_changelevel", None, (0, 0, 0), {"map": next_map, "landmark": landmark}, [vol])))
+    return Preset("END_SAFE_ROOM", "End Safe Room",
+                  "Room + open checkpoint door + medkits/ammo + landmark + change-level volume.", parts)
+
+
+# ---------------------------------------------------------------- horde / event presets
+# All centred on the 3D cursor. They talk to the AI Director, which Hammerless always
+# names "director" (auto-added info_director).
+
+def horde_trigger() -> Preset:
+    vol = g.box_brush((-128, -128, 0), (128, 128, 128), "tools/toolstrigger", "horde_trigger")
+    ent = Entity("trigger_once", None, (0, 0, 0), {"spawnflags": "1"}, [vol],
+                 outputs=[Output("OnTrigger", "director", "ForcePanicEvent", times=1)])
+    return Preset("HORDE_TRIGGER", "Horde Trigger",
+                  "Invisible volume: the first survivor to walk in starts a horde (panic event).",
+                  [PresetPart("trigger", entity=ent)])
+
+
+def horde_button() -> Preset:
+    btn = g.box_brush((-4, -16, 40), (4, 16, 72), "dev/dev_hazzardstripe01a", "horde_button")
+    ent = Entity("func_button", None, (0, 0, 0), {"spawnflags": "1025", "wait": "-1"}, [btn],
+                 outputs=[Output("OnPressed", "director", "ForcePanicEvent", times=1)])
+    return Preset("HORDE_BUTTON", "Horde Button",
+                  "A button (hazard stripes) on a wall: pressing it starts a horde. Like a car alarm "
+                  "or the lift buttons in the campaigns.", [PresetPart("button", entity=ent)])
+
+
+def tank_ambush() -> Preset:
+    spawner = Entity("commentary_zombie_spawner", (0, 0, 0), (0, 0, 0), {"targetname": "tank_ambush_spawner"})
+    vol = g.box_brush((-640, -128, 0), (-384, 128, 128), "tools/toolstrigger", "tank_ambush_trigger")
+    trig = Entity("trigger_once", None, (0, 0, 0), {"spawnflags": "1"}, [vol],
+                  outputs=[Output("OnTrigger", "tank_ambush_spawner", "SpawnZombie", "tank", times=1)])
+    return Preset("TANK_AMBUSH", "Tank Ambush",
+                  "A Tank spawns at the cursor when a survivor walks into the trigger 8 m behind it "
+                  "(move the pieces apart as you like).",
+                  [PresetPart("spawner", entity=spawner), PresetPart("trigger", entity=trig)])
+
+
+def zombie_spawn_area() -> Preset:
+    vol = g.box_brush((-512, -512, -64), (512, 512, 256), "tools/toolstrigger", "zombie_spawn_area")
+    ent = Entity(NAV_REGION, None, (0, 0, 0), {"attributes": "OBSCURED"}, [vol])
+    return Preset("ZOMBIE_SPAWN_AREA", "Zombie Spawn Area",
+                  "Marks the ground inside as hidden (OBSCURED) so the Director may spawn common "
+                  "infected there even if survivors can see it. Needed in open areas like fields.",
+                  [PresetPart("nav_region", entity=ent)])
+
+
+PRESET_BUILDERS = {"START_SAFE_ROOM": start_safe_room, "END_SAFE_ROOM": end_safe_room,
+                   "HORDE_TRIGGER": horde_trigger, "HORDE_BUTTON": horde_button,
+                   "TANK_AMBUSH": tank_ambush, "ZOMBIE_SPAWN_AREA": zombie_spawn_area}
+PRESETS = {k: f() for k, f in PRESET_BUILDERS.items()}  # default instances (labels, tests)

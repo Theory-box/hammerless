@@ -1,0 +1,96 @@
+# Zombies & Horde Events: How They Work
+
+## 1. How the AI Director spawns infected
+
+Left 4 Dead 2 has no "place 20 zombies here" button. The **AI Director** decides what spawns, when, and where, based on the survivors' progress and stress. It spawns:
+
+| What | When |
+|---|---|
+| **Wanderers** | A scattering of common infected placed around the map at start and as you move |
+| **Mobs** | Groups of commons that rush the survivors every so often |
+| **Panic events / hordes** | A big rush you start on purpose (alarm, button, trigger) |
+| **Specials** (Hunter, Smoker, Boomer, Charger, Jockey, Spitter) | Every so often, near the survivors |
+| **Tank / Witch** | Now and then per map, or where you force them |
+
+### Rule 1: commons only spawn where survivors CAN'T see
+
+This is the rule that matters most for your level design. If you get **"Couldn't find a common Spawn position"** in the console, every nearby spot is visible. Valve's maps are full of corners, alleys, buildings, fences, hills and bushes, partly so the Director has hidden spots.
+
+Two ways to give it room:
+- **Design with cover:** walls, buildings you can walk behind, hills, alleys. This is the best option.
+- **Zombie Spawn Area** preset (*Shift+A > L4D2 > Zombie Spawn Area*). This marks the nav mesh inside the box as `OBSCURED`, meaning "treat this as hidden". Use it for open fields, tall grass, fog.
+
+### Rule 2: the Director needs the nav mesh and the flow
+
+The nav mesh is the map of walkable areas. The **flow** is the path from the start safe room to the end safe room; the Director measures survivors' progress along it. Hammerless handles both when you tick **Generate Nav Mesh** and press Build & Play: it generates the nav, marks the safe rooms, saves, and reloads. Regenerate after changing geometry.
+
+## 2. Inputs & outputs: how events are wired
+
+Hammer's event system is **"when X happens, tell Y to do Z"**:
+
+```
+ [trigger_once]  --OnTrigger-->  [director]   : ForcePanicEvent
+   (entity X)      (output)      (target Y)      (input Z)
+```
+
+In Blender: select an entity, and the **Outputs** list is in the Hammerless panel under the keyvalues. Each output has:
+
+| Field | Meaning | Example |
+|---|---|---|
+| Output | The event on *this* entity | `OnTrigger`, `OnPressed`, `OnMapSpawn` |
+| Target | The **name** (targetname) of who to tell | `director`, `tank_ambush_spawner` |
+| Input | What they should do | `ForcePanicEvent`, `SpawnZombie`, `Open` |
+| Parameter | Extra value for the input | `tank` (for SpawnZombie) |
+| Delay | Seconds to wait | `2.5` |
+| Only Once | Fire just the first time | ✔ |
+
+The Director is always named **`director`** (Hammerless adds it automatically). If you target a name that doesn't exist, **Check for Problems** warns you.
+
+## 3. Recipes (all verified in-game unless marked)
+
+### A horde when survivors reach a spot
+*Shift+A > L4D2 > Horde Trigger.* This adds an invisible box. The first survivor to walk in fires `OnTrigger > director > ForcePanicEvent`. Scale the box to cover the whole path so nobody can walk around it.
+✅ Tested: 33 commons arrived within 8 seconds.
+
+### A horde when someone presses a button
+*Shift+A > L4D2 > Horde Button.* This adds a hazard-striped button that fires `OnPressed > director > ForcePanicEvent`. Put it on a wall. It works like the campaigns' lift buttons and radios.
+✅ Tested: 33 commons.
+
+To make your own button: select any small convex mesh, then *Make Brush Entity > Button*, then add an output.
+
+### A Tank ambush
+*Shift+A > L4D2 > Tank Ambush.* This adds a **Zombie Spawner** (where the Tank appears) and a trigger 8 m away. Walking into the trigger fires `OnTrigger > tank_ambush_spawner > SpawnZombie (parameter: tank)`. Move the two pieces wherever you like.
+⚠ Builds and wires correctly (tested in code), not yet tested in-game.
+
+### Spawn anything, anywhere, even in plain sight
+A **Zombie Spawner** (*Shift+A > L4D2 > Infected > Zombie Spawner*) spawns on command, ignoring the visibility rule. Send it `SpawnZombie` with a parameter of `common`, `tank`, `witch`, `hunter`, `boomer`, `smoker`, `charger`, `jockey` or `spitter`. Add several outputs to one trigger for a scripted ambush, for example three `SpawnZombie common` plus one `SpawnZombie hunter` with a 2-second delay.
+
+### A Witch that is always there
+Add a **Zombie Spawner** named `witch_spot` where she should sit, plus a **Map Start** entity (*Logic > Map Start*) with the output `OnMapSpawn > witch_spot > SpawnZombie (witch)`.
+
+### One event, many reactions
+A **Relay** (*Logic > Relay*) passes a signal on. Point several things at it, and give it several outputs. For example: the button triggers the relay, and the relay starts the horde, opens a door and spawns a Tank 20 s later.
+
+## 4. Coming later (so you know the words)
+
+| Term | What it is |
+|---|---|
+| **Crescendo event** | A scripted horde in stages ("hold out until the lift arrives") run by a Director script (`ScriptedPanicEvent`) |
+| **Gauntlet** | Endless horde while survivors run a stretch |
+| **Finale** | `trigger_finale` plus a rescue vehicle; waves of hordes and Tanks |
+| **Director options** | Per-map tuning: how many commons, mob size, special frequency, etc. |
+
+## 5. Testing tips
+
+In-game console (enable it in Options > Keyboard > Allow Developer Console, then press `~`):
+
+```
+sv_cheats 1                 // needed for the commands below
+director_force_panic_event  // start a horde now
+z_spawn_old tank auto       // spawn a Tank somewhere hidden
+z_spawn_old witch           // spawn a Witch where you're aiming
+nb_delete_all infected      // clear all infected
+god 1                       // survivors can't die
+```
+
+**Build & Play always turns cheats off first**, which resets every cheat setting to default. That's on purpose: settings like `z_common_limit 0` or `nb_stop 1` persist until the game restarts and silently stop zombies from spawning. That happened during testing.
