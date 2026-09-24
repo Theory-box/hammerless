@@ -159,22 +159,26 @@ Each phase ends with its tests passing and a fixture that plays in-game.
 | **5. Terrain & decals** | Heightfield → displacements (alpha blend from vertex paint), infodecal, info_overlay | `terrain` + `decals` fixtures correct in-game |
 | **6. Polish** | Leak visualiser, nav auto-gen, env_cubemap auto-place + buildcubemaps, compile presets, game asset browser, instances, cordon | `mini_campaign` plays start to finish |
 
-### Status (2026-09-23)
+### Status (end of 2026-09-23)
 
-The user's priorities are terrain, brushes (convex meshes, no brush tools yet), entities (spawns, safe rooms, infected, items) and materials early. Lighting, scripting and brush tools come later. So the first build pulls pieces forward from phases 1, 3, 4 and 5:
+Everything below is implemented, tested (43 unit, 19 headless Blender tests) and verified in L4D2 unless noted.
 
-| Done (v0.1) | Notes |
+| Area | State |
 |---|---|
-| Convex mesh → brushes, loose parts, convex-hull option, validation (non-convex, non-planar, inverted, limits) | |
-| Terrain → displacements (power 2–4, patch size, vertex-colour alpha) | Row/column orientation needs in-game check |
-| Curated L4D2 entity catalog (~35 entities), keyvalue panel, Add menu | FGD-driven panels still planned (needs srctools) |
-| Start/End safe room presets | Door spawn states need in-game check |
-| Game materials by name + missing-material check via our own VPK reader | |
-| Custom textures → uncompressed VTF + VMT | DXT compression later (srctools) |
-| Basic light conversion + auto sun, auto director, auto player start, auto seal | |
-| Compile runner (vbsp/vvis/vrad presets), log parsing, leak line, game launch | Untested: Authoring Tools not installed yet |
+| Brushes (convex meshes, hull option, validation), terrain displacements, auto seal | ✅ in-game |
+| Entities: ~45 curated L4D2 entities, keyvalues, **outputs (I/O)** | ✅ in-game |
+| Presets: start/end safe rooms (+ nav regions, lights, landmarks), Horde Trigger, Horde Button, Crescendo Button, Tank Ambush, Zombie Spawn Area, Ladder | ✅ in-game except Tank Ambush and Ladder (untested) |
+| Nav: generate after load, mark PLAYER_START / CHECKPOINT / OBSCURED, save, reload | ✅ in-game |
+| Director: map-wide options, crescendos (ScriptedPanicEvent), limits kept during crescendos | ✅ in-game |
+| Materials: game materials, custom image textures (VTF writer), surfaces/friction (patch VMTs) | ✅ in-game (ice feel untested) |
+| Settings panels: Compile (custom), Lighting & Sky, Fog, AI Director, Game Window (monitor, size, difficulty), Debug, Advanced | ✅ |
+| Blender previews: game textures (VTF reader, world-projected), **3D models** (MDL/VVD/VTX reader) | ✅ |
+| Browsers: materials (8k), models (5.5k), skies | ✅ |
+| Testing: Debug Log, Bot Walkthrough Test (no cheats), in-game probes in tests/ingame | ✅ |
 
-**Deviation from §3:** srctools isn't bundled yet. VMF writing, the VPK reader and VTF writing are small in-house modules, so nothing needs downloading. srctools comes in when we add FGD-driven entity panels and DXT textures.
+Known issues / next candidates: finales and gauntlets; preview auto-update when Order/population changes; items from outside the end safe room carried to the next map; Blender light brightness tuning; brush tools (clip/hollow); FGD-driven entity panels (all L4D2 entities).
+
+**Deviation from §3:** srctools still isn't bundled; VMF/VPK/VTF (read+write)/MDL are small in-house modules, so nothing is downloaded.
 
 ## 10. Open questions
 
