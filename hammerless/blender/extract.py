@@ -15,6 +15,7 @@ from mathutils.kdtree import KDTree
 from ..core import textures
 from ..core.displacement import verts_per_side
 from ..core.entities import CATALOG
+from ..core.surfaces import write_patch_material
 from ..core.ir import Brush, Entity, MapIR, MapSettings, Output, Polygon, Terrain
 
 LIGHT_CLASS = {"POINT": "light", "SPOT": "light_spot", "SUN": "light_environment", "AREA": "light"}
@@ -67,22 +68,38 @@ class MaterialResolver:
         self.cache: dict[str, str] = {}
         self.exported: list[str] = []
 
-    def resolve(self, mat) -> tuple[str, float]:
+    def resolve(self, mat) -> tuple[str, float, int]:
+        """Blender material -> (Source material path, texture scale, lightmap scale)."""
+        lm_default = self.settings.lightmap_scale
         if mat is None:
-            return self.settings.default_material, 0.25
+            return self.settings.default_material, 0.25, lm_default
         hs = mat.hammerless
-        if mat.name in self.cache:
-            return self.cache[mat.name], hs.texture_scale
-        path = hs.source_material.strip().lower().replace("\\", "/")
-        if not path:
-            if "/" in mat.name and not mat.name.startswith("hammerless/"):
-                path = mat.name.lower()   # material named like a game path
-            else:
-                path = self._export_custom(mat) or self.settings.default_material
-        self.cache[mat.name] = path
-        return path, hs.texture_scale
+        lm = hs.lightmap_scale or lm_default
+        if mat.name not in self.cache:
+            self.cache[mat.name] = self._resolve_path(mat)
+        return self.cache[mat.name], hs.texture_scale, lm
 
-    def _export_custom(self, mat) -> str | None:
+    def _resolve_path(self, mat) -> str:
+        hs = mat.hammerless
+        surface = hs.surface if hs.surface != "DEFAULT" else ""
+        path = hs.source_material.strip().lower().replace("\\", "/")
+        if not path and "/" in mat.name and not mat.name.startswith("hammerless/"):
+            path = mat.name.lower()   # material named like a game path
+        if path:
+            if surface and self.game_dir:
+                return self._patch(path, surface)
+            return path
+        return self._export_custom(mat, surface or "concrete") or self.settings.default_material
+
+    def _patch(self, base: str, surface: str) -> str:
+        """Game material with a different surface: a patch VMT that includes the original."""
+        safe = re.sub(r"[^a-z0-9_]", "_", base)
+        path = f"hammerless/{self.settings.map_name}/patch_{safe}_{surface}"
+        write_patch_material(self.game_dir, path, base, surface)
+        self.exported.append(path)
+        return path
+
+    def _export_custom(self, mat, surfaceprop: str = "concrete") -> str | None:
         img = _base_color_image(mat)
         if img is None or self.game_dir is None:
             return None
@@ -90,7 +107,7 @@ class MaterialResolver:
         path = f"hammerless/{self.settings.map_name}/{safe}"
         try:
             rgba = image_to_rgba8(img)
-            textures.write_material(self.game_dir, path, rgba, surfaceprop=mat.hammerless.surfaceprop,
+            textures.write_material(self.game_dir, path, rgba, surfaceprop=surfaceprop,
                                     translucent=mat.blend_method in ("BLEND",))
             self.exported.append(path)
         except Exception as ex:
@@ -188,11 +205,11 @@ def mesh_to_brushes(obj, depsgraph, scale: float, materials: MaterialResolver) -
                 polys = []
                 for f in part:
                     mat = slots[f.material_index] if f.material_index < len(slots) else None
-                    path, tscale = materials.resolve(mat)
+                    path, tscale, lmscale = materials.resolve(mat)
                     verts = [tuple(v.co) for v in f.verts]
                     if mirrored:
                         verts.reverse()
-                    polys.append(Polygon(verts, path, tscale))
+                    polys.append(Polygon(verts, path, tscale, lmscale))
             brushes.append(Brush(polys, name))
     finally:
         bm.free()
@@ -233,7 +250,7 @@ def mesh_to_terrain(obj, depsgraph, scale: float, materials: MaterialResolver) -
             for loop in f.loops:
                 vcol[loop.vert.index] = loop[color_layer][0]  # red channel = blend
     slots = [s.material for s in obj.material_slots]
-    material, _ = materials.resolve(slots[0] if slots else None)
+    material, _, _ = materials.resolve(slots[0] if slots else None)
     if material == materials.settings.default_material:
         material = "nature/blend_grass_grass_01"
     bm.free()
@@ -311,8 +328,28 @@ def light_entity(obj, scale: float) -> Entity:
 
 # ---------------------------------------------------------------- main
 
+def _rgb(color) -> tuple[int, int, int]:
+    return tuple(int(round(max(0.0, min(1.0, c)) * 255)) for c in color)
+
+
 def scene_settings_to_ir(s) -> MapSettings:
-    return MapSettings(name=s.map_name, skyname=s.skyname, auto_seal=s.auto_seal)
+    return MapSettings(
+        name=s.map_name, skyname=s.skyname, auto_seal=s.auto_seal,
+        auto_light_environment=s.auto_sun,
+        sun_color=_rgb(s.sun_color), sun_brightness=s.sun_brightness,
+        sun_pitch=s.sun_pitch, sun_yaw=s.sun_yaw,
+        ambient_color=_rgb(s.ambient_color), ambient_brightness=s.ambient_brightness,
+        lightmap_scale=s.lightmap_scale,
+        fog_enabled=s.fog_enabled, fog_color=_rgb(s.fog_color), fog_start=s.fog_start,
+        fog_end=s.fog_end, fog_max_density=s.fog_max_density,
+        director_enabled=s.director_enabled, dir_common_limit=s.dir_common_limit,
+        dir_mob_min=s.dir_mob_min, dir_mob_max=s.dir_mob_max,
+        dir_mob_interval_min=s.dir_mob_interval_min, dir_mob_interval_max=s.dir_mob_interval_max,
+        dir_max_specials=s.dir_max_specials, dir_special_interval=s.dir_special_interval,
+        dir_tank_limit=s.dir_tank_limit, dir_witch_limit=s.dir_witch_limit,
+        dir_no_mobs=s.dir_no_mobs, dir_no_wanderers=s.dir_no_wanderers,
+        debug_log=s.debug_log, debug_interval=s.debug_interval,
+    )
 
 
 def extract_scene(context, report, game_dir: str | None = None) -> tuple[MapIR, MaterialResolver]:

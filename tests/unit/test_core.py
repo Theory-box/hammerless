@@ -278,6 +278,70 @@ class TestOutputs(unittest.TestCase):
             self.assertTrue(rep.ok, (key, rep.errors))
 
 
+class TestSettingsAndScripts(unittest.TestCase):
+    def test_settings_entities(self):
+        ir = box_room_ir()
+        st = ir.settings
+        st.name = "m"
+        st.fog_enabled = True
+        st.debug_log = True
+        st.director_enabled = True
+        st.dir_common_limit = 7
+        st.sun_color, st.sun_brightness = (10, 20, 30), 123
+        text, rep = build_vmf(ir)
+        self.assertTrue(rep.ok, rep.errors)
+        ents = {b.get("classname"): b for b in parse(text) if b.name == "entity"}
+        self.assertEqual(ents["light_environment"].get("_light"), "10 20 30 123")
+        self.assertEqual(ents["env_fog_controller"].get("fogenable"), "1")
+        self.assertEqual(ents["logic_script"].get("vscripts"), "hammerless/debug_m")
+        self.assertEqual(ents["logic_auto"].blocks("connections")[0].get("OnMapSpawn"),
+                         "director,BeginScript,hammerless/director_m,1,1")
+        from hammerless.core.gamefiles import game_files
+        files = game_files(ir)
+        self.assertIn("CommonLimit = 7", files["scripts/vscripts/hammerless/director_m.nut"])
+        self.assertIn("RegisterScriptGameEventListener", files["scripts/vscripts/hammerless/debug_m.nut"])
+
+    def test_crescendo_preset(self):
+        from hammerless.core.entities import crescendo_button
+        from hammerless.core.gamefiles import game_files
+        ir = box_room_ir()
+        ir.settings.name = "m"
+        for part in crescendo_button("c7").parts:
+            ir.entities.append(part.entity)
+        text, rep = build_vmf(ir)
+        self.assertTrue(rep.ok, rep.errors)
+        self.assertEqual(rep.warnings, [])
+        self.assertNotIn("hammerless_crescendo", text)
+        self.assertIn("director,ScriptedPanicEvent,hammerless/crescendo_c7,0,1", text)
+        nut = game_files(ir)["scripts/vscripts/hammerless/crescendo_c7.nut"]
+        self.assertIn("A_CustomFinale_StageCount = 5", nut)
+        self.assertIn("A_CustomFinaleValue2 = 10", nut)
+
+    def test_crescendo_unknown_name_warns(self):
+        from hammerless.core.ir import Output
+        ir = box_room_ir()
+        ir.entities.append(Entity("logic_relay", (0, 0, 0), outputs=[
+            Output("OnTrigger", "director", "ScriptedPanicEvent", "hammerless/crescendo_nope")]))
+        self.assertTrue(any("crescendo_nope" in w for w in validate(ir).warnings))
+
+    def test_parse_stages(self):
+        from hammerless.core.gamefiles import parse_stages
+        self.assertEqual(parse_stages("panic 2, delay 5; TANK")[0], [("PANIC", 2), ("DELAY", 5), ("TANK", 1)])
+        self.assertTrue(parse_stages("DANCE 3")[1])
+
+    def test_compile_options(self):
+        from hammerless.core.compile import CompileOptions
+        o = CompileOptions(vis="SKIP", rad="FINAL", hdr="LDR", extra_vrad="-bounce 50")
+        self.assertIsNone(o.vvis_args())
+        self.assertEqual(o.vrad_args(), ["-ldr", "-final", "-StaticPropLighting", "-StaticPropPolys", "-bounce", "50"])
+
+    def test_patch_vmt(self):
+        from hammerless.core.surfaces import patch_vmt
+        vmt = patch_vmt("concrete/concrete_floor_01", "ice")
+        self.assertIn('"include" "materials/concrete/concrete_floor_01.vmt"', vmt)
+        self.assertIn('"$surfaceprop" "ice"', vmt)
+
+
 class TestLogs(unittest.TestCase):
     def test_leak_detected(self):
         s = parse_log("Processing areas...\n**** leaked ****\nEntity light (0 0 0) leaked!\n")

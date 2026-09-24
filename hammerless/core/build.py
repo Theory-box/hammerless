@@ -6,8 +6,9 @@ from dataclasses import dataclass, field
 from . import geometry as g
 from .displacement import build_patches
 from .entities import default_keyvalues
-from .entities import NAV_REGION
-from .ir import Entity, MapIR, Vec3
+from .entities import PSEUDO_ENTITIES
+from .gamefiles import collect_crescendos, script_path
+from .ir import Entity, MapIR, Output, Vec3
 from .nav import collect_regions
 from .vmf import Block, VMFWriter
 
@@ -65,6 +66,15 @@ def validate(ir: MapIR, content=None) -> Report:
 
     regions, nav_problems = collect_regions(ir)
     r.errors += nav_problems
+    ir.crescendos.clear()
+    r.errors += collect_crescendos(ir)
+    for e in ir.entities:
+        for o in e.outputs:
+            if o.input.lower() == "scriptedpanicevent":
+                name = o.parameter.split("/")[-1].removeprefix("crescendo_")
+                if name not in ir.crescendos:
+                    r.warnings.append(f"'{e.source or e.classname}' starts crescendo '{o.parameter}', "
+                                      "but no Crescendo Definition has that name.")
     if "info_changelevel" in classes and not any(x.bits & 128 for x in regions)             and "info_survivor_position" in classes:
         r.info.append("No PLAYER_START nav region. Survivors may not spawn in the start safe room. "
                       "The Start Safe Room preset includes one.")
@@ -149,15 +159,31 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
             world.add(w.solid(b))
         report.info.append("Sealed the map in an automatic skybox shell.")
 
-    entities = [e for e in ir.entities if e.classname != NAV_REGION]
+    entities = [e for e in ir.entities if e.classname not in PSEUDO_ENTITIES]
     classes = {e.classname for e in entities}
     if s.auto_director and "info_director" not in classes:
         entities.append(Entity("info_director", (0, 0, 0), (0, 0, 0), default_keyvalues("info_director")))
         report.info.append("Added info_director.")
     if s.auto_light_environment and "light_environment" not in classes:
-        kv = default_keyvalues("light_environment")
-        entities.append(Entity("light_environment", (0, 0, 0), (-50, 30, 0), kv))
-        report.info.append("No sun found. Added one (light_environment).")
+        kv = {"_light": "{} {} {} {}".format(*s.sun_color, s.sun_brightness),
+              "_ambient": "{} {} {} {}".format(*s.ambient_color, s.ambient_brightness),
+              "pitch": f"{s.sun_pitch:g}"}
+        entities.append(Entity("light_environment", (0, 0, 0), (s.sun_pitch, s.sun_yaw, 0), kv))
+        report.info.append("No sun in the scene. Added one from the Lighting settings.")
+    if s.fog_enabled and "env_fog_controller" not in classes:
+        entities.append(Entity("env_fog_controller", (0, 0, 64), (0, 0, 0), {
+            "targetname": "hammerless_fog", "fogenable": "1", "spawnflags": "1",
+            "fogcolor": "{} {} {}".format(*s.fog_color), "fogcolor2": "{} {} {}".format(*s.fog_color),
+            "fogstart": f"{s.fog_start:g}", "fogend": f"{s.fog_end:g}",
+            "fogmaxdensity": f"{s.fog_max_density:g}", "farz": "-1"}))
+    if s.debug_log:
+        entities.append(Entity("logic_script", (0, 0, 32), (0, 0, 0), {
+            "targetname": "hammerless_debug", "vscripts": script_path(f"debug_{s.name}"),
+            "thinkfunction": "HL_Think"}))
+        report.info.append("Debug log on: Director events and stats go to the console (HAMMERLESS_DEBUG).")
+    if s.director_enabled:
+        entities.append(Entity("logic_auto", (0, 0, 48), (0, 0, 0), {"spawnflags": "1"}, outputs=[
+            Output("OnMapSpawn", "director", "BeginScript", script_path(f"director_{s.name}"), 1.0, 1)]))
     if "info_player_start" not in classes:
         first = next((e for e in entities if e.classname == "info_survivor_position"), None)
         origin = first.origin if first else (0.0, 0.0, 0.0)

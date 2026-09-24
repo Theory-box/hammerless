@@ -197,6 +197,68 @@ def test_horde_presets_and_outputs():
     assert "targets" not in log, log
 
 
+def test_scene_settings_reach_map():
+    s = reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    s.fog_enabled = True
+    s.fog_end = 2000
+    s.director_enabled = True
+    s.dir_common_limit = 12
+    s.debug_log = True
+    s.sun_brightness = 777
+    s.lightmap_scale = 32
+    blocks, log = export()
+    assert blocks, log
+    assert entities(blocks, "env_fog_controller")[0].get("fogend") == "2000"
+    assert entities(blocks, "light_environment")[0].get("_light").endswith(" 777")
+    assert entities(blocks, "logic_script")
+    lm = {sd.get("lightmapscale") for sol in world_solids(blocks)[:1] for sd in sol.blocks("side")}
+    assert lm == {"32"}, lm
+    nut = os.path.join(FAKE_GAME, "left4dead2", "scripts", "vscripts", "hammerless", "director_test_map.nut")
+    assert "CommonLimit = 12" in open(nut).read()
+
+
+def test_crescendo_names_unique():
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    bpy.ops.hammerless.add_preset(preset="CRESCENDO_BUTTON")
+    bpy.context.scene.cursor.location = (3, 0, 0)
+    bpy.ops.hammerless.add_preset(preset="CRESCENDO_BUTTON")
+    blocks, log = export()
+    assert blocks, log
+    params = sorted(b.blocks("connections")[0].get("OnPressed") for b in entities(blocks, "func_button"))
+    assert params == ["director,ScriptedPanicEvent,hammerless/crescendo_crescendo_1,0,1",
+                      "director,ScriptedPanicEvent,hammerless/crescendo_crescendo_2,0,1"], params
+    assert "crescendo" not in log.lower() or "WARNING" not in log, log
+
+
+def test_surface_override_patch_material():
+    reset_scene()
+    mat = bpy.data.materials.new("concrete/concrete_floor_01")
+    mat.hammerless.surface = "ice"
+    add_box("ice floor", (4, 4, 0.5), (0, 0, 0), mat)
+    blocks, log = export()
+    assert blocks, log
+    mats = {sd.get("material") for sol in world_solids(blocks) for sd in sol.blocks("side")}
+    assert "HAMMERLESS/TEST_MAP/PATCH_CONCRETE_CONCRETE_FLOOR_01_ICE" in mats, mats
+    vmt = os.path.join(FAKE_GAME, "left4dead2", "materials", "hammerless", "test_map",
+                       "patch_concrete_concrete_floor_01_ice.vmt")
+    assert '"$surfaceprop" "ice"' in open(vmt).read()
+
+
+def test_custom_compile_options():
+    from hammerless.blender.ops import compile_options, launch_options
+    s = reset_scene()
+    assert compile_options(s) == "NORMAL"
+    s.compile_preset = "CUSTOM"
+    s.vis_mode, s.rad_mode, s.hdr_mode = "FAST", "SKIP", "LDR"
+    o = compile_options(s)
+    assert o.vvis_args() == ["-fast"] and o.vrad_args() is None
+    s.window_width, s.window_height = 1280, 720
+    lo = launch_options(s)
+    assert (lo.width, lo.height) == (1280, 720)
+
+
 def test_brush_entity_func_detail():
     reset_scene()
     add_box("floor", (10, 10, 0.5), (0, 0, -0.25))

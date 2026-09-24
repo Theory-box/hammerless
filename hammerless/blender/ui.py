@@ -32,6 +32,9 @@ class HL_PT_map(bpy.types.Panel):
         s = context.scene.hammerless
         col = self.layout.column()
         col.prop(s, "map_name")
+        row = col.row(align=True)
+        row.prop(s, "compile_preset", text="Quality")
+        row.prop(s, "generate_nav", text="Nav", toggle=True, icon="MOD_PHYSICS")
         big = col.row()
         big.scale_y = 1.6
         op = big.operator("hammerless.build", text="Build & Play", icon="PLAY")
@@ -46,28 +49,152 @@ class HL_PT_map(bpy.types.Panel):
         row.operator("hammerless.load_leak", icon="ERROR")
 
 
-class HL_PT_map_settings(bpy.types.Panel):
+class _SubPanel:
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Hammerless"
-    bl_label = "Settings"
     bl_parent_id = "HL_PT_map"
     bl_options = {"DEFAULT_CLOSED"}
+
+
+class HL_PT_compile(_SubPanel, bpy.types.Panel):
+    bl_label = "Compile"
 
     def draw(self, context):
         s = context.scene.hammerless
         col = self.layout.column()
+        col.use_property_split = True
         col.prop(s, "compile_preset")
-        col.prop(s, "generate_nav")
+        sub = col.column()
+        sub.enabled = s.compile_preset == "CUSTOM"
+        sub.prop(s, "vis_mode")
+        sub.prop(s, "rad_mode")
+        sub.prop(s, "hdr_mode")
+        sub.prop(s, "static_prop_lighting")
+        box = sub.box()
+        box.label(text="Extra compiler options")
+        box.prop(s, "extra_vbsp")
+        box.prop(s, "extra_vvis")
+        box.prop(s, "extra_vrad")
+        if s.compile_preset != "CUSTOM":
+            col.label(text="Choose Custom to change individual steps", icon="INFO")
+
+
+class HL_PT_lighting(_SubPanel, bpy.types.Panel):
+    bl_label = "Lighting & Sky"
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = self.layout.column()
+        col.use_property_split = True
+        row = col.row(align=True)
+        row.prop(s, "skyname")
+        row.operator("hammerless.pick_sky", text="", icon="VIEWZOOM")
+        col.prop(s, "lightmap_scale")
         col.separator()
+        col.prop(s, "auto_sun")
+        sub = col.column()
+        sub.enabled = s.auto_sun
+        sub.prop(s, "sun_color")
+        sub.prop(s, "sun_brightness")
+        sub.prop(s, "sun_pitch")
+        sub.prop(s, "sun_yaw")
+        sub.prop(s, "ambient_color")
+        sub.prop(s, "ambient_brightness")
+        col.label(text="A Blender Sun lamp in the scene overrides these", icon="LIGHT_SUN")
+
+
+class HL_PT_fog(_SubPanel, bpy.types.Panel):
+    bl_label = "Fog"
+
+    def draw_header(self, context):
+        self.layout.prop(context.scene.hammerless, "fog_enabled", text="")
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = self.layout.column()
+        col.use_property_split = True
+        col.enabled = s.fog_enabled
+        col.prop(s, "fog_color")
+        col.prop(s, "fog_start")
+        col.prop(s, "fog_end")
+        col.prop(s, "fog_max_density")
+
+
+class HL_PT_director(_SubPanel, bpy.types.Panel):
+    bl_label = "AI Director"
+
+    def draw_header(self, context):
+        self.layout.prop(context.scene.hammerless, "director_enabled", text="")
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = self.layout.column()
+        col.use_property_split = True
+        col.enabled = s.director_enabled
+        col.prop(s, "dir_common_limit")
+        r = col.column(align=True)
+        r.prop(s, "dir_mob_min")
+        r.prop(s, "dir_mob_max")
+        r = col.column(align=True)
+        r.prop(s, "dir_mob_interval_min")
+        r.prop(s, "dir_mob_interval_max")
+        col.prop(s, "dir_no_mobs")
+        col.prop(s, "dir_no_wanderers")
+        col.separator()
+        col.prop(s, "dir_max_specials")
+        col.prop(s, "dir_special_interval")
+        col.prop(s, "dir_tank_limit")
+        col.prop(s, "dir_witch_limit")
+        if not s.director_enabled:
+            self.layout.label(text="Off = the game's normal Director", icon="INFO")
+
+
+class HL_PT_game(_SubPanel, bpy.types.Panel):
+    bl_label = "Game Window"
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = self.layout.column()
+        col.use_property_split = True
+        col.prop(s, "window_monitor")
+        r = col.column(align=True)
+        r.prop(s, "window_width")
+        r.prop(s, "window_height")
+        col.prop(s, "window_borderless")
+        col.prop(s, "launch_extra")
+        col.label(text="Size applies when the game starts", icon="INFO")
+
+
+class HL_PT_debug(_SubPanel, bpy.types.Panel):
+    bl_label = "Debug"
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = self.layout.column()
+        col.use_property_split = True
+        col.prop(s, "debug_log")
+        sub = col.column()
+        sub.enabled = s.debug_log
+        sub.prop(s, "debug_interval")
+        col.label(text="Log goes to left4dead2/console.log", icon="TEXT")
+
+
+class HL_PT_advanced(_SubPanel, bpy.types.Panel):
+    bl_label = "Advanced"
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = self.layout.column()
+        col.use_property_split = True
         col.prop(s, "units_per_meter")
-        col.prop(s, "skyname")
         col.prop(s, "default_material")
         col.prop(s, "auto_seal")
         col.prop(s, "check_game_content")
         col.separator()
         col.prop(s, "game_root")
         col.prop(s, "output_dir")
+        col.operator("hammerless.load_game_data", icon="FILE_REFRESH")
 
 
 class HL_PT_object(bpy.types.Panel):
@@ -140,8 +267,9 @@ class HL_PT_object(bpy.types.Panel):
             box.prop(mat.hammerless, "source_material")
             if not mat.hammerless.source_material:
                 box.label(text="Empty = convert image texture", icon="IMAGE_DATA")
-                box.prop(mat.hammerless, "surfaceprop")
+            box.prop(mat.hammerless, "surface")
             box.prop(mat.hammerless, "texture_scale")
+            box.prop(mat.hammerless, "lightmap_scale")
 
 
 class HL_PT_collection(bpy.types.Panel):
@@ -197,7 +325,8 @@ class HL_MT_add(bpy.types.Menu):
             layout.operator("hammerless.add_preset", text=PRESETS[key].label, icon="HOME").preset = key
         layout.separator()
         for key, icon in (("HORDE_TRIGGER", "GHOST_ENABLED"), ("HORDE_BUTTON", "GHOST_ENABLED"),
-                          ("TANK_AMBUSH", "GHOST_ENABLED"), ("ZOMBIE_SPAWN_AREA", "MOD_MASK")):
+                          ("TANK_AMBUSH", "GHOST_ENABLED"), ("CRESCENDO_BUTTON", "GHOST_ENABLED"),
+                          ("ZOMBIE_SPAWN_AREA", "MOD_MASK")):
             layout.operator("hammerless.add_preset", text=PRESETS[key].label, icon=icon).preset = key
         layout.separator()
         for m in CATEGORY_MENUS:
@@ -210,7 +339,8 @@ def _add_menu(self, context):
     self.layout.menu(HL_MT_add.bl_idname, icon="WORLD")
 
 
-CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_PT_map, HL_PT_map_settings, HL_PT_object, HL_PT_collection,
+CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_PT_map, HL_PT_compile, HL_PT_lighting, HL_PT_fog,
+           HL_PT_director, HL_PT_game, HL_PT_debug, HL_PT_advanced, HL_PT_object, HL_PT_collection,
            *CATEGORY_MENUS, HL_MT_add)
 
 

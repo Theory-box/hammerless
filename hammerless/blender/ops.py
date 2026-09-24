@@ -11,7 +11,8 @@ from ..core import compile as cc
 from ..core.build import Report, build_vmf, validate
 from ..core.ir import Entity
 from ..core.entities import CATALOG, CATEGORIES, PRESET_BUILDERS, PRESETS, default_keyvalues
-from ..core.nav import collect_regions, navmark_script
+from ..core.gamefiles import game_files
+from ..core.nav import collect_regions
 from ..core.vpk import GameContent
 from .extract import extract_scene
 
@@ -32,7 +33,32 @@ def game_content(root: str | None) -> GameContent | None:
         return None
     if root not in _content_cache:
         _content_cache[root] = GameContent(root)
+        from ..core.surfaces import load_surfaces
+        from .props import set_surface_list
+        set_surface_list(load_surfaces(_content_cache[root]))
     return _content_cache[root]
+
+
+def compile_options(s) -> "cc.CompileOptions | str":
+    if s.compile_preset != "CUSTOM":
+        return s.compile_preset
+    return cc.CompileOptions(vis=s.vis_mode, rad=s.rad_mode, hdr=s.hdr_mode,
+                             static_prop_lighting=s.static_prop_lighting,
+                             extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad)
+
+
+def launch_options(s) -> cc.LaunchOptions:
+    try:
+        monitor = int(s.window_monitor)
+    except (TypeError, ValueError):
+        monitor = -1
+    return cc.LaunchOptions(width=s.window_width, height=s.window_height,
+                            borderless=s.window_borderless, monitor_index=monitor, extra=s.launch_extra)
+
+
+def launch(context, root) -> None:
+    s = context.scene.hammerless
+    cc.launch_game(cc.Tools(root), s.map_name, generate_nav=s.generate_nav, window=launch_options(s))
 
 
 def work_dir(context) -> str:
@@ -87,12 +113,15 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
         f.write(text)
     rep2.info.append(f"Wrote {path}")
     if gamedir:
+        files = game_files(ir)
+        for rel, content in files.items():
+            full = os.path.join(gamedir, *rel.split("/"))
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w", encoding="utf-8") as f:
+                f.write(content)
         regions, _ = collect_regions(ir)
-        nut = os.path.join(gamedir, "scripts", "vscripts", "hammerless", f"navmark_{s.map_name}.nut")
-        os.makedirs(os.path.dirname(nut), exist_ok=True)
-        with open(nut, "w", encoding="utf-8") as f:
-            f.write(navmark_script(regions, s.map_name))
-        rep2.info.append(f"Nav marking script: {len(regions)} region(s)")
+        rep2.info.append(f"Wrote {len(files)} script(s) to the game folder; nav marking covers "
+                         f"{len(regions)} region(s)")
     return path, root, rep2
 
 
@@ -273,6 +302,13 @@ class HL_OT_add_preset(bpy.types.Operator):
             preset = builder(landmark=self.landmark)
         elif self.preset == "END_SAFE_ROOM":
             preset = builder(next_map=self.next_map, landmark=self.landmark)
+        elif self.preset == "CRESCENDO_BUTTON":
+            used = {kv.value for o in bpy.data.objects for kv in o.hammerless.keyvalues
+                    if o.hammerless.classname == "hammerless_crescendo" and kv.key == "name"}
+            n = 1
+            while f"crescendo_{n}" in used:
+                n += 1
+            preset = builder(name=f"crescendo_{n}")
         else:
             preset = builder()
         coll = bpy.data.collections.new(preset.label)
@@ -370,7 +406,7 @@ class HL_OT_build(bpy.types.Operator):
             return {"CANCELLED"}
         write_log(report_lines(rep) + ["", "Compiling..."])
         self._root = root
-        self._job = cc.CompileJob(tools, path, context.scene.hammerless.compile_preset).start()
+        self._job = cc.CompileJob(tools, path, compile_options(context.scene.hammerless)).start()
         self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
         self.report({"INFO"}, "Compiling... (see the hammerless_log text block)")
@@ -396,7 +432,7 @@ class HL_OT_build(bpy.types.Operator):
             return self._finish(context, {"CANCELLED"})
         s = context.scene.hammerless
         if self.play:
-            cc.launch_game(cc.Tools(self._root), s.map_name, generate_nav=s.generate_nav)
+            launch(context, self._root)
             self.report({"INFO"}, f"Compiled! Launching L4D2 on {s.map_name}")
         else:
             self.report({"INFO"}, "Compiled successfully")
@@ -419,7 +455,7 @@ class HL_OT_launch(bpy.types.Operator):
             self.report({"ERROR"}, "Left 4 Dead 2 not found")
             return {"CANCELLED"}
         s = context.scene.hammerless
-        cc.launch_game(cc.Tools(root), s.map_name, generate_nav=s.generate_nav)
+        launch(context, root)
         return {"FINISHED"}
 
 
@@ -451,6 +487,54 @@ class HL_OT_load_leak(bpy.types.Operator):
         obj.show_in_front = True
         context.scene.collection.objects.link(obj)
         self.report({"INFO"}, "Leak line added (HL_leak). Follow it from inside the map to the hole")
+        return {"FINISHED"}
+
+
+_SKY_ITEMS: list[tuple[str, str, str]] = []
+
+
+def _sky_items(self, context):
+    root = game_root(context)
+    content = game_content(root)
+    _SKY_ITEMS.clear()
+    if content:
+        names = sorted({m[len("skybox/"):-2] for m in content.materials("skybox/") if m.endswith("bk")})
+        for n in names:
+            _SKY_ITEMS.append((n, n, "Skybox " + n))
+    if not _SKY_ITEMS:
+        _SKY_ITEMS.append(("sky_day01_09_hdr", "sky_day01_09_hdr", ""))
+    return _SKY_ITEMS
+
+
+class HL_OT_pick_sky(bpy.types.Operator):
+    bl_idname = "hammerless.pick_sky"
+    bl_label = "Pick Sky"
+    bl_description = "Choose from every sky in Left 4 Dead 2"
+    bl_property = "sky"
+
+    sky: EnumProperty(name="Sky", items=_sky_items)
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        context.scene.hammerless.skyname = self.sky
+        return {"FINISHED"}
+
+
+class HL_OT_load_game_data(bpy.types.Operator):
+    bl_idname = "hammerless.load_game_data"
+    bl_label = "Load Game Data"
+    bl_description = "Read the game's surface list (friction etc.) and sky names"
+
+    def execute(self, context):
+        root = game_root(context)
+        if not game_content(root):
+            self.report({"ERROR"}, "Left 4 Dead 2 not found")
+            return {"CANCELLED"}
+        from .props import SURFACE_ITEMS
+        self.report({"INFO"}, f"Loaded {len(SURFACE_ITEMS) - 1} surfaces")
         return {"FINISHED"}
 
 
@@ -515,7 +599,7 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (HL_OT_add_entity, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
+CLASSES = (HL_OT_pick_sky, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
            HL_OT_export_vmf, HL_OT_build, HL_OT_launch, HL_OT_load_leak,
            HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues)
 

@@ -15,12 +15,42 @@ DEFAULT_GAME_ROOTS = [
     r"C:\Program Files\Steam\steamapps\common\Left 4 Dead 2",
 ]
 
+@dataclass
+class CompileOptions:
+    vis: str = "FULL"           # SKIP / FAST / FULL
+    rad: str = "NORMAL"         # SKIP / FAST / NORMAL / FINAL
+    hdr: str = "BOTH"           # LDR / HDR / BOTH
+    static_prop_lighting: bool = False
+    extra_vbsp: str = ""
+    extra_vvis: str = ""
+    extra_vrad: str = ""
+
+    def vbsp_args(self) -> list[str]:
+        return self.extra_vbsp.split()
+
+    def vvis_args(self) -> list[str] | None:
+        if self.vis == "SKIP":
+            return None
+        return (["-fast"] if self.vis == "FAST" else []) + self.extra_vvis.split()
+
+    def vrad_args(self) -> list[str] | None:
+        if self.rad == "SKIP":
+            return None
+        args = {"LDR": ["-ldr"], "HDR": ["-hdr"], "BOTH": ["-both"]}[self.hdr]
+        if self.rad == "FAST":
+            args.append("-fast")
+        elif self.rad == "FINAL":
+            args += ["-final"]
+        if self.static_prop_lighting or self.rad == "FINAL":
+            args += ["-StaticPropLighting", "-StaticPropPolys"]
+        return args + self.extra_vrad.split()
+
+
 PRESETS = {
-    # name: (vvis args or None to skip, vrad args or None to skip)
-    "QUICK": (None, None),                     # geometry only, fullbright-ish; fastest
-    "FAST": (["-fast"], ["-fast", "-both"]),
-    "NORMAL": ([], ["-both"]),
-    "FINAL": ([], ["-both", "-final", "-StaticPropLighting", "-StaticPropPolys"]),
+    "QUICK": CompileOptions(vis="SKIP", rad="SKIP"),   # geometry only; map is fullbright
+    "FAST": CompileOptions(vis="FAST", rad="FAST"),
+    "NORMAL": CompileOptions(vis="FULL", rad="NORMAL"),
+    "FINAL": CompileOptions(vis="FULL", rad="FINAL"),
 }
 
 
@@ -125,15 +155,18 @@ class CompileJob:
     `done`, `failed` and `summary` are set when finished.
     """
 
-    def __init__(self, tools: Tools, vmf_path: str, preset: str = "FAST", copy_to_game: bool = True):
+    def __init__(self, tools: Tools, vmf_path: str, preset: "str | CompileOptions" = "NORMAL",
+                 copy_to_game: bool = True):
         self.tools = tools
         self.vmf = os.path.abspath(vmf_path)
         self.base = os.path.splitext(self.vmf)[0]
         self.name = os.path.basename(self.base)
         self.copy_to_game = copy_to_game
-        vvis, vrad = PRESETS[preset]
+        opts = PRESETS[preset] if isinstance(preset, str) else preset
+        vvis, vrad = opts.vvis_args(), opts.vrad_args()
         game = ["-game", tools.gamedir]
-        self.steps: list[tuple[str, list[str]]] = [("vbsp", [tools.exe("vbsp")] + game + [self.base])]
+        self.steps: list[tuple[str, list[str]]] = [
+            ("vbsp", [tools.exe("vbsp")] + opts.vbsp_args() + game + [self.base])]
         if vvis is not None:
             self.steps.append(("vvis", [tools.exe("vvis")] + vvis + game + [self.base]))
         if vrad is not None:
@@ -270,7 +303,17 @@ def nav_steps(map_name: str, mark: bool = True) -> list[tuple[str, list[str]]]:
     return steps
 
 
-def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: list[str] | None = None):
+@dataclass
+class LaunchOptions:
+    width: int = 1600
+    height: int = 900
+    borderless: bool = False
+    monitor_index: int = -1        # -1 = let the game decide
+    extra: str = ""                # extra command-line options, e.g. "-novid -high"
+
+
+def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: list[str] | None = None,
+                window: LaunchOptions | None = None):
     """Load the map. Reuses a running game if there is one.
 
     Nav generation must run after the map has loaded (commands after +map on the
@@ -279,16 +322,25 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
     """
     log = os.path.join(tools.gamedir, "console.log")
     log_start = os.path.getsize(log) if os.path.exists(log) else 0
+    window = window or LaunchOptions()
     if game_running():
         # sv_cheats 0 resets every cheat cvar (nb_stop, z_common_limit, ...) left over
         # from earlier testing or play, so each build starts from a clean game.
         proc = send_commands(tools, ["sv_cheats 0", f"map {map_name}"])
     else:
         cmd = [os.path.join(tools.root, "left4dead2.exe"), "-game", "left4dead2",
-               "-novid", "-console", "-condebug", "-windowed"]
-        cmd += extra or []
+               "-novid", "-console", "-condebug", "-windowed",
+               "-w", str(window.width), "-h", str(window.height)]
+        if window.borderless:
+            cmd.append("-noborder")
+        cmd += window.extra.split() + (extra or [])
         cmd += ["+map", map_name]
         proc = subprocess.Popen(cmd, cwd=tools.root)
+    if window.monitor_index >= 0:
+        from .window import monitors, move_game_window
+        mons = monitors()
+        if window.monitor_index < len(mons):
+            move_game_window(mons[window.monitor_index])
     if generate_nav:
         mark = os.path.exists(os.path.join(tools.gamedir, "scripts", "vscripts", "hammerless",
                                            f"navmark_{map_name}.nut"))

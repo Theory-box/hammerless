@@ -45,6 +45,8 @@ class EntityDef:
 
 
 NAV_REGION = "hammerless_nav_region"  # pseudo-entity, see nav.py
+CRESCENDO = "hammerless_crescendo"     # pseudo-entity, see gamefiles.py
+PSEUDO_ENTITIES = {NAV_REGION, CRESCENDO}  # never written to the map
 
 ITEM_FLAGS = KeyDef("spawnflags", "2", "Spawn flags", (
     ("0", "None"), ("1", "Enable physics"), ("2", "Must exist"), ("8", "Infinite items"),
@@ -124,6 +126,13 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               (KeyDef("targetname", "zombie_spawner", "Name"),), size=(32, 32, 72)),
 
     # --- logic
+    EntityDef(CRESCENDO, "Crescendo Definition", "Logic",
+              "Defines a crescendo (a horde in stages, e.g. 'hold out until the lift arrives'). "
+              "Start it with an output: director > ScriptedPanicEvent > hammerless/crescendo_<name>. "
+              "Stages: PANIC n (n hordes), DELAY s (wait s seconds), TANK n.",
+              (KeyDef("name", "crescendo_1", "Name"),
+               KeyDef("stages", "PANIC 1, DELAY 10, PANIC 1, DELAY 10, PANIC 2", "Stages")),
+              size=(24, 24, 24), floor_origin=False),
     EntityDef("logic_auto", "Map Start", "Logic",
               "Fires OnMapSpawn when the map loads. Use it to set things up at the start, e.g. "
               "tell a Zombie Spawner to SpawnZombie witch.",
@@ -357,6 +366,18 @@ def tank_ambush() -> Preset:
                   [PresetPart("spawner", entity=spawner), PresetPart("trigger", entity=trig)])
 
 
+def crescendo_button(name: str = "crescendo_1") -> Preset:
+    btn = g.box_brush((-4, -16, 40), (4, 16, 72), "dev/dev_hazzardstripe01a", "crescendo_button")
+    ent = Entity("func_button", None, (0, 0, 0), {"spawnflags": "1025", "wait": "-1"}, [btn],
+                 outputs=[Output("OnPressed", "director", "ScriptedPanicEvent", f"hammerless/crescendo_{name}", times=1)])
+    definition = Entity(CRESCENDO, (0, 0, 96), (0, 0, 0), {
+        "name": name, "stages": "PANIC 1, DELAY 10, PANIC 1, DELAY 10, PANIC 2"})
+    return Preset("CRESCENDO_BUTTON", "Crescendo Button",
+                  "A button that starts a crescendo: a horde in waves (edit the stages on the "
+                  "Crescendo Definition next to it). Like the lift and radio events in the campaigns.",
+                  [PresetPart("button", entity=ent), PresetPart("definition", entity=definition)])
+
+
 def zombie_spawn_area() -> Preset:
     vol = g.box_brush((-512, -512, -64), (512, 512, 256), "tools/toolstrigger", "zombie_spawn_area")
     ent = Entity(NAV_REGION, None, (0, 0, 0), {"attributes": "OBSCURED"}, [vol])
@@ -368,5 +389,6 @@ def zombie_spawn_area() -> Preset:
 
 PRESET_BUILDERS = {"START_SAFE_ROOM": start_safe_room, "END_SAFE_ROOM": end_safe_room,
                    "HORDE_TRIGGER": horde_trigger, "HORDE_BUTTON": horde_button,
-                   "TANK_AMBUSH": tank_ambush, "ZOMBIE_SPAWN_AREA": zombie_spawn_area}
+                   "TANK_AMBUSH": tank_ambush, "CRESCENDO_BUTTON": crescendo_button,
+                   "ZOMBIE_SPAWN_AREA": zombie_spawn_area}
 PRESETS = {k: f() for k, f in PRESET_BUILDERS.items()}  # default instances (labels, tests)
