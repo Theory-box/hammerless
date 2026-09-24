@@ -226,6 +226,10 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               "Fires its outputs each time it's touched.",
               (KeyDef("wait", "1", "Delay before reset"),), brush=True),
 
+    EntityDef("func_ladder", "Ladder", "Brush Entities",
+              "Climbable volume. Give the side players climb from the tools/toolsinvisibleladder "
+              "material (the Ladder preset does this). The compiler turns it into an L4D2 ladder "
+              "the nav mesh understands.", brush=True),
     EntityDef("func_button", "Button", "Brush Entities",
               "Something players press with Use. Wire its OnPressed output to start events "
               "(e.g. director > ForcePanicEvent for a horde).",
@@ -414,6 +418,24 @@ def crescendo_button(name: str = "crescendo_1") -> Preset:
                   [PresetPart("button", entity=ent), PresetPart("definition", entity=definition)])
 
 
+def ladder(height: float = 256.0) -> Preset:
+    """Climbable from the +X side (the direction the preset arrow points)."""
+    vol = g.box_brush((-4, -16, 0), (4, 16, height), "tools/toolsnodraw", "ladder")
+    vol.faces[4].material = "tools/toolsinvisibleladder"   # +X face: the climbable side
+    parts = [PresetPart("volume", entity=Entity("func_ladder", None, (0, 0, 0), {}, [vol]))]
+    z = 0.0
+    n = 0
+    while z < height - 8:
+        n += 1
+        parts.append(PresetPart(f"model_{n}", entity=Entity(
+            "prop_static", (5.0, 0.0, z), (0, 0, 0),
+            {"model": "models/props_c17/metalladder001.mdl", "solid": "0"})))
+        z += 128.0
+    return Preset("LADDER", "Ladder",
+                  "A 256-unit (about 5 m) climbable ladder with a visible metal ladder model. "
+                  "Climb from the side the arrow points to. Scale it in Z for other heights.", parts)
+
+
 def zombie_spawn_area() -> Preset:
     vol = g.box_brush((-512, -512, -64), (512, 512, 256), "tools/toolstrigger", "zombie_spawn_area")
     ent = Entity(NAV_REGION, None, (0, 0, 0), {"attributes": "OBSCURED"}, [vol])
@@ -426,5 +448,5 @@ def zombie_spawn_area() -> Preset:
 PRESET_BUILDERS = {"START_SAFE_ROOM": start_safe_room, "END_SAFE_ROOM": end_safe_room,
                    "HORDE_TRIGGER": horde_trigger, "HORDE_BUTTON": horde_button,
                    "TANK_AMBUSH": tank_ambush, "CRESCENDO_BUTTON": crescendo_button,
-                   "ZOMBIE_SPAWN_AREA": zombie_spawn_area}
+                   "ZOMBIE_SPAWN_AREA": zombie_spawn_area, "LADDER": ladder}
 PRESETS = {k: f() for k, f in PRESET_BUILDERS.items()}  # default instances (labels, tests)

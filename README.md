@@ -20,8 +20,11 @@ Status: **v0.1, early.** Tested end-to-end in L4D2: compile, spawns, nav, safe r
 | Spawns, items, weapons, Witch/Tank | **Shift+A > L4D2 >** pick a category, or *Search Entities…* |
 | Safe rooms | **Shift+A > L4D2 > Start Safe Room / End Safe Room**: room, door, spawns, items, landmark and change-level volume, all wired up |
 | func_detail, triggers, player blockers | Select meshes, then use the 🔍 next to *Class* in the panel (or *Make Brush Entity*) |
-| Game textures | Name the Blender material after the game path (e.g. `concrete/concrete_floor_01`), or set **Game Material** in the panel |
+| Game textures | 🔍 next to **Game Material** searches all 8,000+ L4D2 materials. The real texture shows in Blender's Material Preview view, world-aligned at Hammer scale (*Refresh Texture Previews* updates older materials) |
 | Your own textures | A material with an Image Texture in Base Color is converted automatically (to `left4dead2/materials/hammerless/<map>/`) |
+| Props & doors | **Shift+A > L4D2 > Props**: Static/Dynamic/Physics Prop and Door. 🔍 next to *Model* searches all 5,500 game models; the preview box takes the model's real size |
+| Friction & footsteps | Material panel > **Surface** (104 surfaces from the game, e.g. `ice` = slippery). Works on game materials too |
+| Crescendo (hordes in waves) | **Shift+A > L4D2 > Crescendo Button**, then edit the stages on its *Crescendo Definition* (e.g. `PANIC 1, DELAY 10, PANIC 2`) |
 | Hordes, Tank ambushes, buttons | **Shift+A > L4D2 > Horde Trigger / Horde Button / Tank Ambush**. Wire your own with the **Outputs** list. See [docs/HORDE_EVENTS.md](docs/HORDE_EVENTS.md) |
 | Zombies in open areas | **Shift+A > L4D2 > Zombie Spawn Area**: commons only spawn where survivors can't see, and this marks an area as "hidden" |
 | Lights | Blender Sun/Point/Spot lights export. If there's no sun, one is added automatically. Safe room presets include a ceiling light |
@@ -30,7 +33,21 @@ Status: **v0.1, early.** Tested end-to-end in L4D2: compile, spawns, nav, safe r
 
 **Leaks can't happen by default:** *Auto Seal* wraps the map in a skybox box. If you turn it off and the map leaks, click **Load Leak** to see a red line leading to the hole.
 
-**Nav mesh:** bots and zombies need one. Tick *Generate Nav Mesh* for the first launch after geometry changes.
+**Nav mesh:** bots and zombies need one. Tick *Nav* (next to Quality) for the first launch after geometry changes.
+
+## Settings (N panel > Hammerless > L4D2 Map)
+
+| Section | What's in it |
+|---|---|
+| **Compile** | Quality preset (Quick / Fast / Normal / Final) or **Custom**: visibility, lighting quality, LDR/HDR, per-vertex prop lighting, extra compiler options |
+| **Lighting & Sky** | Sky picker (every L4D2 sky), lightmap scale (shadow sharpness), sun colour/brightness/height/direction, sky light colour/brightness |
+| **Fog** | Colour, start/end distance, density |
+| **AI Director** | Max common infected, horde size and frequency, no random hordes, no wanderers, max specials, special respawn time, max Tanks/Witches |
+| **Game Window** | Which monitor, size, borderless, extra launch options |
+| **Debug** | *Debug Log*: Director events and stats to the console. *Bot Walkthrough Test*: bots play the map (see below) |
+| **Advanced** | Scale, default material, auto seal, material checks, paths, reload game data, refresh texture previews |
+
+**Bot Walkthrough Test:** with this on, the survivor bots play the map by themselves: they walk through every horde trigger, press every button (the test stands in for the Use key), and finish in the end safe room. Survivors can't die while it runs. Results are written to `left4dead2/console.log` as `HAMMERLESS_AUTOTEST` lines, including warnings if a bot gets stuck. **Turn it off to play the map yourself.**
 
 ## Tests
 
@@ -75,6 +92,8 @@ Verified 2026-09-23 with the two demo maps (Blender 4.5, L4D2 build 10097). Prob
 - [x] Safe room doors have "Use Closes" (spawnflags 8192), so they can be closed again with Use
 - [x] Common infected spawn (with cover or a Zombie Spawn Area); Horde Trigger and Horde Button each bring a 33-zombie horde
 - [x] Entity outputs (I/O) are written to the map and fire in-game
+- [x] No-cheat run through the addon (Bot Walkthrough Test): horde trigger, horde button, **crescendo in 3 waves**, map-wide Director settings loaded
+- [x] Fresh game launch: window opens on the chosen monitor; nav generate → mark → save → clean reload with cheats off
 
 Known issues:
 - [ ] On transition, weapon spawns from *outside* the end safe room are also carried over and recreated outside the next map (harmless but untidy). Needs investigation

@@ -163,6 +163,7 @@ class HL_PT_game(_SubPanel, bpy.types.Panel):
         r.prop(s, "window_height")
         col.prop(s, "window_borderless")
         col.prop(s, "launch_extra")
+        col.prop(s, "difficulty")
         col.label(text="Size applies when the game starts", icon="INFO")
 
 
@@ -336,7 +337,7 @@ class HL_MT_add(bpy.types.Menu):
         layout.separator()
         for key, icon in (("HORDE_TRIGGER", "GHOST_ENABLED"), ("HORDE_BUTTON", "GHOST_ENABLED"),
                           ("TANK_AMBUSH", "GHOST_ENABLED"), ("CRESCENDO_BUTTON", "GHOST_ENABLED"),
-                          ("ZOMBIE_SPAWN_AREA", "MOD_MASK")):
+                          ("ZOMBIE_SPAWN_AREA", "MOD_MASK"), ("LADDER", "SORT_DESC")):
             layout.operator("hammerless.add_preset", text=PRESETS[key].label, icon=icon).preset = key
         layout.separator()
         for m in CATEGORY_MENUS:

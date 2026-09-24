@@ -215,6 +215,10 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     window_height: IntProperty(name="Height", default=900, min=480, max=4320)
     window_borderless: BoolProperty(name="Borderless", default=False)
     launch_extra: StringProperty(name="Launch Options", description="Extra game options, e.g. -high")
+    difficulty: EnumProperty(name="Difficulty", default="Normal", items=[
+        ("", "Keep Current", "Don't change the game's difficulty"),
+        ("Easy", "Easy", ""), ("Normal", "Normal", ""), ("Hard", "Advanced", ""),
+        ("Impossible", "Expert", "")])
 
     # --- debug
     debug_log: BoolProperty(

@@ -313,6 +313,7 @@ class LaunchOptions:
     borderless: bool = False
     monitor_index: int = -1        # -1 = let the game decide
     extra: str = ""                # extra command-line options, e.g. "-novid -high"
+    difficulty: str = ""           # Easy / Normal / Hard / Impossible ("" = leave as is)
 
 
 def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: list[str] | None = None,
@@ -329,7 +330,8 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
     if game_running():
         # sv_cheats 0 resets every cheat cvar (nb_stop, z_common_limit, ...) left over
         # from earlier testing or play, so each build starts from a clean game.
-        proc = send_commands(tools, ["sv_cheats 0", f"map {map_name}"])
+        pre = [f"z_difficulty {window.difficulty}"] if window.difficulty else []
+        proc = send_commands(tools, ["sv_cheats 0"] + pre + [f"map {map_name}"])
     else:
         cmd = [os.path.join(tools.root, "left4dead2.exe"), "-game", "left4dead2",
                "-novid", "-console", "-condebug", "-windowed",
@@ -337,6 +339,8 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
         if window.borderless:
             cmd.append("-noborder")
         cmd += window.extra.split() + (extra or [])
+        if window.difficulty:
+            cmd += ["+z_difficulty", window.difficulty]
         cmd += ["+map", map_name]
         proc = subprocess.Popen(cmd, cwd=tools.root)
     if window.monitor_index >= 0:

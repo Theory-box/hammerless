@@ -53,7 +53,8 @@ def launch_options(s) -> cc.LaunchOptions:
     except (TypeError, ValueError):
         monitor = -1
     return cc.LaunchOptions(width=s.window_width, height=s.window_height,
-                            borderless=s.window_borderless, monitor_index=monitor, extra=s.launch_extra)
+                            borderless=s.window_borderless, monitor_index=monitor, extra=s.launch_extra,
+                            difficulty=s.difficulty)
 
 
 def launch(context, root) -> None:
@@ -207,7 +208,8 @@ def apply_entity_data(obj, ent) -> None:
         item.parameter, item.delay, item.only_once = o.parameter, o.delay, o.times == 1
 
 
-def box_mesh_object(context, name, mins, maxs, scale, collection, material_path=None):
+def box_mesh_object(context, name, mins, maxs, scale, collection, material_path=None, brush=None):
+    """Box object. With `brush`, each face gets the material of the brush face pointing the same way."""
     x0, y0, z0 = (c / scale for c in mins)
     x1, y1, z1 = (c / scale for c in maxs)
     verts = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
@@ -217,7 +219,16 @@ def box_mesh_object(context, name, mins, maxs, scale, collection, material_path=
     mesh.from_pydata(verts, [], faces)
     obj = bpy.data.objects.new(name, mesh)
     collection.objects.link(obj)
-    if material_path:
+    face_mats = sorted({f.material for f in brush.faces}) if brush else []
+    if len(face_mats) > 1:
+        from ..core.geometry import dot, polygon_normal
+        for m in face_mats:
+            obj.data.materials.append(game_material(m))
+        normals = [(polygon_normal(f.verts), f.material) for f in brush.faces]
+        for poly in mesh.polygons:
+            best = max(normals, key=lambda nm: dot(nm[0], tuple(poly.normal)))
+            poly.material_index = face_mats.index(best[1])
+    elif material_path:
         obj.data.materials.append(game_material(material_path))
     return obj
 
@@ -371,7 +382,7 @@ class HL_OT_add_preset(bpy.types.Operator):
                     mins = tuple(min(p[i] for p in pts) for i in range(3))
                     maxs = tuple(max(p[i] for p in pts) for i in range(3))
                     obj = box_mesh_object(context, f"{preset.label} {part.name}", mins, maxs, scale, coll,
-                                          e.brushes[0].faces[0].material)
+                                          e.brushes[0].faces[0].material, e.brushes[0])
                     obj.location += base
                     obj.display_type = "WIRE"
                     obj.hammerless.role = "BRUSH_ENTITY"

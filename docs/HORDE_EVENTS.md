@@ -65,6 +65,16 @@ To make your own button: select any small convex mesh, then *Make Brush Entity >
 ### Spawn anything, anywhere, even in plain sight
 A **Zombie Spawner** (*Shift+A > L4D2 > Infected > Zombie Spawner*) spawns on command, ignoring the visibility rule. Send it `SpawnZombie` with a parameter of `common`, `tank`, `witch`, `hunter`, `boomer`, `smoker`, `charger`, `jockey` or `spitter`. Add several outputs to one trigger for a scripted ambush, for example three `SpawnZombie common` plus one `SpawnZombie hunter` with a 2-second delay.
 
+### A crescendo: hordes in waves
+*Shift+A > L4D2 > Crescendo Button.* This adds a button plus a **Crescendo Definition** (a small cube). Select the definition and edit **stages**, for example:
+
+```
+PANIC 1, DELAY 10, PANIC 1, DELAY 10, PANIC 2
+```
+
+`PANIC n` means n hordes, `DELAY s` means wait s seconds, and `TANK n` means n Tanks. The button's output is `OnPressed > director > ScriptedPanicEvent`, with the crescendo's **name** as the parameter. You can start a crescendo from anything, such as a trigger, a relay or a map start.
+✅ Tested: three waves arrived with the configured pauses.
+
 ### A Witch that is always there
 Add a **Zombie Spawner** named `witch_spot` where she should sit, plus a **Map Start** entity (*Logic > Map Start*) with the output `OnMapSpawn > witch_spot > SpawnZombie (witch)`.
 
@@ -75,10 +85,10 @@ A **Relay** (*Logic > Relay*) passes a signal on. Point several things at it, an
 
 | Term | What it is |
 |---|---|
-| **Crescendo event** | A scripted horde in stages ("hold out until the lift arrives") run by a Director script (`ScriptedPanicEvent`) |
 | **Gauntlet** | Endless horde while survivors run a stretch |
 | **Finale** | `trigger_finale` plus a rescue vehicle; waves of hordes and Tanks |
-| **Director options** | Per-map tuning: how many commons, mob size, special frequency, etc. |
+
+Already available: **crescendos** (recipe above) and **map-wide Director settings** (*L4D2 Map > AI Director* panel: common limit, horde size and frequency, specials, Tanks, Witches). A crescendo keeps the map's Director limits while it runs.
 
 ## 5. Testing tips
 

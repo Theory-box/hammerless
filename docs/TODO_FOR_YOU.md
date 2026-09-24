@@ -2,27 +2,38 @@
 
 Things I (Claude) can't verify myself because they need a person at the keyboard, or a judgement call about how something looks or feels. Tick them off whenever you get to them. None of them blocks further work.
 
-To test: open `demo/demo_level.blend`, turn **off** *Debug > Bot Walkthrough Test* (otherwise the bots play the level), then press **Build & Play**.
+To playtest: open `demo/demo_level.blend`, turn **off** *Debug > Bot Walkthrough Test*, set *Game Window > Difficulty* to Easy if you like, and press **Build & Play**. Tick *Nav* the first time after changing geometry.
 
-## Gameplay feel
-- [ ] **Safe room doors with the Use key:** open, then close again, then open again (both start and end doors)
-- [ ] **Horde Button by hand:** the striped button on the shed's west wall starts a horde when you press Use
-- [ ] **Crescendo Button by hand:** the button on the truck's west side starts hordes in waves (horde, 10 s pause, horde, pause, bigger horde)
-- [ ] **Ice slab:** the square slab near the start (left of the path) should be slippery (surface `ice`, friction 0.1)
-- [ ] **Tank Ambush preset:** add one in a test map; walking into its trigger should spawn a Tank at the spawner
-- [ ] **Zombie density** with custom Director settings (demo: max 20 commons) feels right
+## Current playtest: the demo map, start to finish
+1. [ ] **Start door:** open it with Use, close it, open it again
+2. [ ] **Leaving the safe room:** can you walk out onto the field easily (your terrain fix)?
+3. [ ] **Ice slab** (the square slab near the start, left of the path): slippery?
+4. [ ] **Horde Trigger:** about 15 m out, a horde should come when you cross it
+5. [ ] **Horde Button** (striped, on the shed's west wall): press Use, and another horde should come
+6. [ ] **Crescendo Button** (on the truck's west side): hordes in waves (horde, 10 s pause, horde, pause, bigger horde)
+7. [ ] **Zombie amounts:** the demo caps common infected at 20. Does it feel right?
+8. [ ] **End safe room:** walk in with the bots, close the door with Use, and `hl_demo2` should load with everyone in its start room
+9. [ ] Anything that looks wrong, feels wrong, or gets you stuck (write down roughly where)
+
+## Newer features to try in Blender (no rush)
+- [ ] **Texture previews:** switch the viewport to *Material Preview*. Game materials show their real textures (use *Refresh Texture Previews* in a material's box for older materials)
+- [ ] **Material browser:** 🔍 next to *Game Material* searches all 8,000+ L4D2 materials
+- [ ] **Props:** *Shift+A > L4D2 > Props*, then 🔍 next to *Model* to pick any of 5,500 models (the box resizes to the model)
+- [ ] **Ladder preset:** *Shift+A > L4D2 > Ladder*, put it against a wall or roof edge, climb it in-game (climb from the side the arrow points to). Not tested in-game yet
+- [ ] **Tank Ambush preset:** walking into its trigger should spawn a Tank at the spawner. Not tested in-game yet
+- [ ] **Settings panels** (N panel > Hammerless > L4D2 Map): Compile, Lighting & Sky, Fog, AI Director, Game Window, Debug, Advanced. Clear enough? Anything missing?
 
 ## Looks
-- [ ] **Sun / sky light settings:** try a few values in *Lighting & Sky* and say if the in-game result matches what you'd expect
-- [ ] **Fog:** enable it in *Fog*, try start/end distances
+- [ ] **Sun / sky light settings:** try a few values in *Lighting & Sky*
+- [ ] **Fog:** enable it and try start/end distances
 - [ ] **Blender lights:** point/spot lamp brightness in-game vs. what you expected (the conversion isn't tuned yet)
-- [ ] **Your own texture:** a material with your own image in Base Color shows correctly (text not mirrored, sensible scale)
-
-## Blender side
-- [ ] **Panel layout:** is the Hammerless tab (N panel) clear? Anything missing or confusing?
-- [ ] **Game Window settings:** *Monitor*, size and *Borderless* behave as expected when the game starts
-- [ ] **Your own level:** build something from scratch with the addon and note what felt awkward
+- [ ] **Your own texture:** a material with your own image shows correctly (not mirrored, sensible scale)
 
 ## Things only you can decide
 - [ ] Is 52.49 units per meter the right default scale for how you model?
-- [ ] Priority for next big features: game model previews in Blender, texture previews, ladders, finales, props?
+- [ ] Priority for next big features: 3D model previews in Blender, finales, gauntlets, more props/entities, brush tools?
+
+## Done by playtest / automated test
+- [x] Horde trigger, horde button and crescendo waves (Bot Walkthrough Test, no cheats)
+- [x] Custom Director settings load on map start
+- [x] Game opens on the chosen monitor; nav mesh is generated and safe rooms marked automatically
