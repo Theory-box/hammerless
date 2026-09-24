@@ -5,14 +5,15 @@ Things I (Claude) can't verify myself because they need a person at the keyboard
 To playtest: open `demo/demo_level.blend`, turn **off** *Debug > Bot Walkthrough Test*, set *Game Window > Difficulty* to Easy if you like, and press **Build & Play**. Tick *Nav* the first time after changing geometry.
 
 ## Current playtest: the demo map, start to finish
-1. [ ] **Start door:** open it with Use, close it, open it again
-2. [ ] **Leaving the safe room:** can you walk out onto the field easily (your terrain fix)?
+(Items 1, 2, 4 and 8 confirmed by the debug log of your run on 2026-09-23. Door Use-closing also works.)
+1. [x] **Start door:** open it with Use, close it, open it again
+2. [x] **Leaving the safe room:** can you walk out onto the field easily (your terrain fix)?
 3. [ ] **Ice slab** (the square slab near the start, left of the path): slippery?
-4. [ ] **Horde Trigger:** about 15 m out, a horde should come when you cross it
+4. [x] **Horde Trigger:** about 15 m out, a horde should come when you cross it
 5. [ ] **Horde Button** (striped, on the shed's west wall): press Use, and another horde should come
 6. [ ] **Crescendo Button** (on the truck's west side): hordes in waves (horde, 10 s pause, horde, pause, bigger horde)
 7. [ ] **Zombie amounts:** the demo caps common infected at 20. Does it feel right?
-8. [ ] **End safe room:** walk in with the bots, close the door with Use, and `hl_demo2` should load with everyone in its start room
+8. [x] **End safe room:** walk in with the bots, close the door with Use, and `hl_demo2` should load with everyone in its start room
 9. [ ] Anything that looks wrong, feels wrong, or gets you stuck (write down roughly where)
 
 ## Newer features to try in Blender (no rush)
