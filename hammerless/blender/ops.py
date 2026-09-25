@@ -383,6 +383,16 @@ class HL_OT_add_preset(bpy.types.Operator):
         s = context.scene.hammerless
         scale = s.units_per_meter
         builder = PRESET_BUILDERS[self.preset]
+        if self.preset in ("START_SAFE_ROOM", "END_SAFE_ROOM"):
+            # two rooms in one map can't share a landmark name (the dialog remembers the last one)
+            used = {kv.value for o in bpy.data.objects for kv in o.hammerless.keyvalues
+                    if o.hammerless.classname == "info_landmark" and kv.key == "targetname"}
+            if self.landmark in used:
+                n = 1
+                while f"landmark_{n}" in used:
+                    n += 1
+                self.report({"INFO"}, f"Landmark '{self.landmark}' is already used here; using 'landmark_{n}'")
+                self.landmark = f"landmark_{n}"
         if self.preset == "START_SAFE_ROOM":
             preset = builder(landmark=self.landmark)
         elif self.preset == "END_SAFE_ROOM":

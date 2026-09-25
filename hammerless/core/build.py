@@ -20,6 +20,32 @@ SURVIVOR_SPAWNS = {"info_player_start", "info_survivor_position"}
 FALLBACK_NEXT_MAP = "c1m2_streets"
 
 
+def end_landmark_renames(ir: MapIR) -> dict[str, tuple[Entity, Entity, str]]:
+    """Duplicate landmark names that can be fixed automatically: exactly two landmarks
+    share a name and one of them sits inside an info_changelevel using that name (the
+    end room). Returns {name: (end landmark, changelevel, new name)}."""
+    landmarks = [e for e in ir.entities if e.classname == "info_landmark"]
+    names = [e.keyvalues.get("targetname") for e in landmarks]
+    taken = set(names)
+    fixes = {}
+    for n in sorted({n for n in names if n and names.count(n) == 2}):
+        for cl in ir.entities:
+            if cl.classname != "info_changelevel" or cl.keyvalues.get("landmark") != n or not cl.brushes:
+                continue
+            lo, hi = g.bounds([v for b in cl.brushes for f in b.faces for v in f.verts])
+            inside = [e for e in landmarks if e.keyvalues.get("targetname") == n and e.origin is not None
+                      and all(lo[i] - 1 <= e.origin[i] <= hi[i] + 1 for i in range(3))]
+            if len(inside) == 1:
+                k = 2
+                while f"{n}_end{k if k > 2 else ''}" in taken:
+                    k += 1
+                new = f"{n}_end{k if k > 2 else ''}"
+                taken.add(new)
+                fixes[n] = (inside[0], cl, new)
+                break
+    return fixes
+
+
 def bad_next_map(cl: Entity, map_name: str) -> bool:
     nxt = cl.keyvalues.get("map", "").strip().lower()
     return not nxt or nxt == map_name.strip().lower()
@@ -54,7 +80,13 @@ def validate(ir: MapIR, content=None) -> Report:
     if "prop_door_rotating_checkpoint" not in classes:
         r.info.append("No safe room doors. Fine for testing, but a campaign map needs them.")
     names = [e.keyvalues.get("targetname") for e in ir.entities if e.classname == "info_landmark"]
+    fixable = end_landmark_renames(ir)
     for n in sorted({n for n in names if names.count(n) > 1}):
+        if n in fixable:
+            r.warnings.append(f"Both safe rooms' landmarks are named '{n}'. Renamed the end room's to "
+                              f"'{fixable[n][2]}'. Change it on '{fixable[n][0].source}' if the next map "
+                              "expects another name.")
+            continue
         r.errors.append(f"Two info_landmark entities are both named '{n}'. The end safe room's landmark "
                         "must differ from the start safe room's (it pairs with the NEXT map's start room).")
     changelevels = [e for e in ir.entities if e.classname == "info_changelevel"]
@@ -229,6 +261,9 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     if not report.ok:
         return None, report
     snap_spawns_to_floor(ir, report)
+    for lm, cl, new in end_landmark_renames(ir).values():
+        lm.keyvalues = {**lm.keyvalues, "targetname": new}
+        cl.keyvalues = {**cl.keyvalues, "landmark": new}
 
     w = VMFWriter()
     s = ir.settings

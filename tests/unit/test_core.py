@@ -205,6 +205,28 @@ class TestLandmarks(unittest.TestCase):
             ir.entities.append(Entity("info_landmark", (0, 0, 0), (0, 0, 0), {"targetname": "lm"}))
         self.assertTrue(any("both named 'lm'" in e for e in validate(ir).errors))
 
+    def test_end_landmark_renamed(self):
+        # Both presets default to 'landmark_1': the end room's copy is renamed, not an error.
+        from hammerless.core.entities import end_safe_room, start_safe_room
+        ir = box_room_ir()
+        for preset, dx in ((start_safe_room("landmark_1"), 0), (end_safe_room("c1m2_streets", "landmark_1"), 2000)):
+            for part in preset.parts:
+                for b in ([part.brush] if part.brush else []) + (part.entity.brushes if part.entity else []):
+                    for f in b.faces:
+                        f.verts = [(x + dx, y, z) for x, y, z in f.verts]
+                if part.entity and part.entity.origin is not None:
+                    x, y, z = part.entity.origin
+                    part.entity.origin = (x + dx, y, z)
+                if part.brush:
+                    ir.brushes.append(part.brush)
+                if part.entity:
+                    ir.entities.append(part.entity)
+        text, rep = build_vmf(ir)
+        self.assertTrue(rep.ok, rep.errors)
+        self.assertIn('"targetname" "landmark_1_end"', text)
+        self.assertIn('"landmark" "landmark_1_end"', text)
+        self.assertEqual(text.count('"targetname" "landmark_1"'), 1)
+
     def test_next_map_fallback(self):
         # Empty or self-referencing Next Map breaks the Director's flow in-game.
         from hammerless.core.build import FALLBACK_NEXT_MAP
