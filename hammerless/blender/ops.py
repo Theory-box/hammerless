@@ -58,11 +58,12 @@ def launch_options(s) -> cc.LaunchOptions:
 
 
 def needs_nav(context, root) -> bool:
-    """Generate nav when asked to, or when the map has no nav mesh yet (without one, bots
-    can't move and zombies can't spawn)."""
+    """Generate nav when asked to, when the map has no nav mesh yet (without one, bots
+    can't move and zombies can't spawn), or when safe rooms / spawn areas changed."""
     s = context.scene.hammerless
-    nav = os.path.join(cc.Tools(root).maps_dir, f"{s.map_name}.nav")
-    return s.generate_nav or not os.path.exists(nav)
+    tools = cc.Tools(root)
+    nav = os.path.join(tools.maps_dir, f"{s.map_name}.nav")
+    return s.generate_nav or not os.path.exists(nav) or cc.nav_marks_changed(tools, s.map_name)
 
 
 def launch(context, root) -> None:

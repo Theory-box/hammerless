@@ -27,6 +27,8 @@ SPAWN_ATTRIBUTES = {
 }
 
 # Nav area centres sit slightly above the floor; pad regions so floor-level areas count.
+# Not upward: nav_generate also covers the safe room's roof, just above the volume, and a
+# roof area marked CHECKPOINT breaks the Director's flow (no wandering zombies).
 PAD = 16.0
 
 
@@ -63,7 +65,8 @@ def collect_regions(ir: MapIR) -> tuple[list[NavRegion], list[str]]:
         if not pts or not bits:
             continue
         mins, maxs = g.bounds(pts)
-        regions.append(NavRegion(tuple(c - PAD for c in mins), tuple(c + PAD for c in maxs), bits, e.source))
+        regions.append(NavRegion(tuple(c - PAD for c in mins), (maxs[0] + PAD, maxs[1] + PAD, maxs[2]),
+                                 bits, e.source))
     return regions, problems
 
 

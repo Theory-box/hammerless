@@ -311,6 +311,24 @@ def nav_steps(map_name: str, mark: bool = True) -> list[tuple[str, list[str]]]:
     return steps
 
 
+def _navmark_paths(tools: Tools, map_name: str) -> tuple[str, str]:
+    d = os.path.join(tools.gamedir, "scripts", "vscripts", "hammerless")
+    return os.path.join(d, f"navmark_{map_name}.nut"), os.path.join(d, f"navmark_{map_name}.used")
+
+
+def nav_marks_changed(tools: Tools, map_name: str) -> bool:
+    """True when the safe room / spawn area marks differ from the ones the current nav
+    mesh was built with. Marks only add flags, so a change needs a fresh nav mesh."""
+    script, used = _navmark_paths(tools, map_name)
+    if not os.path.exists(script):
+        return False
+    try:
+        with open(script, encoding="utf-8") as a, open(used, encoding="utf-8") as b:
+            return a.read() != b.read()
+    except OSError:
+        return True
+
+
 @dataclass
 class LaunchOptions:
     width: int = 1600
@@ -354,8 +372,10 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
         if window.monitor_index < len(mons):
             move_game_window(mons[window.monitor_index])
     if generate_nav:
-        mark = os.path.exists(os.path.join(tools.gamedir, "scripts", "vscripts", "hammerless",
-                                           f"navmark_{map_name}.nut"))
+        script, used = _navmark_paths(tools, map_name)
+        mark = os.path.exists(script)
+        if mark:
+            shutil.copyfile(script, used)
         threading.Thread(target=_run_console_script, args=(tools, nav_steps(map_name, mark), log_start),
                          daemon=True).start()
     return proc

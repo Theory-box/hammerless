@@ -273,6 +273,30 @@ class TestNav(unittest.TestCase):
         self.assertEqual(problems, [])
         self.assertEqual(sorted(r.bits for r in regions), [2048, 128 | 2048])
 
+    def test_region_excludes_roof(self):
+        # Roof nav right above the room must not be marked CHECKPOINT (breaks the flow).
+        from hammerless.core.entities import ROOM_Z
+        from hammerless.core.nav import collect_regions
+        regions, _ = collect_regions(self.preset_ir())
+        for r in regions:
+            self.assertLessEqual(r.maxs[2], ROOM_Z + 1, r)
+            self.assertLess(r.mins[2], 0)
+
+    def test_marks_changed(self):
+        import tempfile
+        from hammerless.core import compile as cc
+        root = tempfile.mkdtemp()
+        d = os.path.join(root, "left4dead2", "scripts", "vscripts", "hammerless")
+        os.makedirs(d)
+        tools = cc.Tools(root)
+        self.assertFalse(cc.nav_marks_changed(tools, "m"))          # no marks at all
+        open(os.path.join(d, "navmark_m.nut"), "w").write("a")
+        self.assertTrue(cc.nav_marks_changed(tools, "m"))           # never built with marks
+        open(os.path.join(d, "navmark_m.used"), "w").write("a")
+        self.assertFalse(cc.nav_marks_changed(tools, "m"))
+        open(os.path.join(d, "navmark_m.nut"), "w").write("b")
+        self.assertTrue(cc.nav_marks_changed(tools, "m"))
+
     def test_region_not_in_vmf(self):
         text, rep = build_vmf(self.preset_ir())
         self.assertTrue(rep.ok, rep.errors)
