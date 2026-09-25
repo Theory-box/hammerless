@@ -487,6 +487,26 @@ class HL_OT_export_vmf(bpy.types.Operator):
         return {"FINISHED"} if path else {"CANCELLED"}
 
 
+def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
+    """Once survivors are in the map, log how long the whole Build & Play took."""
+    launch_id = cc.LOAD_STATUS["launch_id"]
+    waited = [0.0]
+
+    def check():
+        if cc.LOAD_STATUS["launch_id"] != launch_id or waited[0] > 300:
+            return None
+        secs = cc.LOAD_STATUS["seconds"]
+        if secs is None:
+            waited[0] += 1.0
+            return 1.0
+        line = (f"Build & Play: {before_launch + secs:.0f}s total ({timing}, game load {secs:.1f}s"
+                + (", then nav mesh generation and two reloads" if nav else "") + ")")
+        write_log([line], append=True)
+        print("Hammerless:", line)
+        return None
+    bpy.app.timers.register(check, first_interval=1.0)
+
+
 class HL_OT_build(bpy.types.Operator):
     bl_idname = "hammerless.build"
     bl_label = "Build"
@@ -497,9 +517,14 @@ class HL_OT_build(bpy.types.Operator):
     _timer = None
     _job: cc.CompileJob | None = None
     _root: str | None = None
+    _t0 = 0.0
+    _export_s = 0.0
 
     def execute(self, context):
+        import time
+        self._t0 = time.time()
         path, root, rep = export_vmf(self, context)
+        self._export_s = time.time() - self._t0
         surface_report(self, rep)
         if not path:
             return {"CANCELLED"}
@@ -513,7 +538,8 @@ class HL_OT_build(bpy.types.Operator):
             return {"CANCELLED"}
         write_log(report_lines(rep) + ["", "Compiling..."])
         self._root = root
-        self._job = cc.CompileJob(tools, path, compile_options(context.scene.hammerless)).start()
+        self._job = cc.CompileJob(tools, path, compile_options(context.scene.hammerless),
+                                  skip_if_unchanged=True).start()
         self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
         self.report({"INFO"}, "Compiling... (see the hammerless_log text block)")
@@ -537,13 +563,20 @@ class HL_OT_build(bpy.types.Operator):
                   (summ.errors[0] if summ and summ.errors else "Compile failed, see the log")
             self.report({"ERROR"}, msg)
             return self._finish(context, {"CANCELLED"})
+        import time
         s = context.scene.hammerless
+        compiled = "Map unchanged, skipped compiling" if self._job.skipped else "Compiled"
+        timing = f"Export {self._export_s:.1f}s, " + (", ".join(f"{n} {t:.1f}s" for n, t in self._job.timings)
+                                                      or "compile skipped")
+        write_log([timing], append=True)
         if self.play:
-            nav_note = " (building its nav mesh first: the map reloads twice)" if needs_nav(context, self._root) else ""
+            nav = needs_nav(context, self._root)
+            nav_note = " (building its nav mesh first: the map reloads twice)" if nav else ""
             launch(context, self._root)
-            self.report({"INFO"}, f"Compiled! Launching L4D2 on {s.map_name}{nav_note}")
+            _watch_load(time.time() - self._t0, timing, nav)
+            self.report({"INFO"}, f"{compiled}. Launching L4D2 on {s.map_name}{nav_note}  [{timing}]")
         else:
-            self.report({"INFO"}, "Compiled successfully")
+            self.report({"INFO"}, f"{compiled}  [{timing}]")
         return self._finish(context, {"FINISHED"})
 
     def _finish(self, context, result):

@@ -48,7 +48,7 @@ class CompileOptions:
 
 PRESETS = {
     "QUICK": CompileOptions(vis="SKIP", rad="SKIP"),   # geometry only; map is fullbright
-    "FAST": CompileOptions(vis="FAST", rad="FAST"),
+    "FAST": CompileOptions(vis="FAST", rad="FAST", hdr="LDR"),   # one lighting pass instead of two
     "NORMAL": CompileOptions(vis="FULL", rad="NORMAL"),
     "FINAL": CompileOptions(vis="FULL", rad="FINAL"),
 }
@@ -156,13 +156,17 @@ class CompileJob:
     """
 
     def __init__(self, tools: Tools, vmf_path: str, preset: "str | CompileOptions" = "NORMAL",
-                 copy_to_game: bool = True):
+                 copy_to_game: bool = True, skip_if_unchanged: bool = False):
         self.tools = tools
+        self.skip_if_unchanged = skip_if_unchanged
+        self.timings: list[tuple[str, float]] = []
+        self.skipped = False
         self.vmf = os.path.abspath(vmf_path)
         self.base = os.path.splitext(self.vmf)[0]
         self.name = os.path.basename(self.base)
         self.copy_to_game = copy_to_game
         opts = PRESETS[preset] if isinstance(preset, str) else preset
+        self._opts = opts
         vvis, vrad = opts.vvis_args(), opts.vrad_args()
         game = ["-game", tools.gamedir]
         self.steps: list[tuple[str, list[str]]] = [
@@ -185,10 +189,35 @@ class CompileJob:
         self._thread.start()
         return self
 
-    def _run(self):
+    def _stamp(self) -> str:
+        """Fingerprint of what gets compiled: the VMF text and the compile options."""
+        import hashlib
+        with open(self.vmf, "rb") as f:
+            return hashlib.sha1(f.read() + repr(self._opts).encode()).hexdigest()
+
+    def up_to_date(self) -> bool:
+        """The last successful compile used the same VMF and options, and the game has its BSP."""
         try:
+            with open(self.base + ".stamp", encoding="utf-8") as f:
+                same = f.read() == self._stamp()
+            game_bsp = os.path.join(self.tools.maps_dir, self.name + ".bsp")
+            return same and os.path.getsize(game_bsp) == os.path.getsize(self.base + ".bsp")
+        except OSError:
+            return False
+
+    def _run(self):
+        import time
+        try:
+            if self.skip_if_unchanged and self.up_to_date():
+                self.skipped = True
+                self._q.put("Map unchanged since the last build: skipped compiling")
+                self._q.put(("OK",))
+                return
+            if os.path.exists(self.base + ".stamp"):   # a failed compile mustn't look up to date
+                os.remove(self.base + ".stamp")
             for name, cmd in self.steps:
                 self._q.put(f"==== {name} ====")
+                t0 = time.time()
                 proc = subprocess.Popen(
                     cmd, cwd=os.path.dirname(self.vmf), stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, text=True, errors="replace",
@@ -196,6 +225,7 @@ class CompileJob:
                 for line in proc.stdout:
                     self._q.put(line.rstrip("\n"))
                 code = proc.wait()
+                self.timings.append((name, time.time() - t0))
                 if code != 0 or (name == "vbsp" and os.path.exists(self.base + ".lin")):
                     self._q.put(f"!! {name} failed (exit code {code})")
                     self._q.put(("FAILED",))
@@ -204,6 +234,9 @@ class CompileJob:
                 os.makedirs(self.tools.maps_dir, exist_ok=True)
                 shutil.copy2(self.base + ".bsp", os.path.join(self.tools.maps_dir, self.name + ".bsp"))
                 self._q.put(f"Copied {self.name}.bsp to {self.tools.maps_dir}")
+            with open(self.base + ".stamp", "w", encoding="utf-8") as f:
+                f.write(self._stamp())
+            self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
             self._q.put(("OK",))
         except Exception as ex:  # surfaced to the user in the log
             self._q.put(f"!! {ex}")
@@ -339,6 +372,25 @@ class LaunchOptions:
     difficulty: str = ""           # Easy / Normal / Hard / Impossible ("" = leave as is)
 
 
+# How long the last launch took until survivors were in the map (set by a watcher thread).
+LOAD_STATUS: dict = {"launch_id": 0, "seconds": None}
+
+
+def _watch_ready(log: str, start: int, launch_id: int, timeout: float = 300.0):
+    import time
+    t0 = time.time()
+    while time.time() - t0 < timeout and LOAD_STATUS["launch_id"] == launch_id:
+        time.sleep(0.5)
+        try:
+            with open(log, "rb") as f:
+                f.seek(start)
+                if READY.encode() in f.read().lower():
+                    LOAD_STATUS["seconds"] = time.time() - t0
+                    return
+        except OSError:
+            pass
+
+
 def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: list[str] | None = None,
                 window: LaunchOptions | None = None):
     """Load the map. Reuses a running game if there is one.
@@ -371,6 +423,9 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
         mons = monitors()
         if window.monitor_index < len(mons):
             move_game_window(mons[window.monitor_index])
+    LOAD_STATUS["launch_id"] += 1
+    LOAD_STATUS["seconds"] = None
+    threading.Thread(target=_watch_ready, args=(log, log_start, LOAD_STATUS["launch_id"]), daemon=True).start()
     if generate_nav:
         script, used = _navmark_paths(tools, map_name)
         mark = os.path.exists(script)

@@ -240,6 +240,32 @@ class TestLandmarks(unittest.TestCase):
             self.assertIn(f'"map" "{FALLBACK_NEXT_MAP}"', text)
 
 
+class TestCompileSkip(unittest.TestCase):
+    def test_up_to_date(self):
+        import tempfile
+        from hammerless.core import compile as cc
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "left4dead2", "maps"))
+        work = tempfile.mkdtemp()
+        vmf = os.path.join(work, "m.vmf")
+        open(vmf, "w").write("world {}")
+        open(os.path.join(work, "m.bsp"), "wb").write(b"x" * 10)
+        tools = cc.Tools(root)
+        job = cc.CompileJob(tools, vmf, "FAST", skip_if_unchanged=True)
+        self.assertFalse(job.up_to_date())                       # never compiled
+        open(os.path.join(work, "m.stamp"), "w").write(job._stamp())
+        self.assertFalse(job.up_to_date())                       # game has no BSP yet
+        open(os.path.join(tools.maps_dir, "m.bsp"), "wb").write(b"x" * 10)
+        self.assertTrue(job.up_to_date())
+        self.assertFalse(cc.CompileJob(tools, vmf, "NORMAL").up_to_date())   # other options
+        open(vmf, "w").write("world { changed }")
+        self.assertFalse(job.up_to_date())
+
+    def test_fast_is_one_lighting_pass(self):
+        from hammerless.core.compile import PRESETS
+        self.assertIn("-ldr", PRESETS["FAST"].vrad_args())
+
+
 class TestPresetFields(unittest.TestCase):
     def test_targets_exist(self):
         from hammerless.core.entities import PRESET_FIELDS
