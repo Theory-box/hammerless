@@ -76,6 +76,7 @@ class MapSettings:
     detail_material: str = "detail/detailsprites_overgrown"
     detail_vbsp: str = "detail.vbsp"
     auto_seal: bool = True
+    auto_detail: str = "SMART"        # OFF / SMART (round and small brushes) / ALL
     seal_padding: float = 256.0
     seal_thickness: float = 16.0
     auto_director: bool = True

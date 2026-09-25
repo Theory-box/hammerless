@@ -305,6 +305,14 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                     "match Valve's maps (doors, stairs). 39.37 = true inches")
     default_material: StringProperty(name="Default Material", default="dev/dev_measuregeneric01b",
                                      description="Used for faces without a material")
+    auto_detail: EnumProperty(
+        name="Auto Detail", default="SMART",
+        description="Turn brushes into func_detail so the visibility compile (vvis) stays fast. "
+                    "Detail brushes still block players and cast shadows",
+        items=[("OFF", "Off", "Every brush cuts visibility, like plain Hammer (slowest vvis)"),
+               ("SMART", "Round and Small", "Cylinders, arches and pieces under 128 units (recommended)"),
+               ("ALL", "Everything", "Fastest vvis: the map becomes one visibility region. Fine for "
+                                     "small maps; big maps may render more than needed")])
     auto_seal: BoolProperty(name="Auto Seal (skybox shell)", default=True,
                             description="Wrap the map in a skybox box so it can never leak")
     model_previews: BoolProperty(name="3D Model Previews", default=True,

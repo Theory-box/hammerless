@@ -83,6 +83,7 @@ class HL_PT_compile(_SubPanel, bpy.types.Panel):
         col = self.layout.column()
         col.use_property_split = True
         col.prop(s, "compile_preset")
+        col.prop(s, "auto_detail")
         sub = col.column()
         sub.enabled = s.compile_preset == "CUSTOM"
         sub.prop(s, "vis_mode")

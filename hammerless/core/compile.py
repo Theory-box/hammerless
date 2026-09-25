@@ -221,7 +221,9 @@ class CompileJob:
                 proc = subprocess.Popen(
                     cmd, cwd=os.path.dirname(self.vmf), stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, text=True, errors="replace",
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    # below-normal priority: the PC stays responsive while vvis/vrad use every core
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
                 for line in proc.stdout:
                     self._q.put(line.rstrip("\n"))
                 code = proc.wait()

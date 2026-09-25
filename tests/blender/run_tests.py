@@ -33,6 +33,7 @@ def reset_scene():
     s.output_dir = os.path.join(TMP, "build")
     s.check_game_content = False
     s.map_name = "test_map"
+    s.auto_detail = "OFF"      # tests count world brushes; auto detail has its own test
     return s
 
 
@@ -277,6 +278,19 @@ def test_map_check_problem_list():
     assert sunk.source == "Buried Medkit"
     s.problem_index = list(msgs).index(sunk.name)               # clicking selects the object
     assert bpy.context.view_layer.objects.active.name == "Buried Medkit"
+
+
+def test_auto_detail_default():
+    s = reset_scene()
+    s.auto_detail = "SMART"
+    add_box("floor", (20, 20, 1), (0, 0, -0.5))
+    add_box("crate", (1, 1, 1), (2, 2, 0.5))
+    bpy.ops.mesh.primitive_cylinder_add(vertices=16, radius=1, depth=4, location=(-4, 0, 2))
+    blocks, log = export()
+    assert blocks, log
+    detail = entities(blocks, "func_detail")
+    assert len(detail) == 1 and len(detail[0].blocks("solid")) == 2, log   # crate + cylinder
+    assert len(world_solids(blocks)) == 1 + 6                              # floor + seal
 
 
 def test_horde_presets_and_outputs():

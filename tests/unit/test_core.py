@@ -1,4 +1,5 @@
 """Core tests: run with `python -m unittest discover tests/unit` (no Blender needed)."""
+import math
 import os
 import sys
 import unittest
@@ -298,6 +299,32 @@ class TestMapCheck(unittest.TestCase):
         self.assertTrue(rep.ok)                                      # still builds
         self.assertTrue(rep.problems and rep.problems[0].location)
         self.assertTrue(any("can't walk" in w for w in rep.warnings))
+
+
+class TestAutoDetail(unittest.TestCase):
+    def test_rules(self):
+        from hammerless.core.build import is_auto_detail
+        wall = g.box_brush((0, 0, 0), (512, 16, 256), "concrete/wall")
+        crate = g.box_brush((0, 0, 0), (64, 64, 64), "wood/crate")
+        sky = g.box_brush((0, 0, 0), (64, 64, 64), "tools/toolsskybox")
+        cyl = Brush([Polygon([(math.cos(a) * 64, math.sin(a) * 64, 0), (math.cos(a + 0.4) * 64, math.sin(a + 0.4) * 64, 0),
+                              (math.cos(a + 0.4) * 64, math.sin(a + 0.4) * 64, 256), (math.cos(a) * 64, math.sin(a) * 64, 256)])
+                     for a in [i * 0.4 for i in range(16)]])
+        self.assertFalse(is_auto_detail(wall, "SMART"))
+        self.assertTrue(is_auto_detail(crate, "SMART"))
+        self.assertFalse(is_auto_detail(sky, "ALL"))
+        self.assertTrue(is_auto_detail(wall, "ALL"))
+        self.assertFalse(is_auto_detail(crate, "OFF"))
+        self.assertGreaterEqual(len(g.merge_coplanar(cyl.faces)), 9)
+
+    def test_vmf(self):
+        ir = box_room_ir()
+        ir.brushes.append(g.box_brush((0, 0, 0), (32, 32, 32), "wood/crate", "crate"))
+        text, rep = build_vmf(ir)
+        self.assertEqual(text.count('"classname" "func_detail"'), 1)
+        ir.settings.auto_seal = False           # func_detail doesn't seal: only with the shell
+        text, rep = build_vmf(ir)
+        self.assertNotIn("func_detail", text)
 
 
 class TestCompileSkip(unittest.TestCase):

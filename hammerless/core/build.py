@@ -8,7 +8,7 @@ from .displacement import build_patches
 from .entities import default_keyvalues
 from .entities import PSEUDO_ENTITIES
 from .gamefiles import collect_crescendos, director_input_script, script_path
-from .ir import Entity, MapIR, Output, Vec3
+from .ir import Brush, Entity, MapIR, Output, Vec3
 from .nav import collect_regions
 from .vmf import Block, VMFWriter
 
@@ -44,6 +44,25 @@ def end_landmark_renames(ir: MapIR) -> dict[str, tuple[Entity, Entity, str]]:
                 fixes[n] = (inside[0], cl, new)
                 break
     return fixes
+
+
+# Auto detail: world brushes cut the map into visibility regions (vvis time grows fast
+# with them); func_detail brushes don't, but still block players and cast shadows.
+DETAIL_MIN_PLANES = 9       # round things: cylinders, arches (a box has 6, a wedge 5)
+DETAIL_MAX_SIZE = 128.0     # small things: crates, steps, trim
+SEAL_MATERIALS = {"tools/toolsskybox", "tools/toolsnodraw", "tools/toolsblack"}
+
+
+def is_auto_detail(brush: Brush, mode: str) -> bool:
+    if mode == "OFF":
+        return False
+    if all(f.material.lower() in SEAL_MATERIALS for f in brush.faces):
+        return False        # sealing / hidden brushes stay world
+    if mode == "ALL":
+        return True
+    lo, hi = g.bounds([v for f in brush.faces for v in f.verts])
+    return (len(g.merge_coplanar(brush.faces)) >= DETAIL_MIN_PLANES
+            or max(b - a for a, b in zip(lo, hi)) <= DETAIL_MAX_SIZE)
 
 
 def bad_next_map(cl: Entity, map_name: str) -> bool:
@@ -282,8 +301,15 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     world.kv("skyname", s.skyname).kv("detailmaterial", s.detail_material)
     world.kv("detailvbsp", s.detail_vbsp).kv("maxpropscreenwidth", -1)
 
+    # detail only when the map is sealed by the automatic shell (func_detail doesn't seal)
+    mode = s.auto_detail if s.auto_seal else "OFF"
+    detail = [b for b in ir.brushes if is_auto_detail(b, mode)]
+    detail_ids = {id(b) for b in detail}
     for b in ir.brushes:
-        world.add(w.solid(b))
+        if id(b) not in detail_ids:
+            world.add(w.solid(b))
+    if detail:
+        report.info.append(f"Made {len(detail)} round/small brush(es) func_detail so they don't slow down vvis.")
     n_patches = 0
     for t in ir.terrains:
         for brush, disp in build_patches(t):
@@ -355,6 +381,8 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
             entities.append(Entity("info_landmark", (x, y, z + 32), (0, 0, 0), {"targetname": "hammerless_nav_seed"}))
 
     ent_blocks = [w.entity(e, [w.solid(b) for b in e.brushes]) for e in entities]
+    if detail:
+        ent_blocks.append(w.entity(Entity("func_detail"), [w.solid(b) for b in detail]))
     report.info.append(
         f"{len(ir.brushes)} brushes, {n_patches} terrain patches, {len(entities)} entities.")
     return w.document(world, ent_blocks), report

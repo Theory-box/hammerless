@@ -334,7 +334,7 @@ def _rgb(color) -> tuple[int, int, int]:
 
 def scene_settings_to_ir(s) -> MapSettings:
     return MapSettings(
-        name=s.map_name, skyname=s.skyname, auto_seal=s.auto_seal,
+        name=s.map_name, skyname=s.skyname, auto_seal=s.auto_seal, auto_detail=s.auto_detail,
         auto_light_environment=s.auto_sun,
         sun_color=_rgb(s.sun_color), sun_brightness=s.sun_brightness,
         sun_pitch=s.sun_pitch, sun_yaw=s.sun_yaw,
