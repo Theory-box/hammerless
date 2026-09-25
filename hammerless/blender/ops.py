@@ -57,9 +57,17 @@ def launch_options(s) -> cc.LaunchOptions:
                             difficulty=s.difficulty)
 
 
+def needs_nav(context, root) -> bool:
+    """Generate nav when asked to, or when the map has no nav mesh yet (without one, bots
+    can't move and zombies can't spawn)."""
+    s = context.scene.hammerless
+    nav = os.path.join(cc.Tools(root).maps_dir, f"{s.map_name}.nav")
+    return s.generate_nav or not os.path.exists(nav)
+
+
 def launch(context, root) -> None:
     s = context.scene.hammerless
-    cc.launch_game(cc.Tools(root), s.map_name, generate_nav=s.generate_nav, window=launch_options(s))
+    cc.launch_game(cc.Tools(root), s.map_name, generate_nav=needs_nav(context, root), window=launch_options(s))
 
 
 def work_dir(context) -> str:
@@ -508,8 +516,9 @@ class HL_OT_build(bpy.types.Operator):
             return self._finish(context, {"CANCELLED"})
         s = context.scene.hammerless
         if self.play:
+            nav_note = " (building its nav mesh first: the map reloads twice)" if needs_nav(context, self._root) else ""
             launch(context, self._root)
-            self.report({"INFO"}, f"Compiled! Launching L4D2 on {s.map_name}")
+            self.report({"INFO"}, f"Compiled! Launching L4D2 on {s.map_name}{nav_note}")
         else:
             self.report({"INFO"}, "Compiled successfully")
         return self._finish(context, {"FINISHED"})

@@ -272,6 +272,22 @@ def test_props_and_doors():
     assert door.get("spawnflags") == "8192" and door.get("model") == "models/props_doors/doormain01.mdl"
 
 
+def test_nav_generated_when_missing():
+    from hammerless.blender.ops import needs_nav
+    s = reset_scene()
+    s.generate_nav = False
+    maps = os.path.join(FAKE_GAME, "left4dead2", "maps")
+    os.makedirs(maps, exist_ok=True)
+    nav = os.path.join(maps, "test_map.nav")
+    if os.path.exists(nav):
+        os.remove(nav)
+    assert needs_nav(bpy.context, FAKE_GAME)          # no nav yet -> generate anyway
+    open(nav, "w").close()
+    assert not needs_nav(bpy.context, FAKE_GAME)      # nav exists and toggle off -> skip
+    s.generate_nav = True
+    assert needs_nav(bpy.context, FAKE_GAME)
+
+
 def test_brush_entity_func_detail():
     reset_scene()
     add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
