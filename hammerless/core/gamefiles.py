@@ -80,6 +80,27 @@ HL_Log("loaded map=" + Director.GetMapName());
 '''
 
 
+# ---------------------------------------------------------------- ready signal
+
+READY_SCRIPT = r'''// Hammerless: prints HAMMERLESS_READY once the survivors have spawned.
+// Build & Play waits for this before generating the nav mesh: nav_generate grows the
+// mesh from where the players stand, so run too early (on a map with no nav mesh
+// yet, survivors take ~15 s to appear) it fails with "No valid walkable seed positions".
+::HLR_Done <- false;
+function HLR_Think() {
+    if (::HLR_Done) return;
+    local p = null;
+    while ((p = Entities.FindByClassname(p, "player")) != null) {
+        if (p.IsSurvivor()) {
+            ::HLR_Done = true;
+            printl("HAMMERLESS_READY survivors spawned");
+            return;
+        }
+    }
+}
+'''
+
+
 # ---------------------------------------------------------------- director options
 
 DIRECTOR_OPTION_KEYS = [
@@ -186,6 +207,7 @@ def game_files(ir: MapIR) -> dict[str, str]:
     files: dict[str, str] = {}
     regions, _ = collect_regions(ir)
     files[f"{SCRIPT_DIR}/navmark_{s.name}.nut"] = navmark_script(regions, s.name)
+    files[f"{SCRIPT_DIR}/ready.nut"] = READY_SCRIPT
     if s.debug_log:
         files[f"{SCRIPT_DIR}/debug_{s.name}.nut"] = DEBUG_SCRIPT.replace("%INTERVAL%", f"{s.debug_interval:.1f}")
     if s.director_enabled:

@@ -430,6 +430,71 @@ class TestTexturePreviews(unittest.TestCase):
         self.assertEqual(base_texture(None, "hammerless/m/patch_floor_ice", game), "test/floor_tex")
 
 
+class TestSpawnSnapping(unittest.TestCase):
+    def test_vertical_span(self):
+        b = g.box_brush((0, 0, -16), (64, 64, 1.05), "x")
+        lo, hi = g.vertical_span(b, 10, 10)
+        self.assertAlmostEqual(lo, -16, places=3)
+        self.assertAlmostEqual(hi, 1.05, places=3)
+        self.assertIsNone(g.vertical_span(b, 100, 10))
+
+    def spawn_z(self, ir):
+        text, rep = build_vmf(ir)
+        self.assertTrue(rep.ok, rep.errors)
+        ents = [b for b in parse(text) if b.name == "entity"]
+        return {b.get("classname"): float(b.get("origin").split()[2]) for b in ents
+                if b.get("classname") in ("info_survivor_position", "info_player_start")}
+
+    def test_spawn_on_floor_surface_is_lifted(self):
+        # the user's map: floor top and spawn origin both at 1.05 units
+        ir = MapIR()
+        ir.brushes.append(g.box_brush((-512, -512, -220), (512, 512, 1.05), "x", "ground"))
+        ir.entities.append(Entity("info_survivor_position", (0, 140, 1.05), (0, 0, 0), {"Order": "1"}))
+        text, rep = build_vmf(ir)
+        pos = {b.get("classname"): [float(c) for c in b.get("origin").split()]
+               for b in parse(text) if b.name == "entity"}
+        self.assertAlmostEqual(pos["info_survivor_position"][2], 3.05, places=2)
+        self.assertAlmostEqual(pos["info_player_start"][2], 3.05, places=2)
+        # the auto-added player start must not sit on the survivor spawn (nobody spawns)
+        dx = pos["info_player_start"][0] - pos["info_survivor_position"][0]
+        dy = pos["info_player_start"][1] - pos["info_survivor_position"][1]
+        self.assertGreaterEqual((dx * dx + dy * dy) ** 0.5, 63.9)
+
+    def test_floating_spawn_dropped_and_far_spawn_left(self):
+        ir = MapIR()
+        ir.brushes.append(g.box_brush((-512, -512, -16), (512, 512, 0), "x", "ground"))
+        ir.entities.append(Entity("info_survivor_position", (0, 0, 30), (0, 0, 0), {"Order": "1"}))
+        ir.entities.append(Entity("info_survivor_position", (100, 0, 400), (0, 0, 0), {"Order": "2"}))  # e.g. on a roof prop
+        text, rep = build_vmf(ir)
+        zs = sorted(float(b.get("origin").split()[2]) for b in parse(text)
+                    if b.name == "entity" and b.get("classname") == "info_survivor_position")
+        self.assertEqual(zs, [2.0, 400.0])
+
+    def test_spawn_on_terrain(self):
+        ir = MapIR()
+        ir.terrains.append(TestDisplacement().make_ramp())   # z = x*0.25 + row*2
+        ir.entities.append(Entity("info_survivor_position", (160, 64, 0), (0, 0, 0), {"Order": "1"}))
+        z = self.spawn_z(ir)["info_survivor_position"]
+        self.assertAlmostEqual(z, 160 * 0.25 + 2 * 2 + 2, delta=0.5)
+
+
+class TestNavSeed(unittest.TestCase):
+    def landmarks(self, ir):
+        text, rep = build_vmf(ir)
+        self.assertTrue(rep.ok, rep.errors)
+        return [b for b in parse(text) if b.name == "entity" and b.get("classname") == "info_landmark"]
+
+    def test_seed_added_without_landmark(self):
+        lm = self.landmarks(box_room_ir())
+        self.assertEqual([b.get("targetname") for b in lm], ["hammerless_nav_seed"])
+        self.assertEqual(float(lm[0].get("origin").split()[2]), 2 + 32)   # above the snapped spawn
+
+    def test_no_seed_when_map_has_landmark(self):
+        ir = box_room_ir()
+        ir.entities.append(Entity("info_landmark", (0, 0, 32), (0, 0, 0), {"targetname": "landmark_1"}))
+        self.assertEqual([b.get("targetname") for b in self.landmarks(ir)], ["landmark_1"])
+
+
 class TestLogs(unittest.TestCase):
     def test_leak_detected(self):
         s = parse_log("Processing areas...\n**** leaked ****\nEntity light (0 0 0) leaked!\n")

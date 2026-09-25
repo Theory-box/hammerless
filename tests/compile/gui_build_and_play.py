@@ -14,6 +14,8 @@ import hammerless  # noqa: E402
 
 hammerless.register()
 bpy.context.scene.hammerless.generate_nav = os.environ.get("HL_NAV", "1") == "1"
+if os.environ.get("HL_DEBUG") == "1":      # log Director events/stats for this run only
+    bpy.context.scene.hammerless.debug_log = True
 if os.environ.get("HL_PLAYTEST") == "1":   # hands-on run: no bot test, easy difficulty
     bpy.context.scene.hammerless.autotest = False
     bpy.context.scene.hammerless.difficulty = "Easy"

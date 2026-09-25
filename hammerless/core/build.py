@@ -38,7 +38,7 @@ def validate(ir: MapIR, content=None) -> Report:
         r.warnings.append("No survivor spawn (info_player_start / info_survivor_position): "
                           "players will spawn at the map origin.")
     if "info_player_start" not in classes and "info_survivor_position" in classes:
-        r.info.append("No info_player_start. Adding one at the first survivor position.")
+        r.info.append("No info_player_start. Adding one next to the first survivor spawn.")
     if classes.count("info_director") > 1:
         r.errors.append("More than one info_director.")
     if "prop_door_rotating_checkpoint" not in classes:
@@ -125,6 +125,72 @@ def _all_points(ir: MapIR) -> list[Vec3]:
     return pts
 
 
+SNAP_TO_FLOOR = {"info_player_start", "info_survivor_position", "info_survivor_rescue"}
+SNAP_RANGE = 48.0     # look for a floor this far above/below the spawn point
+SNAP_LIFT = 2.0       # stand this far above it (a spawn touching the floor counts as stuck)
+
+
+def floor_below(ir: MapIR, x: float, y: float, z: float) -> float | None:
+    """Highest brush or terrain top within SNAP_RANGE of z at (x, y)."""
+    best = None
+    solids = ir.brushes + [b for e in ir.entities if e.classname == "func_detail" for b in e.brushes]
+    for b in solids:
+        span = g.vertical_span(b, x, y)
+        if span and abs(span[1] - z) <= SNAP_RANGE and (best is None or span[1] > best):
+            best = span[1]
+    for t in ir.terrains:
+        rows, cols = len(t.heights), len(t.heights[0]) if t.heights else 0
+        c = (x - t.origin[0]) / t.spacing
+        r = (y - t.origin[1]) / t.spacing
+        if 0 <= r <= rows - 1 and 0 <= c <= cols - 1:
+            r0, c0 = min(int(r), rows - 2), min(int(c), cols - 2)
+            fr, fc = r - r0, c - c0
+            corners = [t.heights[r0][c0], t.heights[r0][c0 + 1], t.heights[r0 + 1][c0], t.heights[r0 + 1][c0 + 1]]
+            if None not in corners:
+                h = (corners[0] * (1 - fc) + corners[1] * fc) * (1 - fr) + (corners[2] * (1 - fc) + corners[3] * fc) * fr
+                if abs(h - z) <= SNAP_RANGE and (best is None or h > best):
+                    best = h
+    return best
+
+
+def snap_spawns_to_floor(ir: MapIR, report: "Report") -> None:
+    """Put player/survivor spawns just above the floor under them. A spawn whose origin
+    touches or sits in the floor makes the player spawn as a spectator, and nav
+    generation fails ('No valid walkable seed positions')."""
+    moved = 0
+    for e in ir.entities:
+        if e.classname not in SNAP_TO_FLOOR or e.origin is None:
+            continue
+        x, y, z = e.origin
+        floor = floor_below(ir, x, y, z)
+        if floor is not None and abs(z - (floor + SNAP_LIFT)) > 0.5:
+            e.origin = (x, y, floor + SNAP_LIFT)
+            moved += 1
+    if moved:
+        report.info.append(f"Placed {moved} spawn point(s) just above the floor.")
+
+
+SPAWN_CLEARANCE = 64.0   # keep the auto-added player start this far from survivor spawns
+
+
+def clear_spawn_spot(ir: MapIR, entities, near: Vec3) -> Vec3:
+    """A floor spot near `near`, at least SPAWN_CLEARANCE from every survivor/player spawn,
+    so spawn points don't overlap (normal mapping practice)."""
+    import math
+    spawns = [e.origin for e in entities if e.classname in SNAP_TO_FLOOR and e.origin is not None]
+    x0, y0, z0 = near
+    for radius in (SPAWN_CLEARANCE, SPAWN_CLEARANCE * 2, SPAWN_CLEARANCE * 3):
+        for step in range(8):
+            a = math.radians(180 + 45 * step)        # try behind first, then around
+            x, y = x0 + radius * math.cos(a), y0 + radius * math.sin(a)
+            if any(math.hypot(x - sx, y - sy) < SPAWN_CLEARANCE and abs(z0 - sz) < 72 for sx, sy, sz in spawns):
+                continue
+            floor = floor_below(ir, x, y, z0)
+            if floor is not None:
+                return (x, y, floor + SNAP_LIFT)
+    return (x0 - SPAWN_CLEARANCE, y0, z0)
+
+
 def seal_brushes(ir: MapIR):
     """Six skybox brushes forming a hollow box around everything."""
     pts = _all_points(ir)
@@ -149,6 +215,7 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     report = validate(ir, content)
     if not report.ok:
         return None, report
+    snap_spawns_to_floor(ir, report)
 
     w = VMFWriter()
     s = ir.settings
@@ -193,6 +260,8 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
             "fogcolor": "{} {} {}".format(*s.fog_color), "fogcolor2": "{} {} {}".format(*s.fog_color),
             "fogstart": f"{s.fog_start:g}", "fogend": f"{s.fog_end:g}",
             "fogmaxdensity": f"{s.fog_max_density:g}", "farz": "-1"}))
+    entities.append(Entity("logic_script", (0, 0, 24), (0, 0, 0), {
+        "targetname": "hammerless_ready", "vscripts": script_path("ready"), "thinkfunction": "HLR_Think"}))
     if s.debug_log:
         entities.append(Entity("logic_script", (0, 0, 32), (0, 0, 0), {
             "targetname": "hammerless_debug", "vscripts": script_path(f"debug_{s.name}"),
@@ -211,8 +280,18 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
             Output("OnMapSpawn", "director", "BeginScript", director_input_script(s.name, "director"), 1.0, 1)]))
     if "info_player_start" not in classes:
         first = next((e for e in entities if e.classname == "info_survivor_position"), None)
-        origin = first.origin if first else (0.0, 0.0, 0.0)
+        origin = clear_spawn_spot(ir, entities, first.origin) if first else (0.0, 0.0, 0.0)
         entities.append(Entity("info_player_start", origin, first.angles if first else (0, 0, 0), {}))
+
+    if not any(e.classname == "info_landmark" for e in entities):
+        # nav_generate grows the nav mesh from item spawns and landmarks, not from player
+        # spawns (verified in-game: a map with only survivor/player spawns fails with "No
+        # valid walkable seed positions"; adding one info_landmark fixes it). Valve's maps
+        # always have landmarks, so add an unused one above the first spawn as a seed.
+        spawn = next((e for e in entities if e.classname in SNAP_TO_FLOOR and e.origin is not None), None)
+        if spawn is not None:
+            x, y, z = spawn.origin
+            entities.append(Entity("info_landmark", (x, y, z + 32), (0, 0, 0), {"targetname": "hammerless_nav_seed"}))
 
     ent_blocks = [w.entity(e, [w.solid(b) for b in e.brushes]) for e in entities]
     report.info.append(

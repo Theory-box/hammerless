@@ -146,6 +146,27 @@ def check_brush(brush: Brush, tolerance: float = 0.1) -> list[BrushProblem]:
     return problems
 
 
+def vertical_span(brush: Brush, x: float, y: float) -> tuple[float, float] | None:
+    """Where the vertical line through (x, y) is inside a convex brush: (bottom z, top z)."""
+    lo, hi = -1e9, 1e9
+    for f in merge_coplanar(brush.faces):
+        pl = Plane.from_polygon(f.verts)
+        nx, ny, nz = pl.normal
+        rest = pl.dist - nx * x - ny * y        # inside: nz * z <= rest
+        if abs(nz) < 1e-6:
+            if rest < -EPS:
+                return None                      # the line misses this side entirely
+            continue
+        bound = rest / nz
+        if nz > 0:
+            hi = min(hi, bound)
+        else:
+            lo = max(lo, bound)
+        if lo > hi:
+            return None
+    return (lo, hi) if hi > -1e8 else None
+
+
 # ---------------------------------------------------------------- texturing
 
 def world_texture_axes(normal: Vec3) -> tuple[Vec3, Vec3]:

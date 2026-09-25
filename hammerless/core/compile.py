@@ -293,12 +293,17 @@ def _run_console_script(tools: Tools, steps: list[tuple[str, list[str]]], log_st
 LOADED = "server number:"
 
 
+# Printed by the map's hammerless_ready script once survivors exist (see gamefiles.py).
+# nav_generate needs players standing in the map; sent earlier, it fails.
+READY = "hammerless_ready survivors spawned"   # not just the name: the game also prints "hammerless_ready executing script"
+
+
 def nav_steps(map_name: str, mark: bool = True) -> list[tuple[str, list[str]]]:
     """Generate nav, mark safe-room attributes (see nav.py), save, reload fresh."""
     steps = [(f"host_newgame on map {map_name.lower()}", []),
-             (LOADED, ["sv_cheats 1", "nav_generate"]),
+             (READY, ["sv_cheats 1", "nav_generate"]),
              (".nav' saved.", []),
-             (LOADED, [f"script_execute hammerless/navmark_{map_name}"] if mark
+             (READY, [f"script_execute hammerless/navmark_{map_name}"] if mark
               else ["sv_cheats 0", f"map {map_name}"])]
     if mark:
         steps.append(("hammerless_navmark done", []))
