@@ -206,9 +206,10 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
 
     # --- game
     generate_nav: BoolProperty(
-        name="Generate Nav Mesh", default=False,
-        description="Build the nav mesh (needed for bots and zombies) after the map loads. "
-                    "Needed after geometry changes")
+        name="Rebuild Nav Mesh", default=False,
+        description="Rebuild the nav mesh (how bots and zombies find their way) on the next Build & Play. "
+                    "Tick it after changing walls, floors or terrain. A map that has no nav mesh yet "
+                    "gets one automatically")
     window_monitor: EnumProperty(name="Monitor", items=_monitor_items,
                                  description="Which monitor the game window opens on")
     window_width: IntProperty(name="Width", default=1600, min=640, max=7680)

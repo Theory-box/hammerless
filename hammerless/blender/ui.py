@@ -32,9 +32,9 @@ class HL_PT_map(bpy.types.Panel):
         s = context.scene.hammerless
         col = self.layout.column()
         col.prop(s, "map_name")
-        row = col.row(align=True)
-        row.prop(s, "compile_preset", text="Quality")
-        row.prop(s, "generate_nav", text="Nav", toggle=True, icon="MOD_PHYSICS")
+        col.prop(s, "compile_preset", text="Quality")
+        col.prop(s, "generate_nav", text="Rebuild Nav Mesh")
+        col.label(text=_nav_status(context), icon="MOD_PHYSICS")
         big = col.row()
         big.scale_y = 1.6
         op = big.operator("hammerless.build", text="Build & Play", icon="PLAY")
@@ -47,6 +47,22 @@ class HL_PT_map(bpy.types.Panel):
         op.play = False
         row.operator("hammerless.launch", icon="URL")
         row.operator("hammerless.load_leak", icon="ERROR")
+
+
+def _nav_status(context) -> str:
+    """One-line nav mesh status for the map (bots and zombies need one)."""
+    import os
+    import time
+    from .ops import game_root
+    s = context.scene.hammerless
+    root = game_root(context)
+    if not root:
+        return "Nav mesh: L4D2 not found"
+    nav = os.path.join(root, "left4dead2", "maps", f"{s.map_name}.nav")
+    if not os.path.exists(nav):
+        return "Nav mesh: none yet (built on next Build & Play)"
+    age = time.strftime("%b %d %H:%M", time.localtime(os.path.getmtime(nav)))
+    return f"Nav mesh: built {age}" + (" - rebuilding next time" if s.generate_nav else "")
 
 
 class _SubPanel:
