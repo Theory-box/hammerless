@@ -22,7 +22,13 @@ Two ways to give it room:
 
 ### Rule 2: the Director needs the nav mesh and the flow
 
-The nav mesh is the map of walkable areas. The **flow** is the path from the start safe room to the end safe room; the Director measures survivors' progress along it. Hammerless handles both when you tick **Generate Nav Mesh** and press Build & Play: it generates the nav, marks the safe rooms, saves, and reloads. Regenerate after changing geometry.
+The nav mesh is the map of walkable areas. The **flow** is the path from the start safe room to the end safe room; the Director measures survivors' progress along it and spawns commons ahead of or behind them.
+
+**No flow means no common infected at all.** Specials (Hunter, Smoker…) still spawn, which makes this confusing. A map with only a survivor spawn and no safe rooms gets specials but never commons. Add a **Start Safe Room** and an **End Safe Room** preset, even for a test map.
+
+Hammerless handles the nav side: Build & Play generates the nav mesh (automatically if the map has none; tick **Rebuild Nav Mesh** after changing geometry), marks the safe rooms and Zombie Spawn Areas, saves, and reloads.
+
+Community sources: [Steam mapping help: nav flow](https://steamcommunity.com/app/550/discussions/3/598517032946829432/), [World of Level Design: nav meshes and spawning infected](https://www.worldofleveldesign.com/categories/left4dead_mapping/l4d-gameplay-navigation-meshes-spawn-infected.php).
 
 ## 2. Inputs & outputs: how events are wired
 
