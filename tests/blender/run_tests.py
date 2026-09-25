@@ -257,6 +257,28 @@ def test_add_panel_items():
     assert wall.hammerless.classname == "env_player_blocker"
 
 
+def test_map_check_problem_list():
+    s = reset_scene()
+    add_box("ground_a", (40, 20, 1), (0, 0, -0.5))
+    add_box("ground_b", (20, 20, 1), (42, 0, -0.5))          # 12 m gap between the grounds
+    bpy.context.scene.cursor.location = (-15, -2, 0)
+    bpy.ops.hammerless.add_preset(preset="START_SAFE_ROOM")
+    bpy.context.scene.cursor.location = (45, -2, 0)
+    bpy.ops.hammerless.add_preset(preset="END_SAFE_ROOM")
+    bpy.context.scene.cursor.location = (0, 0, -0.3)
+    bpy.ops.hammerless.add_entity(classname="weapon_first_aid_kit_spawn")
+    bpy.context.object.name = "Buried Medkit"
+    bpy.ops.hammerless.validate()
+    msgs = {p.name: p for p in s.problems}
+    path = next(p for m, p in msgs.items() if "can't walk" in m)
+    assert path.has_location and path.severity == "ERROR"
+    assert 18 <= path.location.x <= 22, tuple(path.location)   # marker at the edge of ground_a
+    sunk = next(p for m, p in msgs.items() if "Buried Medkit" in m)
+    assert sunk.source == "Buried Medkit"
+    s.problem_index = list(msgs).index(sunk.name)               # clicking selects the object
+    assert bpy.context.view_layer.objects.active.name == "Buried Medkit"
+
+
 def test_horde_presets_and_outputs():
     reset_scene()
     add_box("floor", (20, 20, 0.5), (0, 0, -0.25))

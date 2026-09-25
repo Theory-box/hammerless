@@ -240,6 +240,66 @@ class TestLandmarks(unittest.TestCase):
             self.assertIn(f'"map" "{FALLBACK_NEXT_MAP}"', text)
 
 
+class TestMapCheck(unittest.TestCase):
+    """Walkable path from start to end room, and entity placement, before compiling."""
+
+    def level(self, ground_to=4200, end_dz=0):
+        from hammerless.core.entities import end_safe_room, start_safe_room
+        ir = MapIR()
+        ir.brushes.append(g.box_brush((-400, -1024, -200), (ground_to, 1024, 0), "dev/dev_measuregeneric01b", "ground"))
+        if ground_to < 3800:   # a 96-unit gap, then more ground
+            ir.brushes.append(g.box_brush((ground_to + 96, -1024, -200), (4400, 1024, 0),
+                                          "dev/dev_measuregeneric01b", "ground2"))
+        for preset, dx, dz in ((start_safe_room("a"), -330, 0), (end_safe_room("c1m2_streets", "b"), 3800, end_dz)):
+            for part in preset.parts:
+                for b in ([part.brush] if part.brush else []) + (part.entity.brushes if part.entity else []):
+                    for f in b.faces:
+                        f.verts = [(x + dx, y, z + dz) for x, y, z in f.verts]
+                if part.entity and part.entity.origin is not None:
+                    x, y, z = part.entity.origin
+                    part.entity.origin = (x + dx, y, z + dz)
+                if part.brush:
+                    ir.brushes.append(part.brush)
+                if part.entity:
+                    ir.entities.append(part.entity)
+        return ir
+
+    def test_walkable(self):
+        from hammerless.core.mapcheck import check_map
+        self.assertEqual(check_map(self.level()), [])
+
+    def test_gap_found(self):
+        from hammerless.core.mapcheck import check_map
+        probs = check_map(self.level(ground_to=3000))
+        self.assertEqual(len(probs), 1)
+        self.assertIn("can't walk", probs[0].message)
+        self.assertAlmostEqual(probs[0].location[0], 3000, delta=32)   # marker at the gap
+
+    def test_step_too_tall(self):
+        from hammerless.core.mapcheck import check_map
+        self.assertTrue(any("can't walk" in p.message for p in check_map(self.level(end_dz=40))))
+        self.assertEqual(check_map(self.level(end_dz=12)), [])          # a small step is fine
+
+    def test_placement(self):
+        from hammerless.core.mapcheck import check_map
+        ir = self.level()
+        ir.entities += [Entity("weapon_first_aid_kit_spawn", (1000, 0, -6), source="sunk"),
+                        Entity("weapon_first_aid_kit_spawn", (1100, 0, -150), source="buried"),
+                        Entity("weapon_first_aid_kit_spawn", (1200, 0, 100), source="floating"),
+                        Entity("weapon_first_aid_kit_spawn", (1300, 0, 0), source="fine")]
+        found = {p.source: p.message for p in check_map(ir)}
+        self.assertIn("sunk 6", found["sunk"])
+        self.assertIn("stuck in solid", found["buried"])
+        self.assertIn("floats 100", found["floating"])
+        self.assertNotIn("fine", found)
+
+    def test_in_report(self):
+        text, rep = build_vmf(self.level(ground_to=3000))
+        self.assertTrue(rep.ok)                                      # still builds
+        self.assertTrue(rep.problems and rep.problems[0].location)
+        self.assertTrue(any("can't walk" in w for w in rep.warnings))
+
+
 class TestCompileSkip(unittest.TestCase):
     def test_up_to_date(self):
         import tempfile

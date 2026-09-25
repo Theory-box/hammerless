@@ -40,8 +40,9 @@ class HL_PT_map(bpy.types.Panel):
         big.scale_y = 1.6
         op = big.operator("hammerless.build", text="Build & Play", icon="PLAY")
         op.play = True
+        from .problems import draw_panel
+        draw_panel(col, context)
         row = col.row(align=True)
-        row.operator("hammerless.validate", icon="CHECKMARK")
         row.operator("hammerless.export_vmf", icon="EXPORT")
         row = col.row(align=True)
         op = row.operator("hammerless.build", text="Compile Only", icon="FILE_REFRESH")

@@ -164,6 +164,19 @@ def _on_spawn_index(self, context):
         self.spawn_selected = self.spawn_items[self.spawn_index].name
 
 
+def _on_problem_index(self, context):
+    from .problems import go_to_problem
+    go_to_problem(context, self.problem_index)
+
+
+class HL_Problem(bpy.types.PropertyGroup):
+    """One map check result (name = message)."""
+    severity: StringProperty()              # ERROR / WARNING / INFO
+    source: StringProperty()                # object to select
+    location: FloatVectorProperty(size=3, subtype="TRANSLATION")   # Blender units
+    has_location: BoolProperty()
+
+
 class HL_SpawnListItem(bpy.types.PropertyGroup):
     """One row of the Add panel list (name = spawn item id). Filled from core/spawnlist.py."""
 
@@ -177,6 +190,12 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                  description="Search everything you can add")
     spawn_selected: StringProperty(default="preset:HORDE_TRIGGER")
     spawn_items: CollectionProperty(type=HL_SpawnListItem)
+    # --- map check
+    problems: CollectionProperty(type=HL_Problem)
+    problem_index: IntProperty(default=-1, update=_on_problem_index)
+    problems_checked: BoolProperty(description="The map has been checked since the file opened")
+    show_problem_markers: BoolProperty(name="Show Markers", default=True,
+                                       description="Draw numbered markers in the viewport where problems are")
     spawn_index: IntProperty(default=-1, update=_on_spawn_index)
     spawn_favorites: StringProperty(description="Starred Add panel items (comma separated)")
     # --- build
@@ -296,7 +315,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     last_log: StringProperty()
 
 
-CLASSES = (HL_SpawnListItem, HL_KeyValue, HL_Output, HL_ObjectSettings, HL_CollectionSettings, HL_MaterialSettings, HL_SceneSettings)
+CLASSES = (HL_Problem, HL_SpawnListItem, HL_KeyValue, HL_Output, HL_ObjectSettings, HL_CollectionSettings, HL_MaterialSettings, HL_SceneSettings)
 
 
 def register():

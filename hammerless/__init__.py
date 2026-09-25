@@ -11,19 +11,21 @@ except ImportError:
 
 
 def register():
-    from .blender import props, ops, ui, presets, spawn
+    from .blender import props, ops, ui, presets, spawn, problems
     props.register()
     for c in presets.CLASSES:
         bpy.utils.register_class(c)
     spawn.register()
+    problems.register()
     ops.register()
     ui.register()
 
 
 def unregister():
-    from .blender import props, ops, ui, presets, spawn
+    from .blender import props, ops, ui, presets, spawn, problems
     ui.unregister()
     ops.unregister()
+    problems.unregister()
     spawn.unregister()
     for c in reversed(presets.CLASSES):
         bpy.utils.unregister_class(c)

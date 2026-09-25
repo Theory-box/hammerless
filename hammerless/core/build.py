@@ -56,13 +56,14 @@ class Report:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     info: list[str] = field(default_factory=list)
+    problems: list = field(default_factory=list)   # mapcheck.Problem: with object and location
 
     @property
     def ok(self) -> bool:
         return not self.errors
 
 
-def validate(ir: MapIR, content=None) -> Report:
+def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
     """content: optional vpk.GameContent to check materials/models exist."""
     r = Report()
     for b in ir.brushes + [b for e in ir.entities for b in e.brushes]:
@@ -137,6 +138,15 @@ def validate(ir: MapIR, content=None) -> Report:
             mdl = e.keyvalues.get("model", "")
             if mdl.endswith(".mdl") and not content.has_model(mdl):
                 r.warnings.append(f"Model '{mdl}' on {e.classname} not found in game files.")
+
+    if physical:
+        from .mapcheck import cached_check
+        try:
+            r.problems = cached_check(ir)
+        except Exception as ex:   # a checker bug must never block building
+            r.info.append(f"Map check skipped ({ex})")
+        for p in r.problems:
+            r.warnings.append(p.message)
 
     all_pts = _all_points(ir)
     if all_pts:

@@ -468,6 +468,9 @@ class HL_OT_validate(bpy.types.Operator):
         ir, _ = extract_scene(context, rep, None)
         rep2 = validate(ir, game_content(root) if s.check_game_content else None)
         rep.errors += rep2.errors; rep.warnings += rep2.warnings; rep.info += rep2.info
+        rep.problems = rep2.problems
+        from .problems import store
+        store(context, rep)
         surface_report(self, rep)
         if rep.ok and not rep.warnings:
             self.report({"INFO"}, "No problems found")
@@ -525,6 +528,8 @@ class HL_OT_build(bpy.types.Operator):
         self._t0 = time.time()
         path, root, rep = export_vmf(self, context)
         self._export_s = time.time() - self._t0
+        from .problems import store
+        store(context, rep)
         surface_report(self, rep)
         if not path:
             return {"CANCELLED"}
