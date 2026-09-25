@@ -4,6 +4,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                        FloatVectorProperty, IntProperty, PointerProperty, StringProperty)
 
 from ..core.entities import default_keyvalues
+from ..core.spawnlist import CATEGORIES as SPAWN_CATEGORIES
 
 OBJECT_ROLES = [
     ("AUTO", "Auto", "Lights become lights, meshes follow their collection (default: brush), "
@@ -154,7 +155,30 @@ class HL_MaterialSettings(bpy.types.PropertyGroup):
     surfaceprop: StringProperty(options={"HIDDEN"})  # v0.1 setting, kept so old files load
 
 
+def _on_spawn_category(self, context):
+    self.spawn_search = ""   # picking a tile shows that category, not old search results
+
+
+def _on_spawn_index(self, context):
+    if 0 <= self.spawn_index < len(self.spawn_items):
+        self.spawn_selected = self.spawn_items[self.spawn_index].name
+
+
+class HL_SpawnListItem(bpy.types.PropertyGroup):
+    """One row of the Add panel list (name = spawn item id). Filled from core/spawnlist.py."""
+
+
 class HL_SceneSettings(bpy.types.PropertyGroup):
+    # --- Add panel
+    spawn_category: EnumProperty(
+        name="Category", default="EVENTS", update=_on_spawn_category,
+        items=[(k, label, f"Show {label.lower()}", icon, i) for i, (k, label, icon) in enumerate(SPAWN_CATEGORIES)])
+    spawn_search: StringProperty(name="Search", options={"TEXTEDIT_UPDATE"},
+                                 description="Search everything you can add")
+    spawn_selected: StringProperty(default="preset:HORDE_TRIGGER")
+    spawn_items: CollectionProperty(type=HL_SpawnListItem)
+    spawn_index: IntProperty(default=-1, update=_on_spawn_index)
+    spawn_favorites: StringProperty(description="Starred Add panel items (comma separated)")
     # --- build
     map_name: StringProperty(name="Map Name", default="my_map",
                              description="File name of the map (lowercase, no spaces)")
@@ -272,7 +296,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     last_log: StringProperty()
 
 
-CLASSES = (HL_KeyValue, HL_Output, HL_ObjectSettings, HL_CollectionSettings, HL_MaterialSettings, HL_SceneSettings)
+CLASSES = (HL_SpawnListItem, HL_KeyValue, HL_Output, HL_ObjectSettings, HL_CollectionSettings, HL_MaterialSettings, HL_SceneSettings)
 
 
 def register():

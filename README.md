@@ -12,6 +12,8 @@ Status: **v0.1, early.** Tested end-to-end in L4D2: compile, spawns, nav, safe r
 
 ## Using it
 
+**Adding things:** open the sidebar (N) > *Hammerless* > **Add**. Pick a category tile (Events, Safe Rooms, Survivors, Infected, Weapons, Items, Props, Volumes, Logic, Lights) or type in the search box to look through everything. Click an item to read what it does, star it to keep it under *Favorites*, then press **Add at Cursor**. For volumes (triggers, blockers, detail brushes) with meshes selected, the button becomes **Turn Selected into…**. The *Shift+A > L4D2* menu still works too.
+
 | You want | Do this |
 |---|---|
 | Walls, floors, buildings | Any **convex** mesh (boxes, wedges, cylinders). One object can hold several separate convex pieces. Meshes are brushes by default. |

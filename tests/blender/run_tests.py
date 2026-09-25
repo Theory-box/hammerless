@@ -229,6 +229,34 @@ def test_group_old_preset():
     assert blocks, log
 
 
+def test_add_panel_items():
+    from hammerless.core.spawnlist import SPAWN_ITEMS
+    reset_scene()
+    add_box("floor", (40, 40, 0.5), (0, 0, -0.25))
+    before = set(bpy.data.objects)
+    for it in SPAWN_ITEMS:                       # every item in the Add panel can be added
+        assert bpy.ops.hammerless.spawn_item(item=it.id) == {"FINISHED"}, it.id
+        new = set(bpy.data.objects) - before
+        assert new, it.id
+        before |= new
+    s = bpy.context.scene.hammerless
+    bpy.ops.hammerless.spawn_favorite(item="entity:weapon_smg_spawn")
+    bpy.ops.hammerless.spawn_favorite(item="preset:LADDER")
+    bpy.ops.hammerless.spawn_favorite(item="entity:weapon_smg_spawn")
+    assert s.spawn_favorites == "preset:LADDER", s.spawn_favorites
+    s.spawn_search = "medkit"
+    s.spawn_category = "WEAPONS"
+    assert s.spawn_search == "", "picking a category clears the search"
+    # a volume turns the selected mesh into that entity
+    wall = add_box("wall", (4, 0.2, 3), (0, 10, 1.5))
+    for o in bpy.context.selected_objects:
+        o.select_set(False)
+    wall.select_set(True)
+    bpy.context.view_layer.objects.active = wall
+    bpy.ops.hammerless.spawn_item(item="entity:env_player_blocker", use_selection=True)
+    assert wall.hammerless.classname == "env_player_blocker"
+
+
 def test_horde_presets_and_outputs():
     reset_scene()
     add_box("floor", (20, 20, 0.5), (0, 0, -0.25))

@@ -27,6 +27,7 @@ class HL_PT_map(bpy.types.Panel):
     bl_region_type = "UI"
     bl_category = "Hammerless"
     bl_label = "L4D2 Map"
+    bl_order = 0
 
     def draw(self, context):
         s = context.scene.hammerless
@@ -222,6 +223,7 @@ class HL_PT_object(bpy.types.Panel):
     bl_region_type = "UI"
     bl_category = "Hammerless"
     bl_label = "Selected Object"
+    bl_order = 2
 
     @classmethod
     def poll(cls, context):
