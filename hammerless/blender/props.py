@@ -31,19 +31,35 @@ COMPILE_PRESETS = [
 ]
 
 
+def _kv_changed(self, context):
+    from .presets import on_kv_value
+    on_kv_value(self, context)
+
+
+def _param_changed(self, context):
+    from .presets import on_output_param
+    on_output_param(self, context)
+
+
+def _target_changed(self, context):
+    from .presets import on_output_target
+    on_output_target(self, context)
+
+
 class HL_KeyValue(bpy.types.PropertyGroup):
     key: StringProperty(name="Key")
-    value: StringProperty(name="Value")
+    value: StringProperty(name="Value", update=_kv_changed)
 
 
 class HL_Output(bpy.types.PropertyGroup):
     output: StringProperty(name="Output", default="OnTrigger",
                            description="Event on THIS entity, e.g. OnTrigger, OnPressed, OnStartTouch")
-    target: StringProperty(name="Target", default="director",
+    target: StringProperty(name="Target", default="director", update=_target_changed,
                            description="Name (targetname) of the entity to send the input to")
     input: StringProperty(name="Input", default="ForcePanicEvent",
                           description="What the target should do, e.g. ForcePanicEvent, SpawnZombie, Open")
-    parameter: StringProperty(name="Parameter", description="Optional value passed with the input")
+    parameter: StringProperty(name="Parameter", description="Optional value passed with the input",
+                              update=_param_changed)
     delay: FloatProperty(name="Delay", min=0.0, description="Seconds to wait before sending")
     only_once: BoolProperty(name="Only Once", default=True)
 
@@ -64,6 +80,8 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
     keyvalues_index: IntProperty()
     outputs: CollectionProperty(type=HL_Output)
     outputs_index: IntProperty()
+    preset: StringProperty(description="On a preset's parent Empty: which preset it is")
+    preset_part: StringProperty(description="On a preset part: which part it is")
     use_convex_hull: BoolProperty(
         name="Use Convex Hull",
         description="Wrap each loose part in its convex hull instead of requiring it to be convex")

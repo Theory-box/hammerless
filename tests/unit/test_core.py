@@ -240,6 +240,21 @@ class TestLandmarks(unittest.TestCase):
             self.assertIn(f'"map" "{FALLBACK_NEXT_MAP}"', text)
 
 
+class TestPresetFields(unittest.TestCase):
+    def test_targets_exist(self):
+        from hammerless.core.entities import PRESET_FIELDS
+        for key, fields in PRESET_FIELDS.items():
+            parts = {p.name: p.entity for p in PRESETS[key].parts}
+            for f in fields:
+                for part, kind, k in f.targets:
+                    e = parts.get(part)
+                    self.assertIsNotNone(e, (key, part))
+                    if kind == "kv":
+                        self.assertIn(k, e.keyvalues, (key, part, k))
+                    else:
+                        self.assertTrue(any(o.input == k for o in e.outputs), (key, part, k))
+
+
 class TestNav(unittest.TestCase):
     def preset_ir(self):
         from hammerless.core.entities import end_safe_room, start_safe_room

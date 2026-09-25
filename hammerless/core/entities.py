@@ -452,6 +452,50 @@ PRESET_BUILDERS = {"START_SAFE_ROOM": start_safe_room, "END_SAFE_ROOM": end_safe
 PRESETS = {k: f() for k, f in PRESET_BUILDERS.items()}  # default instances (labels, tests)
 
 
+@dataclass
+class PresetField:
+    """A setting shown on a preset's parent object. The value lives on its parts:
+    `targets` are (part name, kind, key) with kind "kv" (keyvalue `key`), or
+    "output_param" / "output_target" (the part's output whose input is `key`).
+    The first target is the one shown; the rest are kept equal to it."""
+    label: str
+    description: str
+    targets: tuple[tuple[str, str, str], ...]
+
+
+PRESET_FIELDS: dict[str, list[PresetField]] = {
+    "START_SAFE_ROOM": [
+        PresetField("Landmark", "Links this room to the previous map's end room (same name there). "
+                    "Must differ from this map's end room landmark",
+                    (("landmark", "kv", "targetname"),)),
+    ],
+    "END_SAFE_ROOM": [
+        PresetField("Next Map", "Map loaded when survivors close the door. Must be a different map, "
+                    "or the Director has no start-to-end path and zombies won't wander",
+                    (("changelevel", "kv", "map"),)),
+        PresetField("Landmark", "Links this room to the next map's start room (same name there). "
+                    "Must differ from this map's start room landmark",
+                    (("landmark", "kv", "targetname"), ("changelevel", "kv", "landmark"))),
+    ],
+    "CRESCENDO_BUTTON": [
+        PresetField("Stages", "Waves, e.g. PANIC 1, DELAY 10, PANIC 2, TANK 1",
+                    (("definition", "kv", "stages"),)),
+        PresetField("Name", "Crescendo name the button starts",
+                    (("definition", "kv", "name"), ("button", "output_param", "ScriptedPanicEvent"))),
+    ],
+    "TANK_AMBUSH": [
+        PresetField("Spawns", "What appears: tank, witch, hunter, boomer, smoker, charger, jockey, "
+                    "spitter or common", (("trigger", "output_param", "SpawnZombie"),)),
+        PresetField("Spawner Name", "Name of the spawn point the trigger talks to",
+                    (("spawner", "kv", "targetname"), ("trigger", "output_target", "SpawnZombie"))),
+    ],
+    "ZOMBIE_SPAWN_AREA": [
+        PresetField("Nav Marks", "Nav attributes set inside the box (OBSCURED = hidden spot for commons)",
+                    (("nav_region", "kv", "attributes"),)),
+    ],
+}
+
+
 # ---------------------------------------------------------------- preview models
 # What the game shows for entities that have no "model" keyvalue. Used only for
 # previews in Blender; never written to the map.

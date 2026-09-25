@@ -39,6 +39,9 @@ Hammerless handles the nav side: Build & Play generates the nav mesh (automatica
 
 Community sources: [Steam mapping help: nav flow](https://steamcommunity.com/app/550/discussions/3/598517032946829432/), [World of Level Design: nav meshes and spawning infected](https://www.worldofleveldesign.com/categories/left4dead_mapping/l4d-gameplay-navigation-meshes-spawn-infected.php).
 
+### Presets are one object
+Every *Shift+A > L4D2* preset adds a parent **Empty** named after it (for example *End Safe Room*), with all its pieces parented to it. Select the Empty to move the whole thing, and to see its settings in the Hammerless panel: Next Map and Landmark for safe rooms, Stages for crescendos, what a Tank Ambush spawns. Click any piece and the panel shows **Part of: …** with a button to jump back. In files made before this, click any preset piece and press **Group into Preset**.
+
 ## 2. Inputs & outputs: how events are wired
 
 Hammer's event system is **"when X happens, tell Y to do Z"**:
@@ -81,7 +84,7 @@ To make your own button: select any small convex mesh, then *Make Brush Entity >
 A **Zombie Spawner** (*Shift+A > L4D2 > Infected > Zombie Spawner*) spawns on command, ignoring the visibility rule. Send it `SpawnZombie` with a parameter of `common`, `tank`, `witch`, `hunter`, `boomer`, `smoker`, `charger`, `jockey` or `spitter`. Add several outputs to one trigger for a scripted ambush, for example three `SpawnZombie common` plus one `SpawnZombie hunter` with a 2-second delay.
 
 ### A crescendo: hordes in waves
-*Shift+A > L4D2 > Crescendo Button.* This adds a button plus a **Crescendo Definition** (a small cube). Select the definition and edit **stages**, for example:
+*Shift+A > L4D2 > Crescendo Button.* This adds a button plus a **Crescendo Definition** (a small cube), both under one **Crescendo Button** parent. Select the parent and edit **Stages** in the Hammerless panel, for example:
 
 ```
 PANIC 1, DELAY 10, PANIC 1, DELAY 10, PANIC 2

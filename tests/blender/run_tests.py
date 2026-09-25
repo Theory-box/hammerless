@@ -179,6 +179,56 @@ def test_presets():
     assert len(world_solids(blocks)) == 16 + 6
 
 
+def test_preset_parent_and_linked_settings():
+    reset_scene()
+    bpy.ops.hammerless.add_preset(preset="START_SAFE_ROOM", landmark="landmark_1")
+    bpy.context.scene.cursor.location = (30, 0, 0)
+    bpy.ops.hammerless.add_preset(preset="END_SAFE_ROOM")   # dialog default landmark_1 is taken
+    from hammerless.blender.presets import PRESET_FIELDS, resolve
+    root = bpy.context.object
+    assert root.type == "EMPTY" and root.hammerless.preset == "END_SAFE_ROOM", root
+    assert all(c.parent == root for c in root.children) and len(root.children) > 10
+    (next_map, lm) = [resolve(root, f.targets[0]) for f in PRESET_FIELDS["END_SAFE_ROOM"]]
+    assert getattr(*lm) == "landmark_2", getattr(*lm)
+    setattr(lm[0], lm[1], "to_c2")            # editing the landmark updates the changelevel too
+    setattr(next_map[0], next_map[1], "c2m1_highway")
+    root.location.x += 5                      # moving the Empty moves the room
+    blocks, log = export()
+    assert blocks, log
+    cl = entities(blocks, "info_changelevel")[0]
+    assert cl.get("landmark") == "to_c2" and cl.get("map") == "c2m1_highway", (cl.get("landmark"), cl.get("map"))
+    lms = {e.get("targetname"): e for e in entities(blocks, "info_landmark")}
+    assert set(lms) == {"landmark_1", "to_c2"}
+    assert float(lms["to_c2"].get("origin").split()[0]) > 34 * 64 * 0.9, lms["to_c2"].get("origin")
+    assert "Renamed" not in log, log
+
+
+def test_group_old_preset():
+    reset_scene()
+    bpy.ops.hammerless.add_preset(preset="END_SAFE_ROOM", landmark="lm_end")
+    root = bpy.context.object
+    # make it look like a scene made before parent Empties: its own collection, no parent
+    coll = bpy.data.collections.new("End Safe Room")
+    bpy.context.scene.collection.children.link(coll)
+    for c in list(root.children):
+        w = c.matrix_world.copy()
+        c.parent = None
+        c.matrix_world = w
+        c.hammerless.preset_part = ""
+        for uc in list(c.users_collection):
+            uc.objects.unlink(c)
+        coll.objects.link(c)
+    bpy.data.objects.remove(root)
+    part = coll.objects["End Safe Room door"]
+    bpy.context.view_layer.objects.active = part
+    bpy.ops.hammerless.group_preset()
+    root = bpy.context.object
+    assert root.hammerless.preset == "END_SAFE_ROOM" and len(root.children) == len(coll.objects) - 1
+    assert coll.objects["End Safe Room changelevel"].hammerless.preset_part == "changelevel"
+    blocks, log = export()
+    assert blocks, log
+
+
 def test_horde_presets_and_outputs():
     reset_scene()
     add_box("floor", (20, 20, 0.5), (0, 0, -0.25))

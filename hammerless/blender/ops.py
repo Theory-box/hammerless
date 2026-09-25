@@ -406,9 +406,11 @@ class HL_OT_add_preset(bpy.types.Operator):
             preset = builder(name=f"crescendo_{n}")
         else:
             preset = builder()
-        coll = bpy.data.collections.new(preset.label)
-        context.scene.collection.children.link(coll)
+        from .presets import make_root, parent_to
+        coll = context.collection
         base = context.scene.cursor.location.copy()
+        root = make_root(context, self.preset, base, coll)
+        parts = []
         for part in preset.parts:
             if part.brush is not None:
                 pts = [v for f in part.brush.faces for v in f.verts]
@@ -440,7 +442,16 @@ class HL_OT_add_preset(bpy.types.Operator):
                     obj = make_entity_object(context, e.classname, loc, coll, rot, e.keyvalues,
                                              f"{preset.label} {part.name}")
                     apply_entity_data(obj, Entity(e.classname, outputs=e.outputs))
-        self.report({"INFO"}, f"Added {preset.label}")
+            obj.hammerless.preset_part = part.name
+            parts.append(obj)
+        context.view_layer.update()
+        for obj in parts:
+            parent_to(obj, root)
+        for o in context.selected_objects:
+            o.select_set(False)
+        root.select_set(True)
+        context.view_layer.objects.active = root
+        self.report({"INFO"}, f"Added {preset.label}: select '{root.name}' to move it or change its settings")
         return {"FINISHED"}
 
 

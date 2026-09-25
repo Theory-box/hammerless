@@ -228,9 +228,14 @@ class HL_PT_object(bpy.types.Panel):
         return context.object is not None
 
     def draw(self, context):
+        from .presets import draw_part, draw_root
         obj = context.object
         hs = obj.hammerless
+        if hs.preset:
+            draw_root(self.layout, obj)
+            return
         col = self.layout.column()
+        draw_part(col, obj)
         col.prop(hs, "role")
         eff = effective_role(obj)
         if hs.role == "AUTO":
