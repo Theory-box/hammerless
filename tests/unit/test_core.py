@@ -205,6 +205,18 @@ class TestLandmarks(unittest.TestCase):
             ir.entities.append(Entity("info_landmark", (0, 0, 0), (0, 0, 0), {"targetname": "lm"}))
         self.assertTrue(any("both named 'lm'" in e for e in validate(ir).errors))
 
+    def test_next_map_fallback(self):
+        # Empty or self-referencing Next Map breaks the Director's flow in-game.
+        from hammerless.core.build import FALLBACK_NEXT_MAP
+        for nxt in ("", "My_Map"):
+            ir = box_room_ir()
+            ir.settings.name = "my_map"
+            vol = g.box_brush((0, 0, 0), (64, 64, 64), "tools/toolstrigger")
+            ir.entities.append(Entity("info_changelevel", None, (0, 0, 0), {"map": nxt}, [vol]))
+            text, rep = build_vmf(ir)
+            self.assertTrue(any("Next Map" in w for w in rep.warnings))
+            self.assertIn(f'"map" "{FALLBACK_NEXT_MAP}"', text)
+
 
 class TestNav(unittest.TestCase):
     def preset_ir(self):

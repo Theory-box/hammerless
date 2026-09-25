@@ -24,7 +24,16 @@ Two ways to give it room:
 
 The nav mesh is the map of walkable areas. The **flow** is the path from the start safe room to the end safe room; the Director measures survivors' progress along it and spawns commons ahead of or behind them.
 
-**No flow means no common infected at all.** Specials (Hunter, Smoker…) still spawn, which makes this confusing. A map with only a survivor spawn and no safe rooms gets specials but never commons. Add a **Start Safe Room** and an **End Safe Room** preset, even for a test map.
+What spawns with and without flow (measured in-game, Easy):
+
+| Map | Wanderers (commons already standing around) | Mobs (timed rushes) | Specials |
+|---|---|---|---|
+| Start + End Safe Room | ✅ about 30 within 20 s, even before leaving the room | ✅ | ✅ |
+| Only a survivor spawn | ❌ none | ✅ one rush every *Mob Spawn Min–Max Time* (default 90–180 s) | ✅ |
+
+So on a map without safe rooms it looks like "only specials spawn" until the first rush arrives a minute or more in. For a proper level, add a **Start Safe Room** and an **End Safe Room** preset.
+
+**The End Safe Room's Next Map must be a different, real map** (for example `c1m2_streets`). If it's empty or names the map itself, the game silently skips the flow ("an info_changelevel points to the current map" in the console), and there are no wanderers, Tanks or Witches. Hammerless fills in `c1m2_streets` and warns when it's missing.
 
 Hammerless handles the nav side: Build & Play generates the nav mesh (automatically if the map has none; tick **Rebuild Nav Mesh** after changing geometry), marks the safe rooms and Zombie Spawn Areas, saves, and reloads.
 

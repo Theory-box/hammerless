@@ -14,6 +14,16 @@ from .vmf import Block, VMFWriter
 
 SURVIVOR_SPAWNS = {"info_player_start", "info_survivor_position"}
 
+# The Director only computes the flow (the start-to-end progress path) when the end
+# room's info_changelevel names a different map; empty or the map itself breaks it,
+# and with no flow there are no wandering commons, Tanks or Witches.
+FALLBACK_NEXT_MAP = "c1m2_streets"
+
+
+def bad_next_map(cl: Entity, map_name: str) -> bool:
+    nxt = cl.keyvalues.get("map", "").strip().lower()
+    return not nxt or nxt == map_name.strip().lower()
+
 
 @dataclass
 class Report:
@@ -54,8 +64,11 @@ def validate(ir: MapIR, content=None) -> Report:
             r.errors.append(f"info_changelevel '{cl.source}' has no brush volume.")
         if cl.keyvalues.get("landmark") and cl.keyvalues["landmark"] not in landmarks:
             r.warnings.append(f"info_changelevel refers to landmark '{cl.keyvalues['landmark']}' which doesn't exist.")
-        if not cl.keyvalues.get("map"):
-            r.warnings.append("info_changelevel has no 'map' set (next map).")
+        if bad_next_map(cl, ir.settings.name):
+            r.warnings.append(f"End safe room's Next Map is {'empty' if not cl.keyvalues.get('map') else 'this map itself'}. "
+                              "The game then can't work out the path from start to end, so no wandering "
+                              f"zombies spawn. Using '{FALLBACK_NEXT_MAP}'; set Next Map on "
+                              f"'{cl.source or 'info_changelevel'}' to your next map.")
 
     names = {e.keyvalues.get("targetname") for e in ir.entities} | {"director"}  # director is auto-added
     for e in ir.entities:
@@ -244,6 +257,9 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
                 name = resolve_crescendo(ir, o.parameter)
                 if name:
                     o.parameter = director_input_script(s.name, name)
+    for e in entities:
+        if e.classname == "info_changelevel" and bad_next_map(e, s.name):
+            e.keyvalues = {**e.keyvalues, "map": FALLBACK_NEXT_MAP}
     classes = {e.classname for e in entities}
     if s.auto_director and "info_director" not in classes:
         entities.append(Entity("info_director", (0, 0, 0), (0, 0, 0), default_keyvalues("info_director")))

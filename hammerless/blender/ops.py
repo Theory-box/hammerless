@@ -369,8 +369,9 @@ class HL_OT_add_preset(bpy.types.Operator):
         name="Landmark Name", default="landmark_1",
         description="Links this safe room to the neighbouring map. A map's END room and the NEXT "
                     "map's START room must use the same name")
-    next_map: StringProperty(name="Next Map", default="",
-                             description="End safe room only: the map to load when survivors close the door")
+    next_map: StringProperty(name="Next Map", default="c1m2_streets",
+                             description="End safe room only: the map to load when survivors close the door. "
+                                         "Must be a different map, or zombies won't wander (no start-to-end path)")
 
     def draw(self, context):
         if self.preset in ("START_SAFE_ROOM", "END_SAFE_ROOM"):
