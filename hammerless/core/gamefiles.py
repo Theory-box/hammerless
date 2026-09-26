@@ -8,7 +8,7 @@ they work without sv_cheats.
 from __future__ import annotations
 
 from .ir import MapIR
-from .nav import collect_regions, navmark_script
+from .nav import collect_climbs, collect_regions, navmark_script
 
 SCRIPT_DIR = "scripts/vscripts/hammerless"
 
@@ -241,7 +241,8 @@ def game_files(ir: MapIR) -> dict[str, str]:
     s = ir.settings
     files: dict[str, str] = {}
     regions, _ = collect_regions(ir)
-    files[f"{SCRIPT_DIR}/navmark_{s.name}.nut"] = navmark_script(regions, s.name)
+    climbs, _ = collect_climbs(ir)
+    files[f"{SCRIPT_DIR}/navmark_{s.name}.nut"] = navmark_script(regions, s.name, climbs)
     files[f"{SCRIPT_DIR}/ready.nut"] = READY_SCRIPT
     if s.debug_log:
         files[f"{SCRIPT_DIR}/debug_{s.name}.nut"] = DEBUG_SCRIPT.replace("%INTERVAL%", f"{s.debug_interval:.1f}")

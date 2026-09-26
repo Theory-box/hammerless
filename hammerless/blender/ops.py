@@ -12,7 +12,7 @@ from ..core.build import Report, build_vmf, validate
 from ..core.ir import Entity
 from ..core.entities import CATALOG, CATEGORIES, PRESET_BUILDERS, PRESETS, default_keyvalues, preview_model
 from ..core.gamefiles import game_files
-from ..core.nav import collect_regions
+from ..core.nav import collect_climbs, collect_regions
 from ..core.vpk import GameContent
 from .extract import extract_scene
 
@@ -134,6 +134,7 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
                 f.write(content)
         regions, _ = collect_regions(ir)
         rep2.nav_regions = regions
+        rep2.nav_climbs = collect_climbs(ir)[0]
         rep2.info.append(f"Wrote {len(files)} script(s) to the game folder; nav marking covers "
                          f"{len(regions)} region(s)")
     return path, root, rep2
@@ -533,7 +534,7 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
     bpy.app.timers.register(check, first_interval=1.0)
 
 
-def _start_nav_generation(vmf_path: str, regions) -> dict:
+def _start_nav_generation(vmf_path: str, regions, climbs=()) -> dict:
     """Run our copy of the game's nav generator on the VMF in a background thread."""
     import threading
     import time
@@ -541,7 +542,7 @@ def _start_nav_generation(vmf_path: str, regions) -> dict:
     with open(vmf_path, encoding="utf-8") as f:
         text = f.read()
     box = {"stage": "starting", "mesh": None, "error": None, "seconds": 0.0}
-    reuse = cached(text, regions)          # Predict was pressed on this exact map: no waiting
+    reuse = cached(text, regions, climbs)  # Predict was pressed on this exact map: no waiting
     if reuse is not None:
         box["mesh"] = reuse
         box["thread"] = threading.Thread(target=lambda: None)
@@ -552,7 +553,7 @@ def _start_nav_generation(vmf_path: str, regions) -> dict:
     def work():
         t0 = time.time()
         try:
-            box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage.lower()))
+            box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage.lower()), climbs)
         except Exception as ex:          # reported; the game makes the nav mesh instead
             box["error"] = str(ex)
         box["seconds"] = time.time() - t0
@@ -600,7 +601,7 @@ class HL_OT_build(bpy.types.Operator):
         self._nav = None
         s = context.scene.hammerless
         if self.play and s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root)):
-            self._nav = _start_nav_generation(path, rep.nav_regions)
+            self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs)
         self._job.start()
         self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
@@ -641,6 +642,10 @@ class HL_OT_build(bpy.types.Operator):
                 self._nav = None
             else:
                 cc.write_generated_nav(cc.Tools(self._root), s.map_name, self._nav["mesh"])
+                for problem in self._nav["mesh"].problems:
+                    self.report({"WARNING"}, problem)
+                if self._nav["mesh"].problems:
+                    write_log(self._nav["mesh"].problems, append=True)
                 s.generate_nav = False
                 timing += f", nav mesh {self._nav['seconds']:.1f}s (during the compile)"
         if self.play:

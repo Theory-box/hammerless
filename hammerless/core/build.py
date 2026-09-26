@@ -1,15 +1,17 @@
 """MapIR -> VMF text, with validation and automatic fixes (sealing, director, sun)."""
 from __future__ import annotations
 
+import dataclasses
+
 from dataclasses import dataclass, field
 
 from . import geometry as g
 from .displacement import build_patches
 from .entities import default_keyvalues
-from .entities import PSEUDO_ENTITIES
+from .entities import PSEUDO_ENTITIES, ZOMBIES_ONLY
 from .gamefiles import collect_crescendos, director_input_script, script_path
 from .ir import Brush, Entity, MapIR, Output, Vec3
-from .nav import collect_regions
+from .nav import collect_climbs, collect_regions
 from .vmf import Block, VMFWriter
 
 SURVIVOR_SPAWNS = {"info_player_start", "info_survivor_position"}
@@ -77,6 +79,7 @@ class Report:
     info: list[str] = field(default_factory=list)
     problems: list = field(default_factory=list)   # mapcheck.Problem: with object and location
     nav_regions: list = field(default_factory=list)  # nav.NavRegion: marks for the nav mesh
+    nav_climbs: list = field(default_factory=list)   # nav.NavClimb: Zombie Climb links
 
     @property
     def ok(self) -> bool:
@@ -132,6 +135,7 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
 
     regions, nav_problems = collect_regions(ir)
     r.errors += nav_problems
+    r.warnings += collect_climbs(ir)[1]
     ir.crescendos.clear()
     r.errors += collect_crescendos(ir)
     for e in ir.entities:
@@ -266,6 +270,23 @@ def clear_spawn_spot(ir: MapIR, entities, near: Vec3) -> Vec3:
     return (x0 - SPAWN_CLEARANCE, y0, z0)
 
 
+def zombie_ladder_entity(e: Entity, report: Report) -> Entity:
+    """func_ladder with team 'zombies' -> func_simpleladder team 2. vbsp turns every func_ladder
+    into a team 0 func_simpleladder and drops the team, so zombie-only ladders are written
+    directly, with the climbable face's outward normal (what vbsp would work out)."""
+    kv = {k: v for k, v in e.keyvalues.items() if k != "team"}
+    if e.keyvalues.get("team", "").strip().lower() not in ZOMBIES_ONLY:
+        return dataclasses.replace(e, keyvalues=kv)
+    faces = [f for b in e.brushes for f in b.faces if f.material.lower() == "tools/toolsinvisibleladder"]
+    if not faces:
+        report.warnings.append(f"Zombie ladder '{e.source}' has no tools/toolsinvisibleladder face; "
+                               "it stays an ordinary ladder.")
+        return dataclasses.replace(e, keyvalues=kv)
+    n = g.polygon_normal(faces[0].verts)
+    kv.update({"team": "2", "normal.x": f"{n[0]:.6f}", "normal.y": f"{n[1]:.6f}", "normal.z": f"{n[2]:.6f}"})
+    return dataclasses.replace(e, classname="func_simpleladder", keyvalues=kv)
+
+
 def seal_brushes(ir: MapIR):
     """Six skybox brushes forming a hollow box around everything."""
     pts = _all_points(ir)
@@ -332,6 +353,7 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     for e in entities:
         if e.classname == "info_changelevel" and bad_next_map(e, s.name):
             e.keyvalues = {**e.keyvalues, "map": FALLBACK_NEXT_MAP}
+    entities = [zombie_ladder_entity(e, report) if e.classname == "func_ladder" else e for e in entities]
     classes = {e.classname for e in entities}
     if s.auto_director and "info_director" not in classes:
         entities.append(Entity("info_director", (0, 0, 0), (0, 0, 0), default_keyvalues("info_director")))

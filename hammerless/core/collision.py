@@ -25,7 +25,9 @@ NONSOLID = {"tools/toolstrigger", "tools/toolshint", "tools/toolsskip", "tools/t
             "tools/toolsfog", "tools/toolsoccluder", "tools/toolsplayerclip", "tools/toolsinvisibleladder",
             "tools/toolsclip"}
 SKY = {"tools/toolsskybox", "tools/toolsskybox2d"}
-SOLID_BRUSH_ENTITIES = {"func_detail", "func_wall", "func_illusionary_never"}
+# ladder brushes too: nav generation stands nodes on them (measured: the game's nav has a small
+# area on top of each ladder brush, and the ladder's bottom stays inside it)
+SOLID_BRUSH_ENTITIES = {"func_detail", "func_wall", "func_illusionary_never", "func_ladder", "func_simpleladder"}
 
 
 def _sub(a, b):

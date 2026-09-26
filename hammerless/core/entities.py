@@ -46,7 +46,11 @@ class EntityDef:
 
 NAV_REGION = "hammerless_nav_region"  # pseudo-entity, see nav.py
 CRESCENDO = "hammerless_crescendo"     # pseudo-entity, see gamefiles.py
-PSEUDO_ENTITIES = {NAV_REGION, CRESCENDO}  # never written to the map
+CLIMB = "hammerless_zombie_climb"      # pseudo-entity, see nav.py collect_climbs
+PSEUDO_ENTITIES = {NAV_REGION, CRESCENDO, CLIMB}  # never written to the map
+# Tallest wall common infected climbed from a hand-made nav link in our tests (160 yes, 172 no)
+ZOMBIE_CLIMB_MAX = 160.0
+ZOMBIES_ONLY = ("2", "zombies", "zombie", "infected")   # func_ladder "team" values meaning zombies only
 
 ITEM_FLAGS = KeyDef("spawnflags", "2", "Spawn flags", (
     ("0", "None"), ("1", "Enable physics"), ("2", "Must exist"), ("8", "Infinite items"),
@@ -229,7 +233,8 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
     EntityDef("func_ladder", "Ladder", "Brush Entities",
               "Climbable volume. Give the side players climb from the tools/toolsinvisibleladder "
               "material (the Ladder preset does this). The compiler turns it into an L4D2 ladder "
-              "the nav mesh understands.", brush=True),
+              "the nav mesh understands.",
+              (KeyDef("team", "everyone", "Who climbs: everyone or zombies"),), brush=True),
     EntityDef("func_button", "Button", "Brush Entities",
               "Something players press with Use. Wire its OnPressed output to start events "
               "(e.g. director > ForcePanicEvent for a horde).",
@@ -244,6 +249,13 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               "Marks the nav mesh inside this volume after nav generation. Start safe rooms need "
               "PLAYER_START CHECKPOINT. Change-level volumes are marked CHECKPOINT automatically.",
               (KeyDef("attributes", "PLAYER_START CHECKPOINT", "Attributes"),), brush=True),
+
+    EntityDef(CLIMB, "Zombie Climb Point", "Infected",
+              "One end of a Zombie Climb (use the Zombie Climb preset: a bottom and a top point). "
+              "Adds a one-way nav link so common infected climb from the bottom up to the top.",
+              (KeyDef("end", "bottom", "bottom or top"),
+               KeyDef("climb", "climb_1", "Climb name (pairs the two ends)")),
+              size=(12.0, 12.0, 12.0)),
 
     # --- lights (basic; full lighting comes later)
     EntityDef("light", "Point Light", "Lights", "Omni light.",
@@ -422,7 +434,7 @@ def ladder(height: float = 256.0) -> Preset:
     """Climbable from the +X side (the direction the preset arrow points)."""
     vol = g.box_brush((-4, -16, 0), (4, 16, height), "tools/toolsnodraw", "ladder")
     vol.faces[4].material = "tools/toolsinvisibleladder"   # +X face: the climbable side
-    parts = [PresetPart("volume", entity=Entity("func_ladder", None, (0, 0, 0), {}, [vol]))]
+    parts = [PresetPart("volume", entity=Entity("func_ladder", None, (0, 0, 0), {"team": "everyone"}, [vol]))]
     z = 0.0
     n = 0
     while z < height - 8:
@@ -434,6 +446,28 @@ def ladder(height: float = 256.0) -> Preset:
     return Preset("LADDER", "Ladder",
                   "A 256-unit (about 5 m) climbable ladder with a visible metal ladder model. "
                   "Climb from the side the arrow points to. Scale it in Z for other heights.", parts)
+
+
+def zombie_ladder(height: float = 256.0) -> Preset:
+    """An invisible ladder only the infected can use: how Valve's maps let zombies up poles,
+    fences, walls and onto roofs."""
+    vol = g.box_brush((-4, -16, 0), (4, 16, height), "tools/toolsnodraw", "zombie_ladder")
+    vol.faces[4].material = "tools/toolsinvisibleladder"   # +X face: the climbable side
+    return Preset("ZOMBIE_LADDER", "Zombie Ladder",
+                  "An invisible 256-unit ladder only zombies can climb. Put it against a pole, wall or "
+                  "building with the arrow pointing away from the surface. Scale it in Z for other heights.",
+                  [PresetPart("volume", entity=Entity("func_ladder", None, (0, 0, 0), {"team": "zombies"}, [vol]))])
+
+
+def zombie_climb(name: str = "climb_1") -> Preset:
+    return Preset("ZOMBIE_CLIMB", "Zombie Climb",
+                  "Lets common infected climb a wall or ledge up to 160 units (about 3 m) high: put the bottom "
+                  "point on the ground at the foot of the wall and the top point on the ledge. Taller "
+                  "than that, use a Zombie Ladder.",
+                  [PresetPart("bottom", entity=Entity(CLIMB, (0.0, 0.0, 1.0), (0, 0, 0),
+                                                      {"end": "bottom", "climb": name})),
+                   PresetPart("top", entity=Entity(CLIMB, (48.0, 0.0, 129.0), (0, 0, 0),
+                                                   {"end": "top", "climb": name}))])
 
 
 def zombie_spawn_area() -> Preset:
@@ -448,7 +482,8 @@ def zombie_spawn_area() -> Preset:
 PRESET_BUILDERS = {"START_SAFE_ROOM": start_safe_room, "END_SAFE_ROOM": end_safe_room,
                    "HORDE_TRIGGER": horde_trigger, "HORDE_BUTTON": horde_button,
                    "TANK_AMBUSH": tank_ambush, "CRESCENDO_BUTTON": crescendo_button,
-                   "ZOMBIE_SPAWN_AREA": zombie_spawn_area, "LADDER": ladder}
+                   "ZOMBIE_SPAWN_AREA": zombie_spawn_area, "LADDER": ladder,
+                   "ZOMBIE_LADDER": zombie_ladder, "ZOMBIE_CLIMB": zombie_climb}
 PRESETS = {k: f() for k, f in PRESET_BUILDERS.items()}  # default instances (labels, tests)
 
 
@@ -488,6 +523,14 @@ PRESET_FIELDS: dict[str, list[PresetField]] = {
                     "spitter or common", (("trigger", "output_param", "SpawnZombie"),)),
         PresetField("Spawner Name", "Name of the spawn point the trigger talks to",
                     (("spawner", "kv", "targetname"), ("trigger", "output_target", "SpawnZombie"))),
+    ],
+    "LADDER": [
+        PresetField("Who Climbs", "everyone, or zombies (then survivors can not use it)",
+                    (("volume", "kv", "team"),)),
+    ],
+    "ZOMBIE_CLIMB": [
+        PresetField("Name", "Pairs the bottom and top points (each Zombie Climb needs its own name)",
+                    (("bottom", "kv", "climb"), ("top", "kv", "climb"))),
     ],
     "ZOMBIE_SPAWN_AREA": [
         PresetField("Nav Marks", "Nav attributes set inside the box (OBSCURED = hidden spot for commons)",

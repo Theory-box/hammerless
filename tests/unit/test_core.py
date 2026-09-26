@@ -423,6 +423,91 @@ class TestNavGen(unittest.TestCase):
         self.assertFalse(any(n.pos[2] > 100 for n in high.nodes))
 
 
+class TestLaddersAndClimbs(unittest.TestCase):
+    """Ladders and Zombie Climbs in the nav mesh. The ladder numbers are the game's own
+    (nav_generate on the same map: top 192.03, bottom -1, length 194, facing west)."""
+
+    def tower_map(self, height=192.0, zombies=False, climb=False):
+        from hammerless.core.entities import zombie_climb, ladder, zombie_ladder
+        ir = MapIR()
+        m = "dev/dev_measuregeneric01b"
+        ir.brushes.append(g.box_brush((-512, -512, -64), (512, 512, 0), m, "ground"))
+        ir.brushes.append(g.box_brush((128, -256, 0), (512, 256, height), m, "tower"))
+        ir.entities.append(Entity("info_landmark", (-300, 0, 32), (0, 0, 0), {"targetname": "lm"}))
+        # the preset's climbable side faces +X; turn it to face -X (west), away from the tower
+        preset = zombie_ladder(height) if zombies else ladder(height)
+        vol = preset.parts[0].entity
+        for b in vol.brushes:
+            for f in b.faces:
+                f.verts = [(124 - x, -160 - y, z) for x, y, z in f.verts]   # turned 180 degrees
+        ir.entities.append(vol)
+        if climb:
+            for part in zombie_climb("wall").parts:
+                ir.entities.append(part.entity)
+        return ir
+
+    def test_ladder_matches_game(self):
+        from hammerless.core.navpredict import predict
+        text, _rep = build_vmf(self.tower_map())
+        mesh = predict(text, [])
+        self.assertEqual(len(mesh.ladders), 1)
+        lad = mesh.ladders[0]
+        self.assertEqual(lad.direction, 3)                   # WEST
+        self.assertAlmostEqual(lad.bottom[2], -1.0)
+        self.assertAlmostEqual(lad.top[2], 192.03125)
+        self.assertAlmostEqual(lad.length, 194.0)
+        self.assertEqual(lad.width, 34.0)
+        by = mesh.by_id()
+        self.assertGreater(by[lad.top_forward].nw[2], 190)   # the tower top
+        self.assertLess(by[lad.bottom_area].nw[2], 1)        # the floor
+        self.assertIn(lad.id, by[lad.bottom_area].ladders[0])
+        self.assertTrue(any(a.nw[2] > 190 for a in mesh.areas))   # sampling carried on up the ladder
+
+    def test_zombie_ladder_export(self):
+        text, _rep = build_vmf(self.tower_map(zombies=True))
+        self.assertIn('"classname" "func_simpleladder"', text)
+        self.assertIn('"team" "2"', text)
+        self.assertIn('"normal.x" "-1.000000"', text)
+        text, _rep = build_vmf(self.tower_map(zombies=False))
+        self.assertIn('"classname" "func_ladder"', text)
+        self.assertNotIn('"team"', text)
+
+    def test_zombie_climb_link(self):
+        from hammerless.core.nav import collect_climbs
+        from hammerless.core.navpredict import predict
+        ir = self.tower_map(height=128.0)
+        ir.entities = [e for e in ir.entities if e.classname != "func_ladder"]
+        ir.entities.append(Entity("info_landmark", (300, 0, 160), (0, 0, 0), {"targetname": "lm_top"}))
+        from hammerless.core.entities import zombie_climb
+        bottom, top = zombie_climb("wall").parts
+        bottom.entity.origin, top.entity.origin = (100.0, 0.0, 1.0), (160.0, 0.0, 129.0)
+        ir.entities += [bottom.entity, top.entity]
+        climbs, problems = collect_climbs(ir)
+        self.assertEqual(len(climbs), 1)
+        self.assertEqual(problems, [])
+        text, _rep = build_vmf(ir)
+        self.assertNotIn("hammerless_zombie_climb", text)    # never written to the map
+        mesh = predict(text, [], None, climbs)
+        self.assertEqual(mesh.problems, [])
+        by = mesh.by_id()
+        ups = [(a, by[i]) for a in mesh.areas for c in a.connections for i in c
+               if a.nw[2] < 1 and by[i].nw[2] > 120]
+        self.assertTrue(ups)
+
+    def test_climb_problems(self):
+        from hammerless.core.entities import zombie_climb
+        from hammerless.core.nav import collect_climbs
+        ir = MapIR()
+        bottom, top = zombie_climb("tall").parts
+        top.entity.origin = (48.0, 0.0, 300.0)
+        ir.entities += [bottom.entity, top.entity]
+        _c, problems = collect_climbs(ir)
+        self.assertTrue(any("Zombie Ladder" in p for p in problems))
+        ir.entities = [bottom.entity]
+        _c, problems = collect_climbs(ir)
+        self.assertTrue(any("both a bottom and a top" in p for p in problems))
+
+
 class TestNavPredict(unittest.TestCase):
     """The nav mesh our generator predicts, marked and analysed like the game's."""
 

@@ -26,6 +26,11 @@ def available() -> bool:
                 lib.hl_add_seed.restype = ctypes.c_int
                 lib.hl_add_seed.argtypes = [ctypes.c_double] * 3
                 lib.hl_trace_count.restype = ctypes.c_longlong
+                lib.hl_sample_from.restype = ctypes.c_int
+                lib.hl_sample_from.argtypes = [ctypes.c_double] * 6 + [ctypes.c_int]
+                lib.hl_has_node.restype = ctypes.c_int
+                lib.hl_has_node.argtypes = [ctypes.c_double] * 3
+                lib.hl_node_count.restype = ctypes.c_int
                 _lib = lib
             except OSError:
                 _lib = False
@@ -71,12 +76,35 @@ def load_world(world) -> None:
 
 def sample(world, raw_seeds, max_nodes: int = 500000):
     """Run the flood fill natively. Returns navgen.Node objects linked like Sampler.sample makes them."""
-    from .navgen import Node
+    start(world, raw_seeds, max_nodes)
+    return collect(world)
+
+
+def start(world, raw_seeds, max_nodes: int = 500000) -> None:
+    """Flood fill from the seeds (the nodes stay in the DLL until collect())."""
     load_world(world)
     _lib.hl_reset()
     for p in raw_seeds:
         _lib.hl_add_seed(p[0], p[1], p[2])
-    n = _lib.hl_sample(ctypes.c_int(max_nodes))
+    _lib.hl_sample(ctypes.c_int(max_nodes))
+
+
+def sample_from(pos, normal, max_nodes: int = 500000) -> None:
+    _lib.hl_sample_from(pos[0], pos[1], pos[2], normal[0], normal[1], normal[2], max_nodes)
+
+
+def has_node(pos) -> bool:
+    return bool(_lib.hl_has_node(pos[0], pos[1], pos[2]))
+
+
+def node_count() -> int:
+    return _lib.hl_node_count()
+
+
+def collect(world):
+    """The sampled nodes as navgen.Node objects."""
+    from .navgen import Node
+    n = _lib.hl_node_count()
     d14 = (ctypes.c_double * (14 * max(1, n)))()
     i15 = (ctypes.c_int * (15 * max(1, n)))()
     _lib.hl_nodes(d14, i15)

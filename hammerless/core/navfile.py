@@ -102,6 +102,7 @@ class NavMesh:
     areas: list[NavArea] = field(default_factory=list)
     ladders: list[NavLadder] = field(default_factory=list)
     trailer: bytes = b"\x00\x00\x00\x00"          # L4D2 custom data after the ladders
+    problems: list[str] = field(default_factory=list)   # not saved: notes from our generator
 
     def by_id(self) -> dict[int, NavArea]:
         return {a.id: a for a in self.areas}

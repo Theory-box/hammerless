@@ -21,7 +21,7 @@ COLORS = {
     "reach": (0.2, 0.85, 0.35, 0.3), "unreach": (0.95, 0.1, 0.05, 0.55),
     "obscured": (1.0, 0.6, 0.1, 0.4), "plain": (0.55, 0.75, 0.95, 0.25),
     "drop": (1.0, 0.55, 0.1, 1.0), "jump": (0.1, 0.9, 1.0, 1.0), "outline": (0.05, 0.05, 0.05, 0.6),
-    "break": (1.0, 0.1, 0.1, 1.0),
+    "break": (1.0, 0.1, 0.1, 1.0), "ladder": (1.0, 0.9, 0.1, 1.0),
 }
 LIFT = 2.0      # draw this many Hammer units above the floor so areas don't flicker
 
@@ -99,8 +99,17 @@ def _build(scale: float, mode: str, links: bool):
         tri_cols += [col] * 6
         for i in range(4):
             outline += [c[i], c[(i + 1) % 4]]
-    link_lines = {"drop": [], "jump": []}
+    link_lines = {"drop": [], "jump": [], "ladder": []}
     if links:
+        for lad in m.ladders:        # a rail from bottom to top, with rungs
+            b, t = Vector(lad.bottom) / scale, Vector(lad.top) / scale
+            side = Vector((0.0, 0.0, 0.0))
+            side[1 if lad.direction in (1, 3) else 0] = lad.width * 0.5 / scale
+            link_lines["ladder"] += [b - side, t - side, b + side, t + side]
+            steps = max(1, int((lad.top[2] - lad.bottom[2]) / 32))
+            for i in range(steps + 1):
+                p = b + (t - b) * (i / steps)
+                link_lines["ladder"] += [p - side, p + side]
         by = m.by_id()
         for l in rep.links:
             if l.kind not in link_lines:
@@ -141,7 +150,7 @@ def _draw():
         if name != "fill":
             shader.bind()
             shader.uniform_float("color", COLORS[name])
-            gpu.state.line_width_set(2.5 if name in ("drop", "jump") else 1.0)
+            gpu.state.line_width_set(2.5 if name in ("drop", "jump", "ladder") else 1.0)
         batch.draw(shader)
     gpu.state.line_width_set(1.0)
     gpu.state.depth_mask_set(True)
@@ -192,7 +201,7 @@ class HL_OT_nav_predict(bpy.types.Operator):
     def execute(self, context):
         import threading
         from ..core.build import Report, build_vmf
-        from ..core.nav import collect_regions
+        from ..core.nav import collect_climbs, collect_regions
         from ..core.navpredict import predict
         from .extract import extract_scene
         rep = Report()
@@ -205,12 +214,13 @@ class HL_OT_nav_predict(bpy.types.Operator):
             self.report({"ERROR"}, rep2.errors[0] if rep2.errors else "The map doesn't build")
             return {"CANCELLED"}
         regions, _ = collect_regions(ir)
+        climbs, _ = collect_climbs(ir)
         box = {"stage": "Starting", "nodes": 0, "mesh": None, "error": None}
         self._box = box
 
         def work():
             try:
-                box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage, nodes=n))
+                box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage, nodes=n), climbs)
             except Exception as ex:          # shown to the user
                 box["error"] = str(ex)
         self._thread = threading.Thread(target=work, daemon=True)
@@ -233,6 +243,8 @@ class HL_OT_nav_predict(bpy.types.Operator):
             self.report({"ERROR"}, f"Nav prediction failed: {box['error']}")
             return {"CANCELLED"}
         finish_prediction(context, box["mesh"])
+        for problem in box["mesh"].problems:
+            self.report({"WARNING"}, problem)
         rep = _state["report"]
         if not rep.end:
             self.report({"INFO"}, f"Predicted {rep.total} nav areas (no end safe room to check the path)")
@@ -283,7 +295,7 @@ def draw_panel(layout, context):
         col.label(text=f"{rep.unreachable} unreachable in {len(rep.islands)} island(s)", icon="GHOST_DISABLED")
     drops = sum(l.kind == "drop" for l in rep.links)
     jumps = sum(l.kind == "jump" for l in rep.links)
-    col.label(text=f"{drops} drop-downs, {jumps} jump-ups")
+    col.label(text=f"{drops} drop-downs, {jumps} jump-ups / climbs, {len(_state['mesh'].ladders)} ladders")
     col = layout.column(align=True)
     col.prop(s, "nav_color_mode", text="")
     row = col.row(align=True)

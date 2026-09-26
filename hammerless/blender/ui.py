@@ -372,7 +372,8 @@ class HL_MT_add(bpy.types.Menu):
         layout.separator()
         for key, icon in (("HORDE_TRIGGER", "GHOST_ENABLED"), ("HORDE_BUTTON", "GHOST_ENABLED"),
                           ("TANK_AMBUSH", "GHOST_ENABLED"), ("CRESCENDO_BUTTON", "GHOST_ENABLED"),
-                          ("ZOMBIE_SPAWN_AREA", "MOD_MASK"), ("LADDER", "SORT_DESC")):
+                          ("ZOMBIE_SPAWN_AREA", "MOD_MASK"), ("LADDER", "SORT_DESC"),
+                          ("ZOMBIE_LADDER", "SORT_DESC"), ("ZOMBIE_CLIMB", "TRIA_UP")):
             layout.operator("hammerless.add_preset", text=PRESETS[key].label, icon=icon).preset = key
         layout.separator()
         for m in CATEGORY_MENUS:

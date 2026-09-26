@@ -53,6 +53,34 @@ def round_to_units(val: float, unit: float) -> float:
     return float(unit * int(int(val) / int(unit)))
 
 
+def add_dir(pos, d: int, amount: float):
+    """nav.h AddDirectionVector."""
+    dx, dy = STEP_XY[d]
+    return (pos[0] + dx / GENERATION_STEP * amount, pos[1] + dy / GENERATION_STEP * amount, pos[2])
+
+
+MIN_LADDER_CLEARANCE = 32.0
+
+
+@dataclass(eq=False)
+class Ladder:
+    """CNavLadder, as nav generation makes it from a func_simpleladder's bounds."""
+    top: tuple[float, float, float]
+    bottom: tuple[float, float, float]
+    width: float
+    dir: int
+    length: float = 0.0
+    bottom_area: object = None
+    top_forward: object = None
+    top_left: object = None
+    top_right: object = None
+    top_behind: object = None
+
+    @property
+    def normal(self):
+        return add_dir((0.0, 0.0, 0.0), self.dir, 1.0)
+
+
 @dataclass(eq=False)
 class Node:
     pos: tuple[float, float, float]
@@ -107,6 +135,7 @@ class Sampler:
         self.seeds: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
         self.raw_seeds: list[tuple[float, float, float]] = []
         self.native = None           # None: use the DLL when it loads; False: always Python
+        self.ladders: list[Ladder] = []
 
     # ------------------------------------------------------------ traces
     def hull(self, start, end) -> Trace:
@@ -180,6 +209,95 @@ class Sampler:
             self.seeds.append(((round_to_units(p[0], GENERATION_STEP), round_to_units(p[1], GENERATION_STEP), p[2]),
                                normal))
 
+    # ------------------------------------------------------------ ladders
+    def line(self, start, end) -> Trace:
+        return self.world.trace_hull(start, end, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+
+    def add_ladder(self, mins, maxs):
+        """BuildLadders / CreateLadder for one func_simpleladder (mins/maxs: its world bounds,
+        which the engine pads by a unit on each side)."""
+        top = ((mins[0] + maxs[0]) / 2.0, (mins[1] + maxs[1]) / 2.0, maxs[2])
+        bottom = (top[0], top[1], mins[2])
+        xs, ys = maxs[0] - mins[0], maxs[1] - mins[1]
+        half = GENERATION_STEP / 2
+        if xs > ys:
+            tr = self.line((bottom[0], bottom[1] + GENERATION_STEP, bottom[2] + half),
+                           (top[0], top[1] + GENERATION_STEP, top[2] - half))
+            d, width = (NORTH if tr.fraction != 1.0 or tr.startsolid else SOUTH), xs
+        else:
+            tr = self.line((bottom[0] + GENERATION_STEP, bottom[1], bottom[2] + half),
+                           (top[0] + GENERATION_STEP, top[1], top[2] - half))
+            d, width = (WEST if tr.fraction != 1.0 or tr.startsolid else EAST), ys
+        lad = Ladder(top, bottom, width, d)
+        n = lad.normal
+        along = (top[0] - bottom[0], top[1] - bottom[1], top[2] - bottom[2])
+        length = (along[0] ** 2 + along[1] ** 2 + along[2] ** 2) ** 0.5
+        along = tuple(v / length for v in along) if length else along
+
+        def clear(on):
+            out = (on[0] + n[0] * MIN_LADDER_CLEARANCE, on[1] + n[1] * MIN_LADDER_CLEARANCE, on[2])
+            tr = self.line(on, out)
+            return tr.fraction == 1.0 and not tr.startsolid
+        t = 0.0
+        while t <= length:            # move the bottom up past anything in front of it
+            on = tuple(bottom[i] + t * along[i] for i in range(3))
+            if clear(on):
+                lad.bottom = on
+                break
+            t += 10.0
+        t = 0.0
+        while t <= length:            # and the top down
+            on = tuple(top[i] - t * along[i] for i in range(3))
+            if clear(on):
+                lad.top = on
+                break
+            t += 10.0
+        lad.length = sum((lad.top[i] - lad.bottom[i]) ** 2 for i in range(3)) ** 0.5
+        self.ladders.append(lad)
+        return lad
+
+    def ground_height(self, pos):
+        """CNavMesh::GetGroundHeight: (ok, z, normal) of the first floor below with room to stand."""
+        to_z, from_z = pos[2] - 10000.0, pos[2] + HALF_HUMAN_HEIGHT + 1e-3
+        while to_z - pos[2] < 100.0:
+            tr = self.line((pos[0], pos[1], from_z), (pos[0], pos[1], to_z))
+            if not tr.startsolid and (tr.fraction == 1.0 or from_z - tr.endpos[2] >= HALF_HUMAN_HEIGHT):
+                n = tr.normal if any(tr.normal) else (0.0, 0.0, 1.0)
+                return True, tr.endpos[2], n
+            to_z = from_z if tr.startsolid else tr.endpos[2]
+            from_z = to_z + HALF_HUMAN_HEIGHT + 1e-3
+        return False, 0.0, (0.0, 0.0, 1.0)
+
+    def ladder_end_search(self, pos, mount_dir: int, has_node):
+        """LadderEndSearch: a new place to continue sampling next to a ladder's end."""
+        center = add_dir(pos, mount_dir, HALF_HUMAN_WIDTH)
+        for k in range(-1, 8):
+            t = center
+            if k >= 4:
+                t = add_dir(t, k - 4, 2.0 * GENERATION_STEP)
+            elif k >= 0:
+                t = add_dir(t, k, GENERATION_STEP)
+            t = (round_to_units(t[0], GENERATION_STEP), round_to_units(t[1], GENERATION_STEP), t[2] + GENERATION_STEP)
+            ok, z, normal = self.ground_height(t)
+            if not ok:
+                continue
+            t = (t[0], t[1], z)
+            tr = self.hull((center[0], center[1], center[2] + 4.0), (t[0], t[1], t[2] + 4.0))
+            if tr.fraction != 1.0 or tr.startsolid:
+                continue
+            if not has_node(t):
+                return t, normal
+        return None
+
+    def next_ladder_seed(self, has_node):
+        """Sampling from the seeds is exhausted: carry on from the ends of ladders."""
+        for lad in self.ladders:
+            for end in (lad.bottom, lad.top):
+                found = self.ladder_end_search(end, lad.dir, has_node)
+                if found:
+                    return found
+        return None
+
     def add_node(self, dest, normal, d, source: Node, obstacle_height: float, on_disp: bool = False):
         node = self.get_node(dest)
         new = node is None
@@ -251,7 +369,13 @@ class Sampler:
     def sample(self, max_nodes: int = 500000) -> list[Node]:
         from . import fastnav
         if self.native is not False and fastnav.available():
-            self.nodes = fastnav.sample(self.world, self.raw_seeds, max_nodes)
+            fastnav.start(self.world, self.raw_seeds, max_nodes)
+            while self.ladders and fastnav.node_count() < max_nodes:
+                found = self.next_ladder_seed(fastnav.has_node)
+                if not found:
+                    break
+                fastnav.sample_from(found[0], found[1], max_nodes)
+            self.nodes = fastnav.collect(self.world)
             self.hash = {}
             for n in reversed(self.nodes):          # newest first per (x, y), like new_node
                 self.hash.setdefault((n.pos[0], n.pos[1]), []).append(n)
@@ -261,7 +385,11 @@ class Sampler:
         while len(self.nodes) < max_nodes:
             if current is None:
                 if seed_i >= len(self.seeds):
-                    break
+                    found = self.next_ladder_seed(lambda p: self.get_node(p) is not None)
+                    if not found:
+                        break
+                    current = self.new_node(found[0], found[1], None)
+                    continue
                 pos, normal = self.seeds[seed_i]
                 seed_i += 1
                 if self.get_node(pos) is not None:

@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 from .navgen import (AREA_MAX_SIZE, CLIMB_UP_HEIGHT, DEATH_DROP, EAST, GENERATION_STEP, HALF_HUMAN_HEIGHT,
                      HUMAN_CROUCH_HEIGHT, JUMP_CROUCH_HEIGHT, MAX_TRAVERSABLE_HEIGHT, NAV_MESH_CROUCH,
                      NAV_MESH_NO_MERGE, NORTH, NORTH_EAST, OFF_PLANE_TOLERANCE, OPPOSITE, SLOPE_LIMIT, SOUTH,
-                     SOUTH_EAST, SOUTH_WEST, STEP_HEIGHT, STEP_XY, WEST, DUCK_HULL_TOP, Node, Sampler)
+                     SOUTH_EAST, SOUTH_WEST, STEP_HEIGHT, STEP_XY, WEST, DUCK_HULL_TOP, HALF_HUMAN_WIDTH,
+                     HUMAN_HEIGHT, Node, Sampler, add_dir)
 
 COPLANAR_SLOPE_LIMIT = 0.99       # nav_coplanar_slope_limit
 COPLANAR_SLOPE_LIMIT_DISP = 0.7   # nav_coplanar_slope_limit_displacement
@@ -37,6 +38,14 @@ class Area:
     attributes: int = 0
     connect: list = field(default_factory=lambda: [[], [], [], []])
     incoming: list = field(default_factory=lambda: [[], [], [], []])   # one-way links into this area
+    ladders: list = field(default_factory=lambda: [[], []])           # ladders going up, down
+
+    def add_ladder(self, ladder, up: bool):
+        """AddLadderUp / AddLadderDown (each first drops the ladder from both lists)."""
+        for lst in self.ladders:
+            if ladder in lst:
+                lst.remove(ladder)
+        self.ladders[0 if up else 1].append(ladder)
     seq: int = 0                     # creation order (= order in the generator's area list)
 
     def z_at(self, x: float, y: float) -> float:
@@ -961,6 +970,115 @@ class Generator(Sampler):
                     other.connect_to(new, along_ours)
                     new.connect_to(other, OPPOSITE[along_ours])
 
+    # ------------------------------------------------ ladders
+    def get_nearest_nav_area(self, pos, max_dist: float = 10000.0):
+        """GetNearestNavArea(pos, anyZ, maxDist, checkLOS=false, checkGround=true): the area whose
+        closest point is nearest in 3D, searched in rings over the 300-unit area grid."""
+        ok, z, _n = self.ground_height(pos)
+        if not ok:
+            return None
+        source = (pos[0], pos[1], z + HALF_HUMAN_HEIGHT)
+        lo_x = min(a.nw[0] for a in self.areas)
+        lo_y = min(a.nw[1] for a in self.areas)
+        size_x = int((max(a.se[0] for a in self.areas) - lo_x) / self.GRID) + 1
+        size_y = int((max(a.se[1] for a in self.areas) - lo_y) / self.GRID) + 1
+        gx = lambda x: min(max(int((x - lo_x) / self.GRID), 0), size_x - 1)
+        gy = lambda y: min(max(int((y - lo_y) / self.GRID), 0), size_y - 1)
+        grid: dict = {}
+        for a in self.areas:
+            for x in range(gx(a.nw[0]), gx(a.se[0]) + 1):
+                for y in range(gy(a.nw[1]), gy(a.se[1]) + 1):
+                    grid.setdefault((x, y), []).append(a)
+        ox, oy = gx(pos[0]), gy(pos[1])
+        close, close_d = None, max_dist * max_dist
+        seen = set()
+        shift, limit = 0, math.ceil(max_dist / self.GRID)
+        while shift <= limit:
+            for x in range(ox - shift, ox + shift + 1):
+                if x < 0 or x >= size_x:
+                    continue
+                for y in range(oy - shift, oy + shift + 1):
+                    if y < 0 or y >= size_y:
+                        continue
+                    if ox - shift < x < ox + shift and oy - shift < y < oy + shift:
+                        continue
+                    for a in grid.get((x, y), ()):
+                        if id(a) in seen:
+                            continue
+                        seen.add(id(a))
+                        c = a.closest_point(source)
+                        d = (c[0] - pos[0]) ** 2 + (c[1] - pos[1]) ** 2 + (c[2] - pos[2]) ** 2
+                        if d >= close_d:
+                            continue
+                        close, close_d = a, d
+                        limit = shift + 1
+            shift += 1
+        return close
+
+    def connect_ladders(self):
+        """ConnectGeneratedLadder for every ladder, once the areas are final."""
+        self._index_areas()
+        near = 75.0
+        for lad in self.ladders:
+            centre = add_dir((lad.bottom[0], lad.bottom[1], lad.bottom[2] + GENERATION_STEP), lad.dir, HALF_HUMAN_WIDTH)
+            lad.bottom_area = self.get_nearest_nav_area(centre)
+            if lad.bottom_area is not None:
+                lad.bottom_area.add_ladder(lad, True)
+            centre = add_dir((lad.top[0], lad.top[1], lad.top[2] + GENERATION_STEP), lad.dir, HALF_HUMAN_WIDTH)
+            beneath = min(120.0, lad.top[2] - lad.bottom[2] + HALF_HUMAN_WIDTH)
+
+            def first(d, rng):
+                area, _p = self.find_first_area_in_direction(centre, d, rng, beneath)
+                return None if area is lad.bottom_area else area
+            lad.top_forward = first(OPPOSITE[lad.dir], near)
+            lad.top_left = first((lad.dir + 3) % 4, near)
+            lad.top_right = first((lad.dir + 1) % 4, near)
+            lad.top_behind = first(lad.dir, 2.0 * near)
+            for a in (lad.top_forward, lad.top_left, lad.top_right):
+                if a is not None:
+                    a.add_ladder(lad, False)
+            if lad.top_behind is not None:
+                behind = lad.top_behind
+                behind.add_ladder(lad, False)
+                # CNavLadder::Disconnect: the ladder forgets the first of its areas that is this one
+                # (the area keeps its reference to the ladder)
+                for attr in ("top_forward", "top_left", "top_right", "top_behind"):
+                    if getattr(lad, attr) is behind:
+                        setattr(lad, attr, None)
+                        break
+            tops = [lad.top_forward, lad.top_left, lad.top_right, lad.top_behind]
+            top_z, adjusted = lad.bottom[2] + 5.0, False
+            for a in tops:
+                if a is not None:
+                    z = a.closest_point(lad.top)[2]
+                    if top_z < z:
+                        top_z, adjusted = z, True
+            if adjusted:
+                lad.top = (lad.top[0], lad.top[1], top_z)
+            if lad.bottom_area is not None:       # "dangling": the bottom is out of reach
+                spot = lad.bottom_area.closest_point(lad.bottom)
+                if lad.bottom[2] - spot[2] > HUMAN_HEIGHT:
+                    for lst in lad.bottom_area.ladders:
+                        if lad in lst:
+                            lst.remove(lad)
+
+    # ------------------------------------------------ hand-made climb links
+    def add_climb(self, bottom, top) -> str | None:
+        """One-way link from the area under 'bottom' up to the area under 'top' (what mappers
+        add by hand in the game's nav editor so zombies climb a wall). None, or what's wrong."""
+        self._index_areas()
+        low = self.get_nav_area(bottom) or self.get_nearest_nav_area(bottom, 64.0)
+        high = self.get_nav_area(top) or self.get_nearest_nav_area(top, 64.0)
+        if low is None:
+            return "no nav mesh under the bottom point"
+        if high is None:
+            return "no nav mesh under the top point"
+        if low is high:
+            return "bottom and top are on the same nav area"
+        from .nav import climb_direction
+        low.connect_to(high, climb_direction(bottom, top))
+        return None
+
     # ------------------------------------------------ StichAndRemoveJumpAreas
     def _try_connect_many(self, jump: Area, sources, dest, out_dir):
         for src in list(sources):
@@ -1015,4 +1133,5 @@ class Generator(Sampler):
         # (HandleObstacleTopAreas: L4D2 makes no fence-top areas; measured, so skipped)
         self.fix_corner_on_corner_areas()
         self.fix_connections()
+        self.connect_ladders()
         return self.areas

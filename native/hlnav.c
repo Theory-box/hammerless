@@ -364,16 +364,9 @@ EXPORT int hl_add_seed(double x, double y, double z) {
     return 1;
 }
 
-EXPORT int hl_sample(int max_nodes) {
-    if (!H) hrehash();
-    int seed_i = 0, cur = -1;
-    while (NN < max_nodes) {
-        if (cur < 0) {
-            if (seed_i >= NSEEDS) break;
-            double *sd = SEEDS + 6 * seed_i++;
-            if (get_node(sd) >= 0) continue;     /* L4D2 skips covered seeds */
-            cur = new_node(sd, sd + 3, -1, 0);
-        }
+/* flood from 'cur' until the search backs out past it */
+static void run(int cur, int max_nodes) {
+    while (cur >= 0 && NN < max_nodes) {
         int d = -1;
         for (int k = 0; k < 4; k++) if (!(N[cur].visited & (1 << k))) { d = k; break; }
         if (d < 0) { cur = N[cur].parent; continue; }
@@ -381,8 +374,33 @@ EXPORT int hl_sample(int max_nodes) {
         int nx = step(cur, d);
         if (nx >= 0) cur = nx;
     }
+}
+
+EXPORT int hl_sample(int max_nodes) {
+    if (!H) hrehash();
+    for (int seed_i = 0; seed_i < NSEEDS && NN < max_nodes; seed_i++) {
+        double *sd = SEEDS + 6 * seed_i;
+        if (get_node(sd) >= 0) continue;         /* L4D2 skips covered seeds */
+        run(new_node(sd, sd + 3, -1, 0), max_nodes);
+    }
     return NN;
 }
+
+/* carry on sampling from a new node (a ladder end, found by the caller) */
+EXPORT int hl_sample_from(double x, double y, double z, double nx, double ny, double nz, int max_nodes) {
+    if (!H) hrehash();
+    double p[3] = {x, y, z}, n[3] = {nx, ny, nz};
+    run(new_node(p, n, -1, 0), max_nodes);
+    return NN;
+}
+
+EXPORT int hl_has_node(double x, double y, double z) {
+    if (!H) hrehash();
+    double p[3] = {x, y, z};
+    return get_node(p) >= 0;
+}
+
+EXPORT int hl_node_count(void) { return NN; }
 
 /* per node: pos3 normal3 obstacle4 ground4 (14 doubles); to4 parent attributes crouch4 blocked4 on_disp (15 ints) */
 EXPORT void hl_nodes(double *d14, int *i15) {

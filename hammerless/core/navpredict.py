@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .collision import CollisionWorld
 from .navareas import NAV_MESH_JUMP, Generator
-from .navfile import NavArea, NavMesh
+from .navfile import NavArea, NavLadder, NavMesh
 from .navgen import NAV_MESH_NO_MERGE
 from .vmf import parse
 
@@ -30,7 +30,29 @@ def seed_positions(vmf_text: str) -> list[tuple[float, float, float]]:
     return seeds
 
 
-def to_navmesh(areas, regions) -> NavMesh:
+LADDER_CLASSES = {"func_ladder", "func_simpleladder"}   # vbsp turns func_ladder into func_simpleladder
+
+
+def ladder_bounds(vmf_text: str) -> list[tuple[tuple, tuple]]:
+    """World bounds of each ladder entity, in map order, padded by a unit like the engine's
+    brush-model bounds (what nav generation measures ladders by)."""
+    from .collision import brush_from_vmf_sides
+    out = []
+    for e in (b for b in parse(vmf_text) if b.name == "entity"):
+        if e.get("classname", "") not in LADDER_CLASSES:
+            continue
+        mins, maxs = [1e9] * 3, [-1e9] * 3
+        for solid in e.blocks("solid"):
+            b = brush_from_vmf_sides([(sd.get("plane"), sd.get("material", "")) for sd in solid.blocks("side")])
+            if b:
+                mins = [min(mins[i], b.mins[i]) for i in range(3)]
+                maxs = [max(maxs[i], b.maxs[i]) for i in range(3)]
+        if mins[0] <= maxs[0]:
+            out.append((tuple(v - 1.0 for v in mins), tuple(v + 1.0 for v in maxs)))
+    return out
+
+
+def to_navmesh(areas, regions, ladders=()) -> NavMesh:
     """Our generator's areas as a NavMesh, with the spawn attributes Build & Play's marking
     script would set (every area whose centre lies in a region gets its bits)."""
     ids = {id(a): i + 1 for i, a in enumerate(areas)}
@@ -43,45 +65,65 @@ def to_navmesh(areas, regions) -> NavMesh:
             if all(r.mins[i] <= c[i] <= r.maxs[i] for i in range(3)):
                 n.spawn_attributes |= r.bits
         mesh.areas.append(n)
+    lids = {id(lad): i + 1 for i, lad in enumerate(ladders)}
+    aid = lambda a: ids.get(id(a), 0) if a is not None else 0
+    for a, n in zip(areas, mesh.areas):
+        n.ladders = [[lids[id(l)] for l in a.ladders[k] if id(l) in lids] for k in (0, 1)]
+    for lad in ladders:
+        mesh.ladders.append(NavLadder(lids[id(lad)], lad.width, lad.top, lad.bottom, lad.length, lad.dir,
+                                      aid(lad.top_forward), aid(lad.top_left), aid(lad.top_right),
+                                      aid(lad.top_behind), aid(lad.bottom_area)))
     return mesh
 
 
 _last: dict = {"key": None, "mesh": None}
 
 
-def _key(vmf_text: str, regions) -> str:
+def _key(vmf_text: str, regions, climbs=()) -> str:
     import hashlib
-    return hashlib.sha1((vmf_text + repr([(r.mins, r.maxs, r.bits) for r in regions])).encode()).hexdigest()
+    return hashlib.sha1((vmf_text + repr([(r.mins, r.maxs, r.bits) for r in regions])
+                         + repr([(c.bottom, c.top) for c in climbs])).encode()).hexdigest()
 
 
-def cached(vmf_text: str, regions) -> NavMesh | None:
+def cached(vmf_text: str, regions, climbs=()) -> NavMesh | None:
     """The last prediction, if it was made for exactly this map (e.g. by the Predict button)."""
-    if _last["key"] == _key(vmf_text, regions) and _last["mesh"] is not None:
+    if _last["key"] == _key(vmf_text, regions, climbs) and _last["mesh"] is not None:
         import copy
         return copy.deepcopy(_last["mesh"])
     return None
 
 
-def predict(vmf_text: str, regions, progress=None) -> NavMesh:
-    """progress(stage: str, count: int) is called between stages (from any thread)."""
+def predict(vmf_text: str, regions, progress=None, climbs=()) -> NavMesh:
+    """progress(stage: str, count: int) is called between stages (from any thread).
+    climbs: nav.NavClimb links to add (Zombie Climb markers)."""
     import copy
-    mesh = _predict(vmf_text, regions, progress)
-    _last.update(key=_key(vmf_text, regions), mesh=copy.deepcopy(mesh))
+    mesh = _predict(vmf_text, regions, progress, climbs)
+    _last.update(key=_key(vmf_text, regions, climbs), mesh=copy.deepcopy(mesh))
     return mesh
 
 
-def _predict(vmf_text: str, regions, progress=None) -> NavMesh:
+def _predict(vmf_text: str, regions, progress=None, climbs=()) -> NavMesh:
     gen = Generator(CollisionWorld.from_vmf(vmf_text))
     for p in seed_positions(vmf_text):
         gen.add_seed(p)
+    for mins, maxs in ladder_bounds(vmf_text):
+        gen.add_ladder(mins, maxs)
     steps = (("Sampling walkable space", gen.sample), ("Building areas", gen.create_areas),
              ("Connecting areas", gen.connect_areas), ("Marking jump areas", gen.mark_jump_areas),
              ("Merging areas", gen.merge_areas), ("Splitting areas under overhangs", gen.split_areas_under_overhangs),
              ("Squaring up areas", gen.square_up_areas), ("Marking stairs", gen.mark_stair_areas),
              ("Removing jump areas", gen.stitch_and_remove_jump_areas),
-             ("Fixing corners", gen.fix_corner_on_corner_areas), ("Fixing connections", gen.fix_connections))
+             ("Fixing corners", gen.fix_corner_on_corner_areas), ("Fixing connections", gen.fix_connections),
+             ("Connecting ladders", gen.connect_ladders))
     for label, step in steps:
         if progress:
             progress(label, len(gen.nodes))
         step()
-    return to_navmesh(gen.areas, regions)
+    problems = []
+    for c in climbs:
+        err = gen.add_climb(c.bottom, c.top)
+        if err:
+            problems.append(f"Zombie Climb '{c.source}': {err}")
+    mesh = to_navmesh(gen.areas, regions, gen.ladders)
+    mesh.problems = problems
+    return mesh
