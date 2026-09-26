@@ -72,8 +72,14 @@ def store_flow(report: dict) -> None:
     _redraw(bpy.context)
 
 
-def store_nav(context, mesh, rep) -> None:
-    """Problems found in the game's own nav mesh (navanalysis): replaces earlier in-game rows."""
+PREDICTED_BROKEN = ("Survivors won't be able to get from the start to the end safe room: the nav mesh the "
+                    "game will generate (predicted from the scene) stops at the marker. Look there for a gap, "
+                    "a ledge between 19 and 64 units (L4D2 links neither way) or a blocked path. Without this "
+                    "path no zombies wander")
+
+
+def store_nav(context, mesh, rep, predicted: bool = False) -> None:
+    """Problems found in a nav mesh (the game's, or our prediction): replaces earlier nav rows."""
     import math
     s = context.scene.hammerless
     scale = s.units_per_meter
@@ -83,7 +89,13 @@ def store_nav(context, mesh, rep) -> None:
     by = mesh.by_id()
     rows = []
     if rep.end and not rep.end_reached and rep.break_area is not None:
-        rows.append(("ERROR", INGAME_BROKEN, by[rep.break_area].centre))
+        # mark the spot of the last reachable area nearest the end room (where the path stops),
+        # not its middle: areas can be hundreds of units across
+        a = by[rep.break_area]
+        goal = [sum(by[e].centre[i] for e in rep.end) / len(rep.end) for i in range(3)]
+        x = min(max(goal[0], a.nw[0]), a.se[0])
+        y = min(max(goal[1], a.nw[1]), a.se[1])
+        rows.append(("ERROR", PREDICTED_BROKEN if predicted else INGAME_BROKEN, (x, y, a.z_at(x, y))))
     goal = None
     if rep.end:
         goal = tuple(sum(by[e].centre[i] for e in rep.end) / len(rep.end) for i in range(3))

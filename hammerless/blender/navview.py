@@ -12,7 +12,8 @@ from mathutils import Vector
 from ..core.navanalysis import CHECKPOINT, OBSCURED, PLAYER_START, analyse
 from ..core.navfile import load_nav
 
-_state = {"path": None, "mtime": None, "mesh": None, "report": None, "batches": None, "key": None}
+_state = {"path": None, "mtime": None, "mesh": None, "report": None, "batches": None, "key": None,
+          "source": None}         # "game" (read from maps/<map>.nav) or "predicted" (our generator)
 _handlers = []
 
 COLORS = {
@@ -40,9 +41,19 @@ def load(context) -> str:
         _state.update(path=path, mesh=None, report=None, batches=None)
         return "No nav mesh yet: Build & Play makes one"
     mesh = load_nav(path)
-    _state.update(path=path, mtime=os.path.getmtime(path), mesh=mesh, report=analyse(mesh), batches=None)
+    _state.update(path=path, mtime=os.path.getmtime(path), mesh=mesh, report=analyse(mesh), batches=None,
+                  source="game")
     _redraw()
     return f"Loaded {len(mesh.areas)} nav areas"
+
+
+def set_predicted(mesh) -> None:
+    _state.update(path=None, mtime=None, mesh=mesh, report=analyse(mesh), batches=None, source="predicted")
+    _redraw()
+
+
+def source():
+    return _state["source"]
 
 
 def report():
@@ -167,15 +178,95 @@ class HL_OT_nav_load(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class HL_OT_nav_predict(bpy.types.Operator):
+    bl_idname = "hammerless.nav_predict"
+    bl_label = "Predict Nav Mesh"
+    bl_description = ("Work out the nav mesh the game will generate, from this scene, without compiling "
+                      "(our copy of the game's generator). Shows where survivors can go and where the path "
+                      "from start to end breaks")
+
+    _timer = None
+    _thread = None
+    _box: dict = {}
+
+    def execute(self, context):
+        import threading
+        from ..core.build import Report, build_vmf
+        from ..core.nav import collect_regions
+        from ..core.navpredict import predict
+        from .extract import extract_scene
+        rep = Report()
+        ir, _ = extract_scene(context, rep, None)
+        if rep.errors:
+            self.report({"ERROR"}, rep.errors[0])
+            return {"CANCELLED"}
+        text, rep2 = build_vmf(ir, None)
+        if text is None:
+            self.report({"ERROR"}, rep2.errors[0] if rep2.errors else "The map doesn't build")
+            return {"CANCELLED"}
+        regions, _ = collect_regions(ir)
+        box = {"stage": "Starting", "nodes": 0, "mesh": None, "error": None}
+        self._box = box
+
+        def work():
+            try:
+                box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage, nodes=n))
+            except Exception as ex:          # shown to the user
+                box["error"] = str(ex)
+        self._thread = threading.Thread(target=work, daemon=True)
+        self._thread.start()
+        self._timer = context.window_manager.event_timer_add(0.3, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+        box = self._box
+        if self._thread.is_alive():
+            context.workspace.status_text_set(f"Hammerless: predicting the nav mesh: {box['stage']}... "
+                                              f"({box['nodes']} nodes)")
+            return {"PASS_THROUGH"}
+        context.window_manager.event_timer_remove(self._timer)
+        context.workspace.status_text_set(None)
+        if box["error"] or box["mesh"] is None:
+            self.report({"ERROR"}, f"Nav prediction failed: {box['error']}")
+            return {"CANCELLED"}
+        finish_prediction(context, box["mesh"])
+        rep = _state["report"]
+        if not rep.end:
+            self.report({"INFO"}, f"Predicted {rep.total} nav areas (no end safe room to check the path)")
+        elif rep.end_reached:
+            self.report({"INFO"}, f"Predicted {rep.total} nav areas: the path from start to end works")
+        else:
+            self.report({"WARNING"}, "Predicted nav: survivors can't reach the end safe room (see the marker)")
+        return {"FINISHED"}
+
+
+def finish_prediction(context, mesh) -> None:
+    set_predicted(mesh)
+    context.scene.hammerless.show_nav = True
+    from .problems import store_nav
+    store_nav(context, mesh, _state["report"], predicted=True)
+
+
 def draw_panel(layout, context):
     s = context.scene.hammerless
     rep = _state["report"]
+    big = layout.row()
+    big.scale_y = 1.3
+    big.operator("hammerless.nav_predict", text="Predict Nav Mesh", icon="VIEWZOOM")
     row = layout.row(align=True)
-    row.operator("hammerless.nav_load", text="Show Game Nav Mesh" if rep is None else "Reload", icon="MOD_MESHDEFORM")
+    row.operator("hammerless.nav_load", text="Show the Game's Nav Mesh", icon="MOD_MESHDEFORM")
     if rep is None:
-        layout.label(text="Reads maps/<map>.nav after Build & Play", icon="INFO")
+        col = layout.column(align=True)
+        col.scale_y = 0.8
+        col.label(text="Predict: before building, from this scene", icon="INFO")
+        col.label(text="Game's: what the last Build & Play made", icon="BLANK1")
         return
     row.prop(s, "show_nav", text="", icon="HIDE_OFF" if s.show_nav else "HIDE_ON")
+    layout.label(text="Showing: predicted from the scene" if _state["source"] == "predicted"
+                 else "Showing: the game's nav mesh", icon="RESTRICT_VIEW_OFF")
     box = layout.box()
     col = box.column(align=True)
     if not rep.end:
@@ -211,7 +302,7 @@ def draw_panel(layout, context):
         legend.label(text="Arrows: orange drop-down, cyan jump-up", icon="BLANK1")
 
 
-CLASSES = (HL_OT_nav_load,)
+CLASSES = (HL_OT_nav_load, HL_OT_nav_predict)
 
 
 def register():

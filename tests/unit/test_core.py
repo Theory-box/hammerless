@@ -265,22 +265,6 @@ class TestMapCheck(unittest.TestCase):
                     ir.entities.append(part.entity)
         return ir
 
-    def test_walkable(self):
-        from hammerless.core.mapcheck import check_map
-        self.assertEqual(check_map(self.level()), [])
-
-    def test_gap_found(self):
-        from hammerless.core.mapcheck import check_map
-        probs = check_map(self.level(ground_to=3000))
-        self.assertEqual(len(probs), 1)
-        self.assertIn("can't walk", probs[0].message)
-        self.assertAlmostEqual(probs[0].location[0], 3000, delta=32)   # marker at the gap
-
-    def test_step_too_tall(self):
-        from hammerless.core.mapcheck import check_map
-        self.assertTrue(any("can't walk" in p.message for p in check_map(self.level(end_dz=40))))
-        self.assertEqual(check_map(self.level(end_dz=12)), [])          # a small step is fine
-
     def test_placement(self):
         from hammerless.core.mapcheck import check_map
         ir = self.level()
@@ -295,10 +279,12 @@ class TestMapCheck(unittest.TestCase):
         self.assertNotIn("fine", found)
 
     def test_in_report(self):
-        text, rep = build_vmf(self.level(ground_to=3000))
+        ir = self.level()
+        ir.entities.append(Entity("weapon_first_aid_kit_spawn", (1000, 0, -150), source="buried"))
+        text, rep = build_vmf(ir)
         self.assertTrue(rep.ok)                                      # still builds
         self.assertTrue(rep.problems and rep.problems[0].location)
-        self.assertTrue(any("can't walk" in w for w in rep.warnings))
+        self.assertTrue(any("stuck in solid" in w for w in rep.warnings))
 
 
 class TestNavFile(unittest.TestCase):

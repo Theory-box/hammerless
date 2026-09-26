@@ -271,13 +271,22 @@ def test_map_check_problem_list():
     bpy.context.object.name = "Buried Medkit"
     bpy.ops.hammerless.validate()
     msgs = {p.name: p for p in s.problems}
-    path = next(p for m, p in msgs.items() if "can't walk" in m)
-    assert path.has_location and path.severity == "ERROR"
-    assert 18 <= path.location.x <= 22, tuple(path.location)   # marker at the edge of ground_a
     sunk = next(p for m, p in msgs.items() if "Buried Medkit" in m)
     assert sunk.source == "Buried Medkit"
     s.problem_index = list(msgs).index(sunk.name)               # clicking selects the object
     assert bpy.context.view_layer.objects.active.name == "Buried Medkit"
+    # the predicted nav mesh finds the gap (the operator runs it in a thread; call it directly here)
+    from hammerless.blender.extract import extract_scene
+    from hammerless.blender.navview import finish_prediction
+    from hammerless.core.build import Report, build_vmf
+    from hammerless.core.nav import collect_regions
+    from hammerless.core.navpredict import predict
+    ir, _ = extract_scene(bpy.context, Report(), None)
+    text, _rep = build_vmf(ir)
+    finish_prediction(bpy.context, predict(text, collect_regions(ir)[0]))
+    path = next(p for p in s.problems if p.ingame and p.severity == "ERROR")
+    assert "predicted" in path.name and path.has_location
+    assert 17 <= path.location.x <= 21, tuple(path.location)   # break at the edge of ground_a
 
 
 def test_auto_detail_default():
@@ -316,7 +325,7 @@ def test_game_nav_view():
     assert rep and not rep.end_reached and rep.break_area == 3
     broken = [p for p in s.problems if p.ingame and p.severity == "ERROR"]
     assert broken and broken[0].has_location
-    assert abs(broken[0].location.x - 350 / s.units_per_meter) < 0.1, tuple(broken[0].location)
+    assert abs(broken[0].location.x - 400 / s.units_per_meter) < 0.1, tuple(broken[0].location)   # edge nearest the end
 
 
 def test_horde_presets_and_outputs():
