@@ -382,6 +382,22 @@ class TestNavGen(unittest.TestCase):
         s.sample()
         return s
 
+    def test_native_matches_python(self):
+        from hammerless.core import fastnav
+        from hammerless.core.navgen import Sampler
+        if not fastnav.available():
+            self.skipTest("native DLL not built")
+        text, w = self.world(step=16)
+        runs = []
+        for native in (None, False):
+            s = Sampler(w)
+            s.native = native
+            s.add_seed((-150, 0, 10))
+            s.sample()
+            runs.append([(n.pos, n.normal, n.attributes, tuple(n.crouch), tuple(n.blocked), tuple(n.obstacle),
+                          tuple(m.id if m else 0 for m in n.to)) for n in s.nodes])
+        self.assertEqual(runs[0], runs[1])
+
     def test_flat_room(self):
         s = self.sample()
         self.assertGreater(len(s.nodes), 300)

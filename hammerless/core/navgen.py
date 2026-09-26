@@ -104,6 +104,8 @@ class Sampler:
         self.nodes: list[Node] = []
         self.hash: dict[tuple[float, float], list[Node]] = {}
         self.seeds: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
+        self.raw_seeds: list[tuple[float, float, float]] = []
+        self.native = None           # None: use the DLL when it loads; False: always Python
 
     # ------------------------------------------------------------ traces
     def hull(self, start, end) -> Trace:
@@ -170,6 +172,7 @@ class Sampler:
 
     def add_seed(self, pos):
         """AddWalkableSeeds for one spot: snap to the grid, find the ground under it."""
+        self.raw_seeds.append(tuple(pos))
         p = (round_to_units(pos[0], GENERATION_STEP), round_to_units(pos[1], GENERATION_STEP), pos[2])
         p, normal, ok = self.find_ground(p)
         if ok:
@@ -243,6 +246,13 @@ class Sampler:
 
     # ------------------------------------------------------------ SampleStep
     def sample(self, max_nodes: int = 500000) -> list[Node]:
+        from . import fastnav
+        if self.native is not False and fastnav.available():
+            self.nodes = fastnav.sample(self.world, self.raw_seeds, max_nodes)
+            self.hash = {}
+            for n in reversed(self.nodes):          # newest first per (x, y), like new_node
+                self.hash.setdefault((n.pos[0], n.pos[1]), []).append(n)
+            return self.nodes
         seed_i = 0
         current: Node | None = None
         while len(self.nodes) < max_nodes:
