@@ -350,6 +350,51 @@ class TestNavFile(unittest.TestCase):
         self.assertEqual(sorted(rep.islands[0]), [4, 5])
 
 
+class TestNavGen(unittest.TestCase):
+    """Our reimplementation of the game's nav sampling (stage A)."""
+
+    def world(self, step=0.0):
+        from hammerless.core.collision import CollisionWorld
+        ir = box_room_ir()                       # 512x512 floor at z=0, walls, sealed
+        if step:
+            ir.brushes.append(g.box_brush((100, -256, 0), (256, 256, step), "dev/dev_measuregeneric01b", "step"))
+        text, _ = build_vmf(ir)
+        return text, CollisionWorld.from_vmf(text)
+
+    def test_trace_hits_floor(self):
+        text, w = self.world()
+        tr = w.trace_hull((0, 0, 100), (0, 0, -100), (-0.45, -0.45, 0), (0.45, 0.45, 55))
+        self.assertAlmostEqual(tr.endpos[2], 0.03125, places=3)     # stops DIST_EPSILON above the floor
+        self.assertEqual(tr.normal, (0.0, 0.0, 1.0))
+        self.assertTrue(w.trace_hull((0, 0, -8), (0, 0, -10), (-1, -1, 0), (1, 1, 1)).allsolid)   # inside the 16-unit floor
+
+    def test_bevels(self):
+        from hammerless.core.collision import Side, make_brush
+        wedge = make_brush([Side((0, 0, -1), 0), Side((-1, 0, 0), 0), Side((0, -1, 0), 0), Side((0, 1, 0), 64),
+                            Side((0.7071068, 0, 0.7071068), 45.254834)])
+        self.assertEqual([s.bevel for s in wedge.sides[:6]].count(True), 2)       # +x and +z added
+        self.assertEqual([s.normal for s in wedge.sides[:6]][4:], [(0.0, 0.0, -1.0), (0.0, 0.0, 1.0)])
+
+    def sample(self, step=0.0):
+        from hammerless.core.navgen import Sampler
+        text, w = self.world(step)
+        s = Sampler(w)
+        s.add_seed((-150, 0, 10))
+        s.sample()
+        return s
+
+    def test_flat_room(self):
+        s = self.sample()
+        self.assertGreater(len(s.nodes), 300)
+        self.assertTrue(all(abs(n.pos[2] - 0.03125) < 0.01 for n in s.nodes))
+
+    def test_steps(self):
+        low = self.sample(step=16)                # a step survivors walk up
+        self.assertTrue(any(n.pos[2] > 15 for n in low.nodes))
+        high = self.sample(step=250)              # higher than the 200-unit climb check: never reached
+        self.assertFalse(any(n.pos[2] > 100 for n in high.nodes))
+
+
 class TestFlowReport(unittest.TestCase):
     def test_parse(self):
         from hammerless.core.compile import parse_flow
