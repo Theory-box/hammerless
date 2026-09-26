@@ -63,6 +63,17 @@ POPULATIONS = tuple((p, p.title()) for p in (
 ))
 
 
+YES_NO = (("1", "Yes"), ("0", "No"))
+# weapon_item_spawn choices (key, label, Hammerless default): health and throwables on
+RANDOM_ITEMS = (
+    ("item4", "Pain pills", "1"), ("item11", "Adrenaline", "1"), ("item2", "First aid kit", "0"),
+    ("item12", "Defibrillator", "0"), ("item3", "Molotov", "1"), ("item5", "Pipe bomb", "1"),
+    ("item13", "Bile jar", "1"), ("item1", "Ammo pile", "0"), ("item6", "Oxygen tank", "0"),
+    ("item7", "Propane tank", "0"), ("item8", "Gas can", "0"), ("item16", "Chainsaw", "0"),
+    ("item17", "Grenade launcher", "0"), ("item18", "M60", "0"),
+)
+
+
 def _item(cls, label, count="1", size=(16, 16, 8)):
     return EntityDef(cls, label, "Items",
                      f"Spawns {label.lower()}.",
@@ -190,6 +201,13 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
     _item("weapon_molotov_spawn", "Molotov"),
     _item("weapon_pipe_bomb_spawn", "Pipe Bomb"),
     _item("weapon_vomitjar_spawn", "Bile Jar"),
+    EntityDef("weapon_item_spawn", "Item (random)", "Items",
+              "The game picks one of the items set to 1 each time (0 = never this one). With Spawn "
+              "flags 0 the Director may also leave the spot empty.",
+              tuple(KeyDef(key, default, label, YES_NO) for key, label, default in RANDOM_ITEMS)
+              + (KeyDef("melee_weapon", "", "Melee weapon too: blank = no, 'any', or names"),
+                 KeyDef("spawnflags", "0", "Spawn flags", ITEM_FLAGS.choices)),
+              size=(16, 16, 8)),
     EntityDef("weapon_ammo_spawn", "Ammo Pile", "Items", "Infinite ammo pile.",
               (KeyDef("model", "models/props/terror/ammo_stack.mdl", "Model"),),
               size=(26, 34, 8), model="models/props/terror/ammo_stack.mdl"),
@@ -554,6 +572,7 @@ PREVIEW_MODELS = {
     "weapon_pipe_bomb_spawn": W + "w_eq_pipebomb.mdl",
     "weapon_vomitjar_spawn": W + "w_eq_bile_flask.mdl",
     "weapon_spawn": W + "w_rifle_ak47.mdl",
+    "weapon_item_spawn": W + "w_eq_painpills.mdl",
     "weapon_melee_spawn": "models/weapons/melee/w_crowbar.mdl",
     "weapon_pistol_spawn": W + "w_pistol_b.mdl",
     "weapon_pistol_magnum_spawn": W + "w_desert_eagle.mdl",

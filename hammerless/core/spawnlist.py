@@ -46,6 +46,7 @@ _LABELS = {"func_ladder": "Ladder Volume (no model)", "hammerless_crescendo": "C
            "info_zombie_spawn": "Infected Spawn Spot"}
 # Extra search words
 _ALIASES = {
+    "weapon_item_spawn": "random pills health throwable molotov pipe bomb bile adrenaline medkit",
     "weapon_first_aid_kit_spawn": "medkit health heal", "weapon_pain_pills_spawn": "health heal",
     "weapon_adrenaline_spawn": "health", "weapon_defibrillator_spawn": "defib revive",
     "weapon_vomitjar_spawn": "boomer vomit throwable", "weapon_molotov_spawn": "fire throwable",
