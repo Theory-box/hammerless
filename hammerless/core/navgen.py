@@ -29,7 +29,17 @@ DISPLACEMENT_TEST = 10000.0     # nav_displacement_test
 TRACE_MINS = (-0.45, -0.45, 0.0)
 TRACE_MAXS = (0.45, 0.45, 55.0)  # HumanCrouchHeight
 
+JUMP_CROUCH_HEIGHT = 64.0      # TERROR (non-CS) value
+HALF_HUMAN_WIDTH = 16.0
+HUMAN_CROUCH_HEIGHT = 55.0
+AREA_MAX_SIZE = 50              # nav_area_max_size
+OFF_PLANE_TOLERANCE = 5.0
+NAV_MESH_CROUCH = 0x0001
+NAV_MESH_NO_MERGE = 0x2000
+
 NORTH, EAST, SOUTH, WEST = range(4)
+NORTH_WEST, NORTH_EAST, SOUTH_EAST, SOUTH_WEST = range(4)
+CORNER_VEC = {NORTH_WEST: (-1, -1), NORTH_EAST: (1, -1), SOUTH_EAST: (1, 1), SOUTH_WEST: (-1, 1)}
 OPPOSITE = (SOUTH, WEST, NORTH, EAST)
 STEP_XY = {NORTH: (0.0, -GENERATION_STEP), EAST: (GENERATION_STEP, 0.0),
            SOUTH: (0.0, GENERATION_STEP), WEST: (-GENERATION_STEP, 0.0)}
@@ -50,6 +60,26 @@ class Node:
     to: list = field(default_factory=lambda: [None, None, None, None])
     obstacle: list = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
     visited: int = 0
+    attributes: int = 0
+    crouch: list = field(default_factory=lambda: [False, False, False, False])
+    blocked: list = field(default_factory=lambda: [False, False, False, False])
+    crouch_checked: bool = False
+    covered: bool = False
+    area: "Area | None" = None
+
+    def blocked_any(self) -> bool:
+        return any(self.blocked)
+
+    def bi_linked(self, d: int) -> bool:
+        n = self.to[d]
+        return n is not None and n.to[OPPOSITE[d]] is self
+
+    def closed_cell(self) -> bool:
+        """IsClosedCell: NW corner of a quad of nodes all linked both ways."""
+        if not (self.bi_linked(SOUTH) and self.bi_linked(EAST)):
+            return False
+        e, s = self.to[EAST], self.to[SOUTH]
+        return e.bi_linked(SOUTH) and s.bi_linked(EAST) and e.to[SOUTH] is s.to[EAST]
 
     def has_visited(self, d: int) -> bool:
         return bool(self.visited & (1 << d))
@@ -150,7 +180,36 @@ class Sampler:
             node.to[OPPOSITE[d]] = source
             node.obstacle[OPPOSITE[d]] = obstacle_height
             node.mark_visited(OPPOSITE[d])
+        self.check_crouch(node)
         return node if new else None
+
+    def check_crouch(self, node: Node):
+        """CNavNode::CheckCrouch: can a standing (71) or crouching (55) player fit at each corner?"""
+        if node.crouch_checked:
+            return
+        node.crouch_checked = True
+        for corner in range(4):
+            vx, vy = CORNER_VEC[corner]
+            mins = (min(0.0, vx * HALF_HUMAN_WIDTH), min(0.0, vy * HALF_HUMAN_WIDTH), 0.0)
+            maxs = (max(0.0, vx * HALF_HUMAN_WIDTH), max(0.0, vy * HALF_HUMAN_WIDTH))
+            if not self.test_crouch_area(node, corner, mins, maxs):
+                node.attributes |= NAV_MESH_CROUCH
+                node.crouch[corner] = True
+
+    def test_crouch_area(self, node: Node, corner: int, mins, maxs_xy) -> bool:
+        p = node.pos
+        tr = self.hull(p, (p[0], p[1], p[2] + JUMP_CROUCH_HEIGHT))
+        max_height = tr.endpos[2] - p[2]
+        h = 0.0
+        while h <= max_height:
+            start = (p[0], p[1], p[2] + h)
+            t = self.world.trace_hull(start, start, mins, (maxs_xy[0], maxs_xy[1], HUMAN_CROUCH_HEIGHT))
+            if not t.startsolid:
+                t = self.world.trace_hull(start, start, mins, (maxs_xy[0], maxs_xy[1], HUMAN_HEIGHT))
+                return not t.startsolid
+            h += 1.0
+        node.blocked[corner] = True
+        return False
 
     # ------------------------------------------------------------ SampleStep
     def sample(self, max_nodes: int = 500000) -> list[Node]:
