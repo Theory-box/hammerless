@@ -75,6 +75,14 @@ class _SubPanel:
     bl_options = {"DEFAULT_CLOSED"}
 
 
+class HL_PT_nav(_SubPanel, bpy.types.Panel):
+    bl_label = "Nav Mesh (from the game)"
+
+    def draw(self, context):
+        from .navview import draw_panel
+        draw_panel(self.layout, context)
+
+
 class HL_PT_compile(_SubPanel, bpy.types.Panel):
     bl_label = "Compile"
 
@@ -376,7 +384,7 @@ def _add_menu(self, context):
     self.layout.menu(HL_MT_add.bl_idname, icon="WORLD")
 
 
-CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_PT_map, HL_PT_compile, HL_PT_lighting, HL_PT_fog,
+CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_PT_map, HL_PT_nav, HL_PT_compile, HL_PT_lighting, HL_PT_fog,
            HL_PT_director, HL_PT_game, HL_PT_debug, HL_PT_advanced, HL_PT_object, HL_PT_collection,
            *CATEGORY_MENUS, HL_MT_add)
 

@@ -517,6 +517,14 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
                 if report["state"] == "ok" else "In game: no path from start to end")
             store_flow(report)
             write_log([scene.hammerless["ingame_flow"]], append=True)
+            try:        # the game saved its nav mesh by now: read it for the viewport and islands
+                from . import navview
+                navview.load(bpy.context)
+                if navview.report() is not None:
+                    from .problems import store_nav
+                    store_nav(bpy.context, navview.mesh(), navview.report())
+            except Exception as ex:
+                print("Hammerless: couldn't read the nav mesh:", ex)
         return 1.0
     bpy.app.timers.register(check, first_interval=1.0)
 

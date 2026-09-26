@@ -301,6 +301,55 @@ class TestMapCheck(unittest.TestCase):
         self.assertTrue(any("can't walk" in w for w in rep.warnings))
 
 
+class TestNavFile(unittest.TestCase):
+    """The game's .nav files: read, write back identically, analyse."""
+
+    def mesh(self, broken=False):
+        from hammerless.core.navfile import NavArea, NavMesh
+        # a row of 100x100 areas along +x: start room (1), path (2..4), end room (5)
+        m = NavMesh(analyzed=True)
+        for i in range(1, 6):
+            z = 0.0 if not (broken and i >= 4) else -200.0
+            m.areas.append(NavArea(i, 0, (i * 100.0, 0.0, z), (i * 100.0 + 100, 100.0, z), z, z))
+        for a in m.areas:
+            if a.id < 5 and not (broken and a.id == 3):
+                a.connections[1].append(a.id + 1)          # east
+            if a.id > 1 and not (broken and a.id == 4):
+                a.connections[3].append(a.id - 1)          # west
+        m.areas[0].spawn_attributes = 0x880
+        m.areas[4].spawn_attributes = 0x800
+        m.areas[2].visible = [(1, 2), (2, 3)]
+        return m
+
+    def test_round_trip(self):
+        from hammerless.core.navfile import read_nav, write_nav
+        data = write_nav(self.mesh())
+        again = read_nav(data)
+        self.assertEqual(write_nav(again), data)
+        self.assertEqual(again.areas[0].spawn_attributes, 0x880)
+        self.assertEqual(again.areas[2].visible, [(1, 2), (2, 3)])
+
+    def test_game_files_round_trip(self):
+        import glob
+        from hammerless.core.navfile import read_nav, write_nav
+        root = find_game_root()
+        files = glob.glob(os.path.join(root, "left4dead2", "maps", "c1m1_hotel.nav")) if root else []
+        if not files:
+            self.skipTest("L4D2 not installed")
+        data = open(files[0], "rb").read()
+        self.assertEqual(write_nav(read_nav(data)), data)
+
+    def test_analysis(self):
+        from hammerless.core.navanalysis import analyse
+        rep = analyse(self.mesh())
+        self.assertTrue(rep.end_reached)
+        self.assertEqual(len(rep.reachable), 5)
+        rep = analyse(self.mesh(broken=True))
+        self.assertFalse(rep.end_reached)
+        self.assertEqual(rep.break_area, 3)                     # the path stops at area 3
+        self.assertEqual(sorted(rep.islands[0]), [4, 5])
+
+
 class TestFlowReport(unittest.TestCase):
     def test_parse(self):
         from hammerless.core.compile import parse_flow

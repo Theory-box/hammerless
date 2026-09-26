@@ -164,6 +164,11 @@ def _on_spawn_index(self, context):
         self.spawn_selected = self.spawn_items[self.spawn_index].name
 
 
+def _nav_display(self, context):
+    from .navview import _on_display_change
+    _on_display_change(self, context)
+
+
 def _on_problem_index(self, context):
     from .problems import go_to_problem
     go_to_problem(context, self.problem_index)
@@ -195,6 +200,17 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     problems: CollectionProperty(type=HL_Problem)
     problem_index: IntProperty(default=-1, update=_on_problem_index)
     problems_checked: BoolProperty(description="The map has been checked since the file opened")
+    show_nav: BoolProperty(name="Show Nav Mesh", default=True, update=lambda self, c: _nav_display(self, c),
+                           description="Draw the game's nav mesh for this map in the viewport")
+    nav_color_mode: EnumProperty(name="Colour", default="REACH", update=lambda self, c: _nav_display(self, c), items=[
+        ("REACH", "Can survivors reach it?", "Green: reachable from the start room. Red: not"),
+        ("FLOW", "Distance from the start", "Heat map of walking distance along the path"),
+        ("SPAWN", "Zombie spawn marks", "Orange: areas marked OBSCURED by Zombie Spawn Areas"),
+    ])
+    show_nav_links: BoolProperty(name="Drops and Jumps", default=True, update=lambda self, c: _nav_display(self, c),
+                                 description="Arrows for one-way drop-downs (orange) and jump-ups (cyan)")
+    nav_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _nav_display(self, c),
+                           description="Draw the nav mesh through walls")
     show_problem_markers: BoolProperty(name="Show Markers", default=True,
                                        description="Draw numbered markers in the viewport where problems are")
     spawn_index: IntProperty(default=-1, update=_on_spawn_index)

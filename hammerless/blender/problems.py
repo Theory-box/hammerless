@@ -72,6 +72,42 @@ def store_flow(report: dict) -> None:
     _redraw(bpy.context)
 
 
+def store_nav(context, mesh, rep) -> None:
+    """Problems found in the game's own nav mesh (navanalysis): replaces earlier in-game rows."""
+    import math
+    s = context.scene.hammerless
+    scale = s.units_per_meter
+    for n in reversed(range(len(s.problems))):
+        if s.problems[n].ingame:
+            s.problems.remove(n)
+    by = mesh.by_id()
+    rows = []
+    if rep.end and not rep.end_reached and rep.break_area is not None:
+        rows.append(("ERROR", INGAME_BROKEN, by[rep.break_area].centre))
+    goal = None
+    if rep.end:
+        goal = tuple(sum(by[e].centre[i] for e in rep.end) / len(rep.end) for i in range(3))
+    for group in rep.islands[:3]:
+        if len(group) < 4:
+            continue
+        # islands past a broken path are just "the rest of the map": say so once, above
+        if goal and any(e in group for e in rep.end):
+            continue
+        centre = tuple(sum(by[i].centre[k] for i in group) / len(group) for k in range(3))
+        rows.append(("WARNING", f"{len(group)} nav areas here can't be reached from the start (tops of walls, "
+                     "closed-off spots). Zombies can spawn there and never reach survivors. Make it unwalkable "
+                     "(player clip, a sloped or skybox top) or connect it", centre))
+    for severity, msg, loc in reversed(rows):
+        item = s.problems.add()
+        item.name, item.severity, item.ingame = msg, severity, True
+        item.location = Vector(loc) / scale + Vector((0, 0, 0.3))
+        item.has_location = True
+        s.problems.move(len(s.problems) - 1, 0)
+    s.problems_checked = True
+    s["problem_index"] = -1
+    _redraw(context)
+
+
 def go_to_problem(context, index: int) -> None:
     s = context.scene.hammerless
     if not 0 <= index < len(s.problems):

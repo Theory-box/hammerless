@@ -293,6 +293,32 @@ def test_auto_detail_default():
     assert len(world_solids(blocks)) == 1 + 6                              # floor + seal
 
 
+def test_game_nav_view():
+    from hammerless.core.navfile import NavArea, NavMesh, write_nav
+    from hammerless.blender import navview
+    s = reset_scene()
+    m = NavMesh(analyzed=True)
+    for i in range(1, 7):                        # 1-3 connected with the start, 4-6 cut off
+        m.areas.append(NavArea(i, 0, (i * 100.0, 0, 0), (i * 100.0 + 100, 100, 0), 0, 0))
+    for a in m.areas:
+        if a.id not in (3, 6):
+            a.connections[1].append(a.id + 1)
+        if a.id not in (1, 4):
+            a.connections[3].append(a.id - 1)
+    m.areas[0].spawn_attributes = 0x880
+    m.areas[5].spawn_attributes = 0x800
+    maps = os.path.join(FAKE_GAME, "left4dead2", "maps")
+    os.makedirs(maps, exist_ok=True)
+    with open(os.path.join(maps, "test_map.nav"), "wb") as f:
+        f.write(write_nav(m))
+    assert bpy.ops.hammerless.nav_load() == {"FINISHED"}
+    rep = navview.report()
+    assert rep and not rep.end_reached and rep.break_area == 3
+    broken = [p for p in s.problems if p.ingame and p.severity == "ERROR"]
+    assert broken and broken[0].has_location
+    assert abs(broken[0].location.x - 350 / s.units_per_meter) < 0.1, tuple(broken[0].location)
+
+
 def test_horde_presets_and_outputs():
     reset_scene()
     add_box("floor", (20, 20, 0.5), (0, 0, -0.25))
