@@ -301,6 +301,22 @@ class TestMapCheck(unittest.TestCase):
         self.assertTrue(any("can't walk" in w for w in rep.warnings))
 
 
+class TestFlowReport(unittest.TestCase):
+    def test_parse(self):
+        from hammerless.core.compile import parse_flow
+        self.assertEqual(parse_flow("HAMMERLESS_FLOW ok 2380.31"), {"state": "ok", "length": 2380.31})
+        self.assertEqual(parse_flow("HAMMERLESS_FLOW broken at 87.5 3512.5 0.97"),
+                         {"state": "broken", "connected": False, "location": (87.5, 3512.5, 0.97)})
+        self.assertTrue(parse_flow("HAMMERLESS_FLOW broken connected 1 2 3")["connected"])
+        self.assertEqual(parse_flow("HAMMERLESS_FLOW nonav"), {"state": "nonav"})
+        self.assertIsNone(parse_flow("something else"))
+
+    def test_ready_script_reports(self):
+        from hammerless.core.gamefiles import READY_SCRIPT
+        self.assertIn("HLR_FlowReport();", READY_SCRIPT)
+        self.assertIn("GetMaxFlowDistance", READY_SCRIPT)
+
+
 class TestAutoDetail(unittest.TestCase):
     def test_rules(self):
         from hammerless.core.build import is_auto_detail

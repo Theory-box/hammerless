@@ -94,9 +94,44 @@ function HLR_Think() {
         if (p.IsSurvivor()) {
             ::HLR_Done = true;
             printl("HAMMERLESS_READY survivors spawned");
+            HLR_FlowReport();
             return;
         }
     }
+}
+
+// Tells Build & Play whether the Director found the path from the start to the end safe
+// room (the "flow"; without it no zombies wander). If not, walks the nav mesh from the
+// start room and prints the reached spot closest to the end room: where the path breaks.
+function HLR_FlowReport() {
+    local areas = {};
+    NavMesh.GetAllAreas(areas);
+    if (areas.len() == 0) { printl("HAMMERLESS_FLOW nonav"); return; }
+    local max = GetMaxFlowDistance();
+    if (max > 0) { printl("HAMMERLESS_FLOW ok " + max); return; }
+    local queue = [], seen = {}, goal = Vector(0, 0, 0), ends = 0;
+    foreach (id, a in areas) {
+        local f = a.GetSpawnAttributes();
+        if (f & 128) { queue.append(a); seen[a.GetID()] <- true; }
+        else if (f & 2048) { goal += a.GetCenter(); ends++; }
+    }
+    if (ends == 0 || queue.len() == 0) { printl("HAMMERLESS_FLOW noend"); return; }
+    goal = goal * (1.0 / ends);
+    local best = queue[0], bestD = 1e12, reachedEnd = false;
+    while (queue.len() > 0) {
+        local a = queue.pop();
+        local f = a.GetSpawnAttributes();
+        if ((f & 2048) && !(f & 128)) reachedEnd = true;
+        local d = (a.GetCenter() - goal).Length();
+        if (d < bestD) { bestD = d; best = a; }
+        for (local dir = 0; dir < 4; dir++) {
+            local adj = {};
+            a.GetAdjacentAreas(dir, adj);
+            foreach (k, b in adj) if (!(b.GetID() in seen)) { seen[b.GetID()] <- true; queue.append(b); }
+        }
+    }
+    local c = best.GetCenter();
+    printl("HAMMERLESS_FLOW broken " + (reachedEnd ? "connected" : "at") + " " + c.x + " " + c.y + " " + c.z);
 }
 '''
 

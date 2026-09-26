@@ -175,6 +175,7 @@ class HL_Problem(bpy.types.PropertyGroup):
     source: StringProperty()                # object to select
     location: FloatVectorProperty(size=3, subtype="TRANSLATION")   # Blender units
     has_location: BoolProperty()
+    ingame: BoolProperty()                  # reported by the game after Build & Play
 
 
 class HL_SpawnListItem(bpy.types.PropertyGroup):

@@ -14,11 +14,19 @@ _QUOTED = re.compile(r"'([^']+)'")
 _handlers = []
 
 
-def store(context, rep) -> None:
-    """Put a build/check Report's findings into the scene's problem list."""
+def store(context, rep, new_build: bool = False) -> None:
+    """Put a build/check Report's findings into the scene's problem list. The game's own
+    report from the last Build & Play is kept until the next build."""
     s = context.scene.hammerless
     scale = s.units_per_meter
+    kept = [] if new_build else [(p.name, p.severity, tuple(p.location), p.has_location)
+                                 for p in s.problems if p.ingame]
     s.problems.clear()
+    if new_build:
+        s["ingame_flow"] = ""
+    for name, severity, loc, has_loc in kept:
+        item = s.problems.add()
+        item.name, item.severity, item.location, item.has_location, item.ingame = name, severity, loc, has_loc, True
     located = {p.message for p in rep.problems}
     rows = [("ERROR", m, "", None) for m in rep.errors]
     rows += [(p.severity, p.message, p.source, p.location) for p in rep.problems]
@@ -36,6 +44,32 @@ def store(context, rep) -> None:
     s.problems_checked = True
     s["problem_index"] = -1      # no jump on refill
     _redraw(context)
+
+
+INGAME_BROKEN = ("In the game, survivors can't get from the start to the end safe room: its nav mesh "
+                 "stops at the marker. Look there for a drop the nav doesn't connect, a gap, a step "
+                 "that's too tall or a blocked path. Without this path no zombies wander")
+INGAME_CONNECTED = ("In the game, the nav mesh reaches the end safe room but the Director still has no "
+                    "start-to-end path. Check the end room's Next Map and both landmarks")
+
+
+def store_flow(report: dict) -> None:
+    """Show the game's flow report (see gamefiles.READY_SCRIPT) in the problem list."""
+    scene = bpy.context.scene
+    s = scene.hammerless
+    for n in reversed(range(len(s.problems))):
+        if s.problems[n].ingame:
+            s.problems.remove(n)
+    if report["state"] == "broken":
+        item = s.problems.add()
+        item.name = INGAME_CONNECTED if report.get("connected") else INGAME_BROKEN
+        item.severity, item.ingame = "ERROR", True
+        if not report.get("connected"):
+            item.location = Vector(report["location"]) / s.units_per_meter
+            item.has_location = True
+        s.problems.move(len(s.problems) - 1, 0)
+    s["problem_index"] = -1
+    _redraw(bpy.context)
 
 
 def go_to_problem(context, index: int) -> None:
@@ -135,6 +169,7 @@ def draw_panel(layout, context):
     box = layout.box()
     head = box.row(align=True)
     errors = sum(p.severity == "ERROR" for p in s.problems)
+    flow = s.get("ingame_flow", "")
     if not s.problems_checked:
         head.label(text="Map not checked yet", icon="QUESTION")
     elif not s.problems:
@@ -145,6 +180,8 @@ def draw_panel(layout, context):
         count.label(text=f"{len(s.problems)} problem{'s' if len(s.problems) != 1 else ''}", icon="ERROR")
     head.prop(s, "show_problem_markers", text="", icon="HIDE_OFF" if s.show_problem_markers else "HIDE_ON")
     head.operator("hammerless.validate", text="Check", icon="VIEWZOOM")
+    if flow:
+        box.label(text=flow, icon="CHECKMARK" if flow.startswith("In game: path") else "ERROR")
     if s.problems:
         box.template_list("HL_UL_problems", "", s, "problems", s, "problem_index",
                           rows=min(max(len(s.problems), 2), 6))

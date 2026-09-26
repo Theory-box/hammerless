@@ -491,22 +491,33 @@ class HL_OT_export_vmf(bpy.types.Operator):
 
 
 def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
-    """Once survivors are in the map, log how long the whole Build & Play took."""
+    """Once survivors are in the map, log how long Build & Play took; then show the game's
+    start-to-end path report in the problem list (each map load sends one)."""
+    from .problems import store_flow
     launch_id = cc.LOAD_STATUS["launch_id"]
-    waited = [0.0]
+    state = {"waited": 0.0, "logged": False, "flow_seq": cc.LOAD_STATUS["flow_seq"]}
 
     def check():
-        if cc.LOAD_STATUS["launch_id"] != launch_id or waited[0] > 300:
+        if cc.LOAD_STATUS["launch_id"] != launch_id or state["waited"] > 300:
             return None
+        state["waited"] += 1.0
         secs = cc.LOAD_STATUS["seconds"]
-        if secs is None:
-            waited[0] += 1.0
-            return 1.0
-        line = (f"Build & Play: {before_launch + secs:.0f}s total ({timing}, game load {secs:.1f}s"
-                + (", then nav mesh generation and two reloads" if nav else "") + ")")
-        write_log([line], append=True)
-        print("Hammerless:", line)
-        return None
+        if secs is not None and not state["logged"]:
+            state["logged"] = True
+            line = (f"Build & Play: {before_launch + secs:.0f}s total ({timing}, game load {secs:.1f}s"
+                    + (", then nav mesh generation and two reloads" if nav else "") + ")")
+            write_log([line], append=True)
+            print("Hammerless:", line)
+        if cc.LOAD_STATUS["flow_seq"] != state["flow_seq"] and cc.LOAD_STATUS["flow"]:
+            state["flow_seq"] = cc.LOAD_STATUS["flow_seq"]
+            report = cc.LOAD_STATUS["flow"]
+            scene = bpy.context.scene
+            scene.hammerless["ingame_flow"] = (
+                f"In game: path from start to end works ({report['length']:.0f} units)"
+                if report["state"] == "ok" else "In game: no path from start to end")
+            store_flow(report)
+            write_log([scene.hammerless["ingame_flow"]], append=True)
+        return 1.0
     bpy.app.timers.register(check, first_interval=1.0)
 
 
@@ -529,7 +540,7 @@ class HL_OT_build(bpy.types.Operator):
         path, root, rep = export_vmf(self, context)
         self._export_s = time.time() - self._t0
         from .problems import store
-        store(context, rep)
+        store(context, rep, new_build=True)
         surface_report(self, rep)
         if not path:
             return {"CANCELLED"}

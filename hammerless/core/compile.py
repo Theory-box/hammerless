@@ -374,23 +374,51 @@ class LaunchOptions:
     difficulty: str = ""           # Easy / Normal / Hard / Impossible ("" = leave as is)
 
 
-# How long the last launch took until survivors were in the map (set by a watcher thread).
-LOAD_STATUS: dict = {"launch_id": 0, "seconds": None}
+# How long the last launch took until survivors were in the map, and the latest in-game
+# flow report from the map's ready script (both set by a watcher thread).
+LOAD_STATUS: dict = {"launch_id": 0, "seconds": None, "flow": None, "flow_seq": 0}
+FLOW = "hammerless_flow "
+
+
+def parse_flow(line: str) -> dict | None:
+    """'HAMMERLESS_FLOW ok 2380.3' / 'HAMMERLESS_FLOW broken at x y z' / '... broken connected x y z'."""
+    parts = line.strip().split()
+    if len(parts) < 2 or parts[0].upper() != "HAMMERLESS_FLOW":
+        return None
+    state = parts[1].lower()
+    if state == "ok":
+        return {"state": "ok", "length": float(parts[2]) if len(parts) > 2 else 0.0}
+    if state == "broken" and len(parts) >= 6:
+        return {"state": "broken", "connected": parts[2] == "connected",
+                "location": tuple(float(v) for v in parts[3:6])}
+    return {"state": state}
 
 
 def _watch_ready(log: str, start: int, launch_id: int, timeout: float = 300.0):
+    """Record the load time (first HAMMERLESS_READY), then keep collecting flow reports
+    (the map reloads after nav generation, each load prints one)."""
     import time
     t0 = time.time()
+    pos = start
     while time.time() - t0 < timeout and LOAD_STATUS["launch_id"] == launch_id:
         time.sleep(0.5)
         try:
             with open(log, "rb") as f:
-                f.seek(start)
-                if READY.encode() in f.read().lower():
-                    LOAD_STATUS["seconds"] = time.time() - t0
-                    return
+                f.seek(pos)
+                chunk = f.read()
         except OSError:
-            pass
+            continue
+        cut = chunk.rfind(b"\n") + 1           # only complete lines
+        text, pos = chunk[:cut].decode("utf-8", "replace"), pos + cut
+        for line in text.splitlines():
+            low = line.lower()
+            if READY in low and LOAD_STATUS["seconds"] is None:
+                LOAD_STATUS["seconds"] = time.time() - t0
+            elif low.startswith(FLOW):
+                report = parse_flow(line)
+                if report and report["state"] in ("ok", "broken"):
+                    LOAD_STATUS["flow"] = report
+                    LOAD_STATUS["flow_seq"] += 1
 
 
 def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: list[str] | None = None,
@@ -427,6 +455,7 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
             move_game_window(mons[window.monitor_index])
     LOAD_STATUS["launch_id"] += 1
     LOAD_STATUS["seconds"] = None
+    LOAD_STATUS["flow"] = None
     threading.Thread(target=_watch_ready, args=(log, log_start, LOAD_STATUS["launch_id"]), daemon=True).start()
     if generate_nav:
         script, used = _navmark_paths(tools, map_name)
