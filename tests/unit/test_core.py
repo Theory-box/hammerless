@@ -111,6 +111,19 @@ class TestDisplacement(unittest.TestCase):
                 t.heights[r][c] = None
         self.assertEqual(len(build_patches(t)), 3)
 
+    def test_holes_sink_below_terrain(self):
+        # a patch the terrain only partly covers: uncovered points must not make a shelf
+        t = self.make_ramp(patches=1)
+        for r in range(5, 9):
+            for c in range(9):
+                t.heights[r][c] = None
+        (brush, disp), = build_patches(t)
+        lowest = min(h for row in t.heights for h in row if h is not None)
+        for i, row in enumerate(patch_vertex_positions(brush, disp)):
+            for x, y, z in row:
+                if i >= 5:
+                    self.assertLess(z, lowest - 256)
+
 
 class TestBuild(unittest.TestCase):
     def test_box_room_builds(self):

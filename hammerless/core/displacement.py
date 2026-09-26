@@ -17,6 +17,11 @@ from .ir import Brush, Terrain
 from .vmf import Block, fmt, fmt_vec
 
 TERRAIN_BASE_THICKNESS = 16.0
+# Source displacements can't have holes. Grid points the terrain doesn't cover (outside its
+# outline but inside a patch it partly covers) are pulled this far below the base, so the
+# filler drops away as a steep skirt at the terrain's edge instead of a flat shelf that
+# players and zombies can stand on.
+TERRAIN_HOLE_DEPTH = 512.0
 
 
 def verts_per_side(power: int) -> int:
@@ -71,7 +76,7 @@ def _dispinfo(t: Terrain, pr: int, pc: int, n: int, start, zb: float) -> Block:
         nrow, drow, arow = [], [], []
         for j in range(n):
             h = t.heights[pr + i][pc + j]
-            dist = 0.0 if h is None else h - zb
+            dist = -TERRAIN_HOLE_DEPTH if h is None else h - zb
             nrow.append("0 0 1")
             drow.append(fmt(dist))
             a = t.alphas[pr + i][pc + j] if t.alphas else 0.0
