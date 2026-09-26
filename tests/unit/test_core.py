@@ -325,6 +325,19 @@ class TestNavFile(unittest.TestCase):
         data = open(files[0], "rb").read()
         self.assertEqual(write_nav(read_nav(data)), data)
 
+    def test_dead_ledges(self):
+        from hammerless.core.navanalysis import analyse
+        from hammerless.core.navfile import NavArea, NavMesh
+        for drop, expect in ((10, 0), (34, 1), (70, 0)):
+            m = NavMesh()
+            m.areas = [NavArea(1, 0, (0, 0, 0), (100, 100, 0), 0, 0),
+                       NavArea(2, 0, (0, 125, -drop), (100, 225, -drop), -drop, -drop)]   # 25 apart, lower
+            if drop == 10:
+                m.areas[0].connections[2], m.areas[1].connections[0] = [2], [1]
+            if drop == 70:
+                m.areas[0].connections[2] = [2]                   # the game's one-way drop-down
+            self.assertEqual(len(analyse(m).dead_ledges), expect, drop)
+
     def test_analysis(self):
         from hammerless.core.navanalysis import analyse
         rep = analyse(self.mesh())

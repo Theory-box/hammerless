@@ -109,6 +109,10 @@ def store_nav(context, mesh, rep, predicted: bool = False) -> None:
         rows.append(("WARNING", f"{len(group)} nav areas here can't be reached from the start (tops of walls, "
                      "closed-off spots). Zombies can spawn there and never reach survivors. Make it unwalkable "
                      "(player clip, a sloped or skybox top) or connect it", centre))
+    for spot, dz in rep.dead_ledges[:12]:
+        rows.append(("WARNING", f"A {dz:.0f}-unit ledge that bots and zombies can't use either way: L4D2 only links "
+                     "a step of 18 or less, or a drop-down over 64 (one way down, can't climb back). Make it a "
+                     "drop of 65+ for a drop-down, or 18 or less to walk it", spot))
     for severity, msg, loc in reversed(rows):
         item = s.problems.add()
         item.name, item.severity, item.ingame = msg, severity, True

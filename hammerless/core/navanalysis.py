@@ -11,6 +11,8 @@ from .navfile import NavMesh
 
 PLAYER_START, CHECKPOINT, OBSCURED, FINALE = 0x80, 0x800, 0x1000, 0x40
 STEP_HEIGHT = 18.0            # nav.h StepHeight: above this a link needs a jump
+JUMP_DOWN_MIN = 64.0          # JumpCrouchHeight: L4D2 only makes drop-down links for drops above this
+EDGE_GAP = 26.0               # neighbouring areas can be one node step (25) apart at a ledge
 
 
 @dataclass
@@ -32,6 +34,7 @@ class NavReport:
     islands: list[list[int]] = field(default_factory=list)  # groups not connected to the start room
     links: list[Link] = field(default_factory=list)
     distance: dict[int, float] = field(default_factory=dict)  # walking distance from the start room
+    dead_ledges: list[tuple[tuple[float, float, float], float]] = field(default_factory=list)  # (spot, height)
 
     @property
     def unreachable(self) -> int:
@@ -112,4 +115,52 @@ def analyse(mesh: NavMesh) -> NavReport:
                     q.append(y)
         rep.islands.append(group)
     rep.islands.sort(key=len, reverse=True)
+    rep.dead_ledges = find_dead_ledges(mesh, out)
     return rep
+
+
+def find_dead_ledges(mesh: NavMesh, out: dict[int, set[int]]):
+    """Places where two neighbouring areas differ in height by 19-64 units and aren't linked:
+    L4D2 makes neither a step (18 or less) nor a drop-down (over 64) there, so bots, zombies and
+    the Director treat it as the end of the path. Returns (spot on the upper edge, height) per
+    ledge, one per 100-unit stretch."""
+    cell = 128.0
+    grid: dict[tuple[int, int], list] = {}
+    for a in mesh.areas:
+        for gx in range(int((a.nw[0] - EDGE_GAP) // cell), int((a.se[0] + EDGE_GAP) // cell) + 1):
+            for gy in range(int((a.nw[1] - EDGE_GAP) // cell), int((a.se[1] + EDGE_GAP) // cell) + 1):
+                grid.setdefault((gx, gy), []).append(a)
+    found, seen_pairs = [], set()
+    for cellset in grid.values():
+        for a in cellset:
+            for b in cellset:
+                if a.id >= b.id or (a.id, b.id) in seen_pairs:
+                    continue
+                seen_pairs.add((a.id, b.id))
+                spot = _shared_edge(a, b)
+                if spot is None:
+                    continue
+                x, y = spot
+                za, zb = a.z_at(x, y), b.z_at(x, y)
+                dz = abs(za - zb)
+                if STEP_HEIGHT < dz <= JUMP_DOWN_MIN and b.id not in out[a.id] and a.id not in out[b.id]:
+                    found.append(((x, y, max(za, zb)), dz))
+    kept = []
+    for spot, dz in sorted(found, key=lambda f: (f[0][0], f[0][1])):
+        if all(math.dist(spot, k[0]) > 100 for k in kept):
+            kept.append((spot, dz))
+    return kept
+
+
+def _shared_edge(a, b):
+    """Midpoint of the stretch where two areas face each other across a small gap, or None."""
+    for lo, hi in ((a, b), (b, a)):
+        if 0 <= hi.nw[0] - lo.se[0] <= EDGE_GAP:          # lo is west of hi
+            y0, y1 = max(lo.nw[1], hi.nw[1]), min(lo.se[1], hi.se[1])
+            if y1 - y0 >= 20:
+                return ((lo.se[0] + hi.nw[0]) / 2, (y0 + y1) / 2)
+        if 0 <= hi.nw[1] - lo.se[1] <= EDGE_GAP:          # lo is north of hi
+            x0, x1 = max(lo.nw[0], hi.nw[0]), min(lo.se[0], hi.se[0])
+            if x1 - x0 >= 20:
+                return ((x0 + x1) / 2, (lo.se[1] + hi.nw[1]) / 2)
+    return None
