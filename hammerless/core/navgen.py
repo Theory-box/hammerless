@@ -66,13 +66,19 @@ class Node:
     crouch_checked: bool = False
     covered: bool = False
     area: "Area | None" = None
+    on_disp: bool = False
 
     def blocked_any(self) -> bool:
         return any(self.blocked)
 
     def bi_linked(self, d: int) -> bool:
+        """Linked both ways, for building areas. Measured in L4D2 (differs from the 2013 SDK
+        code): nodes more than a step (18) apart in height never share an area, so the game
+        makes no area and no walk connection across a 19-64 unit ledge (drops over 64 get a
+        one-way jump-down link instead)."""
         n = self.to[d]
-        return n is not None and n.to[OPPOSITE[d]] is self
+        return (n is not None and n.to[OPPOSITE[d]] is self
+                and abs(n.pos[2] - self.pos[2]) <= STEP_HEIGHT)
 
     def closed_cell(self) -> bool:
         """IsClosedCell: NW corner of a quad of nodes all linked both ways."""
@@ -152,8 +158,8 @@ class Sampler:
                 return n
         return None
 
-    def new_node(self, pos, normal, parent) -> Node:
-        n = Node(tuple(pos), tuple(normal), parent, len(self.nodes) + 1)
+    def new_node(self, pos, normal, parent, on_disp: bool = False) -> Node:
+        n = Node(tuple(pos), tuple(normal), parent, len(self.nodes) + 1, on_disp=on_disp)
         self.nodes.append(n)
         self.hash.setdefault((n.pos[0], n.pos[1]), []).insert(0, n)   # newest first, like m_nextAtXY
         return n
@@ -166,11 +172,11 @@ class Sampler:
             self.seeds.append(((round_to_units(p[0], GENERATION_STEP), round_to_units(p[1], GENERATION_STEP), p[2]),
                                normal))
 
-    def add_node(self, dest, normal, d, source: Node, obstacle_height: float):
+    def add_node(self, dest, normal, d, source: Node, obstacle_height: float, on_disp: bool = False):
         node = self.get_node(dest)
         new = node is None
         if new:
-            node = self.new_node(dest, normal, source)
+            node = self.new_node(dest, normal, source, on_disp)
         source.to[d] = node
         source.obstacle[d] = obstacle_height
         dz = source.pos[2] - dest[2]
@@ -276,7 +282,7 @@ class Sampler:
         dz = to[2] - current.pos[2]
         if obstacle_height < MAX_TRAVERSABLE_HEIGHT or dz > obstacle_height - 2.0:
             obstacle_height = 0.0
-        return self.add_node(to, to_normal, d, current, obstacle_height)
+        return self.add_node(to, to_normal, d, current, obstacle_height, result.displacement)
 
 
 def sample_map(vmf_text: str, seed_positions) -> Sampler:

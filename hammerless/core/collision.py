@@ -191,6 +191,80 @@ def brush_from_vmf_sides(vmf_sides, source="") -> CollisionBrush | None:
     return make_brush(sides, source) if len(sides) >= 4 else None
 
 
+DISPLACEMENT = "__displacement__"      # material marker for displacement collision triangles
+
+
+def displacement_vertices(plane: str, disp) -> list[list[tuple[float, float, float]]]:
+    """Vertex grid of a displacement on an axis-aligned face. Row i runs along +Y from
+    startposition and column j along +X (the layout core/displacement.py writes);
+    each vertex moves along its normal by its distance, plus offset and elevation."""
+    power = int(disp.get("power"))
+    n = 2 ** power + 1
+    pts = [tuple(float(c) for c in g.split()) for g in _POINTS.search(plane).groups()]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    sx, sy, sz = (float(c) for c in disp.get("startposition").strip("[]").split())
+    x1 = max(xs) if abs(sx - min(xs)) < abs(sx - max(xs)) else min(xs)
+    y1 = max(ys) if abs(sy - min(ys)) < abs(sy - max(ys)) else min(ys)
+    elevation = float(disp.get("elevation", "0"))
+
+    def rows(name, width):
+        blocks = disp.blocks(name)
+        if not blocks:
+            return [[0.0] * (n * width) for _ in range(n)]
+        return [[float(v) for v in blocks[0].get(f"row{i}", "").split()] or [0.0] * (n * width) for i in range(n)]
+
+    normals, dists, offsets = rows("normals", 3), rows("distances", 1), rows("offsets", 3)
+    grid = []
+    for i in range(n):
+        row = []
+        for j in range(n):
+            base = (sx + (x1 - sx) * j / (n - 1), sy + (y1 - sy) * i / (n - 1), sz)
+            nx, ny, nz = normals[i][3 * j:3 * j + 3]
+            d = dists[i][j]
+            ox, oy, oz = offsets[i][3 * j:3 * j + 3]
+            row.append((base[0] + nx * d + ox, base[1] + ny * d + oy, base[2] + nz * d + oz + elevation))
+        grid.append(row)
+    return grid
+
+
+def displacement_brushes(plane: str, disp, thickness: float = 1.0) -> list[CollisionBrush]:
+    """Each displacement triangle as a thin convex solid (face, back face, edge planes) with
+    bevels, which is how swept boxes collide with displacement triangles."""
+    grid = displacement_vertices(plane, disp)
+    n = len(grid)
+    flat = [p for row in grid for p in row]
+    tris = []
+    for i in range(n - 1):
+        for j in range(n - 1):
+            k = i * n + j                     # the engine's alternating diagonal
+            if k % 2:
+                tris += [(k, k + n, k + 1), (k + 1, k + n, k + n + 1)]
+            else:
+                tris += [(k, k + n, k + n + 1), (k, k + n + 1, k + 1)]
+    out = []
+    for a, b, c in tris:
+        pa, pb, pc = flat[a], flat[b], flat[c]
+        normal, length = _norm(_cross(_sub(pb, pa), _sub(pc, pa)))
+        if length < 1e-6:
+            continue
+        if normal[2] < 0:
+            normal = (-normal[0], -normal[1], -normal[2])
+        dist = _dot(normal, pa)
+        sides = [Side(normal, dist, DISPLACEMENT), Side((-normal[0], -normal[1], -normal[2]), -(dist - thickness),
+                                                          DISPLACEMENT)]
+        for p, q, r in ((pa, pb, pc), (pb, pc, pa), (pc, pa, pb)):
+            en, el = _norm(_cross(_sub(q, p), normal))
+            if el < 1e-9:
+                continue
+            if _dot(en, r) - _dot(en, p) > 0:
+                en = (-en[0], -en[1], -en[2])
+            sides.append(Side(en, _dot(en, p), DISPLACEMENT))
+        brush = make_brush(sides, "displacement")
+        if brush:
+            out.append(brush)
+    return out
+
+
 @dataclass
 class Trace:
     fraction: float = 1.0
@@ -204,6 +278,10 @@ class Trace:
     @property
     def sky(self) -> bool:
         return self.material in SKY
+
+    @property
+    def displacement(self) -> bool:
+        return self.material == DISPLACEMENT
 
 
 class CollisionWorld:
@@ -220,14 +298,22 @@ class CollisionWorld:
 
     @classmethod
     def from_vmf(cls, text: str) -> "CollisionWorld":
-        """World and solid brush-entity brushes from a VMF (what nav generation collides with)."""
+        """World and solid brush-entity brushes from a VMF (what nav generation collides with).
+        A brush with a displacement side isn't solid in the compiled map: its displacement
+        surface is, as triangles."""
         from .vmf import parse
         top = parse(text)
         brushes = []
 
         def add_solids(block, owner):
             for solid in block.blocks("solid"):
-                sides = [(s.get("plane"), s.get("material", "")) for s in solid.blocks("side")]
+                vmf_sides = solid.blocks("side")
+                disps = [(s, s.blocks("dispinfo")[0]) for s in vmf_sides if s.blocks("dispinfo")]
+                if disps:
+                    for side, disp in disps:
+                        brushes.extend(displacement_brushes(side.get("plane"), disp))
+                    continue
+                sides = [(s.get("plane"), s.get("material", "")) for s in vmf_sides]
                 if all(m.lower() in NONSOLID for _p, m in sides):
                     continue
                 b = brush_from_vmf_sides(sides, owner)
