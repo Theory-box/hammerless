@@ -134,6 +134,27 @@ def name_brushes(lines: list[str], vmf_path: str) -> list[str]:
     return [re.sub(r"Brush (\d+)", name, line) for line in lines]
 
 
+def failure_reason(log: list[str]) -> str:
+    """When no known error pattern matched: the failure line, plus what the failing tool
+    printed last (usually the real reason)."""
+    fail = next((i for i in range(len(log) - 1, -1, -1) if log[i].startswith("!! ")), None)
+    if fail is None:
+        return "Compile failed (no error message). See the hammerless_log text block"
+    reason = log[fail][3:].strip()
+    if "failed (exit code" not in reason:
+        return reason
+    tail = []
+    for line in reversed(log[:fail]):
+        if line.startswith("==== "):
+            break
+        line = line.strip()
+        if line and not line.endswith("elapsed") and not re.match(r"^[\d.]+\.\.\.", line):
+            tail.append(line)
+        if len(tail) == 3:
+            break
+    return reason + (": " + " | ".join(reversed(tail)) if tail else "")
+
+
 def parse_log(text: str) -> LogSummary:
     s = LogSummary()
     for line in text.splitlines():
@@ -253,7 +274,7 @@ class CompileJob:
                     return
             if self.copy_to_game:
                 os.makedirs(self.tools.maps_dir, exist_ok=True)
-                shutil.copy2(self.base + ".bsp", os.path.join(self.tools.maps_dir, self.name + ".bsp"))
+                self._copy_bsp(os.path.join(self.tools.maps_dir, self.name + ".bsp"))
                 self._q.put(f"Copied {self.name}.bsp to {self.tools.maps_dir}")
             with open(self.base + ".stamp", "w", encoding="utf-8") as f:
                 f.write(self._stamp())
@@ -262,6 +283,24 @@ class CompileJob:
         except Exception as ex:  # surfaced to the user in the log
             self._q.put(f"!! {ex}")
             self._q.put(("FAILED",))
+
+    def _copy_bsp(self, dest: str):
+        """Copy the BSP into the game. While the game has this map loaded it keeps the file
+        open and Windows refuses the copy: unload the map (disconnect) and try again."""
+        import time
+        for attempt in range(12):
+            try:
+                shutil.copy2(self.base + ".bsp", dest)
+                return
+            except PermissionError:
+                if attempt == 0:
+                    if not game_running():
+                        break
+                    self._q.put("The game has the map open: unloading it to copy the new one in")
+                    send_commands(self.tools, ["disconnect"])
+                time.sleep(1.0)
+        raise RuntimeError(f"Couldn't copy {self.name}.bsp into the game's maps folder: the file is in use. "
+                           "Close Left 4 Dead 2 (or load another map) and build again")
 
     def poll(self) -> list[str]:
         new = []
@@ -274,6 +313,8 @@ class CompileJob:
                 self.done = True
                 self.failed = item[0] == "FAILED"
                 self.summary = parse_log("\n".join(self.log))
+                if self.failed and not self.summary.errors and not self.summary.leaked:
+                    self.summary.errors = [failure_reason(self.log)]
                 self.summary.errors = name_brushes(self.summary.errors, self.vmf)
                 self.summary.warnings = name_brushes(self.summary.warnings, self.vmf)
             else:
