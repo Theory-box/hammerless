@@ -29,6 +29,7 @@ Status: **v0.1, early.** Tested end-to-end in L4D2: compile, spawns, nav, safe r
 | Crescendo (hordes in waves) | **Shift+A > L4D2 > Crescendo Button**, then edit the stages on its *Crescendo Definition* (e.g. `PANIC 1, DELAY 10, PANIC 2`) |
 | Hordes, Tank ambushes, buttons | **Shift+A > L4D2 > Horde Trigger / Horde Button / Tank Ambush**. Wire your own with the **Outputs** list. See [docs/HORDE_EVENTS.md](docs/HORDE_EVENTS.md) |
 | Zombies in open areas | **Shift+A > L4D2 > Zombie Spawn Area**: commons only spawn where survivors can't see, and this marks an area as "hidden" |
+| Will survivors get from start to end? | **L4D2 Map > Nav Mesh > Predict Nav Mesh** runs a copy of the game's own nav generator on your scene (no compile) and draws the result: green where survivors can go, red where they can't, a marker where the path breaks. Note: L4D2 never links a ledge between 19 and 64 units high, in either direction. *Show the Game's Nav Mesh* reads what the last Build & Play generated |
 | Lights | Blender Sun/Point/Spot lights export. If there's no sun, one is added automatically. Safe room presets include a ceiling light |
 
 **Scale:** 1 Blender meter = 52.49 Hammer units by default, so real-size buildings match Valve's proportions (a survivor is ~1.37 m tall at this scale). Change it under *Settings*.
