@@ -179,6 +179,8 @@ class Generator(Sampler):
         return run
 
     def test_area(self, node: Node, width: int, height: int) -> bool:
+        """TestArea. On failure, self._fail holds where it failed (see _still_fails)."""
+        self._fail = None
         normal, pos = node.normal, node.pos
         d = -(normal[0] * pos[0] + normal[1] * pos[1] + normal[2] * pos[2])
 
@@ -186,9 +188,13 @@ class Generator(Sampler):
             q = n.pos
             return abs(q[0] * normal[0] + q[1] * normal[1] + q[2] * normal[2] + d) > OFF_PLANE_TOLERANCE
 
+        def fail(kind, x=0, y=0, multi_only=False):
+            self._fail = (kind, x, y, multi_only)
+            return False
+
         node_crouch = node.crouch[SOUTH_EAST]
         if node.blocked[SOUTH_EAST]:
-            return False
+            return fail("dead")
         node_attr = node.attributes & ~NAV_MESH_CROUCH
         multi = width > 1 or height > 1
         vert = node
@@ -200,39 +206,39 @@ class Generator(Sampler):
                 if north and west:
                     hc = horiz.crouch[SOUTH_EAST]
                     if horiz.blocked[SOUTH_EAST]:
-                        return False
+                        return fail("cell", x, y)
                 elif north:
                     hc = horiz.crouch[SOUTH_EAST] or horiz.crouch[SOUTH_WEST]
                     if horiz.blocked[SOUTH_EAST] or horiz.blocked[SOUTH_WEST]:
-                        return False
+                        return fail("cell", x, y)
                 elif west:
                     hc = horiz.crouch[SOUTH_EAST] or horiz.crouch[NORTH_EAST]
                     if horiz.blocked[SOUTH_EAST] or horiz.blocked[NORTH_EAST]:
-                        return False
+                        return fail("cell", x, y)
                 else:                # south-east, south, east, interior
                     hc = bool(horiz.attributes & NAV_MESH_CROUCH)
                     if horiz.blocked_any():
-                        return False
+                        return fail("cell", x, y)
                 if node_crouch != hc:
-                    return False
+                    return fail("cell", x, y)
                 if (horiz.attributes & ~NAV_MESH_CROUCH) != node_attr:
-                    return False
+                    return fail("cell", x, y)
                 if horiz.covered or not horiz.closed_cell():
-                    return False
+                    return fail("cell", x, y)
                 if not self._check_obstacles(horiz, width, height, x, y):
                     return False
                 horiz = horiz.to[EAST]
                 if horiz is None:
-                    return False
+                    return fail("east", x + 1, y)
                 if multi and off_plane(horiz):
-                    return False
+                    return fail("east", x + 1, y, True)
             if not self._check_obstacles(horiz, width, height, width, y):
                 return False
             vert = vert.to[SOUTH]
             if vert is None:
-                return False
+                return fail("south", 0, y + 1)
             if multi and off_plane(vert):
-                return False
+                return fail("south", 0, y + 1, True)
         if multi:
             horiz = vert
             for x in range(width):
@@ -245,14 +251,32 @@ class Generator(Sampler):
                 return False
         if node_crouch:
             vert = node
-            for _y in range(height):
+            for y in range(height):
                 horiz = vert
-                for _x in range(width):
+                for x in range(width):
                     if not self._valid_crouch_area(horiz):
-                        return False
+                        return fail("cell", x, y)
                     horiz = horiz.to[EAST]
                 vert = vert.to[SOUTH]
         return True
+
+    @staticmethod
+    def _still_fails(f, width: int, height: int) -> bool:
+        """Would TestArea still fail at the remembered spot for this (smaller) size? Every
+        remembered reason is permanent (covered stays covered, links and heights don't change),
+        so while the block still includes that spot the answer is the same."""
+        if f is None:
+            return False
+        kind, x, y, multi_only = f
+        if multi_only and width == 1 and height == 1:
+            return False
+        if kind == "dead":
+            return True
+        if kind == "cell":
+            return x < width and y < height
+        if kind == "east":
+            return x <= width and y < height
+        return y <= height                       # "south"
 
     @staticmethod
     def _check_obstacles(n: Node, width, height, x, y) -> bool:
@@ -313,12 +337,17 @@ class Generator(Sampler):
         uncovered = len(self.nodes)
         east, south = self._runs(EAST), self._runs(SOUTH)
         order = list(reversed(self.nodes))       # CNavNode::m_list: newest first
+        memo: dict[int, tuple] = {}
         while uncovered > 0:
             for node in order:
                 if node.covered or east.get(id(node), 0) < width or south.get(id(node), 0) < height:
                     continue
+                if self._still_fails(memo.get(id(node)), width, height):
+                    continue
                 if self.test_area(node, width, height):
                     uncovered -= self.build_area(node, width, height)
+                elif self._fail is not None:
+                    memo[id(node)] = self._fail
             if width >= height:
                 width -= 1
             else:

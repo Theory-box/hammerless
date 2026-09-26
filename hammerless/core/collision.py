@@ -285,10 +285,15 @@ class Trace:
 
 
 class CollisionWorld:
-    CELL = 256.0
+    CELL = 64.0
 
     def __init__(self, brushes: list[CollisionBrush]):
         self.brushes = brushes
+        # packed for speed: bounds, and per side (nx, ny, nz, dist, |nx|, |ny|, |nz|, bevel, normal, material)
+        self._packed = [((b.mins[0], b.mins[1], b.mins[2], b.maxs[0], b.maxs[1], b.maxs[2]),
+                         [(sd.normal[0], sd.normal[1], sd.normal[2], sd.dist, abs(sd.normal[0]), abs(sd.normal[1]),
+                           abs(sd.normal[2]), sd.bevel, sd.normal, sd.material) for sd in b.sides])
+                        for b in brushes]
         self.grid: dict[tuple[int, int], list[int]] = {}
         for i, b in enumerate(brushes):
             for cx in range(int(math.floor(b.mins[0] / self.CELL)), int(math.floor(b.maxs[0] / self.CELL)) + 1):
@@ -327,66 +332,76 @@ class CollisionWorld:
                 add_solids(ent, ent.get("classname"))
         return cls(brushes)
 
-    def _candidates(self, lo, hi):
-        seen = set()
-        for cx in range(int(math.floor(lo[0] / self.CELL)), int(math.floor(hi[0] / self.CELL)) + 1):
-            for cy in range(int(math.floor(lo[1] / self.CELL)), int(math.floor(hi[1] / self.CELL)) + 1):
-                for i in self.grid.get((cx, cy), ()):
-                    if i not in seen:
-                        seen.add(i)
-                        b = self.brushes[i]
-                        if (b.mins[0] <= hi[0] and b.maxs[0] >= lo[0] and b.mins[1] <= hi[1] and b.maxs[1] >= lo[1]
-                                and b.mins[2] <= hi[2] and b.maxs[2] >= lo[2]):
-                            yield b
+    def _candidates(self, x0, y0, z0, x1, y1, z1):
+        cell = self.CELL
+        cx0, cx1 = math.floor(x0 / cell), math.floor(x1 / cell)
+        cy0, cy1 = math.floor(y0 / cell), math.floor(y1 / cell)
+        packed, grid = self._packed, self.grid
+        if cx0 == cx1 and cy0 == cy1:
+            ids = grid.get((cx0, cy0), ())
+        else:
+            seen = set()
+            for cx in range(cx0, cx1 + 1):
+                for cy in range(cy0, cy1 + 1):
+                    seen.update(grid.get((cx, cy), ()))
+            ids = sorted(seen)
+        for i in ids:
+            bx0, by0, bz0, bx1, by1, bz1 = packed[i][0]
+            if bx0 <= x1 and bx1 >= x0 and by0 <= y1 and by1 >= y0 and bz0 <= z1 and bz1 >= z0:
+                yield packed[i][1]
 
     def trace_hull(self, start, end, mins, maxs) -> Trace:
         """UTIL_TraceHull against the brushes: sweep box [mins, maxs] from start to end."""
         self.traces += 1
-        ext = ((maxs[0] - mins[0]) * 0.5, (maxs[1] - mins[1]) * 0.5, (maxs[2] - mins[2]) * 0.5)
-        off = ((maxs[0] + mins[0]) * 0.5, (maxs[1] + mins[1]) * 0.5, (maxs[2] + mins[2]) * 0.5)
-        p1 = (start[0] + off[0], start[1] + off[1], start[2] + off[2])
-        p2 = (end[0] + off[0], end[1] + off[1], end[2] + off[2])
-        is_point = ext == (0.0, 0.0, 0.0)
+        ex, ey, ez = (maxs[0] - mins[0]) * 0.5, (maxs[1] - mins[1]) * 0.5, (maxs[2] - mins[2]) * 0.5
+        ox, oy, oz = (maxs[0] + mins[0]) * 0.5, (maxs[1] + mins[1]) * 0.5, (maxs[2] + mins[2]) * 0.5
+        p1x, p1y, p1z = start[0] + ox, start[1] + oy, start[2] + oz
+        p2x, p2y, p2z = end[0] + ox, end[1] + oy, end[2] + oz
+        is_point = ex == 0.0 and ey == 0.0 and ez == 0.0
         tr = Trace()
-        lo = tuple(min(p1[a], p2[a]) - ext[a] - 1 for a in range(3))
-        hi = tuple(max(p1[a], p2[a]) + ext[a] + 1 for a in range(3))
-        for b in self._candidates(lo, hi):
-            self._clip(b, p1, p2, ext, is_point, tr)
+        cands = self._candidates(min(p1x, p2x) - ex - 1, min(p1y, p2y) - ey - 1, min(p1z, p2z) - ez - 1,
+                                 max(p1x, p2x) + ex + 1, max(p1y, p2y) + ey + 1, max(p1z, p2z) + ez + 1)
+        for sides in cands:
+            self._clip(sides, p1x, p1y, p1z, p2x, p2y, p2z, ex, ey, ez, is_point, tr)
             if tr.allsolid:
                 break
         if tr.fraction == 1.0:
-            tr.endpos = tuple(end)
+            tr.endpos = (end[0], end[1], end[2])
         else:
-            tr.endpos = tuple(start[a] + tr.fraction * (end[a] - start[a]) for a in range(3))
+            f = tr.fraction
+            tr.endpos = (start[0] + f * (end[0] - start[0]), start[1] + f * (end[1] - start[1]),
+                         start[2] + f * (end[2] - start[2]))
         return tr
 
     @staticmethod
-    def _clip(b: CollisionBrush, p1, p2, ext, is_point, tr: Trace):
+    def _clip(sides, p1x, p1y, p1z, p2x, p2y, p2z, ex, ey, ez, is_point, tr: Trace):
         enter, leave = NEVER_UPDATED, 1.0
         getout = startout = False
         clip = None
-        for s in b.sides:
-            if s.bevel and is_point:
-                continue
-            n = s.normal
-            dist = s.dist + (0.0 if is_point else abs(n[0]) * ext[0] + abs(n[1]) * ext[1] + abs(n[2]) * ext[2])
-            d1 = p1[0] * n[0] + p1[1] * n[1] + p1[2] * n[2] - dist
-            d2 = p2[0] * n[0] + p2[1] * n[1] + p2[2] * n[2] - dist
+        eps = DIST_EPSILON
+        for nx, ny, nz, dist, ax, ay, az, bevel, normal, material in sides:
+            if is_point:
+                if bevel:
+                    continue
+            else:
+                dist = dist + ax * ex + ay * ey + az * ez
+            d1 = p1x * nx + p1y * ny + p1z * nz - dist
+            d2 = p2x * nx + p2y * ny + p2z * nz - dist
             if d2 > 0:
                 getout = True
             if d1 > 0:
                 startout = True
-            if d1 > 0 and (d2 >= DIST_EPSILON or d2 >= d1):
-                return                      # completely in front of this face: no hit
-            if d1 <= 0 and d2 <= 0:
+                if d2 >= eps or d2 >= d1:
+                    return                  # completely in front of this face: no hit
+            elif d2 <= 0:
                 continue
             if d1 > d2:                     # entering
-                f = (d1 - DIST_EPSILON) / (d1 - d2)
+                f = (d1 - eps) / (d1 - d2)
                 if f > enter:
                     enter = f
-                    clip = s
+                    clip = (normal, material)
             else:                           # leaving
-                f = (d1 + DIST_EPSILON) / (d1 - d2)
+                f = (d1 + eps) / (d1 - d2)
                 if f < leave:
                     leave = f
         if not startout:
@@ -402,5 +417,4 @@ class CollisionWorld:
             return
         if enter < leave and enter > NEVER_UPDATED and enter < tr.fraction:
             tr.fraction = max(0.0, enter)
-            tr.normal = clip.normal
-            tr.material = clip.material
+            tr.normal, tr.material = clip
