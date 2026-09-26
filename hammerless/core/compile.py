@@ -115,6 +115,25 @@ WARNING_PATTERNS = [
 ]
 
 
+def sources_path(vmf_path: str) -> str:
+    return os.path.splitext(vmf_path)[0] + ".brushes.json"
+
+
+def name_brushes(lines: list[str], vmf_path: str) -> list[str]:
+    """'Brush 177: ...' -> "Brush 177 ('Plane.006'): ..." using the ids written at export."""
+    try:
+        import json
+        with open(sources_path(vmf_path), encoding="utf-8") as f:
+            sources = json.load(f)
+    except (OSError, ValueError):
+        return lines
+
+    def name(m):
+        src = sources.get(m.group(1))
+        return f"Brush {m.group(1)} ('{src}')" if src else m.group(0)
+    return [re.sub(r"Brush (\d+)", name, line) for line in lines]
+
+
 def parse_log(text: str) -> LogSummary:
     s = LogSummary()
     for line in text.splitlines():
@@ -255,6 +274,8 @@ class CompileJob:
                 self.done = True
                 self.failed = item[0] == "FAILED"
                 self.summary = parse_log("\n".join(self.log))
+                self.summary.errors = name_brushes(self.summary.errors, self.vmf)
+                self.summary.warnings = name_brushes(self.summary.warnings, self.vmf)
             else:
                 self.log.append(item)
                 new.append(item)

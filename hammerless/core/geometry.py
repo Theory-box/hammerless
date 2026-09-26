@@ -107,6 +107,28 @@ def polygon_area(verts: list[Vec3]) -> float:
     return length(total) / 2.0
 
 
+def open_direction(normals: list[Vec3], eps: float = 1e-6) -> Vec3 | None:
+    """A direction no face blocks (the solid would go on forever that way), or None if the
+    faces close it in. Such directions include one of the cross products of two face normals,
+    or a reversed normal."""
+    cands = [scale(n, -1.0) for n in normals]
+    for i in range(len(normals)):
+        for j in range(i + 1, len(normals)):
+            c = cross(normals[i], normals[j])
+            if length(c) > 1e-9:
+                c = normalize(c)
+                cands += [c, scale(c, -1.0)]
+    for d in cands:
+        if all(dot(d, n) <= eps for n in normals):
+            return d
+    return None
+
+
+def _direction_name(d: Vec3) -> str:
+    axis = max(range(3), key=lambda i: abs(d[i]))
+    return ("+" if d[axis] > 0 else "-") + "XYZ"[axis]
+
+
 def check_brush(brush: Brush, tolerance: float = 0.1) -> list[BrushProblem]:
     """Return problems that would make this an invalid Source brush."""
     problems: list[BrushProblem] = []
@@ -123,6 +145,14 @@ def check_brush(brush: Brush, tolerance: float = 0.1) -> list[BrushProblem]:
             break
 
     planes = [Plane.from_polygon(f.verts) for f in faces]
+    gap = open_direction([pl.normal for pl in planes])
+    if gap is not None:
+        problems.append(BrushProblem(
+            brush.source,
+            f"is open: its {_direction_name(gap)} side has no face (a hole in the mesh). In Edit Mode select "
+            "the hole's edges and press F to fill it",
+        ))
+        return problems
     if all(pl.distance(v) >= -tolerance for pl in planes for v in verts):
         problems.append(BrushProblem(
             brush.source,

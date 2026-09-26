@@ -83,6 +83,7 @@ def parse(text: str) -> list[Block]:
 class VMFWriter:
     def __init__(self):
         self._next_id = 1
+        self.solid_sources: dict[int, str] = {}   # solid id -> Blender object (compiler messages use ids)
 
     def new_id(self) -> int:
         i = self._next_id
@@ -113,7 +114,10 @@ class VMFWriter:
     def solid(self, brush: Brush, dispinfos: dict[int, Block] | None = None) -> Block:
         """dispinfos maps face index (in brush.faces) -> dispinfo block."""
         sb = Block("solid")
-        sb.kv("id", self.new_id())
+        sid = self.new_id()
+        sb.kv("id", sid)
+        if brush.source:
+            self.solid_sources[sid] = brush.source
         dispinfos = dispinfos or {}
         if dispinfos:
             faces = list(enumerate(brush.faces))  # displacement brushes are exact boxes

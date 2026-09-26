@@ -78,6 +78,7 @@ class Report:
     warnings: list[str] = field(default_factory=list)
     info: list[str] = field(default_factory=list)
     problems: list = field(default_factory=list)   # mapcheck.Problem: with object and location
+    solid_sources: dict = field(default_factory=dict)  # VMF solid id -> Blender object name
     nav_regions: list = field(default_factory=list)  # nav.NavRegion: marks for the nav mesh
     nav_climbs: list = field(default_factory=list)   # nav.NavClimb: Zombie Climb links
 
@@ -89,9 +90,16 @@ class Report:
 def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
     """content: optional vpk.GameContent to check materials/models exist."""
     r = Report()
+    from .mapcheck import Problem
+    brush_problems = []          # with the brush's centre, so the problem list can go to it
     for b in ir.brushes + [b for e in ir.entities for b in e.brushes]:
         for p in g.check_brush(b):
-            r.errors.append(f"Brush '{p.source}' {p.message}")
+            msg = f"Brush '{p.source}' {p.message}"
+            r.errors.append(msg)
+            pts = [v for f in b.faces for v in f.verts]
+            centre = tuple(sum(v[i] for v in pts) / len(pts) for i in range(3)) if pts else None
+            brush_problems.append(Problem("ERROR", msg, p.source, centre))
+    r.problems = list(brush_problems)
 
     classes = [e.classname for e in ir.entities]
     if not SURVIVOR_SPAWNS & set(classes):
@@ -166,11 +174,13 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
     if physical:
         from .mapcheck import cached_check
         try:
-            r.problems = cached_check(ir)
+            found = cached_check(ir)
         except Exception as ex:   # a checker bug must never block building
+            found = []
             r.info.append(f"Map check skipped ({ex})")
-        for p in r.problems:
+        for p in found:
             r.warnings.append(p.message)
+        r.problems = brush_problems + found
 
     all_pts = _all_points(ir)
     if all_pts:
@@ -408,4 +418,5 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
         ent_blocks.append(w.entity(Entity("func_detail"), [w.solid(b) for b in detail]))
     report.info.append(
         f"{len(ir.brushes)} brushes, {n_patches} terrain patches, {len(entities)} entities.")
+    report.solid_sources = dict(w.solid_sources)
     return w.document(world, ent_blocks), report

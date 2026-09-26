@@ -124,6 +124,9 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
     path = os.path.join(work_dir(context), f"{s.map_name}.vmf")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
+    import json
+    with open(cc.sources_path(path), "w", encoding="utf-8") as f:
+        json.dump({str(k): v for k, v in rep2.solid_sources.items()}, f)
     rep2.info.append(f"Wrote {path}")
     if gamedir:
         files = game_files(ir)
@@ -624,6 +627,11 @@ class HL_OT_build(bpy.types.Operator):
         if self._job.failed:
             msg = "Map leaks! Use 'Load Leak' to see where." if summ and summ.leaked else \
                   (summ.errors[0] if summ and summ.errors else "Compile failed, see the log")
+            if summ and summ.errors and not summ.leaked:     # listed, so named brushes can be selected
+                from .problems import store
+                failed = Report()
+                failed.errors = [f"Compiler: {e}" for e in summ.errors[:20]]
+                store(context, failed)
             self.report({"ERROR"}, msg)
             return self._finish(context, {"CANCELLED"})
         import time

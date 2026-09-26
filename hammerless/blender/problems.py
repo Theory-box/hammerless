@@ -28,7 +28,7 @@ def store(context, rep, new_build: bool = False) -> None:
         item = s.problems.add()
         item.name, item.severity, item.location, item.has_location, item.ingame = name, severity, loc, has_loc, True
     located = {p.message for p in rep.problems}
-    rows = [("ERROR", m, "", None) for m in rep.errors]
+    rows = [("ERROR", m, "", None) for m in rep.errors if m not in located]
     rows += [(p.severity, p.message, p.source, p.location) for p in rep.problems]
     rows += [("WARNING", m, "", None) for m in rep.warnings if m not in located]
     for severity, message, source, loc in rows:

@@ -69,6 +69,16 @@ class TestBrushes(unittest.TestCase):
         probs = g.check_brush(Brush([Polygon(bottom), Polygon(top)] + sides, "L"))
         self.assertTrue(any("not convex" in p.message for p in probs))
 
+    def test_open_box_detected(self):
+        # a box with its +Y face deleted: vbsp says "bounds out of range" without a name
+        box = g.box_brush((0, 0, 0), (64, 64, 32), "x", "slab")
+        n = [g.polygon_normal(f.verts) for f in box.faces]
+        box.faces = [f for f, nn in zip(box.faces, n) if nn[1] < 0.5]
+        probs = g.check_brush(box)
+        self.assertEqual(len(probs), 1)
+        self.assertIn("is open: its +Y side", probs[0].message)
+        self.assertEqual(g.check_brush(g.box_brush((0, 0, 0), (64, 64, 32), "x", "ok")), [])
+
     def test_world_texture_axes(self):
         self.assertEqual(g.world_texture_axes((0, 0, 1)), ((1, 0, 0), (0, -1, 0)))
         self.assertEqual(g.world_texture_axes((1, 0, 0)), ((0, 1, 0), (0, 0, -1)))
