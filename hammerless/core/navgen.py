@@ -228,7 +228,9 @@ class Sampler:
                 pos, normal = self.seeds[seed_i]
                 seed_i += 1
                 if self.get_node(pos) is not None:
-                    break           # GetNextWalkableSeedNode returns NULL here: sampling ends (sic)
+                    # The 2013 SDK code stops sampling here; L4D2 skips the covered seed and goes on
+                    # (measured: a map in two separate halves gets nav on both)
+                    continue
                 current = self.new_node(pos, normal, None)
             d = next((d for d in range(4) if not current.has_visited(d)), None)
             if d is None:

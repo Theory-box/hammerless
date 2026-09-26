@@ -395,6 +395,49 @@ class TestNavGen(unittest.TestCase):
         self.assertFalse(any(n.pos[2] > 100 for n in high.nodes))
 
 
+class TestNavPredict(unittest.TestCase):
+    """The nav mesh our generator predicts, marked and analysed like the game's."""
+
+    def predict(self, gap=False, end_dz=0.0):
+        from hammerless.core.entities import end_safe_room, start_safe_room
+        from hammerless.core.navanalysis import analyse
+        from hammerless.core.navpredict import predict
+        from hammerless.core.nav import collect_regions
+        ir = MapIR()
+        ir.brushes.append(g.box_brush((-400, -300, -64), (600 if gap else 1500, 500, 0),
+                                      "dev/dev_measuregeneric01b", "ground"))
+        if gap:
+            ir.brushes.append(g.box_brush((700, -300, -64), (1500, 500, 0), "dev/dev_measuregeneric01b", "far"))
+        for preset, dx, dz in ((start_safe_room("a"), -330, 0.0), (end_safe_room("c1m2_streets", "b"), 1100, end_dz)):
+            for part in preset.parts:
+                for b in ([part.brush] if part.brush else []) + (part.entity.brushes if part.entity else []):
+                    for f in b.faces:
+                        f.verts = [(x + dx, y, z + dz) for x, y, z in f.verts]
+                if part.entity and part.entity.origin is not None:
+                    x, y, z = part.entity.origin
+                    part.entity.origin = (x + dx, y, z + dz)
+                if part.brush:
+                    ir.brushes.append(part.brush)
+                if part.entity:
+                    ir.entities.append(part.entity)
+        text, rep = build_vmf(ir)
+        regions, _ = collect_regions(ir)
+        return analyse(predict(text, regions))
+
+    def test_walkable(self):
+        rep = self.predict()
+        self.assertTrue(rep.start and rep.end)
+        self.assertTrue(rep.end_reached)
+
+    def test_gap_breaks_path(self):
+        rep = self.predict(gap=True)
+        self.assertFalse(rep.end_reached)
+        self.assertIsNotNone(rep.break_area)
+
+    def test_34_unit_step_breaks_path(self):      # L4D2 won't link a 19-64 unit ledge
+        self.assertFalse(self.predict(end_dz=34).end_reached)
+
+
 class TestFlowReport(unittest.TestCase):
     def test_parse(self):
         from hammerless.core.compile import parse_flow
