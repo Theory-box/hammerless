@@ -78,7 +78,8 @@ def _predict(vmf_text: str, regions, progress=None) -> NavMesh:
              ("Connecting areas", gen.connect_areas), ("Marking jump areas", gen.mark_jump_areas),
              ("Merging areas", gen.merge_areas), ("Splitting areas under overhangs", gen.split_areas_under_overhangs),
              ("Squaring up areas", gen.square_up_areas), ("Marking stairs", gen.mark_stair_areas),
-             ("Removing jump areas", gen.stitch_and_remove_jump_areas))
+             ("Removing jump areas", gen.stitch_and_remove_jump_areas),
+             ("Fixing corners", gen.fix_corner_on_corner_areas), ("Fixing connections", gen.fix_connections))
     for label, step in steps:
         if progress:
             progress(label, len(gen.nodes))

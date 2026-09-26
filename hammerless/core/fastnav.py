@@ -77,15 +77,16 @@ def sample(world, raw_seeds, max_nodes: int = 500000):
     for p in raw_seeds:
         _lib.hl_add_seed(p[0], p[1], p[2])
     n = _lib.hl_sample(ctypes.c_int(max_nodes))
-    d10 = (ctypes.c_double * (10 * max(1, n)))()
+    d14 = (ctypes.c_double * (14 * max(1, n)))()
     i15 = (ctypes.c_int * (15 * max(1, n)))()
-    _lib.hl_nodes(d10, i15)
+    _lib.hl_nodes(d14, i15)
     nodes = []
     for i in range(n):
-        d = d10[10 * i:10 * i + 10]
+        d = d14[14 * i:14 * i + 14]
         k = i15[15 * i:15 * i + 15]
         node = Node((d[0], d[1], d[2]), (d[3], d[4], d[5]), None, i + 1)
         node.obstacle = [d[6], d[7], d[8], d[9]]
+        node.ground = [d[10], d[11], d[12], d[13]]
         node.attributes = k[5]
         node.crouch = [bool(v) for v in k[6:10]]
         node.blocked = [bool(v) for v in k[10:14]]

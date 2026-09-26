@@ -19,6 +19,10 @@ COPLANAR_SLOPE_LIMIT = 0.99       # nav_coplanar_slope_limit
 COPLANAR_SLOPE_LIMIT_DISP = 0.7   # nav_coplanar_slope_limit_displacement
 SLOPE_TOLERANCE = 0.1             # nav_slope_tolerance
 NAV_MESH_JUMP = 0x0002
+# L4D2 merges far less than the SDK code (its nav_area_max_size is 50, but that only limits
+# the first areas). Fitted on four test maps against the game's own navs: allowing a merge
+# only while the result has at most 32 cells (25x25 each) gives the most identical areas.
+MERGE_MAX_TOTAL_CELLS = 32
 NAV_MESH_STAIRS = 0x1000
 
 
@@ -520,8 +524,10 @@ class Generator(Sampler):
     # ------------------------------------------------ MergeGeneratedAreas
     @staticmethod
     def _can_merge(a: Area, b: Area) -> bool:
+        cells = (round(a.size_x / GENERATION_STEP) * round(a.size_y / GENERATION_STEP)
+                 + round(b.size_x / GENERATION_STEP) * round(b.size_y / GENERATION_STEP))
         return (bool(a.nodes) and not a.attributes & NAV_MESH_NO_MERGE
-                and bool(b.nodes) and not b.attributes & NAV_MESH_NO_MERGE)
+                and bool(b.nodes) and not b.attributes & NAV_MESH_NO_MERGE and cells <= MERGE_MAX_TOTAL_CELLS)
 
     @staticmethod
     def _assign(src: Area, owner: Area):
@@ -837,6 +843,124 @@ class Generator(Sampler):
             if ret == "yes":
                 a.attributes = NAV_MESH_STAIRS          # (sic) SetAttributes replaces all flags
 
+
+    # ------------------------------------------------ FixUpGeneratedAreas
+    def _nodes_along(self, area: Area, d: int):
+        """CNavArea::GetNodes: the area's nodes along its edge facing d."""
+        start, end, step = {NORTH: (0, 1, EAST), SOUTH: (3, 2, EAST), EAST: (1, 2, SOUTH), WEST: (0, 3, SOUTH)}[d]
+        out, n, guard = [], area.nodes[start], 0
+        while n is not None and n is not area.nodes[end] and guard < 100000:
+            out.append(n)
+            n = n.to[step]
+            guard += 1
+        if n is not None and n is area.nodes[end]:
+            out.append(n)
+        return out
+
+    def _closest_node(self, area: Area, pos, d: int):
+        if not all(n is not None for n in area.nodes):
+            return None
+        best, best_d = None, float("inf")
+        for n in self._nodes_along(area, d):
+            dd = (pos[0] - n.pos[0]) ** 2 + (pos[1] - n.pos[1]) ** 2 + (pos[2] - n.pos[2]) ** 2
+            if dd < best_d:
+                best, best_d = n, dd
+        return best
+
+    def fix_connections(self):
+        """FixConnections: stairs whose sides are more than a step apart drop links where a step
+        can't be climbed; then every 'skip' link (A->C while A->B->C goes the same way) goes."""
+        edge = {NORTH: (0, 1), SOUTH: (3, 2), EAST: (1, 2), WEST: (0, 3)}
+        for area in self.areas:
+            if not area.attributes & NAV_MESH_STAIRS or not all(n is not None for n in area.nodes):
+                continue
+            corners = area.corners()
+            for d in range(4):
+                c0, c1 = edge[d]
+                if abs(corners[c0][2] - corners[c1][2]) < STEP_HEIGHT:
+                    continue
+                drop = []
+                for adj in list(area.connect[d]):
+                    if not all(n is not None for n in adj.nodes):
+                        continue
+                    centre, _w = area.portal(adj, d)
+                    adj_pos = adj.closest_point(centre)
+                    node = self._closest_node(area, centre, d)
+                    adj_node = self._closest_node(adj, adj_pos, OPPOSITE[d])
+                    if node is None or adj_node is None:
+                        continue
+                    a0, a1 = edge[OPPOSITE[d]]
+                    pos, apos = node.pos, adj_node.pos
+                    if (node.ground[c0] > STEP_HEIGHT or node.ground[c1] > STEP_HEIGHT
+                            or apos[2] + adj_node.ground[a0] > pos[2] + STEP_HEIGHT
+                            or apos[2] + adj_node.ground[a1] > pos[2] + STEP_HEIGHT):
+                        drop.append(adj)
+                for adj in drop:
+                    area.disconnect(adj)
+        for area in self.areas:
+            drop = []
+            for d in range(4):
+                for adj in list(area.connect[d]):
+                    for far in list(adj.connect[d]):
+                        if area.is_connected(far, d):
+                            drop.append(far)
+            for far in drop:
+                area.disconnect(far)
+
+    def fix_corner_on_corner_areas(self):
+        """FixCornerOnCornerAreas: where two areas touch only at a corner, add a small area in the
+        notch so bots can get from one to the other."""
+        max_drop = STEP_HEIGHT
+        vec = {NORTH: (0.0, -1.0), EAST: (1.0, 0.0), SOUTH: (0.0, 1.0), WEST: (-1.0, 0.0)}
+        half = GENERATION_STEP * 0.5
+        i = 0
+        while i < len(self.areas):             # (areas added here get their turn too)
+            area = self.areas[i]
+            i += 1
+            for corner in range(4):
+                right, left = corner, (corner + 3) % 4
+                if area.connect[left] or area.connect[right] or area.incoming[left] or area.incoming[right]:
+                    continue
+                cp = area.corners()[corner]
+                for along_other, along_ours in ((left, (left + 3) % 4), (right, (right + 1) % 4)):
+                    vo = (vec[along_other][0] * half, vec[along_other][1] * half)
+                    other_pos = (cp[0] + vo[0], cp[1] + vo[1], cp[2])
+                    other = self.get_nav_area(other_pos)
+                    if other is None:
+                        continue
+                    ok, _tr = self.trace_adjacent(0, cp, other_pos, max_drop)
+                    if not ok:
+                        continue
+                    if other.corners()[(corner + 2) % 4] != cp:
+                        continue
+                    vu = (vec[along_ours][0] * half, vec[along_ours][1] * half)
+                    c = [(cp[0] + vo[0] + vu[0], cp[1] + vo[1] + vu[1], cp[2]), other_pos, cp, (cp[0] + vu[0], cp[1] + vu[1], cp[2])]
+                    ok1, _ = self.trace_adjacent(0, c[1], c[0], max_drop)
+                    ok2, tr = (self.trace_adjacent(0, c[3], c[0], max_drop) if ok1 else (False, None))
+                    if not (ok1 and ok2):
+                        continue
+                    if self.get_nav_area(c[0]) is not None:
+                        continue
+                    c[0] = tr.endpos
+                    nw = ne = se = sw = c[0]          # ClassifyCorners
+                    for p in c:
+                        if p[0] <= nw[0] and p[1] <= nw[1]:
+                            nw = p
+                        if p[0] >= ne[0] and p[1] <= ne[1]:
+                            ne = p
+                        if p[0] >= se[0] and p[1] >= se[1]:
+                            se = p
+                        if p[0] <= sw[0] and p[1] >= sw[1]:
+                            sw = p
+                    new = self._new_area(nw, se, area.attributes)
+                    new.ne_z, new.sw_z = ne[2], sw[2]
+                    self.areas.append(new)
+                    self._index_areas()
+                    area.connect_to(new, along_other)
+                    new.connect_to(area, OPPOSITE[along_other])
+                    other.connect_to(new, along_ours)
+                    new.connect_to(other, OPPOSITE[along_ours])
+
     # ------------------------------------------------ StichAndRemoveJumpAreas
     def _try_connect_many(self, jump: Area, sources, dest, out_dir):
         for src in list(sources):
@@ -888,4 +1012,7 @@ class Generator(Sampler):
         self.square_up_areas()
         self.mark_stair_areas()
         self.stitch_and_remove_jump_areas()
+        # (HandleObstacleTopAreas: L4D2 makes no fence-top areas; measured, so skipped)
+        self.fix_corner_on_corner_areas()
+        self.fix_connections()
         return self.areas

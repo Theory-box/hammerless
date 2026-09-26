@@ -71,6 +71,7 @@ class Node:
     area: "Area | None" = None
     on_disp: bool = False
     closed: bool = False           # closed_cell(), cached once sampling is done
+    ground: list = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])   # m_groundHeightAboveNode
 
     def blocked_any(self) -> bool:
         return any(self.blocked)
@@ -238,9 +239,11 @@ class Sampler:
             start = (p[0], p[1], p[2] + h)
             t = self.world.trace_hull(start, start, mins, (maxs_xy[0], maxs_xy[1], HUMAN_CROUCH_HEIGHT))
             if not t.startsolid:
+                node.ground[corner] = start[2] - p[2]
                 t = self.world.trace_hull(start, start, mins, (maxs_xy[0], maxs_xy[1], HUMAN_HEIGHT))
                 return not t.startsolid
             h += 1.0
+        node.ground[corner] = JUMP_CROUCH_HEIGHT
         node.blocked[corner] = True
         return False
 

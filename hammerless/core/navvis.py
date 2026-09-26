@@ -13,7 +13,10 @@ from .collision import CollisionWorld
 
 HUMAN_HEIGHT = 71.0
 EYE = 0.75 * HUMAN_HEIGHT
-MAX_VIEW_DISTANCE = 6000.0         # nav_max_view_distance
+# L4D2's nav_max_view_distance is 0 (asked the game): areas are gathered within the default
+# 1500 units, and there is no further distance cut-off in the visibility test.
+MAX_VIEW_DISTANCE = 0.0            # nav_max_view_distance
+DEF_VIEW_DISTANCE = 1500.0
 DOT_TOLERANCE = 0.98               # nav_potentially_visible_dot_tolerance
 GENERATION_STEP = 25.0
 NOT_VISIBLE, POTENTIALLY_VISIBLE, COMPLETELY_VISIBLE = 0, 1, 2
@@ -58,7 +61,7 @@ class Visibility:
         """ComputeVisibility(this -> area): how completely 'this' is visible to 'area'."""
         tc, ac = this.centre, area.centre
         dist_sq = (tc[0] - ac[0]) ** 2 + (tc[1] - ac[1]) ** 2 + (tc[2] - ac[2]) ** 2
-        if dist_sq > MAX_VIEW_DISTANCE ** 2:
+        if MAX_VIEW_DISTANCE > 0.00001 and dist_sq > MAX_VIEW_DISTANCE ** 2:
             return NOT_VISIBLE
         corners = [(x, y, z + EYE) for x, y, z in this.corners]
         centre = (tc[0], tc[1], tc[2] + EYE)
@@ -105,13 +108,14 @@ class Visibility:
         """ComputeVisibilityToMesh for every area. Returns {area id: {visible area id: attributes}}."""
         lists: dict[int, dict[int, int]] = {a.id: {} for a in self.areas}
         done = set()
+        radius = MAX_VIEW_DISTANCE if MAX_VIEW_DISTANCE else DEF_VIEW_DISTANCE
         for i, cur in enumerate(self.areas):
             if progress and i % 50 == 0:
                 progress(i, len(self.areas))
             cc = cur.centre
             for other in self.areas:
                 oc = other.centre
-                if (cc[0] - oc[0]) ** 2 + (cc[1] - oc[1]) ** 2 + (cc[2] - oc[2]) ** 2 > MAX_VIEW_DISTANCE ** 2:
+                if (cc[0] - oc[0]) ** 2 + (cc[1] - oc[1]) ** 2 + (cc[2] - oc[2]) ** 2 > radius ** 2:
                     continue
                 key = (min(cur.id, other.id), max(cur.id, other.id))
                 if key in done:
@@ -121,6 +125,8 @@ class Visibility:
                     lists[cur.id][cur.id] = COMPLETELY_VISIBLE
                     continue
                 other_to_this = self.compute(cur, other)
+                # the SDK only computes the reverse when the first test saw something; L4D2 does it
+                # every time (measured: otherwise ~2% of the game's visible pairs are missed)
                 this_to_other = self.compute(other, cur)
                 if not other_to_this and this_to_other:
                     other_to_this = POTENTIALLY_VISIBLE

@@ -163,7 +163,7 @@ static const int OPP[4] = {2, 3, 0, 1};
 static const int CVX[4] = {-1, 1, 1, -1}, CVY[4] = {-1, -1, 1, 1};
 
 typedef struct {
-    double pos[3], normal[3], obstacle[4];
+    double pos[3], normal[3], obstacle[4], ground[4];
     int to[4], parent, visited, attributes, crouch[4], blocked[4], crouch_checked, cliff_checked, on_disp, next_xy;
 } Node;
 
@@ -253,12 +253,14 @@ static int test_crouch_area(int ni, int corner, const double *mins, double mx, d
         double m1[3] = {mx, my, HUMAN_CROUCH_HEIGHT};
         Tr t = trace(s, s, mins, m1);
         if (!t.startsolid) {
+            N[ni].ground[corner] = s[2] - p[2];
             double m2[3] = {mx, my, HUMAN_HEIGHT};
             t = trace(s, s, mins, m2);
             return !t.startsolid;
         }
         h += 1.0;
     }
+    N[ni].ground[corner] = JUMP_CROUCH_HEIGHT;
     N[ni].blocked[corner] = 1;
     return 0;
 }
@@ -382,11 +384,11 @@ EXPORT int hl_sample(int max_nodes) {
     return NN;
 }
 
-/* per node: pos3 normal3 obstacle4 (10 doubles); to4 parent attributes crouch4 blocked4 on_disp (15 ints) */
-EXPORT void hl_nodes(double *d10, int *i15) {
+/* per node: pos3 normal3 obstacle4 ground4 (14 doubles); to4 parent attributes crouch4 blocked4 on_disp (15 ints) */
+EXPORT void hl_nodes(double *d14, int *i15) {
     for (int i = 0; i < NN; i++) {
-        Node *n = &N[i]; double *d = d10 + 10 * i; int *k = i15 + 15 * i;
-        memcpy(d, n->pos, 24); memcpy(d + 3, n->normal, 24); memcpy(d + 6, n->obstacle, 32);
+        Node *n = &N[i]; double *d = d14 + 14 * i; int *k = i15 + 15 * i;
+        memcpy(d, n->pos, 24); memcpy(d + 3, n->normal, 24); memcpy(d + 6, n->obstacle, 32); memcpy(d + 10, n->ground, 32);
         for (int j = 0; j < 4; j++) { k[j] = n->to[j]; k[6 + j] = n->crouch[j]; k[10 + j] = n->blocked[j]; }
         k[4] = n->parent; k[5] = n->attributes; k[14] = n->on_disp;
     }
