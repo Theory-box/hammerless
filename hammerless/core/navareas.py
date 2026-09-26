@@ -33,6 +33,7 @@ class Area:
     attributes: int = 0
     connect: list = field(default_factory=lambda: [[], [], [], []])
     incoming: list = field(default_factory=lambda: [[], [], [], []])   # one-way links into this area
+    seq: int = 0                     # creation order (= order in the generator's area list)
 
     def z_at(self, x: float, y: float) -> float:
         dx, dy = self.se[0] - self.nw[0], self.se[1] - self.nw[1]
@@ -190,7 +191,7 @@ class Generator(Sampler):
             if id(start) in run:
                 continue
             chain, seen, n = [], set(), start
-            while n is not None and id(n) not in run and id(n) not in seen and n.closed_cell():
+            while n is not None and id(n) not in run and id(n) not in seen and n.closed:
                 chain.append(n)
                 seen.add(id(n))
                 n = n.to[d]
@@ -245,7 +246,7 @@ class Generator(Sampler):
                     return fail("cell", x, y)
                 if (horiz.attributes & ~NAV_MESH_CROUCH) != node_attr:
                     return fail("cell", x, y)
-                if horiz.covered or not horiz.closed_cell():
+                if horiz.covered or not horiz.closed:
                     return fail("cell", x, y)
                 if not self._check_obstacles(horiz, width, height, x, y):
                     return False
@@ -335,7 +336,8 @@ class Generator(Sampler):
         for _x in range(width):
             horiz = horiz.to[EAST]
         se = horiz
-        area = Area(len(self.areas) + 1, node.pos, se.pos, ne.pos[2], sw.pos[2], [node, ne, se, sw])
+        self._seq = getattr(self, "_seq", 0) + 1
+        area = Area(self._seq, node.pos, se.pos, ne.pos[2], sw.pos[2], [node, ne, se, sw], seq=self._seq)
         last, v = ne, node           # AssignNodes: all nodes except the east and south edges
         while v is not sw:
             h = v
@@ -355,6 +357,8 @@ class Generator(Sampler):
         return covered
 
     def create_areas(self):
+        for n in self.nodes:           # links don't change after sampling
+            n.closed = n.closed_cell()
         width = height = AREA_MAX_SIZE
         uncovered = len(self.nodes)
         east, south = self._runs(EAST), self._runs(SOUTH)
@@ -539,7 +543,10 @@ class Generator(Sampler):
                 if other is not adj and other is not area:
                     area.connect_to(other, d)
         area.disconnect(adj)
-        for other in self.areas:
+        # every area that references adj is among its links (connections and incoming ones);
+        # handled in list order like the game's loop over all areas
+        near = {id(o): o for d in range(4) for o in adj.connect[d] + adj.incoming[d]}
+        for other in sorted(near.values(), key=lambda o: o.seq):
             if other is area or other is adj:
                 continue
             for d in range(4):
@@ -548,8 +555,9 @@ class Generator(Sampler):
                     other.disconnect(area)
                     other.connect_to(area, d)
         self.areas.remove(adj)
-        for other in self.areas:
+        for other in near.values():
             other.forget(adj)
+        area.forget(adj)
 
     MERGE_TESTS = (
         (NORTH, 1, lambda a, b: a.nodes[0] is b.nodes[3] and a.nodes[1] is b.nodes[2], (0, 1), (0, 1)),
@@ -559,12 +567,18 @@ class Generator(Sampler):
     )
 
     def merge_areas(self):
+        """MergeGeneratedAreas: after each merge the game rescans from the first area. An area that
+        failed and whose neighbourhood hasn't changed fails again, so we remember those ('clean')
+        and only re-test areas a merge touched. Same merges, same order."""
         limit = GENERATION_STEP * AREA_MAX_SIZE
-        merged = True
-        while merged:
-            merged = False
+        clean: set[int] = set()
+        while True:
+            merged = None
             for area in self.areas:
+                if id(area) in clean:
+                    continue
                 if not area.nodes or area.attributes & NAV_MESH_NO_MERGE:
+                    clean.add(id(area))
                     continue
                 for d, axis, test, mine, theirs in self.MERGE_TESTS:
                     for adj in list(area.connect[d]):
@@ -574,21 +588,28 @@ class Generator(Sampler):
                         if size > limit:
                             continue
                         if test(area, adj) and area.attributes == adj.attributes and area.is_coplanar(adj):
+                            touched = [o for dd in range(4) for o in
+                                       area.connect[dd] + area.incoming[dd] + adj.connect[dd] + adj.incoming[dd]]
                             area.nodes[mine[0]], area.nodes[mine[1]] = adj.nodes[theirs[0]], adj.nodes[theirs[1]]
                             self._finish_merge(area, adj)
-                            merged = True
+                            for o in touched + [area] + [o for dd in range(4) for o in area.connect[dd] + area.incoming[dd]]:
+                                clean.discard(id(o))
+                            merged = area
                             break
                     if merged:
                         break
                 if merged:
                     break
+                clean.add(id(area))
+            if not merged:
+                break
         self._index_areas()
 
 
     # ------------------------------------------------ area splitting (SplitEdit)
     def _new_area(self, nw, se, attributes=0) -> Area:
-        self._next_id = getattr(self, "_next_id", len(self.areas) + 1) + 1
-        return Area(self._next_id, nw, se, 0.0, 0.0, [None, None, None, None], attributes)
+        self._seq = getattr(self, "_seq", 0) + 1
+        return Area(self._seq, nw, se, 0.0, 0.0, [None, None, None, None], attributes, seq=self._seq)
 
     def split_edit(self, area: Area, along_x: bool, edge: float):
         """CNavArea::SplitEdit: replace an area by two, split along X (at y = edge) or Y (x = edge)."""

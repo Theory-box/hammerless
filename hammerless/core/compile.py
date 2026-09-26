@@ -346,6 +346,32 @@ def nav_steps(map_name: str, mark: bool = True) -> list[tuple[str, list[str]]]:
     return steps
 
 
+def analyze_steps() -> list[tuple[str, list[str]]]:
+    """For a nav mesh Hammerless wrote itself: the game adds its visibility data and hiding spots
+    (nav_analyze, a second or so), saves and reloads the map once."""
+    return [(READY, ["sv_cheats 1", "nav_edit 1", "nav_analyze"]),
+            (".nav' saved.", []),
+            (READY, ["nav_edit 0", "sv_cheats 0"])]
+
+
+def write_generated_nav(tools: Tools, map_name: str, mesh) -> str:
+    """Write a nav mesh from our generator (navpredict) as maps/<map>.nav, ready for the game's
+    nav_analyze. Records the marks it was made with, like an in-game generation does."""
+    from .navfile import write_nav
+    for a in mesh.areas:
+        a.flags |= 0x20000000        # set on every area of L4D2's own generated navs
+    mesh.analyzed = False
+    bsp = os.path.join(tools.maps_dir, map_name + ".bsp")
+    mesh.bsp_size = os.path.getsize(bsp) if os.path.exists(bsp) else 0
+    path = os.path.join(tools.maps_dir, map_name + ".nav")
+    with open(path, "wb") as f:
+        f.write(write_nav(mesh))
+    script, used = _navmark_paths(tools, map_name)
+    if os.path.exists(script):
+        shutil.copyfile(script, used)
+    return path
+
+
 def _navmark_paths(tools: Tools, map_name: str) -> tuple[str, str]:
     d = os.path.join(tools.gamedir, "scripts", "vscripts", "hammerless")
     return os.path.join(d, f"navmark_{map_name}.nut"), os.path.join(d, f"navmark_{map_name}.used")
@@ -422,7 +448,7 @@ def _watch_ready(log: str, start: int, launch_id: int, timeout: float = 300.0):
 
 
 def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: list[str] | None = None,
-                window: LaunchOptions | None = None):
+                window: LaunchOptions | None = None, analyze_nav: bool = False):
     """Load the map. Reuses a running game if there is one.
 
     Nav generation must run after the map has loaded (commands after +map on the
@@ -457,6 +483,9 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
     LOAD_STATUS["seconds"] = None
     LOAD_STATUS["flow"] = None
     threading.Thread(target=_watch_ready, args=(log, log_start, LOAD_STATUS["launch_id"]), daemon=True).start()
+    if analyze_nav and not generate_nav:
+        threading.Thread(target=_run_console_script, args=(tools, analyze_steps(), log_start),
+                         daemon=True).start()
     if generate_nav:
         script, used = _navmark_paths(tools, map_name)
         mark = os.path.exists(script)

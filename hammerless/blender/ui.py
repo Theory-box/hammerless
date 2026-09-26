@@ -34,6 +34,7 @@ class HL_PT_map(bpy.types.Panel):
         col = self.layout.column()
         col.prop(s, "map_name")
         col.prop(s, "compile_preset", text="Quality")
+        col.prop(s, "nav_source")
         col.prop(s, "generate_nav", text="Rebuild Nav Mesh")
         col.label(text=_nav_status(context), icon="MOD_PHYSICS")
         big = col.row()

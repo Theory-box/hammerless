@@ -70,6 +70,7 @@ class Node:
     covered: bool = False
     area: "Area | None" = None
     on_disp: bool = False
+    closed: bool = False           # closed_cell(), cached once sampling is done
 
     def blocked_any(self) -> bool:
         return any(self.blocked)

@@ -437,6 +437,29 @@ class TestNavPredict(unittest.TestCase):
         self.assertFalse(self.predict(end_dz=34).end_reached)
 
 
+class TestNavVisibility(unittest.TestCase):
+    def lists(self, wall):
+        from hammerless.core.collision import CollisionWorld
+        from hammerless.core.navfile import NavArea
+        from hammerless.core.navvis import Visibility
+        ir = box_room_ir()
+        if wall:
+            ir.brushes.append(g.box_brush((-16, -256, 0), (16, 256, 256), "dev/dev_measuregeneric01b", "wall"))
+        text, _ = build_vmf(ir)
+        areas = [NavArea(1, 0, (-200, -50, 0), (-100, 50, 0), 0, 0), NavArea(2, 0, (100, -50, 0), (200, 50, 0), 0, 0)]
+        return Visibility(CollisionWorld.from_vmf(text), areas).run()
+
+    def test_open_room(self):
+        v = self.lists(False)
+        self.assertIn(2, v[1])
+        self.assertIn(1, v[1])                    # an area always sees itself
+
+    def test_wall_blocks(self):
+        v = self.lists(True)
+        self.assertNotIn(2, v[1])
+        self.assertNotIn(1, v[2])
+
+
 class TestFlowReport(unittest.TestCase):
     def test_parse(self):
         from hammerless.core.compile import parse_flow

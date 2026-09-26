@@ -46,8 +46,31 @@ def to_navmesh(areas, regions) -> NavMesh:
     return mesh
 
 
+_last: dict = {"key": None, "mesh": None}
+
+
+def _key(vmf_text: str, regions) -> str:
+    import hashlib
+    return hashlib.sha1((vmf_text + repr([(r.mins, r.maxs, r.bits) for r in regions])).encode()).hexdigest()
+
+
+def cached(vmf_text: str, regions) -> NavMesh | None:
+    """The last prediction, if it was made for exactly this map (e.g. by the Predict button)."""
+    if _last["key"] == _key(vmf_text, regions) and _last["mesh"] is not None:
+        import copy
+        return copy.deepcopy(_last["mesh"])
+    return None
+
+
 def predict(vmf_text: str, regions, progress=None) -> NavMesh:
     """progress(stage: str, count: int) is called between stages (from any thread)."""
+    import copy
+    mesh = _predict(vmf_text, regions, progress)
+    _last.update(key=_key(vmf_text, regions), mesh=copy.deepcopy(mesh))
+    return mesh
+
+
+def _predict(vmf_text: str, regions, progress=None) -> NavMesh:
     gen = Generator(CollisionWorld.from_vmf(vmf_text))
     for p in seed_positions(vmf_text):
         gen.add_seed(p)

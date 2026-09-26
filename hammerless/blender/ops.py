@@ -66,9 +66,12 @@ def needs_nav(context, root) -> bool:
     return s.generate_nav or not os.path.exists(nav) or cc.nav_marks_changed(tools, s.map_name)
 
 
-def launch(context, root) -> None:
+def launch(context, root, nav_written: bool = False) -> None:
+    """nav_written: Hammerless just wrote the nav mesh; the game only analyzes it."""
     s = context.scene.hammerless
-    cc.launch_game(cc.Tools(root), s.map_name, generate_nav=needs_nav(context, root), window=launch_options(s))
+    generate = False if nav_written else needs_nav(context, root)
+    cc.launch_game(cc.Tools(root), s.map_name, generate_nav=generate, window=launch_options(s),
+                   analyze_nav=nav_written)
 
 
 def work_dir(context) -> str:
@@ -130,6 +133,7 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
             with open(full, "w", encoding="utf-8") as f:
                 f.write(content)
         regions, _ = collect_regions(ir)
+        rep2.nav_regions = regions
         rep2.info.append(f"Wrote {len(files)} script(s) to the game folder; nav marking covers "
                          f"{len(regions)} region(s)")
     return path, root, rep2
@@ -529,6 +533,34 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
     bpy.app.timers.register(check, first_interval=1.0)
 
 
+def _start_nav_generation(vmf_path: str, regions) -> dict:
+    """Run our copy of the game's nav generator on the VMF in a background thread."""
+    import threading
+    import time
+    from ..core.navpredict import cached, predict
+    with open(vmf_path, encoding="utf-8") as f:
+        text = f.read()
+    box = {"stage": "starting", "mesh": None, "error": None, "seconds": 0.0}
+    reuse = cached(text, regions)          # Predict was pressed on this exact map: no waiting
+    if reuse is not None:
+        box["mesh"] = reuse
+        box["thread"] = threading.Thread(target=lambda: None)
+        box["thread"].start()
+        box["thread"].join()
+        return box
+
+    def work():
+        t0 = time.time()
+        try:
+            box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage.lower()))
+        except Exception as ex:          # reported; the game makes the nav mesh instead
+            box["error"] = str(ex)
+        box["seconds"] = time.time() - t0
+    box["thread"] = threading.Thread(target=work, daemon=True)
+    box["thread"].start()
+    return box
+
+
 class HL_OT_build(bpy.types.Operator):
     bl_idname = "hammerless.build"
     bl_label = "Build"
@@ -541,6 +573,7 @@ class HL_OT_build(bpy.types.Operator):
     _root: str | None = None
     _t0 = 0.0
     _export_s = 0.0
+    _nav: dict | None = None        # our nav generator running alongside the compile
 
     def execute(self, context):
         import time
@@ -563,7 +596,12 @@ class HL_OT_build(bpy.types.Operator):
         write_log(report_lines(rep) + ["", "Compiling..."])
         self._root = root
         self._job = cc.CompileJob(tools, path, compile_options(context.scene.hammerless),
-                                  skip_if_unchanged=True).start()
+                                  skip_if_unchanged=True)
+        self._nav = None
+        s = context.scene.hammerless
+        if self.play and s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root)):
+            self._nav = _start_nav_generation(path, rep.nav_regions)
+        self._job.start()
         self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
         self.report({"INFO"}, "Compiling... (see the hammerless_log text block)")
@@ -593,10 +631,24 @@ class HL_OT_build(bpy.types.Operator):
         timing = f"Export {self._export_s:.1f}s, " + (", ".join(f"{n} {t:.1f}s" for n, t in self._job.timings)
                                                       or "compile skipped")
         write_log([timing], append=True)
+        if self.play and self._nav is not None:
+            if self._nav["thread"].is_alive():
+                context.workspace.status_text_set(f"Hammerless: building the nav mesh: {self._nav['stage']}...")
+                return {"PASS_THROUGH"}
+            if self._nav["mesh"] is None:
+                self.report({"WARNING"}, f"Nav mesh couldn't be built in Blender ({self._nav['error']}); "
+                                         "the game will make it")
+                self._nav = None
+            else:
+                cc.write_generated_nav(cc.Tools(self._root), s.map_name, self._nav["mesh"])
+                s.generate_nav = False
+                timing += f", nav mesh {self._nav['seconds']:.1f}s (during the compile)"
         if self.play:
-            nav = needs_nav(context, self._root)
-            nav_note = " (building its nav mesh first: the map reloads twice)" if nav else ""
-            launch(context, self._root)
+            written = self._nav is not None
+            nav = needs_nav(context, self._root) and not written
+            nav_note = (" (the game adds its visibility data: one reload)" if written else
+                        " (building its nav mesh first: the map reloads twice)" if nav else "")
+            launch(context, self._root, nav_written=written)
             _watch_load(time.time() - self._t0, timing, nav)
             self.report({"INFO"}, f"{compiled}. Launching L4D2 on {s.map_name}{nav_note}  [{timing}]")
         else:

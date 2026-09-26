@@ -283,6 +283,13 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     dir_no_wanderers: BoolProperty(name="No Wandering Zombies")
 
     # --- game
+    nav_source: EnumProperty(
+        name="Nav Mesh", default="BLENDER",
+        description="Who builds the nav mesh (how bots and zombies find their way)",
+        items=[("BLENDER", "Made in Blender", "Hammerless builds it while the map compiles (a copy of the game's "
+                                             "generator), then the game only adds its visibility data: one reload"),
+               ("GAME", "Made by the game", "The game generates it after loading: slower (two extra reloads), "
+                                           "kept as a fallback")])
     generate_nav: BoolProperty(
         name="Rebuild Nav Mesh", default=False,
         description="Rebuild the nav mesh (how bots and zombies find their way) on the next Build & Play. "

@@ -76,6 +76,7 @@ class Report:
     warnings: list[str] = field(default_factory=list)
     info: list[str] = field(default_factory=list)
     problems: list = field(default_factory=list)   # mapcheck.Problem: with object and location
+    nav_regions: list = field(default_factory=list)  # nav.NavRegion: marks for the nav mesh
 
     @property
     def ok(self) -> bool:
