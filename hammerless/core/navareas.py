@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from .navgen import (AREA_MAX_SIZE, CLIMB_UP_HEIGHT, DEATH_DROP, EAST, GENERATION_STEP, HALF_HUMAN_HEIGHT,
                      HUMAN_CROUCH_HEIGHT, JUMP_CROUCH_HEIGHT, MAX_TRAVERSABLE_HEIGHT, NAV_MESH_CROUCH,
                      NAV_MESH_NO_MERGE, NORTH, NORTH_EAST, OFF_PLANE_TOLERANCE, OPPOSITE, SLOPE_LIMIT, SOUTH,
-                     SOUTH_EAST, SOUTH_WEST, STEP_HEIGHT, STEP_XY, WEST, Node, Sampler)
+                     SOUTH_EAST, SOUTH_WEST, STEP_HEIGHT, STEP_XY, WEST, DUCK_HULL_TOP, Node, Sampler)
 
 COPLANAR_SLOPE_LIMIT = 0.99       # nav_coplanar_slope_limit
 COPLANAR_SLOPE_LIMIT_DISP = 0.7   # nav_coplanar_slope_limit_displacement
@@ -80,6 +80,28 @@ class Area:
                 self.connect[d].remove(dead)
             if dead in self.incoming[d]:
                 self.incoming[d].remove(dead)
+
+    def overlaps_x(self, other: "Area") -> bool:
+        return other.nw[0] < self.se[0] and other.se[0] > self.nw[0]
+
+    def overlaps_y(self, other: "Area") -> bool:
+        return other.nw[1] < self.se[1] and other.se[1] > self.nw[1]
+
+    def overlaps_area(self, other: "Area") -> bool:
+        return self.overlaps_x(other) and self.overlaps_y(other)
+
+    def extent_z(self):
+        zs = (self.nw[2], self.se[2], self.ne_z, self.sw_z)
+        return min(zs), max(zs)
+
+    def roughly_square(self) -> bool:
+        if self.size_y == 0:
+            return False
+        aspect = self.size_x / self.size_y
+        return 1.0 / 3.01 <= aspect <= 3.01
+
+    def corners(self):
+        return [self.nw, (self.se[0], self.nw[1], self.ne_z), self.se, (self.nw[0], self.se[1], self.sw_z)]
 
     @property
     def size_x(self):
@@ -562,6 +584,238 @@ class Generator(Sampler):
                     break
         self._index_areas()
 
+
+    # ------------------------------------------------ area splitting (SplitEdit)
+    def _new_area(self, nw, se, attributes=0) -> Area:
+        self._next_id = getattr(self, "_next_id", len(self.areas) + 1) + 1
+        return Area(self._next_id, nw, se, 0.0, 0.0, [None, None, None, None], attributes)
+
+    def split_edit(self, area: Area, along_x: bool, edge: float):
+        """CNavArea::SplitEdit: replace an area by two, split along X (at y = edge) or Y (x = edge)."""
+        if along_x:
+            if edge <= area.nw[1] + 1.0 or edge >= area.se[1] - 1.0:
+                return None
+            ase = (area.se[0], edge, area.z_at(area.se[0], edge))
+            alpha = self._new_area(area.nw, ase)
+            bnw = (area.nw[0], edge, area.z_at(area.nw[0], edge))
+            beta = self._new_area(bnw, area.se)
+            alpha.connect_to(beta, SOUTH)
+            beta.connect_to(alpha, NORTH)
+            self._finish_split(area, alpha, SOUTH)
+            self._finish_split(area, beta, NORTH)
+        else:
+            if edge <= area.nw[0] + 1.0 or edge >= area.se[0] - 1.0:
+                return None
+            ase = (edge, area.se[1], area.z_at(edge, area.se[1]))
+            alpha = self._new_area(area.nw, ase)
+            bnw = (edge, area.nw[1], area.z_at(edge, area.nw[1]))
+            beta = self._new_area(bnw, area.se)
+            alpha.connect_to(beta, EAST)
+            beta.connect_to(alpha, WEST)
+            self._finish_split(area, alpha, EAST)
+            self._finish_split(area, beta, WEST)
+        self.areas.remove(area)
+        for other in self.areas:
+            other.forget(area)
+        return alpha, beta
+
+    def _finish_split(self, old: Area, new: Area, ignore: int):
+        new.attributes = old.attributes
+        new.ne_z = old.z_at(new.se[0], new.nw[1])
+        new.sw_z = old.z_at(new.nw[0], new.se[1])
+        for d in range(4):
+            if d == ignore:
+                continue
+            for adj in list(old.connect[d]):
+                overlap = (new.overlaps_x(adj) if d in (NORTH, SOUTH) else new.overlaps_y(adj))
+                if overlap:
+                    new.connect_to(adj, d)
+                    if adj.is_connected(old, OPPOSITE[d]):
+                        adj.connect_to(new, OPPOSITE[d])
+                # (sic) the game re-links incoming connections inside this loop, so only for
+                # directions that have at least one adjacent area
+                for inc in list(old.incoming[d]):
+                    if (new.overlaps_x(inc) if d in (NORTH, SOUTH) else new.overlaps_y(inc)):
+                        inc.connect_to(new, OPPOSITE[d])
+        self.areas.append(new)
+        if all(n is not None for n in old.nodes):
+            new.nodes = list(old.nodes)
+            d, corners = {NORTH: (SOUTH, (0, 1)), SOUTH: (NORTH, (3, 2)),
+                          EAST: (WEST, (1, 2)), WEST: (EAST, (0, 3))}[ignore]
+            guard = 0
+            while not new.overlaps(new.nodes[corners[0]].pos[0], new.nodes[corners[0]].pos[1], GENERATION_STEP / 2):
+                for c in corners:
+                    new.nodes[c] = new.nodes[c].to[d]
+                guard += 1
+                if guard > 10000 or any(new.nodes[c] is None for c in corners):
+                    new.nodes = [None, None, None, None]
+                    break
+            if all(n is not None for n in new.nodes):
+                self._assign(new, new)
+                new.ne_z, new.sw_z = new.nodes[1].pos[2], new.nodes[3].pos[2]
+                new.nw = (new.nw[0], new.nw[1], new.nodes[0].pos[2])
+                new.se = (new.se[0], new.se[1], new.nodes[2].pos[2])
+
+    @staticmethod
+    def _snap(v: float) -> float:
+        from .navgen import round_to_units
+        return round_to_units(v, GENERATION_STEP)
+
+    def _split_x(self, area: Area):
+        if area.roughly_square():
+            return
+        split = self._snap(area.size_x / 2.0 + area.nw[0])
+        if abs(split - area.nw[0]) < 0.1 or abs(split - area.se[0]) < 0.1:
+            return
+        res = self.split_edit(area, False, split)
+        if res:
+            self._split_x(res[0])
+            self._split_x(res[1])
+
+    def _split_y(self, area: Area):
+        if area.roughly_square():
+            return
+        split = self._snap(area.size_y / 2.0 + area.nw[1])
+        if abs(split - area.nw[1]) < 0.1 or abs(split - area.se[1]) < 0.1:
+            return
+        res = self.split_edit(area, True, split)
+        if res:
+            self._split_y(res[0])
+            self._split_y(res[1])
+
+    def square_up_areas(self):
+        """SquareUpAreas. The 2013 SDK loop skips the area that slides into a split area's place;
+        L4D2 splits them all (measured: every long cliff strip gets squared), so no skipping."""
+        i = 0
+        while i < len(self.areas):
+            area = self.areas[i]
+            if all(n is not None for n in area.nodes) and not area.roughly_square():
+                if area.size_x > area.size_y:
+                    self._split_x(area)
+                else:
+                    self._split_y(area)
+                if i < len(self.areas) and self.areas[i] is not area:
+                    continue            # the next area moved into this slot
+            i += 1
+        self._index_areas()
+
+    def split_areas_under_overhangs(self):
+        restart = True
+        while restart:
+            restart = False
+            for area in list(self.areas):
+                if restart:
+                    break
+                lo_a, hi_a = area.extent_z()
+                for d in range(4):
+                    if restart:
+                        break
+                    for other in list(area.connect[d]):
+                        if not area.overlaps_area(other):
+                            continue
+                        lo_o, hi_o = other.extent_z()
+                        if not (lo_a > hi_o + HUMAN_CROUCH_HEIGHT) and not (lo_o > hi_a + HUMAN_CROUCH_HEIGHT):
+                            continue
+                        below, above, a2b = area, other, OPPOSITE[d]
+                        if lo_o < lo_a:
+                            below, above, a2b = other, area, OPPOSITE[a2b]
+                        b2a = OPPOSITE[a2b]
+                        if a2b in (EAST, WEST):
+                            along_x = False
+                            edge_size = below.se[0] - below.nw[0]
+                            if above.se[0] < below.se[0]:
+                                coord, length = above.se[0], above.se[0] - below.nw[0]
+                            else:
+                                coord, length = above.nw[0], below.se[0] - above.nw[0]
+                        else:
+                            along_x = True
+                            edge_size = below.se[1] - below.nw[1]
+                            if above.se[1] < below.se[1]:
+                                coord, length = above.se[1], above.se[1] - below.nw[1]
+                            else:
+                                coord, length = above.nw[1], below.se[1] - above.nw[1]
+                        if length < GENERATION_STEP:
+                            if length < GENERATION_STEP * 0.3 or edge_size <= GENERATION_STEP * 2:
+                                continue
+                            coord += (GENERATION_STEP - length) * (-1 if a2b in (NORTH, WEST) else 1)
+                        from_below = below.is_connected(above, b2a) and above is not below
+                        if from_below:
+                            below.disconnect(above)
+                        from_above = above.is_connected(below, a2b)
+                        if from_above:
+                            above.disconnect(below)
+                        res = self.split_edit(below, along_x, coord)
+                        if res:
+                            keep = res[0] if a2b in (NORTH, WEST) else res[1]
+                            if from_above:
+                                above.connect_to(keep, a2b)
+                            # (the game also links the deleted lower area here, a use-after-free; skipped)
+                            restart = True
+                            break
+        self._index_areas()
+
+    # ------------------------------------------------ MarkStairAreas
+    def _is_stairs(self, start, end, ret):
+        if ret == "no":
+            return ret
+        inc = 5.0
+        min_step = inc * math.tan(math.acos(SLOPE_LIMIT))
+        length = math.hypot(end[0] - start[0], end[1] - start[1])
+        if abs(start[0] - end[0]) > abs(start[1] - end[1]):
+            mins, maxs = (-8.0, -inc / 2, 0.0), (8.0, inc / 2, 1.0)
+        else:
+            mins, maxs = (-inc / 2, -8.0, 0.0), (inc / 2, 8.0, 1.0)
+        off = DUCK_HULL_TOP
+        if abs(start[2] - end[2]) > STEP_HEIGHT:
+            tr = self.world.trace_hull((start[0], start[1], start[2] + off), (start[0], start[1], start[2] - off), mins, maxs)
+            if tr.startsolid or tr.displacement:
+                return "no"
+            prior = tr.endpos[2]
+            step = inc / length if length else 1.0
+            t = 0.0
+            while t <= 1.0:
+                p = tuple(start[k] + t * (end[k] - start[k]) for k in range(3))
+                tr = self.world.trace_hull((p[0], p[1], p[2] + off), (p[0], p[1], p[2] - off), mins, maxs)
+                if tr.startsolid or tr.displacement:
+                    return "no"
+                h = tr.endpos[2]
+                if t == 0.0 and abs(h - start[2]) > STEP_HEIGHT:
+                    return "no"
+                if t == 1.0 and abs(h - end[2]) > STEP_HEIGHT:
+                    return "no"
+                if tr.normal[2] < 0.97:
+                    return "no"
+                dz = abs(h - prior)
+                if min_step <= dz <= STEP_HEIGHT:
+                    ret = "yes"
+                elif dz > STEP_HEIGHT:
+                    return "no"
+                prior = h
+                t += step
+        return ret
+
+    def mark_stair_areas(self):
+        for a in self.areas:
+            a.attributes &= ~NAV_MESH_STAIRS
+            if a.size_x <= GENERATION_STEP and a.size_y <= GENERATION_STEP:
+                continue
+            n1, n2 = a.normal(), a.normal(True)
+            if n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2] < 0.95:
+                continue
+            c = a.corners()
+            nw, ne, se, sw = c
+            ins = 5.0
+            ret = "maybe"
+            for s_, e_ in (((nw[0] + ins, nw[1] + ins, nw[2]), (ne[0] - ins, ne[1] + ins, ne[2])),
+                           ((sw[0] + ins, sw[1] - ins, sw[2]), (se[0] - ins, se[1] - ins, se[2])),
+                           ((nw[0] + ins, nw[1] + ins, nw[2]), (sw[0] + ins, sw[1] - ins, sw[2])),
+                           ((ne[0] - ins, ne[1] + ins, ne[2]), (se[0] - ins, se[1] - ins, se[2])),
+                           (tuple((nw[k] + ne[k]) / 2 for k in range(3)), tuple((sw[k] + se[k]) / 2 for k in range(3))),
+                           (tuple((ne[k] + se[k]) / 2 for k in range(3)), tuple((nw[k] + sw[k]) / 2 for k in range(3)))):
+                ret = self._is_stairs(s_, e_, ret)
+            if ret == "yes":
+                a.attributes = NAV_MESH_STAIRS          # (sic) SetAttributes replaces all flags
+
     # ------------------------------------------------ StichAndRemoveJumpAreas
     def _try_connect_many(self, jump: Area, sources, dest, out_dir):
         for src in list(sources):
@@ -609,5 +863,8 @@ class Generator(Sampler):
         self.connect_areas()
         self.mark_jump_areas()
         self.merge_areas()
+        self.split_areas_under_overhangs()
+        self.square_up_areas()
+        self.mark_stair_areas()
         self.stitch_and_remove_jump_areas()
         return self.areas

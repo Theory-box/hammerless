@@ -36,6 +36,8 @@ AREA_MAX_SIZE = 50              # nav_area_max_size
 OFF_PLANE_TOLERANCE = 5.0
 NAV_MESH_CROUCH = 0x0001
 NAV_MESH_NO_MERGE = 0x2000
+NAV_MESH_CLIFF = 0x8000
+CLIFF_HEIGHT = 300.0
 
 NORTH, EAST, SOUTH, WEST = range(4)
 NORTH_WEST, NORTH_EAST, SOUTH_EAST, SOUTH_WEST = range(4)
@@ -64,6 +66,7 @@ class Node:
     crouch: list = field(default_factory=lambda: [False, False, False, False])
     blocked: list = field(default_factory=lambda: [False, False, False, False])
     crouch_checked: bool = False
+    cliff_checked: bool = False
     covered: bool = False
     area: "Area | None" = None
     on_disp: bool = False
@@ -121,16 +124,16 @@ class Sampler:
             return False, tr
         return True, tr
 
-    def trace_adjacent(self, depth, start, end) -> tuple[bool, Trace]:
+    def trace_adjacent(self, depth, start, end, z_limit: float = DEATH_DROP) -> tuple[bool, Trace]:
         tr = self.hull(start, end)
         if tr.startsolid:
             return False, tr
         if end[0] == tr.endpos[0] and end[1] == tr.endpos[1]:
-            return self.stay_on_floor(tr)
+            return self.stay_on_floor(tr, z_limit)
         dx, dy = tr.endpos[0] - start[0], tr.endpos[1] - start[1]
         if depth and dx * dx + dy * dy < 1.0:
             return False, tr
-        ok, tr = self.stay_on_floor(tr)
+        ok, tr = self.stay_on_floor(tr, z_limit)
         if not ok:
             return False, tr
         top = tr.endpos
@@ -187,7 +190,27 @@ class Sampler:
             node.obstacle[OPPOSITE[d]] = obstacle_height
             node.mark_visited(OPPOSITE[d])
         self.check_crouch(node)
+        if not node.cliff_checked:
+            node.cliff_checked = True
+            for d in range(4):
+                if self.check_cliff(node.pos, d):
+                    node.attributes |= NAV_MESH_CLIFF
+                    break
         return node if new else None
+
+    def check_cliff(self, pos, d, exhaustive: bool = True) -> bool:
+        """CheckCliff: would stepping this way drop more than 300 units? The 2013 SDK code
+        switches this off; L4D2 has it on (its nav marks cliff edges, which then form their own
+        narrow areas)."""
+        to = (pos[0] + STEP_XY[d][0], pos[1] + STEP_XY[d][1], pos[2])
+        ok, tr = self.trace_adjacent(0, pos, to, DEATH_DROP * 10)
+        if ok and not tr.allsolid and not tr.startsolid:
+            dz = pos[2] - tr.endpos[2]
+            if dz > CLIFF_HEIGHT:
+                return True
+            if d in (SOUTH, EAST) and abs(dz) < STEP_HEIGHT and exhaustive:
+                return self.check_cliff(tr.endpos, d, False)
+        return False
 
     def check_crouch(self, node: Node):
         """CNavNode::CheckCrouch: can a standing (71) or crouching (55) player fit at each corner?"""

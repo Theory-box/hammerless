@@ -53,7 +53,9 @@ def predict(vmf_text: str, regions, progress=None) -> NavMesh:
         gen.add_seed(p)
     steps = (("Sampling walkable space", gen.sample), ("Building areas", gen.create_areas),
              ("Connecting areas", gen.connect_areas), ("Marking jump areas", gen.mark_jump_areas),
-             ("Merging areas", gen.merge_areas), ("Removing jump areas", gen.stitch_and_remove_jump_areas))
+             ("Merging areas", gen.merge_areas), ("Splitting areas under overhangs", gen.split_areas_under_overhangs),
+             ("Squaring up areas", gen.square_up_areas), ("Marking stairs", gen.mark_stair_areas),
+             ("Removing jump areas", gen.stitch_and_remove_jump_areas))
     for label, step in steps:
         if progress:
             progress(label, len(gen.nodes))
