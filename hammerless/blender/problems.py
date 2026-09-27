@@ -46,6 +46,19 @@ def store(context, rep, new_build: bool = False) -> None:
     _redraw(context)
 
 
+def add_rows(context, rows) -> None:
+    """Append (severity, message, object name, location in Hammer units or None) to the list."""
+    s = context.scene.hammerless
+    for severity, message, source, loc in rows:
+        item = s.problems.add()
+        item.name, item.severity, item.source = message, severity, _PART.sub("", source or "")
+        if loc is not None:
+            item.location = Vector(loc) / s.units_per_meter
+            item.has_location = True
+    s.problems_checked = True
+    _redraw(context)
+
+
 INGAME_BROKEN = ("In the game, survivors can't get from the start to the end safe room: its nav mesh "
                  "stops at the marker. Look there for a drop the nav doesn't connect, a gap, a step "
                  "that's too tall or a blocked path. Without this path no zombies wander")

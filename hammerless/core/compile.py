@@ -219,6 +219,7 @@ class CompileJob:
         self.done = False
         self.failed = False
         self.summary: LogSummary | None = None
+        self.lighting: list = []     # bspcheck.lighting_problems after vrad: (message, location, object)
         self._q: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -264,14 +265,24 @@ class CompileJob:
                     # below-normal priority: the PC stays responsive while vvis/vrad use every core
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
                     | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
+                out = []
                 for line in proc.stdout:
                     self._q.put(line.rstrip("\n"))
+                    out.append(line)
                 code = proc.wait()
                 self.timings.append((name, time.time() - t0))
                 if code != 0 or (name == "vbsp" and os.path.exists(self.base + ".lin")):
                     self._q.put(f"!! {name} failed (exit code {code})")
                     self._q.put(("FAILED",))
                     return
+                if name == "vrad":
+                    try:
+                        from .bspcheck import lighting_problems
+                        self.lighting = lighting_problems(self.base + ".bsp", self.vmf, "".join(out))
+                    except Exception as ex:      # a checker bug must never fail the build
+                        self._q.put(f"(lighting check skipped: {ex})")
+                    for msg, _loc, _obj in self.lighting:
+                        self._q.put(f"!! {msg}")
             if self.copy_to_game:
                 os.makedirs(self.tools.maps_dir, exist_ok=True)
                 self._copy_bsp(os.path.join(self.tools.maps_dir, self.name + ".bsp"))

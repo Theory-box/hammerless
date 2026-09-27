@@ -640,6 +640,13 @@ class HL_OT_build(bpy.types.Operator):
         timing = f"Export {self._export_s:.1f}s, " + (", ".join(f"{n} {t:.1f}s" for n, t in self._job.timings)
                                                       or "compile skipped")
         write_log([timing], append=True)
+        if self._job.lighting and not getattr(self, "_lighting_listed", False):
+            from .problems import add_rows
+            self._lighting_listed = True
+            failed = "Bounce" in "".join(m for m, _l, _o in self._job.lighting) or any(
+                "lighting failed" in m for m, _l, _o in self._job.lighting)
+            add_rows(context, [("ERROR" if failed else "WARNING", m, o, loc) for m, loc, o in self._job.lighting])
+            self.report({"WARNING"}, self._job.lighting[0][0][:200])
         if self.play and self._nav is not None:
             if self._nav["thread"].is_alive():
                 context.workspace.status_text_set(f"Hammerless: building the nav mesh: {self._nav['stage']}...")
