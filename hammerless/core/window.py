@@ -43,6 +43,9 @@ def monitors() -> list[Monitor]:
 
     proc_type = ctypes.WINFUNCTYPE(ctypes.c_int, wintypes.HMONITOR, wintypes.HDC,
                                    ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+    # 64-bit handles: without argtypes ctypes passes them as 32-bit ints and overflows
+    user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
+    user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.POINTER(wintypes.RECT), proc_type, wintypes.LPARAM]
 
     def callback(hmon, hdc, rect, data):
         info = MONITORINFO()
