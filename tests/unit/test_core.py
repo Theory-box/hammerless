@@ -79,6 +79,21 @@ class TestBrushes(unittest.TestCase):
         self.assertIn("is open: its +Y side", probs[0].message)
         self.assertEqual(g.check_brush(g.box_brush((0, 0, 0), (64, 64, 32), "x", "ok")), [])
 
+    def test_near_misses_found_and_welded(self):
+        # two boxes whose tops miss by a quarter unit and whose edges overlap by 0.08:
+        # the pattern that made vbsp cut a folded face and vrad bake black lightmaps
+        a = g.box_brush((0, 0, 0), (100, 100, 407.245), "x", "Plane.001")
+        b = g.box_brush((99.92, 0, 0), (200, 100, 406.99), "x", "Plane.103")
+        c = g.box_brush((500, 500, 0), (600, 600, 406.99), "x", "far away")
+        misses = g.near_misses([a, b, c])
+        self.assertEqual({(m[0], m[1], m[2]) for m in misses}, {("Plane.001", "Plane.103", "X"), ("Plane.001", "Plane.103", "Z")})
+        self.assertGreater(g.weld_near_misses([a, b, c]), 0)
+        self.assertEqual(g.near_misses([a, b, c]), [])
+        tops = {max(v[2] for f in br.faces for v in f.verts) for br in (a, b)}
+        self.assertEqual(len(tops), 1)
+        for br in (a, b, c):
+            self.assertEqual(g.check_brush(br), [])
+
     def test_world_texture_axes(self):
         self.assertEqual(g.world_texture_axes((0, 0, 1)), ((1, 0, 0), (0, -1, 0)))
         self.assertEqual(g.world_texture_axes((1, 0, 0)), ((0, 1, 0), (0, 0, -1)))

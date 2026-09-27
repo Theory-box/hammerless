@@ -99,6 +99,15 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
             pts = [v for f in b.faces for v in f.verts]
             centre = tuple(sum(v[i] for v in pts) / len(pts) for i in range(3)) if pts else None
             brush_problems.append(Problem("ERROR", msg, p.source, centre))
+    misses = g.near_misses(solid_geometry(ir))
+    for a, b, axis, gap, where in misses[:MAX_NEAR_MISSES]:
+        who = f"'{a}'" if a == b else f"'{a}' and '{b}'"
+        msg = (f"{who} almost line up ({gap:.3f} units apart in {axis}). Hammerless lines them up when it exports "
+               "(near misses make the compiler cut sliver faces that break the lighting), but you can snap them")
+        brush_problems.append(Problem("WARNING", msg, a, where))
+        r.warnings.append(msg)
+    if len(misses) > MAX_NEAR_MISSES:
+        r.info.append(f"{len(misses) - MAX_NEAR_MISSES} more near misses not listed.")
     r.problems = list(brush_problems)
 
     classes = [e.classname for e in ir.entities]
@@ -280,6 +289,15 @@ def clear_spawn_spot(ir: MapIR, entities, near: Vec3) -> Vec3:
     return (x0 - SPAWN_CLEARANCE, y0, z0)
 
 
+MAX_NEAR_MISSES = 40
+
+
+def solid_geometry(ir: MapIR) -> list:
+    """Brushes that become the map's solid surfaces (world and func_detail): the ones whose
+    near misses make vbsp cut sliver faces. Triggers, ladders and clips don't."""
+    return ir.brushes + [b for e in ir.entities if e.classname == "func_detail" for b in e.brushes]
+
+
 def zombie_ladder_entity(e: Entity, report: Report) -> Entity:
     """func_ladder with team 'zombies' -> func_simpleladder team 2. vbsp turns every func_ladder
     into a team 0 func_simpleladder and drops the team, so zombie-only ladders are written
@@ -322,6 +340,10 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     if not report.ok:
         return None, report
     snap_spawns_to_floor(ir, report)
+    welded = g.weld_near_misses(solid_geometry(ir))
+    if welded:
+        report.info.append(f"Lined up {welded} brush corner position(s) that missed each other by under "
+                           f"{g.WELD_TOLERANCE:g} units (they make the compiler cut sliver faces that break lighting).")
     for lm, cl, new in end_landmark_renames(ir).values():
         lm.keyvalues = {**lm.keyvalues, "targetname": new}
         cl.keyvalues = {**cl.keyvalues, "landmark": new}

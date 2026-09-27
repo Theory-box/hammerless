@@ -176,6 +176,99 @@ def check_brush(brush: Brush, tolerance: float = 0.1) -> list[BrushProblem]:
     return problems
 
 
+WELD_TOLERANCE = 0.5     # Hammer units (under 1 cm at the default scale)
+
+
+def weld_near_misses(brushes: list[Brush], tolerance: float = WELD_TOLERANCE) -> int:
+    """Make brush corner coordinates that nearly match exactly equal, per axis.
+
+    Brushes from Blender meshes often miss each other by a fraction of a unit (scale
+    rounding, or a top a quarter unit lower than its neighbour). vbsp then cuts faces
+    folded to zero area, and vrad's full-quality bounces run away and bake black
+    lightmaps. Values closer than `tolerance` (a cluster spans at most twice that) move
+    to the most used value of their cluster. A brush the move would bend out of shape
+    (non-planar or non-convex) keeps its original corners. Returns how many values moved."""
+    if tolerance <= 0 or not brushes:
+        return 0
+    from collections import Counter
+    counts = [Counter() for _ in range(3)]
+    for b in brushes:
+        for f in b.faces:
+            for v in f.verts:
+                for i in range(3):
+                    counts[i][v[i]] += 1
+    maps = []
+    moved = 0
+    for i in range(3):
+        values = sorted(counts[i])
+        mapping, cluster = {}, [values[0]]
+
+        def flush(cl):
+            rep = max(cl, key=lambda v: (counts[i][v], -abs(v - round(v))))
+            for v in cl:
+                mapping[v] = rep
+        for v in values[1:]:
+            if v - cluster[-1] < tolerance and v - cluster[0] < 2 * tolerance:
+                cluster.append(v)
+            else:
+                flush(cluster)
+                cluster = [v]
+        flush(cluster)
+        moved += sum(1 for k, v in mapping.items() if k != v)
+        maps.append(mapping)
+    for b in brushes:
+        before = [list(f.verts) for f in b.faces]
+        for f in b.faces:
+            f.verts = [(maps[0][v[0]], maps[1][v[1]], maps[2][v[2]]) for v in f.verts]
+        if any(p.message for p in check_brush(b, tolerance=0.01)) and not check_brush_problems_before(before, b):
+            for f, verts in zip(b.faces, before):
+                f.verts = verts
+    return moved
+
+
+_PART_SUFFIX = __import__("re").compile(r" \(part \d+\)$")
+NEAR_MISS_REPORT = 0.02     # smaller gaps are float rounding that disappears when the VMF is written
+
+
+def near_misses(brushes: list[Brush], tolerance: float = WELD_TOLERANCE,
+                smallest: float = NEAR_MISS_REPORT) -> list[tuple[str, str, str, float, Vec3]]:
+    """Corners of neighbouring brushes that almost, but don't quite, line up on an axis:
+    (object A, object B, axis, gap, where). One entry (the closest) per pair of objects and axis."""
+    boxes = []
+    for b in brushes:
+        pts = [v for f in b.faces for v in f.verts]
+        boxes.append((tuple(min(p[i] for p in pts) for i in range(3)), tuple(max(p[i] for p in pts) for i in range(3)))
+                     if pts else None)
+
+    def neighbours(a, b):
+        (la, ha), (lb, hb) = boxes[a], boxes[b]
+        return all(la[i] <= hb[i] + tolerance and lb[i] <= ha[i] + tolerance for i in range(3))
+    found: dict = {}
+    for axis in range(3):
+        entries = sorted({(v[axis], bi, v) for bi, b in enumerate(brushes) if boxes[bi] for f in b.faces for v in f.verts})
+        start = 0
+        for j, (val, bj, vj) in enumerate(entries):
+            while entries[start][0] < val - tolerance:
+                start += 1
+            for k in range(start, j):
+                vk_val, bk, vk = entries[k]
+                gap = val - vk_val
+                if gap < smallest or bk == bj or not neighbours(bk, bj):
+                    continue
+                a, b = sorted((_PART_SUFFIX.sub("", brushes[bk].source), _PART_SUFFIX.sub("", brushes[bj].source)))
+                key = (a, b, axis)
+                if key not in found or gap < found[key][3]:
+                    where = tuple((vj[i] + vk[i]) / 2 for i in range(3))
+                    found[key] = (a, b, "XYZ"[axis], gap, where)
+    return sorted(found.values(), key=lambda r: r[3])
+
+
+def check_brush_problems_before(before: list[list[Vec3]], brush: Brush) -> bool:
+    """Did the brush already have problems before welding? (Then welding isn't to blame.)"""
+    orig = Brush([Polygon(v, f.material) for v, f in zip(before, brush.faces)], brush.source)
+    return bool(check_brush(orig, tolerance=0.01))
+
+
 def vertical_span(brush: Brush, x: float, y: float) -> tuple[float, float] | None:
     """Where the vertical line through (x, y) is inside a convex brush: (bottom z, top z)."""
     lo, hi = -1e9, 1e9
