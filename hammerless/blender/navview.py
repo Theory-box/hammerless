@@ -245,6 +245,10 @@ class HL_OT_nav_predict(bpy.types.Operator):
         finish_prediction(context, box["mesh"])
         for problem in box["mesh"].problems:
             self.report({"WARNING"}, problem)
+        if box["mesh"].problems:
+            from .ops import _quoted_object
+            from .problems import add_rows
+            add_rows(context, [("WARNING", p, _quoted_object(p), None) for p in box["mesh"].problems])
         rep = _state["report"]
         if not rep.end:
             self.report({"INFO"}, f"Predicted {rep.total} nav areas (no end safe room to check the path)")

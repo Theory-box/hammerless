@@ -125,5 +125,25 @@ def _predict(vmf_text: str, regions, progress=None, climbs=()) -> NavMesh:
         if err:
             problems.append(f"Zombie Climb '{c.source}': {err}")
     mesh = to_navmesh(gen.areas, regions, gen.ladders)
-    mesh.problems = problems
+    mesh.problems = problems + spawn_block_problems(mesh, regions)
     return mesh
+
+
+EMPTY, NO_MOBS = 2, 8192
+SPAWN_BLOCK_SHARE = 0.4      # warn when one box stops spawns on more than this share of the nav
+
+
+def spawn_block_problems(mesh: NavMesh, regions) -> list[str]:
+    """A no-spawn box (EMPTY / NO_MOBS) covering much of the map leaves the Director almost
+    nowhere to put commons: no zombies, and nothing else looks wrong."""
+    out = []
+    total = len(mesh.areas) or 1
+    for r in regions:
+        if not r.bits & (EMPTY | NO_MOBS):
+            continue
+        n = sum(1 for a in mesh.areas if all(r.mins[i] <= a.centre[i] <= r.maxs[i] for i in range(3)))
+        if n / total > SPAWN_BLOCK_SHARE:
+            what = " and ".join(w for w, bit in (("no wandering commons", EMPTY), ("no hordes", NO_MOBS)) if r.bits & bit)
+            out.append(f"'{r.source}' marks {100 * n // total}% of the nav mesh ({what}), so few or no commons "
+                       "can spawn. Is the box bigger than you meant? Shrink it to the spots zombies shouldn't use")
+    return out

@@ -57,6 +57,12 @@ def launch_options(s) -> cc.LaunchOptions:
                             difficulty=s.difficulty)
 
 
+def _quoted_object(message: str) -> str:
+    """First 'Name' in a message that is an object in the scene (for selecting it)."""
+    import re
+    return next((q for q in re.findall(r"'([^']+)'", message) if bpy.data.objects.get(q)), "")
+
+
 def needs_nav(context, root) -> bool:
     """Generate nav when asked to, when the map has no nav mesh yet (without one, bots
     can't move and zombies can't spawn), or when safe rooms / spawn areas changed."""
@@ -659,6 +665,9 @@ class HL_OT_build(bpy.types.Operator):
                 cc.write_generated_nav(cc.Tools(self._root), s.map_name, self._nav["mesh"])
                 for problem in self._nav["mesh"].problems:
                     self.report({"WARNING"}, problem)
+                if self._nav["mesh"].problems:
+                    from .problems import add_rows
+                    add_rows(context, [("WARNING", p, _quoted_object(p), None) for p in self._nav["mesh"].problems])
                 if self._nav["mesh"].problems:
                     write_log(self._nav["mesh"].problems, append=True)
                 s.generate_nav = False
