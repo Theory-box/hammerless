@@ -79,30 +79,30 @@ def to_navmesh(areas, regions, ladders=()) -> NavMesh:
 _last: dict = {"key": None, "mesh": None}
 
 
-def _key(vmf_text: str, regions, climbs=()) -> str:
+def _key(vmf_text: str, regions, climbs=(), wall_climbs=False) -> str:
     import hashlib
     return hashlib.sha1((vmf_text + repr([(r.mins, r.maxs, r.bits) for r in regions])
-                         + repr([(c.bottom, c.top) for c in climbs])).encode()).hexdigest()
+                         + repr([(c.bottom, c.top) for c in climbs]) + repr(wall_climbs)).encode()).hexdigest()
 
 
-def cached(vmf_text: str, regions, climbs=()) -> NavMesh | None:
+def cached(vmf_text: str, regions, climbs=(), wall_climbs=False) -> NavMesh | None:
     """The last prediction, if it was made for exactly this map (e.g. by the Predict button)."""
-    if _last["key"] == _key(vmf_text, regions, climbs) and _last["mesh"] is not None:
+    if _last["key"] == _key(vmf_text, regions, climbs, wall_climbs) and _last["mesh"] is not None:
         import copy
         return copy.deepcopy(_last["mesh"])
     return None
 
 
-def predict(vmf_text: str, regions, progress=None, climbs=()) -> NavMesh:
+def predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False) -> NavMesh:
     """progress(stage: str, count: int) is called between stages (from any thread).
     climbs: nav.NavClimb links to add (Zombie Climb markers)."""
     import copy
-    mesh = _predict(vmf_text, regions, progress, climbs)
-    _last.update(key=_key(vmf_text, regions, climbs), mesh=copy.deepcopy(mesh))
+    mesh = _predict(vmf_text, regions, progress, climbs, wall_climbs)
+    _last.update(key=_key(vmf_text, regions, climbs, wall_climbs), mesh=copy.deepcopy(mesh))
     return mesh
 
 
-def _predict(vmf_text: str, regions, progress=None, climbs=()) -> NavMesh:
+def _predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False) -> NavMesh:
     gen = Generator(CollisionWorld.from_vmf(vmf_text))
     for p in seed_positions(vmf_text):
         gen.add_seed(p)
@@ -120,6 +120,11 @@ def _predict(vmf_text: str, regions, progress=None, climbs=()) -> NavMesh:
             progress(label, len(gen.nodes))
         step()
     problems = []
+    if wall_climbs:
+        from .entities import ZOMBIE_CLIMB_MAX
+        if progress:
+            progress("Adding wall climbs", len(gen.nodes))
+        gen.add_wall_climbs(ZOMBIE_CLIMB_MAX)
     for c in climbs:
         err = gen.add_climb(c.bottom, c.top)
         if err:

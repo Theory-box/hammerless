@@ -220,7 +220,8 @@ class HL_OT_nav_predict(bpy.types.Operator):
 
         def work():
             try:
-                box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage, nodes=n), climbs)
+                box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage, nodes=n), climbs,
+                                      context.scene.hammerless.wall_climbs)
             except Exception as ex:          # shown to the user
                 box["error"] = str(ex)
         self._thread = threading.Thread(target=work, daemon=True)

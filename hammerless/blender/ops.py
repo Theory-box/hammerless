@@ -543,7 +543,7 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
     bpy.app.timers.register(check, first_interval=1.0)
 
 
-def _start_nav_generation(vmf_path: str, regions, climbs=()) -> dict:
+def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False) -> dict:
     """Run our copy of the game's nav generator on the VMF in a background thread."""
     import threading
     import time
@@ -551,7 +551,7 @@ def _start_nav_generation(vmf_path: str, regions, climbs=()) -> dict:
     with open(vmf_path, encoding="utf-8") as f:
         text = f.read()
     box = {"stage": "starting", "mesh": None, "error": None, "seconds": 0.0}
-    reuse = cached(text, regions, climbs)  # Predict was pressed on this exact map: no waiting
+    reuse = cached(text, regions, climbs, wall_climbs)  # Predict was pressed on this exact map: no waiting
     if reuse is not None:
         box["mesh"] = reuse
         box["thread"] = threading.Thread(target=lambda: None)
@@ -562,7 +562,8 @@ def _start_nav_generation(vmf_path: str, regions, climbs=()) -> dict:
     def work():
         t0 = time.time()
         try:
-            box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage.lower()), climbs)
+            box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage.lower()), climbs,
+                                  wall_climbs)
         except Exception as ex:          # reported; the game makes the nav mesh instead
             box["error"] = str(ex)
         box["seconds"] = time.time() - t0
@@ -610,7 +611,7 @@ class HL_OT_build(bpy.types.Operator):
         self._nav = None
         s = context.scene.hammerless
         if self.play and s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root)):
-            self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs)
+            self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs)
         self._job.start()
         self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
         context.window_manager.modal_handler_add(self)

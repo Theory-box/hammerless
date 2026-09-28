@@ -242,7 +242,7 @@ def game_files(ir: MapIR) -> dict[str, str]:
     files: dict[str, str] = {}
     regions, _ = collect_regions(ir)
     climbs, _ = collect_climbs(ir)
-    files[f"{SCRIPT_DIR}/navmark_{s.name}.nut"] = navmark_script(regions, s.name, climbs)
+    files[f"{SCRIPT_DIR}/navmark_{s.name}.nut"] = navmark_script(regions, s.name, climbs, s.wall_climbs)
     files[f"{SCRIPT_DIR}/ready.nut"] = READY_SCRIPT
     if s.debug_log:
         files[f"{SCRIPT_DIR}/debug_{s.name}.nut"] = DEBUG_SCRIPT.replace("%INTERVAL%", f"{s.debug_interval:.1f}")

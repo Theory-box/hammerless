@@ -339,7 +339,7 @@ def scene_settings_to_ir(s) -> MapSettings:
         sun_color=_rgb(s.sun_color), sun_brightness=s.sun_brightness,
         sun_pitch=s.sun_pitch, sun_yaw=s.sun_yaw,
         ambient_color=_rgb(s.ambient_color), ambient_brightness=s.ambient_brightness,
-        lightmap_scale=s.lightmap_scale,
+        lightmap_scale=s.lightmap_scale, wall_climbs=s.wall_climbs,
         fog_enabled=s.fog_enabled, fog_color=_rgb(s.fog_color), fog_start=s.fog_start,
         fog_end=s.fog_end, fog_max_density=s.fog_max_density,
         director_enabled=s.director_enabled, dir_common_limit=s.dir_common_limit,

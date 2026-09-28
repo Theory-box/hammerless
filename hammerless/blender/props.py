@@ -290,6 +290,10 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                              "generator), then the game only adds its visibility data: one reload"),
                ("GAME", "Made by the game", "The game generates it after loading: slower (two extra reloads), "
                                            "kept as a fallback")])
+    wall_climbs: BoolProperty(
+        name="Zombies Climb Walls", default=False,
+        description="Common infected can climb any wall up to 160 units (about 3 m) high, as if it had a "
+                    "ladder, and get back down. Only with Nav Mesh: Made in Blender")
     generate_nav: BoolProperty(
         name="Rebuild Nav Mesh", default=False,
         description="Rebuild the nav mesh (how bots and zombies find their way) on the next Build & Play. "

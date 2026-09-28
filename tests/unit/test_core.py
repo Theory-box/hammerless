@@ -519,6 +519,20 @@ class TestLaddersAndClimbs(unittest.TestCase):
                if a.nw[2] < 1 and by[i].nw[2] > 120]
         self.assertTrue(ups)
 
+    def test_wall_climbs(self):
+        # Zombies Climb Walls: links up (and back down) a 128-unit wall, none up a 300-unit one
+        from hammerless.core.navpredict import predict
+        for height, expect_up in ((128.0, True), (300.0, False)):
+            ir = self.tower_map(height=height)
+            ir.entities = [e for e in ir.entities if e.classname != "func_ladder"]
+            ir.entities.append(Entity("info_landmark", (300, 0, height + 32), (0, 0, 0), {"targetname": "lm_top"}))
+            text, _rep = build_vmf(ir)
+            for on in (False, True):
+                mesh = predict(text, [], None, (), on)
+                by = mesh.by_id()
+                ups = [1 for a in mesh.areas for c in a.connections for i in c if a.nw[2] < 1 and by[i].nw[2] > height - 5]
+                self.assertEqual(bool(ups), on and expect_up, (height, on))
+
     def test_climb_problems(self):
         from hammerless.core.entities import zombie_climb
         from hammerless.core.nav import collect_climbs

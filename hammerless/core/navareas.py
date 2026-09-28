@@ -180,6 +180,14 @@ class Area:
         return ((self.nw[0] + self.se[0]) / 2, (self.nw[1] + self.se[1]) / 2, (self.nw[2] + self.se[2]) / 2)
 
 
+def _steps(lo: float, hi: float):
+    """Points every generation step along an edge, starting half a step in."""
+    v = lo + GENERATION_STEP / 2
+    while v < hi:
+        yield v
+        v += GENERATION_STEP
+
+
 def _add_dir(pos, d, amount):
     dx, dy = STEP_XY[d]
     k = amount / GENERATION_STEP
@@ -1078,6 +1086,44 @@ class Generator(Sampler):
         from .nav import climb_direction
         low.connect_to(high, climb_direction(bottom, top))
         return None
+
+    def add_wall_climbs(self, max_height: float) -> int:
+        """'Zombies Climb Walls': a climb link up every wall 19..max_height units high (commons
+        climb a nav link like that; see Zombie Climb), and a way back down where there is none
+        (L4D2 makes no drop link for 19-64 unit ledges). Only where a wall really stands between
+        the two: walking straight ahead from the low side must be blocked. Returns links added."""
+        self._index_areas()
+        added = 0
+        for low in list(self.areas):
+            for d in range(4):
+                if d in (NORTH, SOUTH):
+                    y = low.nw[1] if d == NORTH else low.se[1]
+                    spots = [(x, y) for x in _steps(low.nw[0], low.se[0])]
+                else:
+                    x = low.se[0] if d == EAST else low.nw[0]
+                    spots = [(x, y) for y in _steps(low.nw[1], low.se[1])]
+                for x, y in spots:
+                    z = low.z_at(x, y)
+                    for dist in (GENERATION_STEP * 0.5, GENERATION_STEP, GENERATION_STEP * 2):
+                        q = _add_dir((x, y, z + max_height + 1.0), d, dist)
+                        high = self.get_nav_area(q, max_height + 1.0 - STEP_HEIGHT)
+                        if high is None or high is low:
+                            continue
+                        dz = high.z_at(q[0], q[1]) - z
+                        if not STEP_HEIGHT < dz <= max_height:
+                            continue
+                        if low.is_connected(high, d):
+                            break
+                        start = (x, y, z + STEP_HEIGHT + 1.0)
+                        if self.hull(start, (q[0], q[1], start[2])).fraction >= 1.0:
+                            break           # nothing to climb: open space under a higher floor
+                        low.connect_to(high, d)
+                        added += 1
+                        if not high.is_connected(low, OPPOSITE[d]):
+                            high.connect_to(low, OPPOSITE[d])
+                            added += 1
+                        break
+        return added
 
     # ------------------------------------------------ StichAndRemoveJumpAreas
     def _try_connect_many(self, jump: Area, sources, dest, out_dir):
