@@ -1,32 +1,58 @@
-"""Logic graphs -> the game's entities and I/O connections.
+"""Logic graphs -> the game's entities, I/O connections and a small map script.
 
 The Blender node editor (blender/logic.py) hands over plain data: nodes (a kind, settings,
-maybe a scene object or volume brushes) and wires (from node/socket to node/socket). Each
-node becomes zero or more entities; each wire becomes one output row on the entity that
-fires it ("when X happens, tell Y to do Z"), exactly what Hammer mappers wire by hand.
-Nothing here needs scripting, so it is as robust as hand-made Hammer logic.
+maybe a scene object and where it is) and wires (from node/socket to node/socket). Each node
+becomes entities; each wire becomes one output row on the entity that fires it ("when X
+happens, tell Y to do Z"), exactly what Hammer mappers wire by hand. Nodes that act on a plain
+mesh turn it into the entity they need (a button, a mover, a toggleable wall). The few things
+entity I/O can't do (game events such as "survivors left the safe room", teleporting the team,
+changing Director settings) become functions in one generated map script, called through the
+same wires.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 
-from .entities import default_keyvalues
+from .entities import CRESCENDO, default_keyvalues
 from .ir import Brush, Entity, MapIR, Output
 
 DIRECTOR = "director"
+LOGIC_SCRIPT = "hl_logic"
 TRIGGER_MATERIAL = "tools/toolstrigger"
 WHO_FLAGS = {"SURVIVORS": "1", "INFECTED": "3", "EVERYONE": "3"}   # trigger spawnflags: 1 clients, 2 NPCs
+
+# Game Event node: event id -> (label, game event, extra Squirrel condition on `p` = the player, or "")
+GAME_EVENTS = {
+    "LEFT_SAFE_ROOM": ("Survivors Leave the Safe Room", "player_left_start_area", ""),
+    "FINALE_START": ("Finale Starts", "finale_start", ""),
+    "SURVIVOR_DIES": ("A Survivor Dies", "player_death", "p && p.IsSurvivor()"),
+    "SURVIVOR_DOWN": ("A Survivor Is Incapacitated", "player_incapacitated", "p && p.IsSurvivor()"),
+    "SURVIVOR_REVIVED": ("A Survivor Is Revived", "revive_success", ""),
+    "SPECIAL_KILLED": ("A Special Infected Is Killed", "player_death", "p && !p.IsSurvivor()"),
+    "COMMON_KILLED": ("A Common Infected Is Killed", "infected_death", ""),
+    "TANK_SPAWNS": ("A Tank Appears", "tank_spawn", ""),
+    "TANK_KILLED": ("A Tank Is Killed", "tank_killed", ""),
+    "WITCH_KILLED": ("A Witch Is Killed", "witch_killed", ""),
+    "WITCH_STARTLED": ("A Witch Is Startled", "witch_harasser_set", ""),
+}
+ZOMBIE_TYPES = ("tank", "witch", "hunter", "smoker", "boomer", "charger", "jockey", "spitter", "common")
+# Director Settings node fields: (setting, DirectorOptions key)
+DIRECTOR_FIELDS = (("common_limit", "CommonLimit"), ("mob_min", "MobMinSize"), ("mob_max", "MobMaxSize"),
+                   ("mob_interval_min", "MobSpawnMinTime"), ("mob_interval_max", "MobSpawnMaxTime"),
+                   ("max_specials", "MaxSpecials"), ("special_interval", "SpecialRespawnInterval"),
+                   ("tank_limit", "TankLimit"), ("witch_limit", "WitchLimit"))
 
 
 @dataclass
 class LNode:
     id: str                          # unique within the graph (the Blender node name)
-    kind: str                        # OBJECT, DIRECTOR, VOLUME, MAP_START, DELAY, ONCE, COUNTER, RANDOM, HORDE, MESSAGE
+    kind: str
     settings: dict = field(default_factory=dict)
-    obj: str = ""                    # scene object the node stands for (OBJECT, VOLUME)
+    obj: str = ""                    # scene object the node acts on
     brushes: list[Brush] = field(default_factory=list)   # VOLUME: the object's shape
     params: dict = field(default_factory=dict)            # input socket -> value typed on the node
+    pos: tuple | None = None         # where the object is (Hammer units), for spawn/sound/teleport
 
 
 @dataclass
@@ -56,27 +82,65 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", text.lower()).strip("_") or "node"
 
 
+def _base(source: str) -> str:
+    return re.sub(r" \(part \d+\)$", "", source)
+
+
 class _Compiler:
-    def __init__(self, ir: MapIR, problems: list[str]):
+    def __init__(self, ir: MapIR, problems: list[str], graph: str = "", log: bool = False):
+        self.log = log
+        self.log_names: list[str] = []
         self.ir = ir
         self.problems = problems
-        self.by_source = {}
-        for e in ir.entities:
-            self.by_source.setdefault(re.sub(r" \(part \d+\)$", "", e.source), e)
+        self.graph = _slug(graph) if graph else ""
+        self.graph_tag = f"_{self.graph}" if self.graph else ""
         self.fires: dict[tuple[str, str], _Fire] = {}
-        self.takes: dict[tuple[str, str], _Take] = {}
+        self.takes: dict[tuple[str, str], list[_Take]] = {}
         self.filters: dict[str, str] = {}
+        self.functions: list[str] = []                  # Squirrel functions for the map script
+        self.events: dict[str, list[tuple[str, str]]] = {}   # game event -> [(condition, relay)]
 
-    # -- helpers
+    # -- names and entities
+    def unique(self, base: str) -> str:
+        taken = {e.keyvalues.get("targetname") for e in self.ir.entities}
+        name, i = base, 2
+        while name in taken:
+            name, i = f"{base}_{i}", i + 1
+        return name
+
     def name_of(self, e: Entity, hint: str) -> str:
         """The entity's targetname, giving it one if it has none."""
         if not e.keyvalues.get("targetname"):
-            e.keyvalues = {**e.keyvalues, "targetname": f"hl_{_slug(hint)}"}
+            e.keyvalues = {**e.keyvalues, "targetname": self.unique(f"hl_{_slug(hint)}")}
         return e.keyvalues["targetname"]
 
-    def add(self, classname: str, name: str, kv: dict, brushes=None, source: str = "") -> Entity:
-        e = Entity(classname, None if brushes else (0.0, 0.0, 16.0), (0, 0, 0),
-                   {"targetname": name, **kv}, brushes or [], source or name)
+    def add(self, classname: str, name: str, kv: dict, brushes=None, source: str = "", origin=None) -> Entity:
+        e = Entity(classname, None if brushes else tuple(origin or (0.0, 0.0, 16.0)), (0, 0, 0),
+                   {"targetname": self.unique(name), **kv}, brushes or [], source or name)
+        self.ir.entities.append(e)
+        return e
+
+    def entity_of(self, obj: str) -> Entity | None:
+        return next((e for e in self.ir.entities if _base(e.source) == obj), None)
+
+    def make_entity(self, nid: str, obj: str, classname: str, kv: dict) -> Entity | None:
+        """The scene object as an entity of this class: an existing entity is reused (its class
+        changed if needed), a plain mesh's brushes are taken out of the world."""
+        if not obj:
+            self.problems.append(f"Logic node '{nid}': pick an object")
+            return None
+        e = self.entity_of(obj)
+        if e is not None and e.brushes:
+            e.classname = classname
+            e.keyvalues = {**kv, **{k: v for k, v in e.keyvalues.items() if k == "targetname"}}
+            return e
+        brushes = [b for b in self.ir.brushes if _base(b.source) == obj]
+        if not brushes:
+            self.problems.append(f"Logic node '{nid}': '{obj}' has no solid shape to turn into a {classname} "
+                                 "(pick a mesh that is part of the map)")
+            return None
+        self.ir.brushes = [b for b in self.ir.brushes if _base(b.source) != obj]
+        e = Entity(classname, None, (0, 0, 0), {"targetname": self.unique(f"hl_{_slug(obj)}"), **kv}, brushes, obj)
         self.ir.entities.append(e)
         return e
 
@@ -90,35 +154,42 @@ class _Compiler:
 
     def team_filter(self, team: str) -> str:
         if team not in self.filters:
-            name = f"hl_filter_team{team}"
-            self.add("filter_activator_team", name, {"filterteam": team, "Negated": "0"})
-            self.filters[team] = name
+            e = self.add("filter_activator_team", f"hl_filter_team{team}", {"filterteam": team, "Negated": "0"})
+            self.filters[team] = e.keyvalues["targetname"]
         return self.filters[team]
+
+    def script_call(self, fn: str) -> tuple[str, str, str]:
+        return (LOGIC_SCRIPT, "RunScriptCode", f"{fn}()")
 
     # -- nodes
     def node(self, n: LNode):
         s, nid = n.settings, n.id
-        slug = _slug(nid)
+        slug = _slug(f"{self.graph}_{nid}" if self.graph else nid)
 
         def fire(sock, ent, output, delay=0.0, times=-1):
             self.fires[(nid, sock)] = _Fire(ent, output, delay, times)
 
         def take(sock, target, inp, param=""):
-            self.takes[(nid, sock)] = _Take(target, inp, n.params.get(sock, param))
+            self.takes[(nid, sock)] = [_Take(target, inp, n.params.get(sock, param))]
 
-        if n.kind in ("OBJECT", "DIRECTOR"):
-            e = self.director() if n.kind == "DIRECTOR" else self.by_source.get(n.obj)
+        def also(sock, target, inp, param=""):     # one input socket, a second receiver
+            self.takes.setdefault((nid, sock), []).append(_Take(target, inp, param))
+
+        k = n.kind
+        if k in ("OBJECT", "DIRECTOR"):
+            e = self.director() if k == "DIRECTOR" else self.entity_of(n.obj)
             if e is None:
-                self.problems.append(f"Logic node '{nid}': "
-                                     + ("pick an object" if not n.obj else
-                                        f"'{n.obj}' isn't an entity (set its Role to Point or Brush Entity)"))
+                self.problems.append(f"Logic node '{nid}': " + (
+                    "pick an object" if not n.obj else
+                    f"'{n.obj}' is a plain mesh. Use a Button, Move Over Time or Show/Hide node on it, "
+                    "or set its Role to an entity"))
                 return
             name = self.name_of(e, n.obj or DIRECTOR)
             for sock in s.get("outputs", []):
                 fire(sock, e, sock)
             for sock in s.get("inputs", []):
                 take(sock, name, sock)
-        elif n.kind == "VOLUME":
+        elif k == "VOLUME":
             if not n.brushes:
                 self.problems.append(f"Logic node '{nid}': pick a mesh object for the volume")
                 return
@@ -126,8 +197,8 @@ class _Compiler:
                 for f in b.faces:
                     f.material = TRIGGER_MATERIAL
             who = s.get("who", "SURVIVORS")
-            kv = {"spawnflags": WHO_FLAGS.get(who, "1"), "wait": "0", "entireteam": "2", "StartDisabled":
-                  "1" if s.get("start_disabled") else "0"}
+            kv = {"spawnflags": WHO_FLAGS.get(who, "1"), "wait": "0", "entireteam": "2",
+                  "StartDisabled": "1" if s.get("start_disabled") else "0"}
             if who in ("SURVIVORS", "INFECTED"):
                 kv["filtername"] = self.team_filter("2" if who == "SURVIVORS" else "3")
             e = self.add("trigger_multiple", f"hl_{slug}", kv, n.brushes, n.obj)
@@ -137,54 +208,263 @@ class _Compiler:
                 fire(sock, e, output, times=times)
             take("enable", e.keyvalues["targetname"], "Enable")
             take("disable", e.keyvalues["targetname"], "Disable")
-        elif n.kind == "MAP_START":
+        elif k == "BUTTON":
+            hold = float(s.get("hold", 0) or 0)
+            if hold > 0:
+                e = self.make_entity(nid, n.obj, "func_button_timed", {
+                    "use_time": str(max(1, int(round(hold)))), "use_string": s.get("text", "Using..."),
+                    "auto_disable": "1" if s.get("once", True) else "0", "spawnflags": "0"})
+                press = "OnTimeUp"
+            else:
+                wait = "-1" if s.get("once", True) else f"{float(s.get('reset', 1)):g}"
+                e = self.make_entity(nid, n.obj, "func_button", {"spawnflags": "1025", "wait": wait})
+                press = "OnPressed"
+            if e is None:
+                return
+            name = e.keyvalues["targetname"]
+            fire("pressed", e, press)
+            fire("started", e, "OnPressed")
+            take("lock", name, "Lock")
+            take("unlock", name, "Unlock")
+        elif k == "MOVE":
+            e = self.make_entity(nid, n.obj, "func_movelinear", {
+                "direction": s.get("direction", "down"), "movedistance": s.get("distance", "auto") or "auto",
+                "move_time": f"{float(s.get('seconds', 4)):g}", "startposition": "0"})
+            if e is None:
+                return
+            name = e.keyvalues["targetname"]
+            take("go", name, "Open")
+            take("back", name, "Close")
+            fire("arrived", e, "OnFullyOpen")
+            fire("returned", e, "OnFullyClosed")
+            if s.get("block_nav", True):
+                # the nav mesh runs through a closed gate (nav generation ignores moving brushes):
+                # block the nav areas it covers while closed, like Valve's gates and barricades
+                pts = [v for b in e.brushes for f in b.faces for v in f.verts]
+                lo = [min(p[i] for p in pts) for i in range(3)]
+                hi = [max(p[i] for p in pts) for i in range(3)]
+                from . import geometry as g
+                box = g.box_brush((lo[0] - 8, lo[1] - 8, lo[2] - 16), (hi[0] + 8, hi[1] + 8, hi[2]), TRIGGER_MATERIAL,
+                                  f"{n.obj} nav blocker")
+                blocker = self.add("func_nav_blocker", f"{name}_navblock", {"teamToBlock": "-1", "affectsFlow": "0"},
+                                   [box], f"{n.obj} nav blocker")
+                bname = blocker.keyvalues["targetname"]
+                self.add("logic_auto", f"{name}_navblock_start", {"spawnflags": "1"}).outputs.append(
+                    Output("OnMapSpawn", bname, "BlockNav", "", 1.0, 1))
+                also("go", bname, "UnblockNav")
+                also("back", bname, "BlockNav")
+        elif k == "SHOW_HIDE":
+            e = self.make_entity(nid, n.obj, "func_brush", {
+                "Solidity": "0", "StartDisabled": "1" if s.get("start_hidden") else "0", "spawnflags": "2"})
+            if e is None:
+                return
+            name = e.keyvalues["targetname"]
+            take("show", name, "Enable")
+            take("hide", name, "Disable")
+            take("remove", name, "Kill")
+        elif k == "MAP_START":
             e = self.add("logic_auto", f"hl_{slug}", {"spawnflags": "1"})
             fire("start", e, "OnMapSpawn")
-        elif n.kind in ("DELAY", "ONCE"):
-            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "1" if n.kind == "ONCE" else "0"})
+        elif k == "GAME_EVENT":
+            ev = s.get("event", "LEFT_SAFE_ROOM")
+            label, game_event, cond = GAME_EVENTS.get(ev, GAME_EVENTS["LEFT_SAFE_ROOM"])
+            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "1" if s.get("once") else "0"})
+            self.events.setdefault(game_event, []).append((cond, e.keyvalues["targetname"]))
+            fire("happened", e, "OnTrigger")
+        elif k == "TIMER":
+            lo, hi = float(s.get("seconds", 10)), float(s.get("max_seconds", 0) or 0)
+            kv = {"StartDisabled": "0" if s.get("running", True) else "1", "spawnflags": "0"}
+            if hi > lo:
+                kv.update({"UseRandomTime": "1", "LowerRandomBound": f"{lo:g}", "UpperRandomBound": f"{hi:g}"})
+            else:
+                kv.update({"UseRandomTime": "0", "RefireTime": f"{max(lo, 0.1):g}"})
+            e = self.add("logic_timer", f"hl_{slug}", kv)
+            name = e.keyvalues["targetname"]
+            take("start", name, "Enable")
+            take("stop", name, "Disable")
+            take("now", name, "FireTimer")
+            fire("tick", e, "OnTimer")
+        elif k in ("DELAY", "ONCE"):
+            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "1" if k == "ONCE" else "0"})
             take("in", e.keyvalues["targetname"], "Trigger")
             take("cancel", e.keyvalues["targetname"], "CancelPending")
-            fire("out", e, "OnTrigger", float(s.get("seconds", 0)) if n.kind == "DELAY" else 0.0)
-        elif n.kind == "COUNTER":
+            fire("out", e, "OnTrigger", float(s.get("seconds", 0)) if k == "DELAY" else 0.0)
+        elif k == "SEQUENCE":
+            step = float(s.get("seconds", 0) or 0)
+            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "0"})
+            take("in", e.keyvalues["targetname"], "Trigger")
+            for i in range(1, 7):     # a hundredth of a second apart keeps the order
+                fire(f"then{i}", e, "OnTrigger", step * (i - 1) + 0.01 * (i - 1))
+        elif k == "GATE":
+            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "0", "StartDisabled": "0" if s.get("open", True)
+                                                        else "1"})
+            name = e.keyvalues["targetname"]
+            take("in", name, "Trigger")
+            take("open", name, "Enable")
+            take("close", name, "Disable")
+            fire("out", e, "OnTrigger")
+        elif k == "BRANCH":
+            e = self.add("logic_branch", f"hl_{slug}", {"InitialValue": "1" if s.get("initial") else "0"})
+            name = e.keyvalues["targetname"]
+            take("test", name, "Test")
+            take("set_true", name, "SetValue", "1")
+            take("set_false", name, "SetValue", "0")
+            take("toggle", name, "Toggle")
+            fire("true", e, "OnTrue")
+            fire("false", e, "OnFalse")
+        elif k == "COUNTER":
             target = max(1, int(s.get("count", 3)))
             e = self.add("math_counter", f"hl_{slug}", {"min": "0", "max": str(target), "startvalue": "0"})
             take("add", e.keyvalues["targetname"], "Add", "1")
             take("reset", e.keyvalues["targetname"], "SetValueNoFire", "0")
             fire("reached", e, "OnHitMax")
-        elif n.kind == "RANDOM":
+        elif k == "RANDOM":
             e = self.add("logic_case", f"hl_{slug}", {})
             take("pick", e.keyvalues["targetname"], "PickRandom")
             for i in range(1, 5):
                 fire(f"case{i}", e, f"OnCase{i:02d}")
-        elif n.kind == "HORDE":
+        elif k == "HORDE":
             d = self.director()
             take("start", self.name_of(d, DIRECTOR), "ForcePanicEvent")
             fire("finished", d, "OnPanicEventFinished")
-        elif n.kind == "MESSAGE":
-            e = self.add("env_instructor_hint", f"hl_{slug}", {
-                "hint_caption": s.get("text", "Objective"), "hint_timeout": str(int(float(s.get("seconds", 6)))),
-                "hint_color": s.get("color", "255 255 255"), "hint_static": "1", "hint_icon_onscreen":
-                s.get("icon", "icon_tip"), "hint_forcecaption": "1", "hint_range": "0", "hint_auto_start": "0",
-                "hint_instance_type": "2"})
+        elif k == "CRESCENDO":
+            name = _slug(s.get("name") or slug)
+            self.ir.entities.append(Entity(CRESCENDO, (0, 0, 0), (0, 0, 0),
+                                           {"name": name, "stages": s.get("stages", "PANIC 1")}, [], nid))
+            d = self.director()
+            take("start", self.name_of(d, DIRECTOR), "ScriptedPanicEvent", name)
+            fire("finished", d, "OnCustomPanicStageFinished")
+        elif k == "SPAWN":
+            if n.pos is None:
+                self.problems.append(f"Logic node '{nid}': pick where to spawn (an object or empty)")
+                return
+            what = s.get("what", "tank")
+            e = self.add("commentary_zombie_spawner", f"hl_{slug}", {}, origin=n.pos)
+            take("spawn", e.keyvalues["targetname"], "SpawnZombie", what if what != "common" else "common")
+            fire("killed", e, "OnSpawnedZombieDeath")
+        elif k == "SOUND":
+            everywhere = n.pos is None or s.get("everywhere", True)
+            e = self.add("ambient_generic", f"hl_{slug}", {
+                "message": s.get("sound", "ambient/alarms/klaxon1.wav"), "health": str(int(s.get("volume", 10))),
+                "radius": str(int(s.get("radius", 1250))), "pitch": "100", "pitchstart": "100",
+                "spawnflags": str(16 | 32 | (1 if everywhere else 0))}, origin=n.pos)
+            take("play", e.keyvalues["targetname"], "PlaySound")
+            take("stop", e.keyvalues["targetname"], "StopSound")
+        elif k == "TELEPORT":
+            if n.pos is None:
+                self.problems.append(f"Logic node '{nid}': pick where to teleport to (an object or empty)")
+                return
+            fn = f"HL_Teleport_{slug}"
+            x, y, z = n.pos
+            self.functions.append(
+                f"function {fn}() {{\n    local p = null, i = 0;\n"
+                f"    while (p = Entities.FindByClassname(p, \"player\")) {{\n"
+                f"        if (!p.IsSurvivor()) continue;\n"
+                f"        p.SetOrigin(Vector({x:.1f} + (i % 2) * 40, {y:.1f} + (i / 2) * 40, {z + 8:.1f}));\n"
+                f"        p.SetVelocity(Vector(0, 0, 0));\n        i++;\n    }}\n}}")
+            take("go", *self.script_call(fn))
+        elif k == "MESSAGE":
+            e = self.hint(slug, s.get("text", "Objective"), float(s.get("seconds", 6)), s.get("color", "255 255 255"),
+                          s.get("icon", "icon_tip"))
             take("show", e.keyvalues["targetname"], "ShowHint")
             take("hide", e.keyvalues["targetname"], "EndHint")
+        elif k == "OBJECTIVE":
+            hint = self.hint(slug, s.get("text", "Objective"), 0, s.get("color", "255 255 200"), "icon_info")
+            done_kv = {"spawnflags": "1"}
+            done = self.add("logic_relay", f"hl_{slug}_done", done_kv)
+            start = self.add("logic_relay", f"hl_{slug}_start", {"spawnflags": "1"})
+            start.outputs.append(Output("OnTrigger", hint.keyvalues["targetname"], "ShowHint"))
+            done.outputs.append(Output("OnTrigger", hint.keyvalues["targetname"], "EndHint"))
+            if s.get("done_text"):
+                ok = self.hint(slug + "_ok", s["done_text"], 4, "150 255 150", "icon_tip")
+                done.outputs.append(Output("OnTrigger", ok.keyvalues["targetname"], "ShowHint", "", 0.1))
+            take("start", start.keyvalues["targetname"], "Trigger")
+            take("complete", done.keyvalues["targetname"], "Trigger")
+            fire("started", start, "OnTrigger")
+            fire("completed", done, "OnTrigger")
+        elif k == "DIRECTOR_SETTINGS":
+            from .gamefiles import director_input_script, director_option_lines
+            name = director_input_script(self.ir.settings.name, slug)
+            base = {line.split("=")[0].strip(): line for line in director_option_lines(self.ir)}
+            for key, opt in DIRECTOR_FIELDS:
+                v = s.get(key, -1)
+                if v is not None and int(v) >= 0:
+                    base[opt] = f"    {opt} = {int(v)}"
+            for key, opt, on in (("no_mobs", "NoMobSpawns", "true"), ("no_wanderers", "WanderingZombieDensityModifier", "0")):
+                if s.get(key) == "ON":
+                    base[opt] = f"    {opt} = {on}"
+                elif s.get(key) == "OFF":
+                    base.pop(opt, None)
+            self.ir.extra_scripts[f"scripts/vscripts/{name}.nut"] = (
+                f"// Hammerless Director Settings node '{nid}'\nDirectorOptions <-\n{{\n"
+                + "\n".join(base.values()) + f"\n}}\nprintl(\"HAMMERLESS_DIRECTOR settings '{nid}' active\");\n")
+            d = self.director()
+            dname = self.name_of(d, DIRECTOR)
+            take("apply", dname, "BeginScript", name)
+            main = director_input_script(self.ir.settings.name, "director")
+            if self.ir.settings.director_enabled:
+                take("reset", dname, "BeginScript", main)
+            else:
+                take("reset", dname, "EndScript")
         else:
-            self.problems.append(f"Logic node '{nid}': unknown kind {n.kind}")
+            self.problems.append(f"Logic node '{nid}': unknown kind {k}")
+
+    def hint(self, slug: str, text: str, seconds: float, color: str, icon: str) -> Entity:
+        return self.add("env_instructor_hint", f"hl_{slug}", {
+            "hint_caption": text, "hint_timeout": str(int(seconds)), "hint_color": color, "hint_static": "1",
+            "hint_icon_onscreen": icon, "hint_forcecaption": "1", "hint_range": "0", "hint_auto_start": "0",
+            "hint_instance_type": "2"})
 
     def link(self, l: LLink):
         f = self.fires.get((l.from_node, l.from_socket))
-        t = self.takes.get((l.to_node, l.to_socket))
-        if f is None or t is None:
+        takes = self.takes.get((l.to_node, l.to_socket))
+        if f is None or not takes:
             return            # the node itself already reported what's wrong
-        f.entity.outputs.append(Output(f.output, t.target, t.input, t.param, f.delay, f.times))
+        for t in takes:
+            f.entity.outputs.append(Output(f.output, t.target, t.input, t.param, f.delay, f.times))
+        if self.log:        # Debug Log: print each wire as it fires
+            self.log_names.append(f"{l.from_node}.{l.from_socket} -> {l.to_node}.{l.to_socket}")
+            f.entity.outputs.append(Output(f.output, LOGIC_SCRIPT, "RunScriptCode",
+                                           f"HL_Log{self.graph_tag}({len(self.log_names) - 1})", f.delay, f.times))
+
+    def finish_script(self):
+        """(Re)write the one map script shared by all graphs: their functions, and one handler per
+        game event registered on the script's own scope (the pattern that works in L4D2)."""
+        if self.log_names:
+            names = ", ".join('"' + n.replace('"', "'") + '"' for n in self.log_names)
+            self.functions.append(f"HL_LogNames{self.graph_tag} <- [{names}];\n"
+                                  f"function HL_Log{self.graph_tag}(i) {{ printl(\"HAMMERLESS_EVENT \" + "
+                                  f"HL_LogNames{self.graph_tag}[i]); }}")
+        self.ir.logic_functions += self.functions
+        for ev, targets in self.events.items():
+            self.ir.logic_events.setdefault(ev, []).extend(targets)
+        if not self.ir.logic_functions and not self.ir.logic_events:
+            return
+        parts = [f"// Hammerless logic graphs for {self.ir.settings.name}\n"]
+        parts += [f + "\n" for f in self.ir.logic_functions]
+        for game_event, targets in self.ir.logic_events.items():
+            body = "    local p = (\"userid\" in params) ? GetPlayerFromUserID(params.userid) : null;\n"
+            for cond, relay in targets:
+                fire = f"EntFire(\"{relay}\", \"Trigger\");"
+                body += f"    if ({cond}) {fire}\n" if cond else f"    {fire}\n"
+            parts.append(f"function OnGameEvent_{game_event}(params) {{\n{body}}}\n")
+        if self.ir.logic_events:
+            parts.append("__CollectEventCallbacks(this, \"OnGameEvent_\", \"GameEventCallbacks\", "
+                         "RegisterScriptGameEventListener);\n")
+        self.ir.extra_scripts[f"scripts/vscripts/hammerless/logic_{self.ir.settings.name}.nut"] = "".join(parts)
+        if not any(e.keyvalues.get("targetname") == LOGIC_SCRIPT for e in self.ir.entities):
+            self.ir.entities.append(Entity("logic_script", (0.0, 0.0, 56.0), (0, 0, 0), {
+                "targetname": LOGIC_SCRIPT, "vscripts": f"hammerless/logic_{self.ir.settings.name}"}, [], LOGIC_SCRIPT))
 
 
-def compile_graph(nodes: list[LNode], links: list[LLink], ir: MapIR) -> list[str]:
-    """Add the graph's entities and connections to the map. Returns problems to report."""
+def compile_graph(nodes: list[LNode], links: list[LLink], ir: MapIR, graph: str = "", log: bool = False) -> list[str]:
+    """Add the graph's entities, connections and script to the map. Returns problems to report.
+    log: every wire also prints 'HAMMERLESS_EVENT from -> to' to the console when it fires."""
     problems: list[str] = []
-    c = _Compiler(ir, problems)
+    c = _Compiler(ir, problems, graph, log)
     for n in nodes:
         c.node(n)
     for l in links:
         c.link(l)
+    c.finish_script()
     return problems

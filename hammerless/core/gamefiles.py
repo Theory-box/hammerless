@@ -252,6 +252,7 @@ def game_files(ir: MapIR) -> dict[str, str]:
         from .autotest import autotest_script, plan_route, start_door
         route, _ = plan_route(ir)
         files[f"{SCRIPT_DIR}/autotest_{s.name}.nut"] = autotest_script(route, s.name, start_door(ir))
+    files.update(ir.extra_scripts)
     for name, stages in ir.crescendos.items():
         files[f"scripts/vscripts/{director_input_script(s.name, name)}.nut"] = crescendo_script(
             name, stages, director_option_lines(ir))

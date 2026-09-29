@@ -532,7 +532,7 @@ def test_logic_graph_exports():
     sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
     tree = bpy.data.node_groups.new("Map Logic", "HL_LogicTree")
     vol = tree.nodes.new("HL_NodeVolume")
-    vol.target = zone
+    vol.inputs["Mesh"].value = zone
     msg = tree.nodes.new("HL_NodeMessage")
     msg.text = "Get to the gate"
     start, delay, horde = (tree.nodes.new(t) for t in ("HL_NodeMapStart", "HL_NodeDelay", "HL_NodeHorde"))
@@ -554,6 +554,38 @@ def test_logic_graph_exports():
     assert all("toolstrigger" in sd.get("material").lower() for sd in trig[0].blocks("solid")[0].blocks("side"))
     assert not any(sd.get("material").lower() == "tools/toolstrigger"
                    for so in world_solids(blocks) for sd in so.blocks("side"))
+
+
+def test_logic_nodes_convert_plain_meshes():
+    # Button and Move Over Time turn ordinary meshes into a button and a mover (with a nav blocker)
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    btn = add_box("btn", (0.1, 0.6, 0.6), (-2, 0, 1))
+    gate = add_box("gate", (0.2, 3, 2.5), (2, 0, 1.25))
+    bpy.ops.object.empty_add(location=(-4, 0, 0.1))
+    sp = bpy.context.object
+    sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
+    tree = bpy.data.node_groups.new("Map Logic", "HL_LogicTree")
+    b = tree.nodes.new("HL_NodeButton")
+    b.inputs["Mesh"].value = btn
+    info = tree.nodes.new("HL_NodeObjectInfo")
+    info.target = gate
+    mv = tree.nodes.new("HL_NodeMove")
+    tree.links.new(info.outputs["Object"], mv.inputs["Object"])
+    tree.links.new(b.outputs["On Press"], mv.inputs["Go"])
+    blocks, log = export()
+    assert blocks, log
+    button = entities(blocks, "func_button")
+    mover = entities(blocks, "func_movelinear")
+    assert len(button) == 1 and len(mover) == 1, log
+    assert button[0].get("spawnflags") == "1025"
+    assert mover[0].get("movedir") == "90 0 0" and float(mover[0].get("speed")) > 0
+    name = mover[0].get("targetname")
+    conns = button[0].blocks("connections")[0]
+    assert conns.get("OnPressed").startswith(name + ",Open"), conns.get("OnPressed")
+    assert entities(blocks, "func_nav_blocker"), "no nav blocker for the gate"
+    # the meshes left the world: only the floor (plus the sky shell) stays world geometry
+    assert len(world_solids(blocks)) == 1 + 6, len(world_solids(blocks))
 
 
 # ---------------------------------------------------------------- runner

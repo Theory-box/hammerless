@@ -1,17 +1,21 @@
-"""L4D2 Logic: a node editor for map events (like the shader editor, for game logic).
+"""L4D2 Logic: a node editor for map events, objectives and director control (like the shader
+editor, for game logic).
 
-Event wires carry "when this happens, do that". Nodes stand for scene entities (sockets come
-from the game's own entity definitions) or for small logic pieces (delay, counter, volume,
-message...). core/logic.py turns a graph into entities and I/O connections at export.
+Two kinds of wire: orange event wires ("when this happens, do that") and blue object wires
+(which scene object a node acts on; an Object Info node supplies one, or pick it on the node).
+core/logic.py turns a graph into entities, I/O connections and a small map script at export.
 """
 import bpy
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
 
 from ..core import fgd
-from ..core.logic import LLink, LNode, compile_graph
+from ..core.logic import DIRECTOR_FIELDS, GAME_EVENTS, ZOMBIE_TYPES, LLink, LNode, compile_graph
 
 TREE = "HL_LogicTree"
 EVENT_COLOR = (1.0, 0.62, 0.15, 1.0)
+OBJECT_COLOR = (0.35, 0.65, 1.0, 1.0)
+CATEGORY_COLORS = {"Events": (0.45, 0.18, 0.16), "Scene": (0.16, 0.33, 0.40), "Flow": (0.25, 0.25, 0.30),
+                   "Actions": (0.18, 0.36, 0.20), "Director": (0.33, 0.20, 0.42), "Objectives": (0.45, 0.38, 0.12)}
 
 
 class HL_LogicTree(bpy.types.NodeTree):
@@ -46,12 +50,42 @@ class HL_EventSocket(bpy.types.NodeSocket):
         return EVENT_COLOR
 
 
+class HL_ObjectSocket(bpy.types.NodeSocket):
+    """A scene object: wire one in from Object Info, or pick it here"""
+    bl_idname = "HL_ObjectSocket"
+    bl_label = "Object"
+
+    value: PointerProperty(type=bpy.types.Object, name="Object")
+
+    def draw(self, context, layout, node, text):
+        if self.is_output or self.is_linked:
+            layout.label(text=text)
+        else:
+            layout.prop(self, "value", text="")
+
+    def draw_color(self, context, node):
+        return OBJECT_COLOR
+
+    @classmethod
+    def draw_color_simple(cls):
+        return OBJECT_COLOR
+
+
 class _Node:
     kind = ""
+    category = "Flow"
 
     @classmethod
     def poll(cls, ntree):
         return ntree.bl_idname == TREE
+
+    def init(self, context):
+        self.use_custom_color = True
+        self.color = CATEGORY_COLORS.get(self.category, (0.25, 0.25, 0.25))
+        self.make_sockets()
+
+    def make_sockets(self):
+        pass
 
     def ev_in(self, ident, label, takes_value=False, tip=""):
         s = self.inputs.new("HL_EventSocket", label, identifier=ident)
@@ -63,12 +97,33 @@ class _Node:
         s.tip = tip
         return s
 
+    def obj_in(self, ident, label):
+        return self.inputs.new("HL_ObjectSocket", label, identifier=ident)
+
+    def object_from(self, ident):
+        """The object wired into (or picked on) an object socket."""
+        sock = next((s for s in self.inputs if s.identifier == ident), None)
+        if sock is None:
+            return None
+        if sock.is_linked:
+            src = sock.links[0].from_node
+            return getattr(src, "target", None)
+        return sock.value
+
     def settings(self) -> dict:
         return {}
 
     def to_lnode(self, context) -> LNode:
         params = {s.identifier: s.value for s in self.inputs if getattr(s, "takes_value", False) and s.value}
         return LNode(self.name, self.kind, self.settings(), params=params)
+
+    def with_object(self, context, n: LNode, ident="object", position=False) -> LNode:
+        obj = self.object_from(ident)
+        if obj is not None:
+            n.obj = obj.name
+            if position:
+                n.pos = tuple(c * context.scene.hammerless.units_per_meter for c in obj.matrix_world.translation)
+        return n
 
 
 def _game_root():
@@ -107,21 +162,171 @@ def _rebuild_entity_sockets(node, classname: str):
             tree.links.new(out, inp)
 
 
+def _label_from_target(self, context):
+    self.label = self.target.name if self.target else ""
+
+
+# ---------------------------------------------------------------- Events
+
+class HL_NodeMapStart(_Node, bpy.types.Node):
+    """Fires once when the map starts"""
+    bl_idname, bl_label, bl_icon = "HL_NodeMapStart", "Map Start", "PLAY"
+    kind, category = "MAP_START", "Events"
+
+    def make_sockets(self):
+        self.ev_out("start", "On Map Start")
+
+
+class HL_NodeGameEvent(_Node, bpy.types.Node):
+    """Something that happens in the game: survivors leave the safe room, a Tank appears, a witch dies..."""
+    bl_idname, bl_label, bl_icon = "HL_NodeGameEvent", "Game Event", "LIGHT_SUN"
+    kind, category = "GAME_EVENT", "Events"
+    event: EnumProperty(name="Event", items=[(k, v[0], v[0]) for k, v in GAME_EVENTS.items()],
+                        update=lambda self, c: setattr(self, "label", GAME_EVENTS[self.event][0]))
+    once: BoolProperty(name="Only Once", description="Fires the first time only")
+
+    def make_sockets(self):
+        self.ev_out("happened", "On Event")
+        self.label = GAME_EVENTS[self.event][0]
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "event", text="")
+        layout.prop(self, "once", toggle=True)
+
+    def settings(self):
+        return {"event": self.event, "once": self.once}
+
+
+class HL_NodeVolume(_Node, bpy.types.Node):
+    """A mesh in the scene used as a trigger volume: fires when survivors (or zombies) enter or leave"""
+    bl_idname, bl_label, bl_icon = "HL_NodeVolume", "Volume", "MESH_CUBE"
+    kind, category = "VOLUME", "Events"
+    who: EnumProperty(name="Who", default="SURVIVORS", items=[
+        ("SURVIVORS", "Survivors", "Survivor players and bots"),
+        ("INFECTED", "Infected", "Zombies and infected players"),
+        ("EVERYONE", "Everyone", "Anyone")])
+    once: BoolProperty(name="Only Once", description="Each event fires only the first time")
+    start_disabled: BoolProperty(name="Starts Off", description="Does nothing until it gets Enable")
+
+    def make_sockets(self):
+        self.obj_in("object", "Mesh")
+        self.ev_in("enable", "Enable")
+        self.ev_in("disable", "Disable")
+        self.ev_out("enter", "On Enter", "Someone walks in")
+        self.ev_out("leave", "On Leave", "Someone walks out")
+        self.ev_out("first", "On First Enter", "The first one walks in (nobody was inside)")
+        self.ev_out("empty", "On Everyone Left", "The last one walks out")
+        self.ev_out("all_inside", "On All Survivors Inside", "The whole survivor team is inside")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "who", text="")
+        row = layout.row(align=True)
+        row.prop(self, "once", toggle=True)
+        row.prop(self, "start_disabled", toggle=True)
+
+    def settings(self):
+        return {"who": self.who, "once": self.once, "start_disabled": self.start_disabled}
+
+    def to_lnode(self, context):
+        n = self.with_object(context, super().to_lnode(context))
+        obj = self.object_from("object")
+        if obj is not None and obj.type == "MESH":
+            from .extract import MaterialResolver, mesh_to_brushes
+            s = context.scene.hammerless
+            n.brushes = mesh_to_brushes(obj, context.evaluated_depsgraph_get(), s.units_per_meter,
+                                        MaterialResolver(s, None, _Quiet()))
+        return n
+
+
+class _Quiet:
+    """A report sink for material lookups while turning a volume into brushes."""
+    def __init__(self):
+        self.errors, self.warnings, self.info = [], [], []
+
+
+class HL_NodeButton(_Node, bpy.types.Node):
+    """Turns a mesh into a button survivors press (or hold) with the use key"""
+    bl_idname, bl_label, bl_icon = "HL_NodeButton", "Button", "RADIOBUT_ON"
+    kind, category = "BUTTON", "Events"
+    once: BoolProperty(name="Only Once", default=True, description="Can be used once, then stays pressed")
+    reset: FloatProperty(name="Reset After", default=1.0, min=0.0, description="Seconds until it can be pressed again")
+    hold: FloatProperty(name="Hold For", default=0.0, min=0.0,
+                        description="Seconds survivors hold the use key, with a progress bar (0 = a quick press)")
+    text: StringProperty(name="Hold Text", default="Opening...", description="Shown while holding")
+
+    def make_sockets(self):
+        self.obj_in("object", "Mesh")
+        self.ev_in("lock", "Lock")
+        self.ev_in("unlock", "Unlock")
+        self.ev_out("pressed", "On Press", "Pressed (for Hold For: held until the bar is full)")
+        self.ev_out("started", "On Start Holding", "Hold For buttons: someone starts holding")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "once", toggle=True)
+        if not self.once:
+            layout.prop(self, "reset")
+        layout.prop(self, "hold")
+        if self.hold > 0:
+            layout.prop(self, "text", text="")
+
+    def settings(self):
+        return {"once": self.once, "reset": self.reset, "hold": self.hold, "text": self.text}
+
+    def to_lnode(self, context):
+        return self.with_object(context, super().to_lnode(context))
+
+
+class HL_NodeTimer(_Node, bpy.types.Node):
+    """Fires again and again: every N seconds, or at random times between two values"""
+    bl_idname, bl_label, bl_icon = "HL_NodeTimer", "Timer", "TIME"
+    kind, category = "TIMER", "Events"
+    seconds: FloatProperty(name="Every", default=10.0, min=0.1)
+    max_seconds: FloatProperty(name="Up To", default=0.0, min=0.0, description="Random time up to this (0 = exact)")
+    running: BoolProperty(name="Running", default=True, description="Starts running with the map")
+
+    def make_sockets(self):
+        self.ev_in("start", "Start")
+        self.ev_in("stop", "Stop")
+        self.ev_in("now", "Fire Now")
+        self.ev_out("tick", "On Tick")
+
+    def draw_buttons(self, context, layout):
+        row = layout.row(align=True)
+        row.prop(self, "seconds")
+        row.prop(self, "max_seconds")
+        layout.prop(self, "running", toggle=True)
+
+    def settings(self):
+        return {"seconds": self.seconds, "max_seconds": self.max_seconds, "running": self.running}
+
+
+# ---------------------------------------------------------------- Scene
+
+class HL_NodeObjectInfo(_Node, bpy.types.Node):
+    """Picks a scene object to hand to other nodes (Move Over Time, Spawn at, Teleport to...)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeObjectInfo", "Object Info", "OBJECT_DATA"
+    kind, category = "OBJECT_INFO", "Scene"
+    target: PointerProperty(type=bpy.types.Object, name="Object", update=_label_from_target)
+
+    def make_sockets(self):
+        self.outputs.new("HL_ObjectSocket", "Object", identifier="object")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "target", text="")
+
+
 def _object_update(self, context):
-    cls = self.target.hammerless.classname if self.target else ""
+    cls = self.target.hammerless.classname if self.target and self.target.hammerless.role in (
+        "ENTITY", "BRUSH_ENTITY") else ""
     self.classname = cls
     _rebuild_entity_sockets(self, cls)
-    if self.target:
-        self.label = self.target.name
+    _label_from_target(self, context)
 
 
 class HL_NodeObject(_Node, bpy.types.Node):
-    """An entity in the scene, with all its events from the game (like Object Info)"""
-    bl_idname = "HL_NodeObject"
-    bl_label = "Object"
-    bl_icon = "OBJECT_DATA"
-    kind = "OBJECT"
-
+    """An entity in the scene with all its events from the game (for anything the other nodes don't cover)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeObject", "Entity Events", "OUTLINER_DATA_EMPTY"
+    kind, category = "OBJECT", "Scene"
     target: PointerProperty(type=bpy.types.Object, name="Object", update=_object_update)
     classname: StringProperty()
     show_all: BoolProperty(name="All Events", description="Also show the rarely used inputs and outputs",
@@ -130,7 +335,9 @@ class HL_NodeObject(_Node, bpy.types.Node):
     def draw_buttons(self, context, layout):
         layout.prop(self, "target", text="")
         if self.target and not self.classname:
-            layout.label(text="Not an entity: set its Role", icon="ERROR")
+            col = layout.column(align=True)
+            col.label(text="Plain mesh, no entity events.", icon="INFO")
+            col.label(text="Use Button / Move / Show-Hide on it")
         elif self.classname:
             row = layout.row()
             row.label(text=self.classname)
@@ -145,96 +352,33 @@ class HL_NodeObject(_Node, bpy.types.Node):
         return n
 
 
-class HL_NodeDirector(_Node, bpy.types.Node):
-    """The AI Director: hordes, scripted events and its own events"""
-    bl_idname = "HL_NodeDirector"
-    bl_label = "Director"
-    bl_icon = "GHOST_ENABLED"
-    kind = "DIRECTOR"
-    show_all: BoolProperty(name="All Events", update=lambda self, c: _rebuild_entity_sockets(self, "info_director"))
+# ---------------------------------------------------------------- Flow
 
-    def init(self, context):
-        _rebuild_entity_sockets(self, "info_director")
+class HL_NodeSequence(_Node, bpy.types.Node):
+    """Does several things in order, optionally a few seconds apart"""
+    bl_idname, bl_label, bl_icon = "HL_NodeSequence", "Sequence", "LINENUMBERS_ON"
+    kind, category = "SEQUENCE", "Flow"
+    seconds: FloatProperty(name="Seconds Between", default=0.0, min=0.0)
 
-    def draw_buttons(self, context, layout):
-        layout.prop(self, "show_all", text="All Events", icon="PLUS")
-
-    def settings(self):
-        return {"outputs": [s.identifier for s in self.outputs], "inputs": [s.identifier for s in self.inputs]}
-
-
-class HL_NodeVolume(_Node, bpy.types.Node):
-    """A mesh in the scene used as a trigger volume: fires when survivors (or zombies) enter or leave"""
-    bl_idname = "HL_NodeVolume"
-    bl_label = "Volume"
-    bl_icon = "MESH_CUBE"
-    kind = "VOLUME"
-
-    target: PointerProperty(type=bpy.types.Object, name="Mesh", poll=lambda self, o: o.type == "MESH",
-                            update=lambda self, c: setattr(self, "label", self.target.name if self.target else ""))
-    who: EnumProperty(name="Who", default="SURVIVORS", items=[
-        ("SURVIVORS", "Survivors", "Survivor players and bots"),
-        ("INFECTED", "Infected", "Zombies and infected players"),
-        ("EVERYONE", "Everyone", "Anyone")])
-    once: BoolProperty(name="Only Once", description="Each event fires only the first time")
-    start_disabled: BoolProperty(name="Starts Off", description="Does nothing until it gets Enable")
-
-    def init(self, context):
-        self.ev_in("enable", "Enable")
-        self.ev_in("disable", "Disable")
-        self.ev_out("enter", "On Enter", "Someone walks in")
-        self.ev_out("leave", "On Leave", "Someone walks out")
-        self.ev_out("first", "On First Enter", "The first one walks in (nobody was inside)")
-        self.ev_out("empty", "On Everyone Left", "The last one walks out")
-        self.ev_out("all_inside", "On All Survivors Inside", "The whole survivor team is inside")
+    def make_sockets(self):
+        self.ev_in("in", "Run")
+        for i in range(1, 5):
+            self.ev_out(f"then{i}", f"Then {i}")
 
     def draw_buttons(self, context, layout):
-        layout.prop(self, "target", text="")
-        layout.prop(self, "who", text="")
-        row = layout.row(align=True)
-        row.prop(self, "once", toggle=True)
-        row.prop(self, "start_disabled", toggle=True)
+        layout.prop(self, "seconds")
 
     def settings(self):
-        return {"who": self.who, "once": self.once, "start_disabled": self.start_disabled}
-
-    def to_lnode(self, context):
-        n = super().to_lnode(context)
-        if self.target:
-            from .extract import MaterialResolver, mesh_to_brushes
-            s = context.scene.hammerless
-            n.obj = self.target.name
-            n.brushes = mesh_to_brushes(self.target, context.evaluated_depsgraph_get(), s.units_per_meter,
-                                        MaterialResolver(s, None, _Quiet()))
-        return n
-
-
-class _Quiet:
-    """A report sink for material lookups while turning a volume into brushes."""
-    def __init__(self):
-        self.errors, self.warnings, self.info = [], [], []
-
-
-class HL_NodeMapStart(_Node, bpy.types.Node):
-    """Fires once when the map starts"""
-    bl_idname = "HL_NodeMapStart"
-    bl_label = "Map Start"
-    bl_icon = "PLAY"
-    kind = "MAP_START"
-
-    def init(self, context):
-        self.ev_out("start", "On Map Start")
+        return {"seconds": self.seconds}
 
 
 class HL_NodeDelay(_Node, bpy.types.Node):
     """Waits, then passes the event on"""
-    bl_idname = "HL_NodeDelay"
-    bl_label = "Delay"
-    bl_icon = "TIME"
-    kind = "DELAY"
+    bl_idname, bl_label, bl_icon = "HL_NodeDelay", "Delay", "TIME"
+    kind, category = "DELAY", "Flow"
     seconds: FloatProperty(name="Seconds", default=2.0, min=0.0)
 
-    def init(self, context):
+    def make_sockets(self):
         self.ev_in("in", "In")
         self.ev_in("cancel", "Cancel")
         self.ev_out("out", "Out")
@@ -248,25 +392,61 @@ class HL_NodeDelay(_Node, bpy.types.Node):
 
 class HL_NodeOnce(_Node, bpy.types.Node):
     """Passes the event on the first time only"""
-    bl_idname = "HL_NodeOnce"
-    bl_label = "Once"
-    bl_icon = "FORWARD"
-    kind = "ONCE"
+    bl_idname, bl_label, bl_icon = "HL_NodeOnce", "Once", "FORWARD"
+    kind, category = "ONCE", "Flow"
 
-    def init(self, context):
+    def make_sockets(self):
         self.ev_in("in", "In")
         self.ev_out("out", "Out")
 
 
+class HL_NodeGate(_Node, bpy.types.Node):
+    """Lets events through only while it's open"""
+    bl_idname, bl_label, bl_icon = "HL_NodeGate", "Gate", "UNLOCKED"
+    kind, category = "GATE", "Flow"
+    open: BoolProperty(name="Starts Open", default=True)
+
+    def make_sockets(self):
+        self.ev_in("in", "In")
+        self.ev_in("open", "Open")
+        self.ev_in("close", "Close")
+        self.ev_out("out", "Out")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "open", toggle=True)
+
+    def settings(self):
+        return {"open": self.open}
+
+
+class HL_NodeBranch(_Node, bpy.types.Node):
+    """Remembers true or false; Test sends the event one way or the other"""
+    bl_idname, bl_label, bl_icon = "HL_NodeBranch", "Branch", "DECORATE_KEYFRAME"
+    kind, category = "BRANCH", "Flow"
+    initial: BoolProperty(name="Starts True", default=False)
+
+    def make_sockets(self):
+        self.ev_in("test", "Test")
+        self.ev_in("set_true", "Set True")
+        self.ev_in("set_false", "Set False")
+        self.ev_in("toggle", "Toggle")
+        self.ev_out("true", "If True")
+        self.ev_out("false", "If False")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "initial", toggle=True)
+
+    def settings(self):
+        return {"initial": self.initial}
+
+
 class HL_NodeCounter(_Node, bpy.types.Node):
     """Counts events and fires when the count is reached (e.g. after 3 buttons)"""
-    bl_idname = "HL_NodeCounter"
-    bl_label = "Counter"
-    bl_icon = "LINENUMBERS_ON"
-    kind = "COUNTER"
+    bl_idname, bl_label, bl_icon = "HL_NodeCounter", "Counter", "LINENUMBERS_ON"
+    kind, category = "COUNTER", "Flow"
     count: IntProperty(name="Count", default=3, min=1)
 
-    def init(self, context):
+    def make_sockets(self):
         self.ev_in("add", "Add One")
         self.ev_in("reset", "Reset")
         self.ev_out("reached", "On Reached")
@@ -280,40 +460,175 @@ class HL_NodeCounter(_Node, bpy.types.Node):
 
 class HL_NodeRandom(_Node, bpy.types.Node):
     """Picks one of the connected outputs at random"""
-    bl_idname = "HL_NodeRandom"
-    bl_label = "Random"
-    bl_icon = "MOD_NOISE"
-    kind = "RANDOM"
+    bl_idname, bl_label, bl_icon = "HL_NodeRandom", "Random", "MOD_NOISE"
+    kind, category = "RANDOM", "Flow"
 
-    def init(self, context):
+    def make_sockets(self):
         self.ev_in("pick", "Pick")
         for i in range(1, 5):
             self.ev_out(f"case{i}", f"Option {i}")
 
 
+# ---------------------------------------------------------------- Actions
+
+DIRECTIONS = [("down", "Down", ""), ("up", "Up", ""), ("+x", "+X", ""), ("-x", "-X", ""), ("+y", "+Y", ""),
+              ("-y", "-Y", "")]
+
+
+class HL_NodeMove(_Node, bpy.types.Node):
+    """Slides an object: gates, garage doors, lifts, drawbridges"""
+    bl_idname, bl_label, bl_icon = "HL_NodeMove", "Move Over Time", "ORIENTATION_LOCAL"
+    kind, category = "MOVE", "Actions"
+    direction: EnumProperty(name="Direction", items=DIRECTIONS, default="down")
+    distance: StringProperty(name="Distance", default="auto",
+                             description="Units to move (auto = the object's own size in that direction)")
+    seconds: FloatProperty(name="Seconds", default=4.0, min=0.0)
+    block_nav: BoolProperty(name="Blocks Nav While Closed", default=True,
+                            description="Zombies and bots treat the way through as blocked until it has moved "
+                                        "(Valve's gates do this), so they don't pile up behind it")
+
+    def make_sockets(self):
+        self.obj_in("object", "Object")
+        self.ev_in("go", "Go")
+        self.ev_in("back", "Go Back")
+        self.ev_out("arrived", "On Arrived")
+        self.ev_out("returned", "On Back")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "direction", text="")
+        row = layout.row(align=True)
+        row.prop(self, "distance", text="")
+        row.prop(self, "seconds")
+        layout.prop(self, "block_nav")
+
+    def settings(self):
+        return {"direction": self.direction, "distance": self.distance, "seconds": self.seconds,
+                "block_nav": self.block_nav}
+
+    def to_lnode(self, context):
+        return self.with_object(context, super().to_lnode(context))
+
+
+class HL_NodeShowHide(_Node, bpy.types.Node):
+    """Makes an object appear or disappear (solid while shown): walls, barricades, debris"""
+    bl_idname, bl_label, bl_icon = "HL_NodeShowHide", "Show / Hide Object", "HIDE_OFF"
+    kind, category = "SHOW_HIDE", "Actions"
+    start_hidden: BoolProperty(name="Starts Hidden")
+
+    def make_sockets(self):
+        self.obj_in("object", "Object")
+        self.ev_in("show", "Show")
+        self.ev_in("hide", "Hide")
+        self.ev_in("remove", "Remove")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "start_hidden", toggle=True)
+
+    def settings(self):
+        return {"start_hidden": self.start_hidden}
+
+    def to_lnode(self, context):
+        return self.with_object(context, super().to_lnode(context))
+
+
 class HL_NodeHorde(_Node, bpy.types.Node):
     """Starts a zombie horde (panic event)"""
-    bl_idname = "HL_NodeHorde"
-    bl_label = "Horde"
-    bl_icon = "COMMUNITY"
-    kind = "HORDE"
+    bl_idname, bl_label, bl_icon = "HL_NodeHorde", "Horde", "COMMUNITY"
+    kind, category = "HORDE", "Actions"
 
-    def init(self, context):
+    def make_sockets(self):
         self.ev_in("start", "Start")
         self.ev_out("finished", "On Finished")
 
 
+class HL_NodeCrescendo(_Node, bpy.types.Node):
+    """Hordes in waves, like the lift and radio events in the campaigns"""
+    bl_idname, bl_label, bl_icon = "HL_NodeCrescendo", "Crescendo", "SEQ_HISTOGRAM"
+    kind, category = "CRESCENDO", "Actions"
+    stages: StringProperty(name="Stages", default="PANIC 1, DELAY 10, PANIC 1, DELAY 10, PANIC 2",
+                           description="PANIC n (hordes), DELAY n (seconds), TANK n")
+
+    def make_sockets(self):
+        self.ev_in("start", "Start")
+        self.ev_out("finished", "On Finished")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "stages", text="")
+
+    def settings(self):
+        return {"stages": self.stages, "name": self.name}
+
+
+class HL_NodeSpawn(_Node, bpy.types.Node):
+    """Spawns a Tank, Witch or special infected at an object's position"""
+    bl_idname, bl_label, bl_icon = "HL_NodeSpawn", "Spawn Zombie", "GHOST_ENABLED"
+    kind, category = "SPAWN", "Actions"
+    what: EnumProperty(name="What", items=[(z, z.title(), "") for z in ZOMBIE_TYPES], default="tank")
+
+    def make_sockets(self):
+        self.obj_in("object", "Where")
+        self.ev_in("spawn", "Spawn")
+        self.ev_out("killed", "On Killed")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "what", text="")
+
+    def settings(self):
+        return {"what": self.what}
+
+    def to_lnode(self, context):
+        return self.with_object(context, super().to_lnode(context), position=True)
+
+
+class HL_NodeSound(_Node, bpy.types.Node):
+    """Plays a sound: everywhere, or from an object's position"""
+    bl_idname, bl_label, bl_icon = "HL_NodeSound", "Play Sound", "SPEAKER"
+    kind, category = "SOUND", "Actions"
+    sound: StringProperty(name="Sound", default="ambient/alarms/klaxon1.wav",
+                          description="A game sound file (sound/...) or sound name")
+    volume: IntProperty(name="Volume", default=10, min=0, max=10)
+    everywhere: BoolProperty(name="Everywhere", default=True, description="Heard everywhere, not just nearby")
+
+    def make_sockets(self):
+        self.obj_in("object", "From (optional)")
+        self.ev_in("play", "Play")
+        self.ev_in("stop", "Stop")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "sound", text="")
+        row = layout.row(align=True)
+        row.prop(self, "volume")
+        row.prop(self, "everywhere", toggle=True)
+
+    def settings(self):
+        return {"sound": self.sound, "volume": self.volume, "everywhere": self.everywhere}
+
+    def to_lnode(self, context):
+        return self.with_object(context, super().to_lnode(context), position=True)
+
+
+class HL_NodeTeleport(_Node, bpy.types.Node):
+    """Moves every survivor to an object's position"""
+    bl_idname, bl_label, bl_icon = "HL_NodeTeleport", "Teleport Survivors", "CON_TRACKTO"
+    kind, category = "TELEPORT", "Actions"
+
+    def make_sockets(self):
+        self.obj_in("object", "To")
+        self.ev_in("go", "Teleport")
+
+    def to_lnode(self, context):
+        return self.with_object(context, super().to_lnode(context), position=True)
+
+
 class HL_NodeMessage(_Node, bpy.types.Node):
-    """Shows text on the survivors' screens: objectives, hints, warnings"""
-    bl_idname = "HL_NodeMessage"
-    bl_label = "Show Message"
-    bl_icon = "INFO"
-    kind = "MESSAGE"
+    """Shows text on the survivors' screens: hints, warnings"""
+    bl_idname, bl_label, bl_icon = "HL_NodeMessage", "Show Message", "INFO"
+    kind, category = "MESSAGE", "Actions"
     text: StringProperty(name="Text", default="Find a way through")
     seconds: FloatProperty(name="Seconds", default=6.0, min=0.0, description="0 = until Hide")
-    color: bpy.props.FloatVectorProperty(name="Colour", subtype="COLOR", size=3, min=0, max=1, default=(1, 1, 1))
+    color: FloatVectorProperty(name="Colour", subtype="COLOR", size=3, min=0, max=1, default=(1, 1, 1))
 
-    def init(self, context):
+    def make_sockets(self):
         self.ev_in("show", "Show")
         self.ev_in("hide", "Hide")
 
@@ -328,14 +643,94 @@ class HL_NodeMessage(_Node, bpy.types.Node):
                 "color": " ".join(str(int(c * 255)) for c in self.color)}
 
 
-NODE_CLASSES = (HL_NodeObject, HL_NodeDirector, HL_NodeVolume, HL_NodeMapStart, HL_NodeDelay, HL_NodeOnce,
-                HL_NodeCounter, HL_NodeRandom, HL_NodeHorde, HL_NodeMessage)
+# ---------------------------------------------------------------- Director
+
+class HL_NodeDirector(_Node, bpy.types.Node):
+    """The AI Director's own inputs and outputs"""
+    bl_idname, bl_label, bl_icon = "HL_NodeDirector", "Director", "GHOST_ENABLED"
+    kind, category = "DIRECTOR", "Director"
+    show_all: BoolProperty(name="All Events", update=lambda self, c: _rebuild_entity_sockets(self, "info_director"))
+
+    def make_sockets(self):
+        _rebuild_entity_sockets(self, "info_director")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "show_all", text="All Events", icon="PLUS")
+
+    def settings(self):
+        return {"outputs": [s.identifier for s in self.outputs], "inputs": [s.identifier for s in self.inputs]}
+
+
+TRI = [("SAME", "Unchanged", ""), ("ON", "On", ""), ("OFF", "Off", "")]
+
+
+class HL_NodeDirectorSettings(_Node, bpy.types.Node):
+    """Changes how the Director behaves from this point on (e.g. no hordes until the gate opens,
+    more zombies in the finale). -1 = leave as the map's setting"""
+    bl_idname, bl_label, bl_icon = "HL_NodeDirectorSettings", "Director Settings", "PREFERENCES"
+    kind, category = "DIRECTOR_SETTINGS", "Director"
+    common_limit: IntProperty(name="Max Commons", default=-1, min=-1, max=300)
+    mob_min: IntProperty(name="Horde Min", default=-1, min=-1, max=300)
+    mob_max: IntProperty(name="Horde Max", default=-1, min=-1, max=300)
+    mob_interval_min: IntProperty(name="Horde Every (min s)", default=-1, min=-1, max=3600)
+    mob_interval_max: IntProperty(name="Horde Every (max s)", default=-1, min=-1, max=3600)
+    max_specials: IntProperty(name="Max Specials", default=-1, min=-1, max=32)
+    special_interval: IntProperty(name="Special Every (s)", default=-1, min=-1, max=600)
+    tank_limit: IntProperty(name="Max Tanks", default=-1, min=-1, max=8)
+    witch_limit: IntProperty(name="Max Witches", default=-1, min=-1, max=16)
+    no_mobs: EnumProperty(name="No Random Hordes", items=TRI, default="SAME")
+    no_wanderers: EnumProperty(name="No Wandering Zombies", items=TRI, default="SAME")
+
+    def make_sockets(self):
+        self.ev_in("apply", "Apply")
+        self.ev_in("reset", "Back to Map Settings")
+
+    def draw_buttons(self, context, layout):
+        col = layout.column(align=True)
+        for key, _opt in DIRECTOR_FIELDS:
+            col.prop(self, key)
+        layout.prop(self, "no_mobs")
+        layout.prop(self, "no_wanderers")
+
+    def settings(self):
+        d = {key: getattr(self, key) for key, _opt in DIRECTOR_FIELDS}
+        d.update(no_mobs=self.no_mobs, no_wanderers=self.no_wanderers)
+        return d
+
+
+# ---------------------------------------------------------------- Objectives
+
+class HL_NodeObjective(_Node, bpy.types.Node):
+    """A goal shown on screen until it's completed; chain them: On Completed -> the next one's Start"""
+    bl_idname, bl_label, bl_icon = "HL_NodeObjective", "Objective", "CHECKMARK"
+    kind, category = "OBJECTIVE", "Objectives"
+    text: StringProperty(name="Goal", default="Open the gate")
+    done_text: StringProperty(name="When Done", default="", description="Shown briefly when completed (optional)")
+
+    def make_sockets(self):
+        self.ev_in("start", "Start")
+        self.ev_in("complete", "Complete")
+        self.ev_out("started", "On Started")
+        self.ev_out("completed", "On Completed")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "text", text="")
+        layout.prop(self, "done_text", text="Done")
+
+    def settings(self):
+        return {"text": self.text, "done_text": self.done_text}
+
+
 CATEGORIES = [
-    ("Events", [HL_NodeMapStart, HL_NodeVolume]),
-    ("Scene", [HL_NodeObject, HL_NodeDirector]),
-    ("Flow", [HL_NodeDelay, HL_NodeOnce, HL_NodeCounter, HL_NodeRandom]),
-    ("Actions", [HL_NodeHorde, HL_NodeMessage]),
+    ("Events", [HL_NodeMapStart, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton, HL_NodeTimer]),
+    ("Scene", [HL_NodeObjectInfo, HL_NodeObject]),
+    ("Flow", [HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch, HL_NodeCounter, HL_NodeRandom]),
+    ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
+                 HL_NodeTeleport, HL_NodeMessage]),
+    ("Director", [HL_NodeDirector, HL_NodeDirectorSettings]),
+    ("Objectives", [HL_NodeObjective]),
 ]
+NODE_CLASSES = tuple(c for _t, cs in CATEGORIES for c in cs)
 
 
 def _category_menu(title, classes):
@@ -364,17 +759,19 @@ def logic_trees():
 
 
 def compile_logic(context, ir, report) -> None:
-    """Add every L4D2 Logic graph's entities and connections to the map."""
+    """Add every L4D2 Logic graph's entities, connections and script to the map."""
     for tree in logic_trees():
-        nodes = [n.to_lnode(context) for n in tree.nodes if isinstance(n, _Node)]
+        nodes = [n.to_lnode(context) for n in tree.nodes if isinstance(n, _Node) and n.kind != "OBJECT_INFO"
+                 and not n.mute]
         volumes = {n.obj for n in nodes if n.kind == "VOLUME" and n.obj}
         if volumes:     # a volume's mesh becomes the trigger, not a solid wall
             ir.brushes = [b for b in ir.brushes if b.source.split(" (part ")[0] not in volumes]
             ir.entities = [e for e in ir.entities if not (e.source.split(" (part ")[0] in volumes
                                                           and e.classname == "func_detail")]
         links = [LLink(l.from_node.name, l.from_socket.identifier, l.to_node.name, l.to_socket.identifier)
-                 for l in tree.links if l.is_valid and not l.is_muted]
-        for p in compile_graph(nodes, links, ir):
+                 for l in tree.links if l.is_valid and not l.is_muted and l.from_socket.bl_idname == "HL_EventSocket"]
+        for p in compile_graph(nodes, links, ir, tree.name if len(logic_trees()) > 1 else "",
+                               log=context.scene.hammerless.debug_log):
             report.warnings.append(f"{tree.name}: {p}")
 
 
@@ -383,7 +780,7 @@ def compile_logic(context, ir, report) -> None:
 class HL_OT_logic_new(bpy.types.Operator):
     bl_idname = "hammerless.logic_new"
     bl_label = "New Logic Graph"
-    bl_description = "Create a logic graph and open it in this editor (or the largest area)"
+    bl_description = "Create a logic graph and open it in a node editor"
 
     def execute(self, context):
         tree = bpy.data.node_groups.new("Map Logic", TREE)
@@ -406,13 +803,12 @@ class HL_OT_logic_from_outputs(bpy.types.Operator):
                     by_name[kv.value] = o
         nodes = {n.target.name: n for n in tree.nodes if isinstance(n, HL_NodeObject) and n.target}
         director = next((n for n in tree.nodes if isinstance(n, HL_NodeDirector)), None)
-        col = {"x": 0.0}
 
         def node_for(obj):
             if obj.name not in nodes:
                 n = tree.nodes.new("HL_NodeObject")
                 n.target = obj
-                n.location = (col["x"], -200.0 * (len(nodes) % 6))
+                n.location = (0.0, -220.0 * (len(nodes) % 6))
                 nodes[obj.name] = n
             return nodes[obj.name]
         moved = 0
@@ -452,14 +848,14 @@ class HL_OT_logic_from_outputs(bpy.types.Operator):
 
 def _show_tree(context, tree):
     area = context.area if context.area and context.area.type == "NODE_EDITOR" else None
-    if area is None:
+    if area is None and context.screen:
         area = next((a for a in context.screen.areas if a.type == "NODE_EDITOR"), None)
     if area is not None:
         area.ui_type = TREE
         area.spaces.active.node_tree = tree
 
 
-CLASSES = (HL_LogicTree, HL_EventSocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + (
+CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + (
     HL_OT_logic_new, HL_OT_logic_from_outputs)
 
 

@@ -126,3 +126,6 @@ class MapIR:
     terrains: list[Terrain] = field(default_factory=list)
     entities: list[Entity] = field(default_factory=list)
     crescendos: dict[str, list[tuple[str, float]]] = field(default_factory=dict)
+    extra_scripts: dict[str, str] = field(default_factory=dict)   # game file path -> text (logic graphs)
+    logic_functions: list[str] = field(default_factory=list)       # map script functions (all graphs)
+    logic_events: dict = field(default_factory=dict)               # game event -> [(condition, relay)]
