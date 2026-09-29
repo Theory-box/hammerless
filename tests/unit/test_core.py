@@ -448,6 +448,26 @@ class TestNavGen(unittest.TestCase):
         self.assertFalse(any(n.pos[2] > 100 for n in high.nodes))
 
 
+class TestMover(unittest.TestCase):
+    def test_gate_button_export(self):
+        import re
+        from hammerless.core.entities import gate_button
+        ir = MapIR()
+        ir.brushes.append(g.box_brush((-256, -256, -64), (256, 256, 0), "dev/dev_measuregeneric01b", "floor"))
+        ir.entities.append(Entity("info_survivor_position", (-100, 0, 2), (0, 0, 0), {"Order": "1"}))
+        for part in gate_button().parts:
+            ir.entities.append(part.entity)
+        text, rep = build_vmf(ir)
+        self.assertIsNotNone(text, rep.errors)
+        gate = re.search(r'"classname" "func_movelinear"[^}]*', text).group(0)
+        self.assertIn('"movedir" "90 0 0"', gate)          # down
+        self.assertIn('"movedistance" "128"', gate)        # auto = its height
+        self.assertIn('"speed" "32"', gate)                # 128 units / 4 seconds
+        self.assertNotIn("move_time", text)
+        self.assertRegex(text, r'"OnPressed" "gate_1.Open')
+        self.assertRegex(text, r'"OnPressed" "director.ForcePanicEvent')
+
+
 class TestLaddersAndClimbs(unittest.TestCase):
     """Ladders and Zombie Climbs in the nav mesh. The ladder numbers are the game's own
     (nav_generate on the same map: top 192.03, bottom -1, length 194, facing west)."""

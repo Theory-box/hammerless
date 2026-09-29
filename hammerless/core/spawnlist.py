@@ -30,7 +30,7 @@ _PRESET_CATEGORY = {
     "START_SAFE_ROOM": "SAFE_ROOMS", "END_SAFE_ROOM": "SAFE_ROOMS",
     "HORDE_TRIGGER": "EVENTS", "HORDE_BUTTON": "EVENTS", "TANK_AMBUSH": "EVENTS",
     "CRESCENDO_BUTTON": "EVENTS", "ZOMBIE_SPAWN_AREA": "EVENTS", "LADDER": "VOLUMES",
-    "ZOMBIE_LADDER": "INFECTED", "ZOMBIE_CLIMB": "INFECTED",
+    "ZOMBIE_LADDER": "INFECTED", "ZOMBIE_CLIMB": "INFECTED", "GATE_BUTTON": "EVENTS",
 }
 _ENTITY_CATEGORY = {
     "Players": "SURVIVORS", "Infected": "INFECTED", "Weapons": "WEAPONS", "Items": "ITEMS",
@@ -46,6 +46,7 @@ _LABELS = {"func_ladder": "Ladder Volume (no model)", "hammerless_crescendo": "C
            "info_zombie_spawn": "Infected Spawn Spot"}
 # Extra search words
 _ALIASES = {
+    "func_movelinear": "gate door lift elevator moving slide platform garage drawbridge",
     "weapon_item_spawn": "random pills health throwable molotov pipe bomb bile adrenaline medkit",
     "weapon_first_aid_kit_spawn": "medkit health heal", "weapon_pain_pills_spawn": "health heal",
     "weapon_adrenaline_spawn": "health", "weapon_defibrillator_spawn": "defib revive",
@@ -78,6 +79,7 @@ BRUSH_BOXES = {
     "func_playerinfected_clip": ((-128, -8, 0), (128, 8, 256)),
     "func_button": ((-4, -16, 40), (4, 16, 72)),
     "func_ladder": ((-4, -16, 0), (4, 16, 256)),
+    "func_movelinear": ((-64, -4, 0), (64, 4, 128)),
     "hammerless_nav_region": ((-512, -512, -64), (512, 512, 256)),
     "info_changelevel": ((0, 0, 0), (320, 256, 128)),
 }

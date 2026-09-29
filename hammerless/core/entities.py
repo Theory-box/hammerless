@@ -64,6 +64,10 @@ POPULATIONS = tuple((p, p.title()) for p in (
 
 
 YES_NO = (("1", "Yes"), ("0", "No"))
+# Mover direction choices -> func_movelinear movedir (pitch yaw roll; Source +X is yaw 0, down is pitch 90)
+MOVE_DIRECTIONS = (("down", "Down"), ("up", "Up"), ("+x", "+X"), ("-x", "-X"), ("+y", "+Y"), ("-y", "-Y"))
+MOVE_DIR_ANGLES = {"down": "90 0 0", "up": "-90 0 0", "+x": "0 0 0", "-x": "0 180 0", "+y": "0 90 0", "-y": "0 270 0"}
+MOVE_DIR_AXIS = {"down": (2, -1), "up": (2, 1), "+x": (0, 1), "-x": (0, -1), "+y": (1, 1), "-y": (1, -1)}
 # weapon_item_spawn choices (key, label, Hammerless default): health and throwables on
 RANDOM_ITEMS = (
     ("item4", "Pain pills", "1"), ("item11", "Adrenaline", "1"), ("item2", "First aid kit", "0"),
@@ -253,6 +257,16 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               "material (the Ladder preset does this). The compiler turns it into an L4D2 ladder "
               "the nav mesh understands.",
               (KeyDef("team", "everyone", "Who climbs: everyone or zombies"),), brush=True),
+    EntityDef("func_movelinear", "Mover (gate, lift, sliding door)", "Brush Entities",
+              "A brush that slides in a straight line when told to: gates, garage doors, drawbridges, "
+              "lifts. Send it Open to slide out, Close to slide back (e.g. from a button's OnPressed). It "
+              "fires OnFullyOpen / OnFullyClosed when it gets there. Players standing on it ride along.",
+              (KeyDef("targetname", "gate_1", "Name (outputs send Open/Close to this)"),
+               KeyDef("direction", "down", "Direction", MOVE_DIRECTIONS),
+               KeyDef("movedistance", "auto", "Distance in units (auto = its own size that way)"),
+               KeyDef("move_time", "4", "Seconds to get there"),
+               KeyDef("startsound", "", "Sound when it starts (optional)"),
+               KeyDef("stopsound", "", "Sound when it stops (optional)")), brush=True),
     EntityDef("func_button", "Button", "Brush Entities",
               "Something players press with Use. Wire its OnPressed output to start events "
               "(e.g. director > ForcePanicEvent for a horde).",
@@ -488,6 +502,23 @@ def zombie_climb(name: str = "climb_1") -> Preset:
                                                    {"end": "top", "climb": name}))])
 
 
+def gate_button(name: str = "gate_1") -> Preset:
+    """A gate that slides down into the floor when a button is pressed, and starts a horde:
+    a worked example of wiring a Mover to a button."""
+    gate = g.box_brush((96, -64, 0), (104, 64, 128), "dev/dev_measuregeneric01b", "gate")
+    button = g.box_brush((-4, -16, 40), (4, 16, 72), "dev/dev_hazzardstripe01a", "gate_button")
+    return Preset("GATE_BUTTON", "Gate + Button",
+                  "A gate that slides down into the floor over 4 seconds when survivors press the button, "
+                  "and starts a horde. The gate is a Mover and the button's outputs tell it to Open: change "
+                  "either, or copy the idea for lifts and sliding doors.",
+                  [PresetPart("gate", entity=Entity("func_movelinear", None, (0, 0, 0), {
+                      "targetname": name, "direction": "down", "movedistance": "auto", "move_time": "4"}, [gate])),
+                   PresetPart("button", entity=Entity("func_button", None, (0, 0, 0),
+                                                      {"spawnflags": "1025", "wait": "-1"}, [button], outputs=[
+                       Output("OnPressed", name, "Open", times=1),
+                       Output("OnPressed", "director", "ForcePanicEvent", times=1)]))])
+
+
 def zombie_spawn_area() -> Preset:
     vol = g.box_brush((-512, -512, -64), (512, 512, 256), "tools/toolstrigger", "zombie_spawn_area")
     ent = Entity(NAV_REGION, None, (0, 0, 0), {"attributes": "OBSCURED"}, [vol])
@@ -501,7 +532,7 @@ PRESET_BUILDERS = {"START_SAFE_ROOM": start_safe_room, "END_SAFE_ROOM": end_safe
                    "HORDE_TRIGGER": horde_trigger, "HORDE_BUTTON": horde_button,
                    "TANK_AMBUSH": tank_ambush, "CRESCENDO_BUTTON": crescendo_button,
                    "ZOMBIE_SPAWN_AREA": zombie_spawn_area, "LADDER": ladder,
-                   "ZOMBIE_LADDER": zombie_ladder, "ZOMBIE_CLIMB": zombie_climb}
+                   "ZOMBIE_LADDER": zombie_ladder, "ZOMBIE_CLIMB": zombie_climb, "GATE_BUTTON": gate_button}
 PRESETS = {k: f() for k, f in PRESET_BUILDERS.items()}  # default instances (labels, tests)
 
 
@@ -545,6 +576,14 @@ PRESET_FIELDS: dict[str, list[PresetField]] = {
     "LADDER": [
         PresetField("Who Climbs", "everyone, or zombies (then survivors can not use it)",
                     (("volume", "kv", "team"),)),
+    ],
+    "GATE_BUTTON": [
+        PresetField("Gate Name", "Name the button's output sends Open to",
+                    (("gate", "kv", "targetname"), ("button", "output_target", "Open"))),
+        PresetField("Direction", "down, up, +x, -x, +y or -y", (("gate", "kv", "direction"),)),
+        PresetField("Distance", "Units to slide (auto = the gate's own size that way)",
+                    (("gate", "kv", "movedistance"),)),
+        PresetField("Seconds", "How long the slide takes", (("gate", "kv", "move_time"),)),
     ],
     "ZOMBIE_CLIMB": [
         PresetField("Name", "Pairs the bottom and top points (each Zombie Climb needs its own name)",

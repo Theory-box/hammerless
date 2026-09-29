@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from . import geometry as g
 from .displacement import build_patches
 from .entities import default_keyvalues
-from .entities import PSEUDO_ENTITIES, ZOMBIES_ONLY
+from .entities import MOVE_DIR_ANGLES, MOVE_DIR_AXIS, PSEUDO_ENTITIES, ZOMBIES_ONLY
 from .gamefiles import collect_crescendos, director_input_script, script_path
 from .ir import Brush, Entity, MapIR, Output, Vec3
 from .nav import collect_climbs, collect_regions
@@ -298,6 +298,49 @@ def solid_geometry(ir: MapIR) -> list:
     return ir.brushes + [b for e in ir.entities if e.classname == "func_detail" for b in e.brushes]
 
 
+def mover_entity(e: Entity, report: Report) -> Entity:
+    """Mover (func_movelinear): friendly keys -> the game's. direction -> movedir, distance 'auto' ->
+    the brush's size that way, move_time (seconds) -> speed."""
+    kv = dict(e.keyvalues)
+    key = kv.pop("direction", "down").strip().lower()
+    if key in MOVE_DIR_ANGLES:
+        kv["movedir"] = MOVE_DIR_ANGLES[key]
+    elif "movedir" not in kv:
+        report.warnings.append(f"Mover '{e.source}': direction '{key}' isn't down, up, +x, -x, +y or -y; "
+                               "moving down.")
+        key, kv["movedir"] = "down", MOVE_DIR_ANGLES["down"]
+    dist = kv.get("movedistance", "auto").strip().lower()
+    if dist in ("", "auto"):
+        axis = MOVE_DIR_AXIS.get(key, (2, -1))[0]
+        pts = [v[axis] for b in e.brushes for f in b.faces for v in f.verts]
+        dist_v = (max(pts) - min(pts)) if pts else 0.0
+    else:
+        try:
+            dist_v = float(dist)
+        except ValueError:
+            report.warnings.append(f"Mover '{e.source}': distance '{dist}' isn't a number; using its size.")
+            axis = MOVE_DIR_AXIS.get(key, (2, -1))[0]
+            pts = [v[axis] for b in e.brushes for f in b.faces for v in f.verts]
+            dist_v = (max(pts) - min(pts)) if pts else 0.0
+    kv["movedistance"] = f"{dist_v:g}"
+    t = kv.pop("move_time", "").strip()
+    if t:
+        try:
+            secs = float(t)
+            kv["speed"] = f"{(dist_v / secs) if secs > 0 else dist_v * 100:g}"
+        except ValueError:
+            report.warnings.append(f"Mover '{e.source}': time '{t}' isn't a number of seconds.")
+    kv.setdefault("speed", "32")
+    kv.setdefault("startposition", "0")
+    kv.setdefault("spawnflags", "0")
+    for k in ("startsound", "stopsound"):
+        if not kv.get(k):
+            kv.pop(k, None)
+    if not kv.get("targetname"):
+        report.warnings.append(f"Mover '{e.source}' has no name, so nothing can tell it to move.")
+    return dataclasses.replace(e, keyvalues=kv)
+
+
 def zombie_ladder_entity(e: Entity, report: Report) -> Entity:
     """func_ladder with team 'zombies' -> func_simpleladder team 2. vbsp turns every func_ladder
     into a team 0 func_simpleladder and drops the team, so zombie-only ladders are written
@@ -386,6 +429,7 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
         if e.classname == "info_changelevel" and bad_next_map(e, s.name):
             e.keyvalues = {**e.keyvalues, "map": FALLBACK_NEXT_MAP}
     entities = [zombie_ladder_entity(e, report) if e.classname == "func_ladder" else e for e in entities]
+    entities = [mover_entity(e, report) if e.classname == "func_movelinear" else e for e in entities]
     classes = {e.classname for e in entities}
     if s.auto_director and "info_director" not in classes:
         entities.append(Entity("info_director", (0, 0, 0), (0, 0, 0), default_keyvalues("info_director")))
