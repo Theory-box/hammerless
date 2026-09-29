@@ -122,6 +122,8 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
     ir, _mats = extract_scene(context, rep, gamedir)
     if rep.errors:
         return None, root, rep
+    from .logic import compile_logic
+    compile_logic(context, ir, rep)
     text, rep2 = build_vmf(ir, game_content(root) if s.check_game_content else None)
     rep2.errors[:0] = rep.errors
     rep2.warnings[:0] = rep.warnings
@@ -480,6 +482,8 @@ class HL_OT_validate(bpy.types.Operator):
         rep = Report()
         root = game_root(context)
         ir, _ = extract_scene(context, rep, None)
+        from .logic import compile_logic
+        compile_logic(context, ir, rep)
         rep2 = validate(ir, game_content(root) if s.check_game_content else None)
         rep.errors += rep2.errors; rep.warnings += rep2.warnings; rep.info += rep2.info
         rep.problems = rep2.problems

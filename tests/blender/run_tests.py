@@ -522,6 +522,40 @@ def test_hidden_objects_skipped():
     assert blocks, log
 
 
+def test_logic_graph_exports():
+    # a Volume that shows a message, and Map Start -> Delay -> Horde, wired as nodes
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    zone = add_box("zone", (2, 2, 2), (-3, 0, 1))
+    bpy.ops.object.empty_add(location=(2, 0, 0.1))
+    sp = bpy.context.object
+    sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
+    tree = bpy.data.node_groups.new("Map Logic", "HL_LogicTree")
+    vol = tree.nodes.new("HL_NodeVolume")
+    vol.target = zone
+    msg = tree.nodes.new("HL_NodeMessage")
+    msg.text = "Get to the gate"
+    start, delay, horde = (tree.nodes.new(t) for t in ("HL_NodeMapStart", "HL_NodeDelay", "HL_NodeHorde"))
+    delay.seconds = 10
+    tree.links.new(vol.outputs["On Enter"], msg.inputs["Show"])
+    tree.links.new(start.outputs["On Map Start"], delay.inputs["In"])
+    tree.links.new(delay.outputs["Out"], horde.inputs["Start"])
+    blocks, log = export()
+    assert blocks, log
+    trig = entities(blocks, "trigger_multiple")
+    assert len(trig) == 1 and trig[0].blocks("solid"), log
+    conns = trig[0].blocks("connections")[0]
+    assert conns.get("OnStartTouch").startswith("hl_show_message,ShowHint"), conns.get("OnStartTouch")
+    hint = entities(blocks, "env_instructor_hint")[0]
+    assert hint.get("hint_caption") == "Get to the gate"
+    relay = entities(blocks, "logic_relay")[0]
+    assert relay.blocks("connections")[0].get("OnTrigger") == "director,ForcePanicEvent,,10,-1"
+    # the volume's mesh became the trigger, not a solid wall
+    assert all("toolstrigger" in sd.get("material").lower() for sd in trig[0].blocks("solid")[0].blocks("side"))
+    assert not any(sd.get("material").lower() == "tools/toolstrigger"
+                   for so in world_solids(blocks) for sd in so.blocks("side"))
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

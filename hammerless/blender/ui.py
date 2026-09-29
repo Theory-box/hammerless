@@ -79,6 +79,22 @@ class _SubPanel:
     bl_options = {"DEFAULT_CLOSED"}
 
 
+class HL_PT_logic(_SubPanel, bpy.types.Panel):
+    bl_label = "Logic (nodes)"
+
+    def draw(self, context):
+        from .logic import logic_trees
+        col = self.layout.column(align=True)
+        trees = logic_trees()
+        col.label(text=f"{len(trees)} logic graph(s)" if trees else "No logic graph yet", icon="NODETREE")
+        col.operator("hammerless.logic_new", icon="ADD")
+        col.operator("hammerless.logic_from_outputs", icon="NODE")
+        sub = self.layout.column(align=True)
+        sub.scale_y = 0.8
+        sub.label(text="Open any editor as 'L4D2 Logic' to edit,", icon="INFO")
+        sub.label(text="Shift+A adds nodes, like the shader editor", icon="BLANK1")
+
+
 class HL_PT_nav(_SubPanel, bpy.types.Panel):
     bl_label = "Nav Mesh (from the game)"
 
@@ -390,7 +406,7 @@ def _add_menu(self, context):
     self.layout.menu(HL_MT_add.bl_idname, icon="WORLD")
 
 
-CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_PT_map, HL_PT_nav, HL_PT_compile, HL_PT_lighting, HL_PT_fog,
+CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_PT_map, HL_PT_logic, HL_PT_nav, HL_PT_compile, HL_PT_lighting, HL_PT_fog,
            HL_PT_director, HL_PT_game, HL_PT_debug, HL_PT_advanced, HL_PT_object, HL_PT_collection,
            *CATEGORY_MENUS, HL_MT_add)
 

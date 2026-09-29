@@ -448,6 +448,62 @@ class TestNavGen(unittest.TestCase):
         self.assertFalse(any(n.pos[2] > 100 for n in high.nodes))
 
 
+class TestLogicGraph(unittest.TestCase):
+    def test_fgd_parse_and_inherit(self):
+        from hammerless.core import fgd
+        text = """
+        @BaseClass = Targetname [ input Kill(void) : "Removes" output OnUser1(void) : "x" ]
+        @SolidClass base(Targetname) = func_thing : "A thing" + " that moves"
+        [
+            speed(integer) : "Speed" : 10 : "desc [with brackets]"
+            mode(choices) : "Mode" : 0 = [ 0 : "A" 1 : "B" ]
+            input Open(void) : "Opens it"
+            input SetPosition(string) : "Moves " + "there"
+            output OnFullyOpen(void) : "Done"
+        ]
+        """
+        classes = fgd.parse(text)
+        ios = fgd.resolve(classes, "func_thing")
+        names = [(io.kind, io.name) for io in ios]
+        self.assertEqual(names[:3], [("input", "Open"), ("input", "SetPosition"), ("output", "OnFullyOpen")])
+        self.assertIn(("input", "Kill"), names)
+        self.assertTrue(next(io for io in ios if io.name == "SetPosition").takes_value)
+        self.assertEqual(next(io for io in ios if io.name == "SetPosition").description, "Moves there")
+        self.assertEqual(fgd.pretty("OnFullyOpen"), "On Fully Open")
+
+    def test_compile_graph(self):
+        from hammerless.core.logic import LLink, LNode, compile_graph
+        ir = MapIR()
+        btn = Entity("func_button", None, (0, 0, 0), {}, [g.box_brush((0, 0, 0), (8, 8, 8), "x")], "gate 1 button")
+        gate = Entity("func_movelinear", None, (0, 0, 0), {"targetname": "gate_1"},
+                      [g.box_brush((50, 0, 0), (58, 64, 128), "x")], "gate 1")
+        ir.entities += [btn, gate]
+        vol = g.box_brush((-100, 0, 0), (-50, 50, 50), "x", "zone")
+        nodes = [LNode("Button", "OBJECT", {"outputs": ["OnPressed"], "inputs": []}, "gate 1 button"),
+                 LNode("Gate", "OBJECT", {"outputs": [], "inputs": ["Open", "SetPosition"]}, "gate 1",
+                       params={"SetPosition": "0.5"}),
+                 LNode("Delay", "DELAY", {"seconds": 2.5}), LNode("Horde", "HORDE"),
+                 LNode("Zone", "VOLUME", {"who": "SURVIVORS", "once": True}, "zone", [vol]),
+                 LNode("Count", "COUNTER", {"count": 3}), LNode("Lonely", "OBJECT", {}, "missing")]
+        links = [LLink("Button", "OnPressed", "Gate", "Open"), LLink("Button", "OnPressed", "Gate", "SetPosition"),
+                 LLink("Button", "OnPressed", "Delay", "in"), LLink("Delay", "out", "Horde", "start"),
+                 LLink("Zone", "all_inside", "Count", "add")]
+        problems = compile_graph(nodes, links, ir)
+        self.assertEqual(len(problems), 1)                       # the node with no real object
+        self.assertEqual(btn.keyvalues["targetname"], "hl_gate_1_button")
+        outs = {(o.output, o.target, o.input, o.parameter, o.delay, o.times) for o in btn.outputs}
+        self.assertIn(("OnPressed", "gate_1", "Open", "", 0.0, -1), outs)
+        self.assertIn(("OnPressed", "gate_1", "SetPosition", "0.5", 0.0, -1), outs)
+        relay = next(e for e in ir.entities if e.classname == "logic_relay")
+        self.assertEqual([(o.target, o.input, o.delay) for o in relay.outputs], [("director", "ForcePanicEvent", 2.5)])
+        trig = next(e for e in ir.entities if e.classname == "trigger_multiple")
+        self.assertEqual(trig.brushes[0].faces[0].material, "tools/toolstrigger")
+        self.assertEqual([(o.output, o.input, o.parameter, o.times) for o in trig.outputs],
+                         [("OnEntireTeamStartTouch", "Add", "1", 1)])
+        self.assertTrue(any(e.classname == "filter_activator_team" for e in ir.entities))
+        self.assertEqual(sum(e.classname == "info_director" for e in ir.entities), 1)
+
+
 class TestMover(unittest.TestCase):
     def test_gate_button_export(self):
         import re
