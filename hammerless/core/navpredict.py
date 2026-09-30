@@ -151,4 +151,8 @@ def spawn_block_problems(mesh: NavMesh, regions) -> list[str]:
             what = " and ".join(w for w, bit in (("no wandering commons", EMPTY), ("no hordes", NO_MOBS)) if r.bits & bit)
             out.append(f"'{r.source}' marks {100 * n // total}% of the nav mesh ({what}), so few or no commons "
                        "can spawn. Is the box bigger than you meant? Shrink it to the spots zombies shouldn't use")
+    blocked = sum(1 for a in mesh.areas if a.spawn_attributes & (EMPTY | NO_MOBS))
+    if not out and blocked / total > SPAWN_BLOCK_SHARE:
+        out.append(f"No-spawn boxes together mark {100 * blocked // total}% of the nav mesh, so commons have few "
+                   "places to spawn. Check the Nav Attribute Regions set to EMPTY / NO_MOBS")
     return out

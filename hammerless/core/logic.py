@@ -88,6 +88,11 @@ class _Take:        # an input socket: which named entity receives which input
     param: str = ""
 
 
+# what a scene object became, in the words of the node that made it (for messages)
+BECAME = {"func_movelinear": "Mover (Move Over Time)", "func_button": "Button", "func_button_timed": "Button",
+          "func_brush": "solid brush (Collision or Show / Hide)", "func_illusionary": "walk-through brush (Collision)"}
+
+
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", text.lower()).strip("_") or "node"
 
@@ -115,6 +120,7 @@ class _Compiler:
         self.expr_cache: dict[tuple[str, str], str] = {}
         self.defined: set[str] = set()
         self.whens: list[tuple[str, str, str, bool]] = []
+        self.converted: dict[str, tuple[str, str]] = {}   # object -> (class it became, node that did it)
 
     # -- names and entities
     def unique(self, base: str) -> str:
@@ -145,6 +151,13 @@ class _Compiler:
         if not obj:
             self.problems.append(f"Logic node '{nid}': pick an object")
             return None
+        if obj in self.converted and self.converted[obj][0] != classname:
+            # two nodes want this object as different things: the first one wins, never silently
+            first_class, first_node = self.converted[obj]
+            self.problems.append(f"Logic node '{nid}': '{obj}' is already a {BECAME.get(first_class, first_class)} (node '{first_node}'), "
+                                 f"so it can't also be a {BECAME.get(classname, classname)}; this node is skipped")
+            return None
+        self.converted.setdefault(obj, (classname, nid))
         e = self.entity_of(obj)
         if e is not None and e.brushes:
             e.classname = classname
@@ -350,6 +363,11 @@ class _Compiler:
             players, nav = bool(s.get("players", True)), bool(s.get("nav", False))
             if players and nav:
                 return                      # ordinary world geometry already does both
+            if n.obj in self.converted:     # e.g. a Mover: already solid, and the nav already runs through it
+                first_class, first_node = self.converted[n.obj]
+                self.problems.append(f"Logic node '{nid}': '{n.obj}' is already a {BECAME.get(first_class, first_class)} (node "
+                                     f"'{first_node}'), which sets its own collision; this Collision node is skipped")
+                return
             if players:
                 # solid for players and zombies, but nav generation ignores brush entities: the nav
                 # mesh runs through it (a fence zombies climb, a barricade they bash)
@@ -741,7 +759,7 @@ def compile_graph(nodes: list[LNode], links: list[LLink], ir: MapIR, graph: str 
     c = _Compiler(ir, problems, graph, log)
     c.nodes = {n.id: n for n in nodes}
     c.data_links = {(l.to_node, l.to_socket): (l.from_node, l.from_socket) for l in links if l.data}
-    for n in nodes:
+    for n in sorted(nodes, key=lambda n: n.kind == "COLLISION"):
         c.node(n)
     for l in links:
         if not l.data:
