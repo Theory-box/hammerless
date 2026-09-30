@@ -504,6 +504,33 @@ class TestLogicGraph(unittest.TestCase):
         self.assertEqual(sum(e.classname == "info_director" for e in ir.entities), 1)
 
 
+class TestPathProgressSpawns(unittest.TestCase):
+    def test_at_least_one_tank(self):
+        from hammerless.core.logic import LLink, LNode, compile_graph
+        ir = MapIR()
+        ir.settings.name = "m"
+        nodes = [LNode("Tank At", "PATH_PROGRESS", {"from": 0.8, "to": 0.1}),
+                 LNode("Tank", "SPAWN", {"what": "tank", "fewer_than": 1}),
+                 LNode("Here", "SPAWN", {"what": "witch"}, pos=(10.0, 20.0, 30.0)),
+                 LNode("Commons", "SPAWN", {"what": "common"})]
+        links = [LLink("Tank At", "reached", "Tank", "spawn"), LLink("Tank At", "reached", "Here", "spawn")]
+        problems = compile_graph(nodes, links, ir)
+        self.assertEqual(len(problems), 1)                   # commons need a Where
+        script = ir.extra_scripts["scripts/vscripts/hammerless/logic_m.nut"]
+        self.assertIn('relay = "hl_tank_at", lo = 0.100, hi = 0.800', script)   # From/To in order
+        self.assertIn("if (HL_Count.tank >= 1) return;", script)
+        self.assertIn('HL_TrySpawn(8, "tank", 1);', script)
+        self.assertIn("function OnGameEvent_tank_spawn", script)
+        self.assertIn("HL_Retry();", script)
+        logic = next(e for e in ir.entities if e.classname == "logic_script")
+        self.assertEqual(logic.keyvalues.get("thinkfunction"), "HL_Think")
+        relay = next(e for e in ir.entities if e.keyvalues.get("targetname") == "hl_tank_at")
+        outs = {(o.target, o.input, o.parameter) for o in relay.outputs}
+        self.assertIn(("hl_logic", "RunScriptCode", "HL_Spawn_tank()"), outs)
+        spawner = next(e for e in ir.entities if e.classname == "commentary_zombie_spawner")
+        self.assertIn((spawner.keyvalues["targetname"], "SpawnZombie", "witch"), outs)   # a Where, no limit: direct
+
+
 class TestMover(unittest.TestCase):
     def test_gate_button_export(self):
         import re

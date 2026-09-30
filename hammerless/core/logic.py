@@ -37,6 +37,14 @@ GAME_EVENTS = {
     "WITCH_STARTLED": ("A Witch Is Startled", "witch_harasser_set", ""),
 }
 ZOMBIE_TYPES = ("tank", "witch", "hunter", "smoker", "boomer", "charger", "jockey", "spitter", "common")
+SPAWN_TYPES = {"smoker": 1, "boomer": 2, "hunter": 3, "spitter": 4, "jockey": 5, "charger": 6, "witch": 7, "tank": 8}
+# infected counting for Spawn Zombie's "Only If Fewer Than": every Tank, Witch and special that appears
+COUNT_CODE = {
+    "tank_spawn": "    HL_Count.tank++;\n",
+    "witch_spawn": "    HL_Count.witch++;\n",
+    "player_spawn": ("    if (p && !p.IsSurvivor()) { local t = p.GetZombieType(); "
+                     "if (t in HL_CountNames) HL_Count[HL_CountNames[t]]++; }\n"),
+}
 # Director Settings node fields: (setting, DirectorOptions key)
 DIRECTOR_FIELDS = (("common_limit", "CommonLimit"), ("mob_min", "MobMinSize"), ("mob_max", "MobMaxSize"),
                    ("mob_interval_min", "MobSpawnMinTime"), ("mob_interval_max", "MobSpawnMaxTime"),
@@ -99,6 +107,7 @@ class _Compiler:
         self.filters: dict[str, str] = {}
         self.functions: list[str] = []                  # Squirrel functions for the map script
         self.events: dict[str, list[tuple[str, str]]] = {}   # game event -> [(condition, relay)]
+        self.progress: list[tuple[str, float, float]] = []  # Path Progress: (relay, from, to)
 
     # -- names and entities
     def unique(self, base: str) -> str:
@@ -262,6 +271,11 @@ class _Compiler:
             take("show", name, "Enable")
             take("hide", name, "Disable")
             take("remove", name, "Kill")
+        elif k == "PATH_PROGRESS":
+            lo, hi = float(s.get("from", 0.5)), float(s.get("to", 0.5))
+            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "1"})
+            self.progress.append((e.keyvalues["targetname"], min(lo, hi), max(lo, hi)))
+            fire("reached", e, "OnTrigger")
         elif k == "MAP_START":
             e = self.add("logic_auto", f"hl_{slug}", {"spawnflags": "1"})
             fire("start", e, "OnMapSpawn")
@@ -335,13 +349,32 @@ class _Compiler:
             take("start", self.name_of(d, DIRECTOR), "ScriptedPanicEvent", name)
             fire("finished", d, "OnCustomPanicStageFinished")
         elif k == "SPAWN":
-            if n.pos is None:
-                self.problems.append(f"Logic node '{nid}': pick where to spawn (an object or empty)")
-                return
             what = s.get("what", "tank")
-            e = self.add("commentary_zombie_spawner", f"hl_{slug}", {}, origin=n.pos)
-            take("spawn", e.keyvalues["targetname"], "SpawnZombie", what if what != "common" else "common")
-            fire("killed", e, "OnSpawnedZombieDeath")
+            limit = int(s.get("fewer_than", 0) or 0)
+            if n.pos is None and what == "common":
+                self.problems.append(f"Logic node '{nid}': common infected need a Where (an object or empty)")
+                return
+            spawner = None
+            if n.pos is not None:
+                spawner = self.add("commentary_zombie_spawner", f"hl_{slug}", {}, origin=n.pos)
+                fire("killed", spawner, "OnSpawnedZombieDeath")
+            if spawner is not None and not limit:
+                take("spawn", spawner.keyvalues["targetname"], "SpawnZombie", what)
+            else:
+                # the game picks the spot (ZSpawn without a position, like its own spawns) and/or
+                # only if fewer than `limit` of this infected have appeared so far
+                fn = f"HL_Spawn_{slug}"
+                check = f"if (HL_Count.{what} >= {limit}) return;\n    " if limit and what in SPAWN_TYPES else ""
+                if limit and what in SPAWN_TYPES:
+                    self.ir.logic_counts = True
+                if spawner is not None:
+                    act = f"EntFire(\"{spawner.keyvalues['targetname']}\", \"SpawnZombie\", \"{what}\");"
+                else:       # no spot right now (e.g. just after a teleport): keep trying for 30 s
+                    self.ir.logic_retry = True
+                    act = (f"HL_TrySpawn({SPAWN_TYPES.get(what, 8)}, \"{what}\", "
+                           f"{limit if what in SPAWN_TYPES else 0});")
+                self.functions.append(f"function {fn}() {{\n    {check}{act}\n}}")
+                take("spawn", *self.script_call(fn))
         elif k == "SOUND":
             everywhere = n.pos is None or s.get("everywhere", True)
             e = self.add("ambient_generic", f"hl_{slug}", {
@@ -438,23 +471,81 @@ class _Compiler:
         self.ir.logic_functions += self.functions
         for ev, targets in self.events.items():
             self.ir.logic_events.setdefault(ev, []).extend(targets)
-        if not self.ir.logic_functions and not self.ir.logic_events:
+        self.ir.logic_progress += self.progress
+        ir = self.ir
+        if not (ir.logic_functions or ir.logic_events or ir.logic_progress or ir.logic_counts):
             return
-        parts = [f"// Hammerless logic graphs for {self.ir.settings.name}\n"]
-        parts += [f + "\n" for f in self.ir.logic_functions]
-        for game_event, targets in self.ir.logic_events.items():
+        thinks = bool(ir.logic_progress or ir.logic_retry)
+        parts = [f"// Hammerless logic graphs for {ir.settings.name}\n"]
+        if ir.logic_counts:
+            parts.append("HL_Count <- { tank = 0, witch = 0, smoker = 0, boomer = 0, hunter = 0, spitter = 0, "
+                         "jockey = 0, charger = 0 };\n"
+                         "HL_CountNames <- { [1] = \"smoker\", [2] = \"boomer\", [3] = \"hunter\", "
+                         "[4] = \"spitter\", [5] = \"jockey\", [6] = \"charger\" };\n")
+        if ir.logic_retry:
+            check = "(limit > 0 && HL_Count[what] >= limit)" if ir.logic_counts else "false"
+            parts.append("HL_Pending <- [];\n"
+                         "function HL_TrySpawn(type, what, limit) {\n"
+                         f"    if ({check}) return;\n"
+                         "    if (!ZSpawn({ type = type })) HL_Pending.append({ type = type, what = what, "
+                         "limit = limit, until = Time() + 30.0 });\n"
+                         "}\n"
+                         "HL_PendingNext <- 0.0;\n"
+                         "function HL_Retry() {\n"
+                         "    if (HL_Pending.len() == 0 || Time() < HL_PendingNext) return;\n"
+                         "    HL_PendingNext = Time() + 1.0;\n"
+                         "    local keep = [];\n"
+                         "    foreach (s in HL_Pending) {\n"
+                         "        local limit = s.limit, what = s.what;\n"
+                         f"        if ({check}) continue;\n"
+                         "        if (!ZSpawn({ type = s.type }) && Time() < s.until) keep.append(s);\n"
+                         "    }\n"
+                         "    HL_Pending = keep;\n"
+                         "}\n")
+        parts += [f + "\n" for f in ir.logic_functions]
+        if ir.logic_progress:
+            # Path Progress: each node picks its random point once per game, fires when the furthest
+            # survivor gets there
+            rows = ", ".join(f'{{ relay = "{r}", lo = {lo:.3f}, hi = {hi:.3f}, at = -1.0 }}' for r, lo, hi in ir.logic_progress)
+            parts.append(f"HL_Progress <- [ {rows} ];\nHL_ProgressNext <- 0.0;\n"
+                         "function HL_Progress_Think() {\n"
+                         "    if (Time() < HL_ProgressNext) return;\n"
+                         "    HL_ProgressNext = Time() + 0.5;\n"
+                         "    local max = GetMaxFlowDistance();\n"
+                         "    if (max <= 0) return;\n"
+                         "    local flow = Director.GetFurthestSurvivorFlow() / max;\n"
+                         "    foreach (r in HL_Progress) {\n"
+                         "        if (r.at < 0) { r.at = RandomFloat(r.lo, r.hi); "
+                         "printl(\"HAMMERLESS_PROGRESS \" + r.relay + \" at \" + (r.at * 100).tointeger() + \" percent\"); }\n"
+                         "        if (r.at <= 1.0 && flow >= r.at) { r.at = 2.0; EntFire(r.relay, \"Trigger\"); }\n"
+                         "    }\n}\n")
+        if thinks:
+            parts.append("function HL_Think() {\n"
+                         + ("    HL_Progress_Think();\n" if ir.logic_progress else "")
+                         + ("    HL_Retry();\n" if ir.logic_retry else "") + "}\n")
+        events = {ev: list(t) for ev, t in ir.logic_events.items()}
+        if ir.logic_counts:
+            for ev in COUNT_CODE:
+                events.setdefault(ev, [])
+        for game_event, targets in events.items():
             body = "    local p = (\"userid\" in params) ? GetPlayerFromUserID(params.userid) : null;\n"
+            if ir.logic_counts:
+                body += COUNT_CODE.get(game_event, "")
             for cond, relay in targets:
                 fire = f"EntFire(\"{relay}\", \"Trigger\");"
                 body += f"    if ({cond}) {fire}\n" if cond else f"    {fire}\n"
             parts.append(f"function OnGameEvent_{game_event}(params) {{\n{body}}}\n")
-        if self.ir.logic_events:
+        if events:
             parts.append("__CollectEventCallbacks(this, \"OnGameEvent_\", \"GameEventCallbacks\", "
                          "RegisterScriptGameEventListener);\n")
         self.ir.extra_scripts[f"scripts/vscripts/hammerless/logic_{self.ir.settings.name}.nut"] = "".join(parts)
-        if not any(e.keyvalues.get("targetname") == LOGIC_SCRIPT for e in self.ir.entities):
-            self.ir.entities.append(Entity("logic_script", (0.0, 0.0, 56.0), (0, 0, 0), {
-                "targetname": LOGIC_SCRIPT, "vscripts": f"hammerless/logic_{self.ir.settings.name}"}, [], LOGIC_SCRIPT))
+        script = next((e for e in self.ir.entities if e.keyvalues.get("targetname") == LOGIC_SCRIPT), None)
+        if script is None:
+            script = Entity("logic_script", (0.0, 0.0, 56.0), (0, 0, 0), {
+                "targetname": LOGIC_SCRIPT, "vscripts": f"hammerless/logic_{self.ir.settings.name}"}, [], LOGIC_SCRIPT)
+            self.ir.entities.append(script)
+        if thinks:
+            script.keyvalues = {**script.keyvalues, "thinkfunction": "HL_Think"}
 
 
 def compile_graph(nodes: list[LNode], links: list[LLink], ir: MapIR, graph: str = "", log: bool = False) -> list[str]:

@@ -276,6 +276,28 @@ class HL_NodeButton(_Node, bpy.types.Node):
         return self.with_object(context, super().to_lnode(context))
 
 
+class HL_NodePathProgress(_Node, bpy.types.Node):
+    """Fires when the survivors get this far along the path to the end safe room: at a random point
+    between From and To, picked each game (From = To for a fixed point)"""
+    bl_idname, bl_label, bl_icon = "HL_NodePathProgress", "Path Progress", "TRACKING_FORWARDS"
+    kind, category = "PATH_PROGRESS", "Events"
+    lo: FloatProperty(name="From", default=0.2, min=0.0, max=1.0, subtype="FACTOR",
+                      description="Earliest point (0 = start safe room, 1 = end safe room)")
+    hi: FloatProperty(name="To", default=0.8, min=0.0, max=1.0, subtype="FACTOR",
+                      description="Latest point; a random point between From and To is picked each game")
+
+    def make_sockets(self):
+        self.ev_out("reached", "On Reached")
+
+    def draw_buttons(self, context, layout):
+        col = layout.column(align=True)
+        col.prop(self, "lo", slider=True)
+        col.prop(self, "hi", slider=True)
+
+    def settings(self):
+        return {"from": self.lo, "to": self.hi}
+
+
 class HL_NodeTimer(_Node, bpy.types.Node):
     """Fires again and again: every N seconds, or at random times between two values"""
     bl_idname, bl_label, bl_icon = "HL_NodeTimer", "Timer", "TIME"
@@ -561,21 +583,26 @@ class HL_NodeCrescendo(_Node, bpy.types.Node):
 
 
 class HL_NodeSpawn(_Node, bpy.types.Node):
-    """Spawns a Tank, Witch or special infected at an object's position"""
+    """Spawns a Tank, Witch or special infected: at an object's position, or (Where empty) where the
+    game would put one. Only If Fewer Than makes it 'at least N' instead of 'always'"""
     bl_idname, bl_label, bl_icon = "HL_NodeSpawn", "Spawn Zombie", "GHOST_ENABLED"
     kind, category = "SPAWN", "Actions"
     what: EnumProperty(name="What", items=[(z, z.title(), "") for z in ZOMBIE_TYPES], default="tank")
+    fewer_than: IntProperty(name="Only If Fewer Than", default=0, min=0, max=16,
+                            description="Only spawn if fewer than this many have appeared so far, counting the "
+                                        "Director's own (0 = always spawn)")
 
     def make_sockets(self):
-        self.obj_in("object", "Where")
+        self.obj_in("object", "Where (empty = game picks)")
         self.ev_in("spawn", "Spawn")
-        self.ev_out("killed", "On Killed")
+        self.ev_out("killed", "On Killed (with a Where)")
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "what", text="")
+        layout.prop(self, "fewer_than")
 
     def settings(self):
-        return {"what": self.what}
+        return {"what": self.what, "fewer_than": self.fewer_than}
 
     def to_lnode(self, context):
         return self.with_object(context, super().to_lnode(context), position=True)
@@ -723,7 +750,8 @@ class HL_NodeObjective(_Node, bpy.types.Node):
 
 
 CATEGORIES = [
-    ("Events", [HL_NodeMapStart, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton, HL_NodeTimer]),
+    ("Events", [HL_NodeMapStart, HL_NodePathProgress, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton,
+                HL_NodeTimer]),
     ("Scene", [HL_NodeObjectInfo, HL_NodeObject]),
     ("Flow", [HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch, HL_NodeCounter, HL_NodeRandom]),
     ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
