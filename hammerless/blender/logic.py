@@ -9,12 +9,18 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
 
 from ..core import fgd
-from ..core.logic import DIRECTOR_FIELDS, GAME_EVENTS, ZOMBIE_TYPES, LLink, LNode, compile_graph
+from ..core.logic import DIRECTOR_FIELDS, GAME_EVENTS, SPAWN_TYPES, ZOMBIE_TYPES, LLink, LNode, compile_graph
+
+SPAWN_KINDS = ("tank", "witch", "smoker", "boomer", "hunter", "charger", "jockey", "spitter")
 
 TREE = "HL_LogicTree"
 EVENT_COLOR = (1.0, 0.62, 0.15, 1.0)
 OBJECT_COLOR = (0.35, 0.65, 1.0, 1.0)
+FLOAT_COLOR = (0.63, 0.63, 0.63, 1.0)       # Blender's colours: grey numbers, pink true/false
+BOOL_COLOR = (0.80, 0.65, 0.84, 1.0)
+DATA_SOCKETS = ("HL_FloatSocket", "HL_BoolSocket")
 CATEGORY_COLORS = {"Events": (0.45, 0.18, 0.16), "Scene": (0.16, 0.33, 0.40), "Flow": (0.25, 0.25, 0.30),
+                   "Values": (0.22, 0.22, 0.40),
                    "Actions": (0.18, 0.36, 0.20), "Director": (0.33, 0.20, 0.42), "Objectives": (0.45, 0.38, 0.12)}
 
 
@@ -71,6 +77,46 @@ class HL_ObjectSocket(bpy.types.NodeSocket):
         return OBJECT_COLOR
 
 
+class HL_FloatSocket(bpy.types.NodeSocket):
+    """A number, worked out live in the game (wire it in, or type it here)"""
+    bl_idname = "HL_FloatSocket"
+    bl_label = "Number"
+    value: FloatProperty(name="Value", default=0.0)
+
+    def draw(self, context, layout, node, text):
+        if self.is_output or self.is_linked:
+            layout.label(text=text)
+        else:
+            layout.prop(self, "value", text=text)
+
+    def draw_color(self, context, node):
+        return FLOAT_COLOR
+
+    @classmethod
+    def draw_color_simple(cls):
+        return FLOAT_COLOR
+
+
+class HL_BoolSocket(bpy.types.NodeSocket):
+    """True or false, worked out live in the game"""
+    bl_idname = "HL_BoolSocket"
+    bl_label = "True/False"
+    value: BoolProperty(name="Value", default=False)
+
+    def draw(self, context, layout, node, text):
+        if self.is_output or self.is_linked:
+            layout.label(text=text)
+        else:
+            layout.prop(self, "value", text=text)
+
+    def draw_color(self, context, node):
+        return BOOL_COLOR
+
+    @classmethod
+    def draw_color_simple(cls):
+        return BOOL_COLOR
+
+
 class _Node:
     kind = ""
     category = "Flow"
@@ -100,6 +146,22 @@ class _Node:
     def obj_in(self, ident, label):
         return self.inputs.new("HL_ObjectSocket", label, identifier=ident)
 
+    def num_in(self, ident, label, default=0.0):
+        s = self.inputs.new("HL_FloatSocket", label, identifier=ident)
+        s.value = default
+        return s
+
+    def num_out(self, ident, label):
+        return self.outputs.new("HL_FloatSocket", label, identifier=ident)
+
+    def bool_in(self, ident, label, default=False):
+        s = self.inputs.new("HL_BoolSocket", label, identifier=ident)
+        s.value = default
+        return s
+
+    def bool_out(self, ident, label):
+        return self.outputs.new("HL_BoolSocket", label, identifier=ident)
+
     def object_from(self, ident):
         """The object wired into (or picked on) an object socket."""
         sock = next((s for s in self.inputs if s.identifier == ident), None)
@@ -115,7 +177,8 @@ class _Node:
 
     def to_lnode(self, context) -> LNode:
         params = {s.identifier: s.value for s in self.inputs if getattr(s, "takes_value", False) and s.value}
-        return LNode(self.name, self.kind, self.settings(), params=params)
+        consts = {s.identifier: s.value for s in self.inputs if s.bl_idname in DATA_SOCKETS}
+        return LNode(self.name, self.kind, self.settings(), params=params, consts=consts)
 
     def with_object(self, context, n: LNode, ident="object", position=False) -> LNode:
         obj = self.object_from(ident)
@@ -279,7 +342,7 @@ class HL_NodeButton(_Node, bpy.types.Node):
 class HL_NodePathProgress(_Node, bpy.types.Node):
     """Fires when the survivors get this far along the path to the end safe room: at a random point
     between From and To, picked each game (From = To for a fixed point)"""
-    bl_idname, bl_label, bl_icon = "HL_NodePathProgress", "Path Progress", "TRACKING_FORWARDS"
+    bl_idname, bl_label, bl_icon = "HL_NodePathProgress", "Reach Random Point (old)", "TRACKING_FORWARDS"
     kind, category = "PATH_PROGRESS", "Events"
     lo: FloatProperty(name="From", default=0.2, min=0.0, max=1.0, subtype="FACTOR",
                       description="Earliest point (0 = start safe room, 1 = end safe room)")
@@ -708,6 +771,14 @@ class HL_NodeDirectorSettings(_Node, bpy.types.Node):
     witch_limit: IntProperty(name="Max Witches", default=-1, min=-1, max=16)
     no_mobs: EnumProperty(name="No Random Hordes", items=TRI, default="SAME")
     no_wanderers: EnumProperty(name="No Wandering Zombies", items=TRI, default="SAME")
+    spawn_tank: EnumProperty(name="Director Spawns Tanks", items=TRI, default="SAME")
+    spawn_witch: EnumProperty(name="Director Spawns Witches", items=TRI, default="SAME")
+    spawn_smoker: EnumProperty(name="Smokers", items=TRI, default="SAME")
+    spawn_boomer: EnumProperty(name="Boomers", items=TRI, default="SAME")
+    spawn_hunter: EnumProperty(name="Hunters", items=TRI, default="SAME")
+    spawn_charger: EnumProperty(name="Chargers", items=TRI, default="SAME")
+    spawn_jockey: EnumProperty(name="Jockeys", items=TRI, default="SAME")
+    spawn_spitter: EnumProperty(name="Spitters", items=TRI, default="SAME")
 
     def make_sockets(self):
         self.ev_in("apply", "Apply")
@@ -719,11 +790,174 @@ class HL_NodeDirectorSettings(_Node, bpy.types.Node):
             col.prop(self, key)
         layout.prop(self, "no_mobs")
         layout.prop(self, "no_wanderers")
+        box = layout.box()
+        box.label(text="Director spawns (Off = your graph decides)")
+        col = box.column(align=True)
+        for what in SPAWN_KINDS:
+            col.prop(self, f"spawn_{what}", text=what.title() + "s" if what != "witch" else "Witches")
 
     def settings(self):
         d = {key: getattr(self, key) for key, _opt in DIRECTOR_FIELDS}
         d.update(no_mobs=self.no_mobs, no_wanderers=self.no_wanderers)
+        d.update({f"spawn_{w}": getattr(self, f"spawn_{w}") for w in SPAWN_KINDS})
         return d
+
+
+# ---------------------------------------------------------------- Values
+
+class HL_NodeValue(_Node, bpy.types.Node):
+    """A number to share between nodes"""
+    bl_idname, bl_label, bl_icon = "HL_NodeValue", "Value", "DRIVER_TRANSFORM"
+    kind, category = "VALUE", "Values"
+
+    def make_sockets(self):
+        self.num_in("value", "Value", 0.5)
+        self.num_out("value", "Value")
+
+
+class HL_NodeProgress(_Node, bpy.types.Node):
+    """How far along the path to the end safe room the survivors are, 0 (start) to 1 (end)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeProgress", "Path Progress", "TRACKING_FORWARDS"
+    kind, category = "PROGRESS", "Values"
+
+    def make_sockets(self):
+        self.num_out("furthest", "Furthest Survivor")
+        self.num_out("average", "Average")
+        self.num_out("last", "Last Survivor")
+
+
+class HL_NodeRandomValue(_Node, bpy.types.Node):
+    """A random number between Min and Max"""
+    bl_idname, bl_label, bl_icon = "HL_NodeRandomValue", "Random Value", "MOD_NOISE"
+    kind, category = "RANDOM_VALUE", "Values"
+    each_time: BoolProperty(name="New Each Time", default=False,
+                            description="Roll again every time it's read (off: rolled once per game and kept)")
+
+    def make_sockets(self):
+        self.num_in("min", "Min", 0.0)
+        self.num_in("max", "Max", 1.0)
+        self.num_out("value", "Value")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "each_time", toggle=True)
+
+    def settings(self):
+        return {"each_time": self.each_time}
+
+
+MATH_OPS = [("ADD", "Add", ""), ("SUBTRACT", "Subtract", ""), ("MULTIPLY", "Multiply", ""), ("DIVIDE", "Divide", ""),
+            ("MINIMUM", "Minimum", ""), ("MAXIMUM", "Maximum", ""), ("POWER", "Power", ""), ("MODULO", "Modulo", ""),
+            ("ABSOLUTE", "Absolute (A)", ""), ("ROUND", "Round (A)", ""), ("FLOOR", "Floor (A)", ""),
+            ("CEIL", "Ceil (A)", "")]
+
+
+class HL_NodeMath(_Node, bpy.types.Node):
+    """Maths on numbers, like Blender's Math node"""
+    bl_idname, bl_label, bl_icon = "HL_NodeMath", "Math", "LINENUMBERS_ON"
+    kind, category = "MATH", "Values"
+    op: EnumProperty(name="Operation", items=MATH_OPS, default="MULTIPLY")
+
+    def make_sockets(self):
+        self.num_in("a", "A", 0.0)
+        self.num_in("b", "B", 0.5)
+        self.num_out("value", "Value")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "op", text="")
+
+    def settings(self):
+        return {"op": self.op}
+
+
+COMPARE_OPS = [("GREATER_EQUAL", "A ≥ B", ""), ("GREATER", "A > B", ""), ("LESS", "A < B", ""),
+               ("LESS_EQUAL", "A ≤ B", ""), ("EQUAL", "A = B", ""), ("NOT_EQUAL", "A ≠ B", "")]
+
+
+class HL_NodeCompare(_Node, bpy.types.Node):
+    """Compares two numbers: true or false"""
+    bl_idname, bl_label, bl_icon = "HL_NodeCompare", "Compare", "ARROW_LEFTRIGHT"
+    kind, category = "COMPARE", "Values"
+    op: EnumProperty(name="Operation", items=COMPARE_OPS, default="GREATER_EQUAL")
+
+    def make_sockets(self):
+        self.num_in("a", "A", 0.0)
+        self.num_in("b", "B", 0.5)
+        self.bool_out("result", "Result")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "op", text="")
+
+    def settings(self):
+        return {"op": self.op}
+
+
+class HL_NodeBoolMath(_Node, bpy.types.Node):
+    """And, Or, Not on true/false values"""
+    bl_idname, bl_label, bl_icon = "HL_NodeBoolMath", "Boolean Math", "SELECT_INTERSECT"
+    kind, category = "BOOL_MATH", "Values"
+    op: EnumProperty(name="Operation", default="AND", items=[
+        ("AND", "And", ""), ("OR", "Or", ""), ("NOT", "Not (A)", ""), ("XOR", "Either but not both", "")])
+
+    def make_sockets(self):
+        self.bool_in("a", "A")
+        self.bool_in("b", "B")
+        self.bool_out("result", "Result")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "op", text="")
+
+    def settings(self):
+        return {"op": self.op}
+
+
+class HL_NodeInfectedCount(_Node, bpy.types.Node):
+    """How many Tanks, Witches or specials have appeared so far (the Director's and your own), or are alive now"""
+    bl_idname, bl_label, bl_icon = "HL_NodeInfectedCount", "Infected Count", "COMMUNITY"
+    kind, category = "INFECTED_COUNT", "Values"
+    what: EnumProperty(name="What", items=[(z, z.title(), "") for z in ZOMBIE_TYPES if z != "common"], default="tank")
+    mode: EnumProperty(name="Count", default="APPEARED", items=[
+        ("APPEARED", "Appeared So Far", "Every one that has spawned this game"),
+        ("ALIVE", "Alive Now", "Only the ones alive right now")])
+
+    def make_sockets(self):
+        self.num_out("count", "Count")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "what", text="")
+        layout.prop(self, "mode", text="")
+
+    def settings(self):
+        return {"what": self.what, "mode": self.mode}
+
+
+class HL_NodeWhen(_Node, bpy.types.Node):
+    """Fires the moment its condition becomes true (checked twice a second); On False when it turns false again"""
+    bl_idname, bl_label, bl_icon = "HL_NodeWhen", "When", "PLAY"
+    kind, category = "WHEN", "Flow"
+    once: BoolProperty(name="Only Once", default=True, description="Fire On True the first time only")
+
+    def make_sockets(self):
+        self.bool_in("condition", "Condition")
+        self.ev_out("true", "On True")
+        self.ev_out("false", "On False")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "once", toggle=True)
+
+    def settings(self):
+        return {"once": self.once}
+
+
+class HL_NodeIf(_Node, bpy.types.Node):
+    """An event comes in and goes out True or False, depending on the condition right then"""
+    bl_idname, bl_label, bl_icon = "HL_NodeIf", "If", "DECORATE_KEYFRAME"
+    kind, category = "IF", "Flow"
+
+    def make_sockets(self):
+        self.ev_in("in", "In")
+        self.bool_in("condition", "Condition")
+        self.ev_out("true", "True")
+        self.ev_out("false", "False")
 
 
 # ---------------------------------------------------------------- Objectives
@@ -750,16 +984,18 @@ class HL_NodeObjective(_Node, bpy.types.Node):
 
 
 CATEGORIES = [
-    ("Events", [HL_NodeMapStart, HL_NodePathProgress, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton,
-                HL_NodeTimer]),
+    ("Events", [HL_NodeMapStart, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton, HL_NodeTimer]),
+    ("Values", [HL_NodeProgress, HL_NodeRandomValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath,
+                HL_NodeInfectedCount, HL_NodeValue]),
     ("Scene", [HL_NodeObjectInfo, HL_NodeObject]),
-    ("Flow", [HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch, HL_NodeCounter, HL_NodeRandom]),
+    ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
+              HL_NodeCounter, HL_NodeRandom]),
     ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
                  HL_NodeTeleport, HL_NodeMessage]),
     ("Director", [HL_NodeDirector, HL_NodeDirectorSettings]),
     ("Objectives", [HL_NodeObjective]),
 ]
-NODE_CLASSES = tuple(c for _t, cs in CATEGORIES for c in cs)
+NODE_CLASSES = tuple(c for _t, cs in CATEGORIES for c in cs) + (HL_NodePathProgress,)   # (old graphs)
 
 
 def _category_menu(title, classes):
@@ -797,8 +1033,10 @@ def compile_logic(context, ir, report) -> None:
             ir.brushes = [b for b in ir.brushes if b.source.split(" (part ")[0] not in volumes]
             ir.entities = [e for e in ir.entities if not (e.source.split(" (part ")[0] in volumes
                                                           and e.classname == "func_detail")]
-        links = [LLink(l.from_node.name, l.from_socket.identifier, l.to_node.name, l.to_socket.identifier)
-                 for l in tree.links if l.is_valid and not l.is_muted and l.from_socket.bl_idname == "HL_EventSocket"]
+        links = [LLink(l.from_node.name, l.from_socket.identifier, l.to_node.name, l.to_socket.identifier,
+                       data=l.from_socket.bl_idname in DATA_SOCKETS)
+                 for l in tree.links if l.is_valid and not l.is_muted
+                 and l.from_socket.bl_idname in ("HL_EventSocket",) + DATA_SOCKETS]
         for p in compile_graph(nodes, links, ir, tree.name if len(logic_trees()) > 1 else "",
                                log=context.scene.hammerless.debug_log):
             report.warnings.append(f"{tree.name}: {p}")
@@ -884,7 +1122,7 @@ def _show_tree(context, tree):
         area.spaces.active.node_tree = tree
 
 
-CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + (
+CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_BoolSocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + (
     HL_OT_logic_new, HL_OT_logic_from_outputs)
 
 

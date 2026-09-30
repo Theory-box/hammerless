@@ -195,6 +195,12 @@ class HL_PT_director(_SubPanel, bpy.types.Panel):
         col.prop(s, "dir_witch_limit")
         if not s.director_enabled:
             self.layout.label(text="Off = the game's normal Director", icon="INFO")
+        box = self.layout.box()
+        box.enabled = s.director_enabled
+        box.label(text="Director Spawns (off = your logic graph decides)")
+        grid = box.grid_flow(columns=2, align=True)
+        for t in ("tank", "witch", "smoker", "boomer", "hunter", "charger", "jockey", "spitter"):
+            grid.prop(s, f"dir_spawn_{t}", toggle=True)
 
 
 class HL_PT_game(_SubPanel, bpy.types.Panel):

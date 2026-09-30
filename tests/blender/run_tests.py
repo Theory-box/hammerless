@@ -588,6 +588,31 @@ def test_logic_nodes_convert_plain_meshes():
     assert len(world_solids(blocks)) == 1 + 6, len(world_solids(blocks))
 
 
+def test_logic_value_wires():
+    # grey/pink value wires from Blender reach the map script
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    bpy.ops.object.empty_add(location=(2, 0, 0.1))
+    sp = bpy.context.object
+    sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
+    tree = bpy.data.node_groups.new("Map Logic", "HL_LogicTree")
+    path, rand, cmp_, when, spawn = (tree.nodes.new(t) for t in (
+        "HL_NodeProgress", "HL_NodeRandomValue", "HL_NodeCompare", "HL_NodeWhen", "HL_NodeSpawn"))
+    rand.inputs["Min"].value, rand.inputs["Max"].value = 0.25, 0.75
+    tree.links.new(path.outputs["Furthest Survivor"], cmp_.inputs["A"])
+    tree.links.new(rand.outputs["Value"], cmp_.inputs["B"])
+    tree.links.new(cmp_.outputs["Result"], when.inputs["Condition"])
+    tree.links.new(when.outputs["On True"], spawn.inputs["Spawn"])
+    blocks, log = export()
+    assert blocks, log
+    path_ = os.path.join(FAKE_GAME, "left4dead2", "scripts", "vscripts", "hammerless", "logic_test_map.nut")
+    script = open(path_, encoding="utf-8").read()
+    assert "RandomFloat(0.25, 0.75)" in script, script
+    assert "(HL_PathFurthest() >= HL_Random_" in script, script
+    assert entities(blocks, "logic_script") and any(e.get("thinkfunction") == "HL_Think"
+                                                    for e in entities(blocks, "logic_script"))
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

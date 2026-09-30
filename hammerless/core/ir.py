@@ -112,6 +112,9 @@ class MapSettings:
     dir_witch_limit: int = 1
     dir_no_mobs: bool = False
     dir_no_wanderers: bool = False
+    # Director spawns this type itself (off = limit 0: the map's logic decides instead)
+    dir_spawns: dict = field(default_factory=lambda: {t: True for t in (
+        "tank", "witch", "smoker", "boomer", "hunter", "charger", "jockey", "spitter")})
 
     # debug
     debug_log: bool = False
@@ -132,3 +135,5 @@ class MapIR:
     logic_progress: list = field(default_factory=list)             # Path Progress: (relay, from, to)
     logic_counts: bool = False                                     # count infected as they appear
     logic_retry: bool = False                                      # spawns where the game picks the spot
+    logic_whens: list = field(default_factory=list)                # When nodes: (condition fn, on-true relay, on-false relay, once)
+    logic_path: bool = False                                       # path progress helper functions

@@ -281,6 +281,14 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     dir_witch_limit: IntProperty(name="Max Witches", default=1, min=0, max=16)
     dir_no_mobs: BoolProperty(name="No Random Hordes", description="Only your triggers start hordes")
     dir_no_wanderers: BoolProperty(name="No Wandering Zombies")
+    dir_spawn_tank: BoolProperty(name="Tanks", default=True, description="The Director spawns Tanks itself (off: only your logic does)")
+    dir_spawn_witch: BoolProperty(name="Witches", default=True, description="The Director spawns Witches itself")
+    dir_spawn_smoker: BoolProperty(name="Smokers", default=True, description="The Director spawns Smokers itself")
+    dir_spawn_boomer: BoolProperty(name="Boomers", default=True, description="The Director spawns Boomers itself")
+    dir_spawn_hunter: BoolProperty(name="Hunters", default=True, description="The Director spawns Hunters itself")
+    dir_spawn_charger: BoolProperty(name="Chargers", default=True, description="The Director spawns Chargers itself")
+    dir_spawn_jockey: BoolProperty(name="Jockeys", default=True, description="The Director spawns Jockeys itself")
+    dir_spawn_spitter: BoolProperty(name="Spitters", default=True, description="The Director spawns Spitters itself")
 
     # --- game
     nav_source: EnumProperty(

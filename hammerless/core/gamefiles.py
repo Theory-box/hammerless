@@ -172,6 +172,10 @@ def director_option_lines(ir: MapIR) -> list[str]:
     if not s.director_enabled:
         return []
     lines = [f"    {key} = {getattr(s, attr)}" for key, attr in DIRECTOR_OPTION_KEYS]
+    for what, on in s.dir_spawns.items():       # Director Spawns switches: off = the map's logic decides
+        if not on:
+            key = f"{what.title()}Limit"
+            lines = [l for l in lines if l.split("=")[0].strip() != key] + [f"    {key} = 0"]
     if s.dir_no_mobs:
         lines.append("    NoMobSpawns = true")
     if s.dir_no_wanderers:

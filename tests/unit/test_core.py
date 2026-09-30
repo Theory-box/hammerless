@@ -531,6 +531,47 @@ class TestPathProgressSpawns(unittest.TestCase):
         self.assertIn((spawner.keyvalues["targetname"], "SpawnZombie", "witch"), outs)   # a Where, no limit: direct
 
 
+class TestValueNodes(unittest.TestCase):
+    def test_random_point_spawn_graph(self):
+        # Path Progress >= Random Value -> When -> Spawn Tank; Random x 0.5 -> second When
+        from hammerless.core.logic import LLink, LNode, compile_graph
+        ir = MapIR()
+        ir.settings.name = "m"
+        nodes = [LNode("Path", "PROGRESS"), LNode("Rand", "RANDOM_VALUE", consts={"min": 0.2, "max": 1.0}),
+                 LNode("Half", "MATH", {"op": "MULTIPLY"}, consts={"b": 0.5}),
+                 LNode("Cmp", "COMPARE", {"op": "GREATER_EQUAL"}), LNode("Cmp2", "COMPARE", {"op": "GREATER_EQUAL"}),
+                 LNode("When", "WHEN", {"once": True}), LNode("When2", "WHEN"), LNode("Tank", "SPAWN", {"what": "tank"}),
+                 LNode("Alive", "INFECTED_COUNT", {"what": "tank", "mode": "ALIVE"}),
+                 LNode("Has", "COMPARE", {"op": "GREATER_EQUAL"}, consts={"b": 1.0}), LNode("If", "IF"),
+                 LNode("Msg", "MESSAGE")]
+        links = [LLink("Path", "furthest", "Cmp", "a", True), LLink("Rand", "value", "Cmp", "b", True),
+                 LLink("Cmp", "result", "When", "condition", True), LLink("When", "true", "Tank", "spawn"),
+                 LLink("Rand", "value", "Half", "a", True), LLink("Path", "furthest", "Cmp2", "a", True),
+                 LLink("Half", "value", "Cmp2", "b", True), LLink("Cmp2", "result", "When2", "condition", True),
+                 LLink("Alive", "count", "Has", "a", True), LLink("Has", "result", "If", "condition", True),
+                 LLink("When", "true", "If", "in"), LLink("If", "true", "Msg", "show")]
+        self.assertEqual(compile_graph(nodes, links, ir), [])
+        script = ir.extra_scripts["scripts/vscripts/hammerless/logic_m.nut"]
+        self.assertIn("function HL_When_when() { return (HL_PathFurthest() >= HL_Random_rand()); }", script)
+        self.assertIn("(HL_PathFurthest() >= (HL_Random_rand() * 0.5))", script)
+        self.assertIn("RandomFloat(0.2, 1.0)", script)
+        self.assertEqual(script.count("function HL_Random_rand()"), 1)     # one roll, shared
+        self.assertIn("if ((HL_Alive(8) >= 1.0)) EntFire(\"hl_if_true\"", script)
+        self.assertIn("w.fn.call(this)", script)
+        self.assertIn("HL_ZSpawn(type)", script)                            # lifts the Director's limit
+        self.assertIn("HL_When_Think();", script)
+
+    def test_director_spawns_switch(self):
+        from hammerless.core.gamefiles import director_option_lines
+        ir = MapIR()
+        ir.settings.director_enabled = True
+        ir.settings.dir_spawns = {**ir.settings.dir_spawns, "tank": False, "hunter": False}
+        lines = director_option_lines(ir)
+        self.assertIn("    TankLimit = 0", lines)
+        self.assertIn("    HunterLimit = 0", lines)
+        self.assertEqual(sum(l.strip().startswith("TankLimit") for l in lines), 1)
+
+
 class TestMover(unittest.TestCase):
     def test_gate_button_export(self):
         import re
