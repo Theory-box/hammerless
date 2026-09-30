@@ -346,6 +346,18 @@ class _Compiler:
                     Output("OnMapSpawn", bname, "BlockNav", "", 1.0, 1))
                 also("go", bname, "UnblockNav")
                 also("back", bname, "BlockNav")
+        elif k == "COLLISION":
+            players, nav = bool(s.get("players", True)), bool(s.get("nav", False))
+            if players and nav:
+                return                      # ordinary world geometry already does both
+            if players:
+                # solid for players and zombies, but nav generation ignores brush entities: the nav
+                # mesh runs through it (a fence zombies climb, a barricade they bash)
+                self.make_entity(nid, n.obj, "func_brush", {"Solidity": "2", "StartDisabled": "0", "spawnflags": "2"})
+                return
+            e = self.make_entity(nid, n.obj, "func_illusionary", {})     # seen, but walked through
+            if e is not None and nav:        # ...and zombies and bots path around it
+                self.nav_blocker(e, n.obj, always=True)
         elif k == "SHOW_HIDE":
             e = self.make_entity(nid, n.obj, "func_brush", {
                 "Solidity": "0", "StartDisabled": "1" if s.get("start_hidden") else "0", "spawnflags": "2"})
@@ -554,6 +566,22 @@ class _Compiler:
                 take("reset", dname, "EndScript")
         else:
             self.problems.append(f"Logic node '{nid}': unknown kind {k}")
+
+    def nav_blocker(self, e: Entity, obj: str, always: bool = False) -> Entity:
+        """func_nav_blocker over an entity's bounds; always = blocking from map start for good."""
+        from . import geometry as g
+        pts = [v for b in e.brushes for f in b.faces for v in f.verts]
+        lo = [min(p[i] for p in pts) for i in range(3)]
+        hi = [max(p[i] for p in pts) for i in range(3)]
+        box = g.box_brush((lo[0] - 8, lo[1] - 8, lo[2] - 16), (hi[0] + 8, hi[1] + 8, hi[2]), TRIGGER_MATERIAL,
+                          f"{obj} nav blocker")
+        name = e.keyvalues.get("targetname") or _slug(obj)
+        blocker = self.add("func_nav_blocker", f"{name}_navblock", {"teamToBlock": "-1", "affectsFlow": "0"},
+                           [box], f"{obj} nav blocker")
+        if always:
+            self.add("logic_auto", f"{name}_navblock_start", {"spawnflags": "1"}).outputs.append(
+                Output("OnMapSpawn", blocker.keyvalues["targetname"], "BlockNav", "", 1.0, 1))
+        return blocker
 
     def hint(self, slug: str, text: str, seconds: float, color: str, icon: str) -> Entity:
         return self.add("env_instructor_hint", f"hl_{slug}", {

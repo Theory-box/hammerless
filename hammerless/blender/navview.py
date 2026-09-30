@@ -209,6 +209,8 @@ class HL_OT_nav_predict(bpy.types.Operator):
         if rep.errors:
             self.report({"ERROR"}, rep.errors[0])
             return {"CANCELLED"}
+        from .logic import compile_logic     # the map as it's built: gates are movers, volumes triggers...
+        compile_logic(context, ir, rep)
         text, rep2 = build_vmf(ir, None)
         if text is None:
             self.report({"ERROR"}, rep2.errors[0] if rep2.errors else "The map doesn't build")

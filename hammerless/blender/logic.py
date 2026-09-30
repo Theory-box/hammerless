@@ -595,6 +595,31 @@ class HL_NodeMove(_Node, bpy.types.Node):
         return self.with_object(context, super().to_lnode(context))
 
 
+class HL_NodeCollision(_Node, bpy.types.Node):
+    """How an object collides: solid for players and zombies, and whether the nav mesh goes through it"""
+    bl_idname, bl_label, bl_icon = "HL_NodeCollision", "Collision", "MOD_PHYSICS"
+    kind, category = "COLLISION", "Scene"
+    players: BoolProperty(name="Blocks Players", default=True,
+                          description="Survivors and zombies bump into it (off: they walk through)")
+    nav: BoolProperty(name="Blocks Nav Mesh", default=False,
+                      description="Zombies and bots path around it (off: the nav mesh runs through it, e.g. a "
+                                  "fence or barricade they can get past)")
+
+    def make_sockets(self):
+        self.obj_in("object", "Object")
+
+    def draw_buttons(self, context, layout):
+        col = layout.column(align=True)
+        col.prop(self, "players", toggle=True)
+        col.prop(self, "nav", toggle=True)
+
+    def settings(self):
+        return {"players": self.players, "nav": self.nav}
+
+    def to_lnode(self, context):
+        return self.with_object(context, super().to_lnode(context))
+
+
 class HL_NodeShowHide(_Node, bpy.types.Node):
     """Makes an object appear or disappear (solid while shown): walls, barricades, debris"""
     bl_idname, bl_label, bl_icon = "HL_NodeShowHide", "Show / Hide Object", "HIDE_OFF"
@@ -987,7 +1012,7 @@ CATEGORIES = [
     ("Events", [HL_NodeMapStart, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton, HL_NodeTimer]),
     ("Values", [HL_NodeProgress, HL_NodeRandomValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath,
                 HL_NodeInfectedCount, HL_NodeValue]),
-    ("Scene", [HL_NodeObjectInfo, HL_NodeObject]),
+    ("Scene", [HL_NodeObjectInfo, HL_NodeObject, HL_NodeCollision]),
     ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
               HL_NodeCounter, HL_NodeRandom]),
     ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,

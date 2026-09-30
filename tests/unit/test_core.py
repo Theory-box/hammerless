@@ -572,6 +572,32 @@ class TestValueNodes(unittest.TestCase):
         self.assertEqual(sum(l.strip().startswith("TankLimit") for l in lines), 1)
 
 
+class TestCollisionNode(unittest.TestCase):
+    def test_nav_runs_through_solid_wall(self):
+        # Collision: Blocks Players on, Blocks Nav Mesh off -> solid, but the nav mesh goes through it
+        from hammerless.core import navpredict
+        from hammerless.core.logic import LNode, compile_graph
+        counts = {}
+        for players, nav in ((True, True), (True, False), (False, True)):
+            ir = MapIR()
+            ir.settings.name = "c"
+            ir.brushes.append(g.box_brush((-600, -128, -64), (600, 128, 0), "dev/dev_measuregeneric01b", "floor"))
+            ir.brushes.append(g.box_brush((-8, -128, 0), (8, 128, 200), "dev/dev_measuregeneric01b", "wall"))
+            ir.entities.append(Entity("info_landmark", (-400, 0, 32), (0, 0, 0), {"targetname": "a"}))
+            ir.entities.append(Entity("info_survivor_position", (-400, 40, 2), (0, 0, 0), {"Order": "1"}))
+            self.assertEqual(compile_graph([LNode("Col", "COLLISION", {"players": players, "nav": nav}, "wall")], [], ir), [])
+            text, _ = build_vmf(ir)
+            m = navpredict._predict(text, [])
+            counts[(players, nav)] = sum(1 for a in m.areas if a.centre[0] > 50)
+            classes = {e.classname for e in ir.entities}
+            if (players, nav) == (True, False):
+                self.assertIn("func_brush", classes)
+            if (players, nav) == (False, True):
+                self.assertTrue({"func_illusionary", "func_nav_blocker"} <= classes)
+        self.assertEqual(counts[(True, True)], 0)          # plain wall: no nav beyond
+        self.assertGreater(counts[(True, False)], 0)       # nav goes through
+
+
 class TestMover(unittest.TestCase):
     def test_gate_button_export(self):
         import re
