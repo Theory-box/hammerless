@@ -413,3 +413,148 @@ EXPORT void hl_nodes(double *d14, int *i15) {
 }
 
 EXPORT long long hl_trace_count(void) { return g_traces; }
+
+/* ---------------------------------------------------------------- areas (navareas.Generator.create_areas) */
+#define AREA_MAX_SIZE 50
+#define OFF_PLANE_TOLERANCE 5.0
+#define MAX_TRAVERSABLE_HEIGHT STEP_HEIGHT
+#define GEN_NORTH 0
+#define GEN_EAST 1
+#define GEN_SOUTH 2
+#define GEN_WEST 3
+#define C_NW 0
+#define C_NE 1
+#define C_SE 2
+#define C_SW 3
+
+static int bi_linked(int i, int d) {
+    int n = N[i].to[d];
+    return n >= 0 && N[n].to[OPP[d]] == i && fabs(N[n].pos[2] - N[i].pos[2]) <= STEP_HEIGHT;
+}
+static int closed_cell(int i) {
+    if (!(bi_linked(i, GEN_SOUTH) && bi_linked(i, GEN_EAST))) return 0;
+    int e = N[i].to[GEN_EAST], s = N[i].to[GEN_SOUTH];
+    return bi_linked(e, GEN_SOUTH) && bi_linked(s, GEN_EAST) && N[e].to[GEN_SOUTH] == N[s].to[GEN_EAST];
+}
+static int blocked_any(int i) { const int *b = N[i].blocked; return b[0] || b[1] || b[2] || b[3]; }
+static int check_obstacles(int i, int width, int height, int x, int y) {
+    if (width > 1 || height > 1) {
+        const double *o = N[i].obstacle;
+        if (x > 0 && o[GEN_WEST] > MAX_TRAVERSABLE_HEIGHT) return 0;
+        if (y > 0 && o[GEN_NORTH] > MAX_TRAVERSABLE_HEIGHT) return 0;
+        if (x < width - 1 && o[GEN_EAST] > MAX_TRAVERSABLE_HEIGHT) return 0;
+        if (y < height - 1 && o[GEN_SOUTH] > MAX_TRAVERSABLE_HEIGHT) return 0;
+    }
+    return 1;
+}
+static int valid_crouch_area(int i) {
+    static const double mins[3] = {0.0, 0.0, 0.0}, maxs[3] = {GENERATION_STEP, GENERATION_STEP, HUMAN_CROUCH_HEIGHT};
+    const double *p = N[i].pos; double e[3] = {p[0], p[1], p[2] + JUMP_CROUCH_HEIGHT};
+    return !trace(p, e, mins, maxs).allsolid;
+}
+
+static unsigned char *COVERED, *CLOSED;
+
+/* TestArea (navareas.Generator.test_area) */
+static int test_area(int node, int width, int height) {
+    const double *normal = N[node].normal, *pos = N[node].pos;
+    double d = -(normal[0] * pos[0] + normal[1] * pos[1] + normal[2] * pos[2]);
+#define OFF_PLANE(k) (fabs(N[k].pos[0] * normal[0] + N[k].pos[1] * normal[1] + N[k].pos[2] * normal[2] + d) > OFF_PLANE_TOLERANCE)
+    int node_crouch = N[node].crouch[C_SE];
+    if (N[node].blocked[C_SE]) return 0;
+    int node_attr = N[node].attributes & ~NAV_MESH_CROUCH;
+    int multi = width > 1 || height > 1;
+    int vert = node, horiz;
+    for (int y = 0; y < height; y++) {
+        horiz = vert;
+        for (int x = 0; x < width; x++) {
+            Node *h = &N[horiz]; int hc;
+            if (y == 0 && x == 0) { hc = h->crouch[C_SE]; if (h->blocked[C_SE]) return 0; }
+            else if (y == 0) { hc = h->crouch[C_SE] || h->crouch[C_SW]; if (h->blocked[C_SE] || h->blocked[C_SW]) return 0; }
+            else if (x == 0) { hc = h->crouch[C_SE] || h->crouch[C_NE]; if (h->blocked[C_SE] || h->blocked[C_NE]) return 0; }
+            else { hc = (h->attributes & NAV_MESH_CROUCH) != 0; if (blocked_any(horiz)) return 0; }
+            if ((node_crouch != 0) != (hc != 0)) return 0;
+            if ((h->attributes & ~NAV_MESH_CROUCH) != node_attr) return 0;
+            if (COVERED[horiz] || !CLOSED[horiz]) return 0;
+            if (!check_obstacles(horiz, width, height, x, y)) return 0;
+            horiz = h->to[GEN_EAST];
+            if (horiz < 0) return 0;
+            if (multi && OFF_PLANE(horiz)) return 0;
+        }
+        if (!check_obstacles(horiz, width, height, width, y)) return 0;
+        vert = N[vert].to[GEN_SOUTH];
+        if (vert < 0) return 0;
+        if (multi && OFF_PLANE(vert)) return 0;
+    }
+    if (multi) {
+        horiz = vert;
+        for (int x = 0; x < width; x++) {
+            if (!check_obstacles(horiz, width, height, x, height)) return 0;
+            horiz = N[horiz].to[GEN_EAST];
+            if (horiz < 0 || OFF_PLANE(horiz)) return 0;
+        }
+        if (!check_obstacles(horiz, width, height, width, height)) return 0;
+    }
+    if (node_crouch) {
+        vert = node;
+        for (int y = 0; y < height; y++) {
+            horiz = vert;
+            for (int x = 0; x < width; x++) {
+                if (!valid_crouch_area(horiz)) return 0;
+                horiz = N[horiz].to[GEN_EAST];
+            }
+            vert = N[vert].to[GEN_SOUTH];
+        }
+    }
+    return 1;
+#undef OFF_PLANE
+}
+
+static int covered_count(int node, int width, int height) {
+    int n = 0, vert = node;
+    for (int y = 0; y < height; y++) {
+        int horiz = vert;
+        for (int x = 0; x < width; x++) { COVERED[horiz] = 1; n++; horiz = N[horiz].to[GEN_EAST]; }
+        vert = N[vert].to[GEN_SOUTH];
+    }
+    return n;
+}
+
+/* longest closed-cell run from each node in direction d (a speed-up bound only) */
+static void runs(int d, int *run) {
+    for (int i = 0; i < NN; i++) run[i] = -1;
+    int *chain = malloc(sizeof(int) * (NN + 1));
+    for (int s = 0; s < NN; s++) {
+        if (run[s] >= 0) continue;
+        int len = 0, n = s;
+        while (n >= 0 && run[n] == -1 && CLOSED[n]) { run[n] = -2; chain[len++] = n; n = N[n].to[d]; }
+        int base = (n >= 0 && run[n] >= 0) ? run[n] : 0;
+        for (int k = len - 1, v = base + 1; k >= 0; k--, v++) run[chain[k]] = v;
+        if (run[s] < 0) run[s] = 0;
+    }
+    free(chain);
+}
+
+/* CreateNavAreasFromNodes: writes (node index, width, height) per area in build order; returns the count */
+EXPORT int hl_create_areas(int *out, int cap) {
+    free(COVERED); free(CLOSED);
+    COVERED = calloc(NN + 1, 1); CLOSED = calloc(NN + 1, 1);
+    for (int i = 0; i < NN; i++) CLOSED[i] = (unsigned char)closed_cell(i);
+    int *east = malloc(sizeof(int) * (NN + 1)), *south = malloc(sizeof(int) * (NN + 1));
+    runs(GEN_EAST, east); runs(GEN_SOUTH, south);
+    int width = AREA_MAX_SIZE, height = AREA_MAX_SIZE, uncovered = NN, count = 0;
+    while (uncovered > 0) {
+        for (int node = NN - 1; node >= 0; node--) {          /* CNavNode::m_list: newest first */
+            if (COVERED[node] || east[node] < width || south[node] < height) continue;
+            if (test_area(node, width, height)) {
+                uncovered -= covered_count(node, width, height);
+                if (count < cap) { out[3 * count] = node; out[3 * count + 1] = width; out[3 * count + 2] = height; }
+                count++;
+            }
+        }
+        if (width >= height) width--; else height--;
+        if (width <= 0 || height <= 0) break;
+    }
+    free(east); free(south);
+    return count;
+}

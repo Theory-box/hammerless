@@ -376,6 +376,7 @@ class Sampler:
                     break
                 fastnav.sample_from(found[0], found[1], max_nodes)
             self.nodes = fastnav.collect(self.world)
+            self.native_nodes = True            # the DLL still holds these nodes (create_areas uses them)
             self.hash = {}
             for n in reversed(self.nodes):          # newest first per (x, y), like new_node
                 self.hash.setdefault((n.pos[0], n.pos[1]), []).append(n)

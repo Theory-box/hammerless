@@ -378,6 +378,12 @@ class Generator(Sampler):
         return covered
 
     def create_areas(self):
+        if getattr(self, "native_nodes", False):      # same result, done in the DLL
+            from . import fastnav
+            for i, width, height in fastnav.create_areas(self.world, len(self.nodes)):
+                self.build_area(self.nodes[i], width, height)
+            self._index_areas()
+            return
         for n in self.nodes:           # links don't change after sampling
             n.closed = n.closed_cell()
         width = height = AREA_MAX_SIZE

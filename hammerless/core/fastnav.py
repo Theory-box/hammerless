@@ -31,6 +31,7 @@ def available() -> bool:
                 lib.hl_has_node.restype = ctypes.c_int
                 lib.hl_has_node.argtypes = [ctypes.c_double] * 3
                 lib.hl_node_count.restype = ctypes.c_int
+                lib.hl_create_areas.restype = ctypes.c_int
                 _lib = lib
             except OSError:
                 _lib = False
@@ -128,3 +129,17 @@ def collect(world):
         nodes[i].parent = nodes[k[4]] if k[4] >= 0 else None
     world.traces += int(_lib.hl_trace_count())
     return nodes
+
+
+def create_areas(world, count: int):
+    """CreateNavAreasFromNodes on the DLL's nodes (which must be the ones collect() returned, unchanged):
+    the areas to build, in order, as (node index, width, height)."""
+    cap = max(1, count)
+    while True:
+        out = (ctypes.c_int * (3 * cap))()
+        before = int(_lib.hl_trace_count())
+        n = _lib.hl_create_areas(out, ctypes.c_int(cap))
+        if n <= cap:
+            world.traces += int(_lib.hl_trace_count()) - before
+            return [(out[3 * i], out[3 * i + 1], out[3 * i + 2]) for i in range(n)]
+        cap = n
