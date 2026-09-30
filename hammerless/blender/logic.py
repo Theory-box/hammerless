@@ -482,7 +482,8 @@ class HL_NodeMove(_Node, bpy.types.Node):
     direction: EnumProperty(name="Direction", items=DIRECTIONS, default="down")
     distance: StringProperty(name="Distance", default="auto",
                              description="Units to move (auto = the object's own size in that direction)")
-    seconds: FloatProperty(name="Seconds", default=4.0, min=0.0)
+    seconds: FloatProperty(name="Seconds", default=4.0, min=0.0,
+                           description="How long the whole move takes (the speed is worked out from this)")
     block_nav: BoolProperty(name="Blocks Nav While Closed", default=True,
                             description="Zombies and bots treat the way through as blocked until it has moved "
                                         "(Valve's gates do this), so they don't pile up behind it")
@@ -495,11 +496,11 @@ class HL_NodeMove(_Node, bpy.types.Node):
         self.ev_out("returned", "On Back")
 
     def draw_buttons(self, context, layout):
-        layout.prop(self, "direction", text="")
-        row = layout.row(align=True)
-        row.prop(self, "distance", text="")
-        row.prop(self, "seconds")
-        layout.prop(self, "block_nav")
+        col = layout.column(align=True)
+        col.prop(self, "direction", text="")
+        col.prop(self, "distance", text="Distance")
+        col.prop(self, "seconds", text="Seconds")
+        layout.prop(self, "block_nav", text="Block Nav While Closed")
 
     def settings(self):
         return {"direction": self.direction, "distance": self.distance, "seconds": self.seconds,
