@@ -793,3 +793,4 @@ EXPORT int hl_create_areas(int *out, int cap) {
 
 #include "hlareas.c"
 #include "hlvis.c"
+

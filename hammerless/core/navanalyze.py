@@ -8,9 +8,9 @@ What blocks sight is what the engine's traces hit with MASK_NAV_VISION:
     so the planes and contents are exactly vbsp's), and its displacements;
   - solid brush entities, each traced on its own (closest hit wins); SOLID_VPHYSICS ones (movers,
     doors, func_brush...) stick a trace that starts inside them;
-  - props with a collision model; a door's custom ray test lets sight lines through (measured:
-    the closed checkpoint door stops MASK_SOLID rays but not MASK_NAV_VISION ones), box traces
-    still hit it.
+  - doors, with their collision model at the position they spawn in (the end safe room door
+    starts open): they block both sight lines and boxes in the analysis (measured against the
+    game's lists; a VScript TraceLine with the same mask passes through them, its filter differs).
 """
 from __future__ import annotations
 
@@ -26,7 +26,8 @@ NOT_VISIBLE, POTENTIALLY_VISIBLE, COMPLETELY_VISIBLE = 0, 1, 2
 DOOR_CLASSES = {"prop_door_rotating", "prop_door_rotating_checkpoint"}
 
 
-DOOR_MODE = "none"         # how a door blocks sight: "none" (measured best), "boxes", "all"
+DOOR_MODE = "all"          # doors block sight lines and boxes (measured: "none" and "boxes" leave every
+                           # doorway area different from the game; "all" none)
 
 
 def _slots(vmf_text: str, bsp_path: str, materials: MaterialContents, content=None):
@@ -74,6 +75,15 @@ def _prop_pieces(ent, content):
         return []
     origin = tuple(float(v) for v in (ent.get("origin") or "0 0 0").split())
     angles = tuple(float(v) for v in (ent.get("angles") or "0 0 0").split())
+    if (ent.get("classname") or "").lower() in DOOR_CLASSES:
+        # a door that spawns open stands rotated by its distance (measured: the end safe room door,
+        # spawnpos 1 at yaw -90, is at yaw -180 in the game); 2 opens the other way
+        spawnpos = int(float(ent.get("spawnpos") or 0))
+        distance = float(ent.get("distance") or 90)
+        if spawnpos == 1:
+            angles = (angles[0], angles[1] - distance, angles[2])
+        elif spawnpos == 2:
+            angles = (angles[0], angles[1] + distance, angles[2])
     out = []
     for pts in read_phy(data):
         br = convex_brush(place(pts, origin, angles), ent.get("classname"))
