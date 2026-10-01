@@ -440,6 +440,27 @@ class TestSmartBuild(unittest.TestCase):
         os.remove(t.name)
 
 
+class TestNavAnalysis(unittest.TestCase):
+    def test_visibility_compression_round_trip(self):
+        # areas inherit a neighbour's list plus a difference (NOT_VISIBLE cancels); expanding the
+        # stored form gives back exactly the lists we computed
+        from hammerless.core.navfile import NavArea, NavMesh
+        from hammerless.core.navanalyze import compress_visibility
+        from hammerless.core.navvis import expand_game_lists
+        areas = []
+        for i in range(4):
+            a = NavArea(i + 1, 0, (i * 100.0, 0.0, 0.0), (i * 100.0 + 100.0, 100.0, 0.0), 0.0, 0.0)
+            a.connections = [[], [i + 2] if i < 3 else [], [], [i] if i > 0 else []]
+            areas.append(a)
+        mesh = NavMesh(areas=areas)
+        lists = [{0: 2, 1: 2, 2: 1}, {0: 2, 1: 2, 2: 1, 3: 1}, {1: 3, 2: 2, 3: 2}, {2: 2, 3: 2}]
+        compress_visibility(mesh, lists)
+        self.assertTrue(any(a.inherit_visibility for a in mesh.areas))
+        expanded = expand_game_lists(mesh)
+        for i, a in enumerate(mesh.areas):
+            self.assertEqual(expanded[a.id], {mesh.areas[k].id: v for k, v in lists[i].items()})
+
+
 class TestNavGen(unittest.TestCase):
     """Our reimplementation of the game's nav sampling (stage A)."""
 

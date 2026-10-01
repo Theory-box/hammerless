@@ -34,6 +34,12 @@ class Encounter:
     spots: list[tuple[int, int]] = field(default_factory=list)   # (spot id, t 0..255)
 
 
+def _f32(v: float) -> float:
+    """Round to a 32-bit float (the game's Vector maths)."""
+    import struct
+    return struct.unpack("<f", struct.pack("<f", v))[0]
+
+
 @dataclass
 class NavArea:
     id: int
@@ -62,8 +68,11 @@ class NavArea:
 
     @property
     def centre(self) -> tuple[float, float, float]:
-        c = self.corners
-        return (sum(p[0] for p in c) / 4, sum(p[1] for p in c) / 4, sum(p[2] for p in c) / 4)
+        """CNavArea::GetCenter: halfway between the NW and SE corners (their heights only), in
+        the game's 32-bit floats. The Director, the visibility analysis and VScript's GetCenter
+        all use this point."""
+        (x0, y0, z0), (x1, y1, z1) = self.nw, self.se
+        return (_f32(x0 + x1) / 2, _f32(y0 + y1) / 2, _f32(z0 + z1) / 2)
 
     def z_at(self, x: float, y: float) -> float:
         (x0, y0, z_nw), (x1, y1, z_se) = self.nw, self.se

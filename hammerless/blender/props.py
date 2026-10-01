@@ -206,7 +206,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("REACH", "Can survivors reach it?", "Green: reachable from the start room. Red: not"),
         ("FLOW", "Distance from the start", "Heat map of walking distance along the path"),
         ("SPAWN", "Zombie spawn marks", "Orange: areas marked OBSCURED by Zombie Spawn Areas"),
+        ("VIS", "What can be seen from the 3D cursor", "From the area under the 3D cursor (Shift + right-click to "
+                "place it): green completely visible, yellow partly, grey not visible (needs an analyzed nav)"),
     ])
+    show_hiding_spots: BoolProperty(name="Hiding Spots", default=True, update=lambda self, c: _nav_display(self, c),
+                                    description="Hiding spots from the nav analysis: blue in cover, orange exposed")
     show_nav_links: BoolProperty(name="Drops and Jumps", default=True, update=lambda self, c: _nav_display(self, c),
                                  description="Arrows for one-way drop-downs (orange) and jump-ups (cyan)")
     nav_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _nav_display(self, c),

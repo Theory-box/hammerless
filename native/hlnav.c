@@ -20,13 +20,13 @@ typedef struct { double b[6]; int first, count; } Brush;
 static Side *g_sides; static Brush *g_brushes; static int g_nbrushes;
 static double g_cell; static int g_cx0, g_cy0, g_w, g_h;
 static int *g_cell_start, *g_cell_count, *g_cell_ids;   /* dense grid of cell lists (ascending brush ids) */
-static int *g_scratch; static int g_scratch_cap; static int *g_mark; static int g_mark_gen;
+static int *g_scratch; static int g_scratch_cap; static int *g_mark; static int g_mark_gen, g_mark_cap, g_world_gen;
 
 EXPORT void hl_world(int nbrushes, const double *bounds, const int *side_first, const int *side_count,
                      int nsides, const double *sides7, const int *side_bevel, const int *side_flags,
                      double cell, int cx0, int cy0, int w, int h, const int *cell_start, const int *cell_count,
                      int nids, const int *cell_ids) {
-    free(g_sides); free(g_brushes); free(g_cell_start); free(g_cell_count); free(g_cell_ids); free(g_mark);
+    free(g_sides); free(g_brushes); free(g_cell_start); free(g_cell_count); free(g_cell_ids);
     g_sides = malloc(sizeof(Side) * (nsides ? nsides : 1));
     for (int i = 0; i < nsides; i++) {
         const double *s = sides7 + 7 * i;
@@ -44,7 +44,10 @@ EXPORT void hl_world(int nbrushes, const double *bounds, const int *side_first, 
     g_cell_start = malloc(sizeof(int) * (w * h ? w * h : 1)); memcpy(g_cell_start, cell_start, sizeof(int) * w * h);
     g_cell_count = malloc(sizeof(int) * (w * h ? w * h : 1)); memcpy(g_cell_count, cell_count, sizeof(int) * w * h);
     g_cell_ids = malloc(sizeof(int) * (nids ? nids : 1)); memcpy(g_cell_ids, cell_ids, sizeof(int) * nids);
-    g_mark = calloc(nbrushes ? nbrushes : 1, sizeof(int)); g_mark_gen = 0;
+    if (nbrushes > g_mark_cap) {          /* grow only: worlds can be swapped (hlvis.c slots) */
+        free(g_mark); g_mark_cap = nbrushes; g_mark = calloc(g_mark_cap, sizeof(int)); g_mark_gen = 0;
+    }
+    g_world_gen++;
 }
 
 typedef struct { double fraction, ex, ey, ez, nx, ny, nz, left; int startsolid, allsolid, flags; } Tr;
@@ -696,3 +699,4 @@ EXPORT int hl_create_areas(int *out, int cap) {
 }
 
 #include "hlareas.c"
+#include "hlvis.c"

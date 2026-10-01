@@ -23,6 +23,18 @@ NOT_VISIBLE, POTENTIALLY_VISIBLE, COMPLETELY_VISIBLE = 0, 1, 2
 _ZERO = (0.0, 0.0, 0.0)
 
 
+def _f32(v: float) -> float:
+    import struct
+    return struct.unpack("<f", struct.pack("<f", v))[0]
+
+
+def in_radius(centre, pos, radius: float) -> bool:
+    """ForAllAreasInRadius' test, in the game's floats: (centre - pos).LengthSqr() <= radius^2."""
+    dx, dy, dz = _f32(centre[0] - pos[0]), _f32(centre[1] - pos[1]), _f32(centre[2] - pos[2])
+    d2 = _f32(_f32(_f32(dx * dx) + _f32(dy * dy)) + _f32(dz * dz))
+    return d2 <= _f32(radius * radius)
+
+
 def _norm(v):
     length = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
     return (v[0] / length, v[1] / length, v[2] / length) if length else v
@@ -114,8 +126,7 @@ class Visibility:
                 progress(i, len(self.areas))
             cc = cur.centre
             for other in self.areas:
-                oc = other.centre
-                if (cc[0] - oc[0]) ** 2 + (cc[1] - oc[1]) ** 2 + (cc[2] - oc[2]) ** 2 > radius ** 2:
+                if not in_radius(other.centre, cc, radius):
                     continue
                 key = (min(cur.id, other.id), max(cur.id, other.id))
                 if key in done:
@@ -140,13 +151,17 @@ class Visibility:
 
 
 def expand_game_lists(mesh) -> dict[int, dict[int, int]]:
-    """The game stores visibility as an inherited list plus differences; expand to full lists."""
+    """The game stores visibility as an inherited list plus differences; expand to full lists
+    keyed by area id. In the file, list entries are area *positions* (0-based index into the
+    area list: their distances top out at exactly the 1500-unit radius that way, and some
+    entries are 0), while 'inherit from' is an area id."""
     by = mesh.by_id()
+    ids = [a.id for a in mesh.areas]
     out = {}
     for a in mesh.areas:
         full = {}
         if a.inherit_visibility and a.inherit_visibility in by:
-            full.update({i: attr for i, attr in by[a.inherit_visibility].visible})
-        full.update({i: attr for i, attr in a.visible})
+            full.update({ids[i]: attr for i, attr in by[a.inherit_visibility].visible if 0 <= i < len(ids)})
+        full.update({ids[i]: attr for i, attr in a.visible if 0 <= i < len(ids)})
         out[a.id] = {i: attr for i, attr in full.items() if attr != NOT_VISIBLE}
     return out

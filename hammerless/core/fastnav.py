@@ -32,6 +32,9 @@ def available() -> bool:
                 lib.hl_has_node.argtypes = [ctypes.c_double] * 3
                 lib.hl_node_count.restype = ctypes.c_int
                 lib.hl_create_areas.restype = ctypes.c_int
+                lib.hl_world_stash.argtypes = [ctypes.c_int] * 3
+                lib.hl_world_restore.argtypes = [ctypes.c_int]
+                lib.hl_world_drop.argtypes = [ctypes.c_int]
                 lib.hl_memo_invalidate.restype = ctypes.c_int
                 lib.hl_memo_hits.restype = ctypes.c_longlong
                 lib.hl_memo_misses.restype = ctypes.c_longlong
@@ -121,13 +124,16 @@ class _Tracer:
         return tr
 
 
-def load_world(world) -> None:
-    """Hand a CollisionWorld's brushes and brush grid to the DLL (its traces then go there too)."""
+def load_world(world, memo: bool = True) -> None:
+    """Hand a CollisionWorld's brushes and brush grid to the DLL (its traces then go there too).
+    memo=False: a world for something else (the nav analysis' slots): the sweep memory and the
+    'current world' bookkeeping are left alone."""
     global _current
-    if _current is not None and _current is not world:
-        _current.native_trace = None
-    _current = world
-    world.native_trace = None          # not while loading
+    if memo:
+        if _current is not None and _current is not world:
+            _current.native_trace = None
+        _current = world
+        world.native_trace = None          # not while loading
     from .collision import DISPLACEMENT, SKY
     bounds, first, count, sides7, bevel, flags = [], [], [], [], [], []
     for b in world.brushes:
@@ -154,11 +160,29 @@ def load_world(world) -> None:
             cnt[gx * h + gy] = len(lst)
             ids += lst
     D, I = ctypes.c_double, ctypes.c_int
-    _update_memo(world, bounds, sides7, bevel, flags, first, count)
+    if memo:
+        _update_memo(world, bounds, sides7, bevel, flags, first, count)
     _lib.hl_world(I(len(world.brushes)), _arr(D, bounds), _arr(I, first), _arr(I, count), I(len(bevel)),
                   _arr(D, sides7), _arr(I, bevel), _arr(I, flags), D(world.CELL), I(cx0), I(cy0), I(w), I(h),
                   _arr(I, start), _arr(I, cnt), I(len(ids)), _arr(I, ids))
-    world.native_trace = _Tracer()
+    if memo:
+        world.native_trace = _Tracer()
+
+
+NAV_STASH_SLOT = 1023
+
+
+def stash_current():
+    """Set the nav generator's world aside (the nav analysis loads its own worlds)."""
+    if _current is None:
+        return None
+    _lib.hl_world_stash(NAV_STASH_SLOT, 0, 1)
+    return _current
+
+
+def restore_current(prev) -> None:
+    if prev is not None:
+        _lib.hl_world_restore(NAV_STASH_SLOT)
 
 
 def sample(world, raw_seeds, max_nodes: int = 500000):
