@@ -237,7 +237,7 @@ class HL_OT_nav_predict(bpy.types.Operator):
             return {"PASS_THROUGH"}
         box = self._box
         if self._thread.is_alive():
-            context.workspace.status_text_set(f"Hammerless: predicting the nav mesh: {box['stage']}... "
+            context.workspace.status_text_set(f"Hammerless: building the navmesh: {box['stage']}... "
                                               f"({box['nodes']} nodes)")
             return {"PASS_THROUGH"}
         context.window_manager.event_timer_remove(self._timer)

@@ -81,6 +81,9 @@ static void clip(const Brush *br, double p1x, double p1y, double p1z, double p2x
 }
 
 static long long g_traces;
+static int g_acc; static double g_acc_box[6];      /* while g_acc: union of the boxes traces looked at */
+static void acc_begin(void) { g_acc = 1; for (int i = 0; i < 3; i++) { g_acc_box[i] = 1e300; g_acc_box[3 + i] = -1e300; } }
+static void acc_end(double *box) { g_acc = 0; memcpy(box, g_acc_box, sizeof g_acc_box); }
 
 static Tr trace(const double *start, const double *end, const double *mins, const double *maxs) {
     g_traces++;
@@ -92,6 +95,10 @@ static Tr trace(const double *start, const double *end, const double *mins, cons
     Tr tr; memset(&tr, 0, sizeof tr); tr.fraction = 1.0;
     double x0 = (p1x < p2x ? p1x : p2x) - ex - 1, y0 = (p1y < p2y ? p1y : p2y) - ey - 1, z0 = (p1z < p2z ? p1z : p2z) - ez - 1;
     double x1 = (p1x > p2x ? p1x : p2x) + ex + 1, y1 = (p1y > p2y ? p1y : p2y) + ey + 1, z1 = (p1z > p2z ? p1z : p2z) + ez + 1;
+    if (g_acc) {
+        if (x0 < g_acc_box[0]) g_acc_box[0] = x0; if (y0 < g_acc_box[1]) g_acc_box[1] = y0; if (z0 < g_acc_box[2]) g_acc_box[2] = z0;
+        if (x1 > g_acc_box[3]) g_acc_box[3] = x1; if (y1 > g_acc_box[4]) g_acc_box[4] = y1; if (z1 > g_acc_box[5]) g_acc_box[5] = z1;
+    }
     int cx0 = (int)floor(x0 / g_cell), cx1 = (int)floor(x1 / g_cell), cy0 = (int)floor(y0 / g_cell), cy1 = (int)floor(y1 / g_cell);
     int n = 0;
     if (cx0 == cx1 && cy0 == cy1) {
@@ -247,8 +254,10 @@ static int node_overlapped(const double *pos, double ox, double oy) {
     return tr.startsolid || tr.allsolid || tr.fraction == 1.0 || tr.nz < 0.7;
 }
 
-static int test_crouch_area(int ni, int corner, const double *mins, double mx, double my) {
-    double p[3] = {N[ni].pos[0], N[ni].pos[1], N[ni].pos[2]};
+typedef struct { double ground[4]; int crouch[4], blocked[4], attrs; } Props;
+
+static int test_crouch_area(const double *pos, Props *pr, int corner, const double *mins, double mx, double my) {
+    double p[3] = {pos[0], pos[1], pos[2]};
     double up[3] = {p[0], p[1], p[2] + JUMP_CROUCH_HEIGHT};
     Tr tr = hull(p, up);
     double max_height = tr.ez - p[2];
@@ -258,26 +267,25 @@ static int test_crouch_area(int ni, int corner, const double *mins, double mx, d
         double m1[3] = {mx, my, HUMAN_CROUCH_HEIGHT};
         Tr t = trace(s, s, mins, m1);
         if (!t.startsolid) {
-            N[ni].ground[corner] = s[2] - p[2];
+            pr->ground[corner] = s[2] - p[2];
             double m2[3] = {mx, my, HUMAN_HEIGHT};
             t = trace(s, s, mins, m2);
             return !t.startsolid;
         }
         h += 1.0;
     }
-    N[ni].ground[corner] = JUMP_CROUCH_HEIGHT;
-    N[ni].blocked[corner] = 1;
+    pr->ground[corner] = JUMP_CROUCH_HEIGHT;
+    pr->blocked[corner] = 1;
     return 0;
 }
 
-static void check_crouch(int ni) {
-    if (N[ni].crouch_checked) return;
-    N[ni].crouch_checked = 1;
+static void crouch_props(const double *pos, Props *pr) {
+    memset(pr, 0, sizeof *pr);
     for (int c = 0; c < 4; c++) {
         double vx = CVX[c], vy = CVY[c];
         double mins[3] = {fmin(0.0, vx * HALF_HUMAN_WIDTH), fmin(0.0, vy * HALF_HUMAN_WIDTH), 0.0};
         double mxx = fmax(0.0, vx * HALF_HUMAN_WIDTH), mxy = fmax(0.0, vy * HALF_HUMAN_WIDTH);
-        if (!test_crouch_area(ni, c, mins, mxx, mxy)) { N[ni].attributes |= NAV_MESH_CROUCH; N[ni].crouch[c] = 1; }
+        if (!test_crouch_area(pos, pr, c, mins, mxx, mxy)) { pr->attrs |= NAV_MESH_CROUCH; pr->crouch[c] = 1; }
     }
 }
 
@@ -290,6 +298,96 @@ static int check_cliff(const double *pos, int d, int exhaustive) {
         if ((d == 2 || d == 1) && fabs(dz) < STEP_HEIGHT && exhaustive) { double np[3] = {tr.ex, tr.ey, tr.ez}; return check_cliff(np, d, 0); }
     }
     return 0;
+}
+
+static int cliff_at(const double *pos) {
+    for (int k = 0; k < 4; k++) { double p[3] = {pos[0], pos[1], pos[2]}; if (check_cliff(p, k, 1)) return 1; }
+    return 0;
+}
+
+/* ---- memory of sweeps between runs. Each step / crouch / cliff result at a position is a pure
+ * function of the position and of the brushes touching the space its traces looked at, so it's
+ * kept with that box. When brushes change, results whose box touches one are dropped; the flood
+ * redoes those and replays the rest, in its usual order, so the nodes match a fresh run exactly. */
+typedef struct { int ok, disp; double to[3], n[3], obst; } StepRes;
+typedef struct {
+    double pos[3]; int next_xy;
+    unsigned char have_step[4], have_crouch, have_cliff;
+    StepRes s[4]; double sbox[4][6];
+    Props crouch; double cbox[6];
+    int cliff; double clbox[6];
+} Memo;
+static Memo *M; static int NM, MCAP;
+static int *MH; static int MHCAP, mhcount;
+static long long g_memo_hits, g_memo_misses;
+
+static int mslot(double x, double y) {
+    uint64_t k = key_xy(x, y); int i = (int)(k & (uint64_t)(MHCAP - 1));
+    while (MH[i] >= 0) { Memo *e = &M[MH[i]]; if (e->pos[0] == x && e->pos[1] == y) return i; i = (i + 1) & (MHCAP - 1); }
+    return i;
+}
+static void mrehash(void) {
+    int old = MHCAP; int *oh = MH; MHCAP = MHCAP ? MHCAP * 2 : 1 << 16;
+    MH = malloc(sizeof(int) * MHCAP); for (int i = 0; i < MHCAP; i++) MH[i] = -1;
+    if (oh) { for (int i = 0; i < old; i++) if (oh[i] >= 0) { Memo *e = &M[oh[i]]; MH[mslot(e->pos[0], e->pos[1])] = oh[i]; } free(oh); }
+}
+static Memo *memo_at(const double *p) {        /* the memo for this exact position, made if missing */
+    if (!MH) mrehash();
+    for (int i = MH[mslot(p[0], p[1])]; i >= 0; i = M[i].next_xy) if (M[i].pos[2] == p[2]) return &M[i];
+    if (NM == MCAP) { MCAP = MCAP ? MCAP * 2 : 4096; M = realloc(M, sizeof(Memo) * MCAP); }
+    if ((mhcount + 1) * 2 > MHCAP) mrehash();
+    int sl = mslot(p[0], p[1]);
+    if (MH[sl] < 0) mhcount++;
+    Memo *e = &M[NM]; memset(e, 0, sizeof *e);
+    memcpy(e->pos, p, 24); e->next_xy = MH[sl]; MH[sl] = NM;
+    return &M[NM++];
+}
+EXPORT void hl_memo_clear(void) { free(M); M = NULL; NM = MCAP = 0; free(MH); MH = NULL; MHCAP = 0; mhcount = 0; }
+static int box_hits(const double *b, int nbox, const double *boxes) {
+    for (int k = 0; k < nbox; k++) {
+        const double *c = boxes + 6 * k;    /* brush bounds, tested like clip()'s candidate test */
+        if (c[0] <= b[3] && c[3] >= b[0] && c[1] <= b[4] && c[4] >= b[1] && c[2] <= b[5] && c[5] >= b[2]) return 1;
+    }
+    return 0;
+}
+/* drop what changed brushes (given by bounds, old and new) could affect; returns how many results went */
+EXPORT int hl_memo_invalidate(int nbox, const double *boxes) {
+    int dropped = 0;
+    for (int i = 0; i < NM; i++) {
+        Memo *e = &M[i];
+        for (int d = 0; d < 4; d++) if (e->have_step[d] && box_hits(e->sbox[d], nbox, boxes)) { e->have_step[d] = 0; dropped++; }
+        if (e->have_crouch && box_hits(e->cbox, nbox, boxes)) { e->have_crouch = 0; dropped++; }
+        if (e->have_cliff && box_hits(e->clbox, nbox, boxes)) { e->have_cliff = 0; dropped++; }
+    }
+    return dropped;
+}
+
+static void check_crouch(int ni) {
+    if (N[ni].crouch_checked) return;
+    N[ni].crouch_checked = 1;
+    double pos[3] = {N[ni].pos[0], N[ni].pos[1], N[ni].pos[2]};
+    Memo *e = memo_at(pos);
+    if (!e->have_crouch) {
+        Props pr; acc_begin(); crouch_props(pos, &pr);
+        e = memo_at(pos); acc_end(e->cbox); e->crouch = pr; e->have_crouch = 1; g_memo_misses++;
+    } else g_memo_hits++;
+    for (int c = 0; c < 4; c++) {
+        N[ni].ground[c] = e->crouch.ground[c];
+        if (e->crouch.crouch[c]) N[ni].crouch[c] = 1;
+        if (e->crouch.blocked[c]) N[ni].blocked[c] = 1;
+    }
+    N[ni].attributes |= e->crouch.attrs;
+}
+static void check_cliff_node(int ni) {
+    if (N[ni].cliff_checked) return;
+    N[ni].cliff_checked = 1;
+    double pos[3] = {N[ni].pos[0], N[ni].pos[1], N[ni].pos[2]};
+    Memo *e = memo_at(pos);
+    if (!e->have_cliff) {
+        acc_begin(); int c = cliff_at(pos);
+        e = memo_at(pos); acc_end(e->clbox); e->cliff = c; e->have_cliff = 1; g_memo_misses++;
+    } else g_memo_hits++;
+    if (e->cliff) N[ni].attributes |= NAV_MESH_CLIFF;
 }
 
 /* returns the new node index, or -1 when an existing node was linked */
@@ -305,17 +403,15 @@ static int add_node(const double *dest, const double *nrm, int d, int src, doubl
         N[node].visited |= 1 << OPP[d];
     }
     check_crouch(node);
-    if (!N[node].cliff_checked) {
-        N[node].cliff_checked = 1;
-        for (int k = 0; k < 4; k++) { double p[3] = {N[node].pos[0], N[node].pos[1], N[node].pos[2]}; if (check_cliff(p, k, 1)) { N[node].attributes |= NAV_MESH_CLIFF; break; } }
-    }
+    check_cliff_node(node);
     return isnew ? node : -1;
 }
 
-static int step(int cur, int d) {
-    double cx = round_to_units(N[cur].pos[0], GENERATION_STEP) + STEPX[d];
-    double cy = round_to_units(N[cur].pos[1], GENERATION_STEP) + STEPY[d];
-    double frm[3] = {N[cur].pos[0], N[cur].pos[1], N[cur].pos[2]};
+static void step_compute(const double *from, int d, StepRes *r) {
+    r->ok = 0;
+    double cx = round_to_units(from[0], GENERATION_STEP) + STEPX[d];
+    double cy = round_to_units(from[1], GENERATION_STEP) + STEPY[d];
+    double frm[3] = {from[0], from[1], from[2]};
     double pos[3] = {cx, cy, frm[2]};
     double obstacle_height = 0.0, to[3], to_n[3];
     Tr result; int ok = trace_adjacent(0, frm, pos, &result, DEATH_DROP);
@@ -335,26 +431,38 @@ static int step(int cur, int d) {
             }
             h += 1.0;
         }
-        if (!success) return -1;
+        if (!success) return;
     }
-    if (result.flags & 1) return -1;       /* sky */
-    if (node_overlapped(to, 1, 1) && node_overlapped(to, -1, 1) && node_overlapped(to, 1, -1) && node_overlapped(to, -1, -1)) return -1;
+    if (result.flags & 1) return;          /* sky */
+    if (node_overlapped(to, 1, 1) && node_overlapped(to, -1, 1) && node_overlapped(to, 1, -1) && node_overlapped(to, -1, -1)) return;
     double up[3] = {to[0], to[1], to[2] + DISPLACEMENT_TEST};
     Tr u = hull(to, up);
     if (u.fraction > 0) {
         double ue[3] = {u.ex, u.ey, u.ez};
         Tr dn = hull(ue, to);
-        if (dn.fraction < 1 && dn.ez > to[2] + STEP_HEIGHT) return -1;
+        if (dn.fraction < 1 && dn.ez > to[2] + STEP_HEIGHT) return;
     }
-    double dz = to[2] - N[cur].pos[2];
+    double dz = to[2] - from[2];
     if (obstacle_height < STEP_HEIGHT || dz > obstacle_height - 2.0) obstacle_height = 0.0;
-    return add_node(to, to_n, d, cur, obstacle_height, (result.flags & 2) != 0);
+    r->ok = 1; memcpy(r->to, to, 24); memcpy(r->n, to_n, 24); r->obst = obstacle_height; r->disp = (result.flags & 2) != 0;
+}
+
+static int step(int cur, int d) {
+    double pos[3] = {N[cur].pos[0], N[cur].pos[1], N[cur].pos[2]};
+    Memo *e = memo_at(pos);
+    if (!e->have_step[d]) {
+        StepRes r; acc_begin(); step_compute(pos, d, &r);
+        e = memo_at(pos); acc_end(e->sbox[d]); e->s[d] = r; e->have_step[d] = 1; g_memo_misses++;
+    } else g_memo_hits++;
+    StepRes r = e->s[d];
+    if (!r.ok) return -1;
+    return add_node(r.to, r.n, d, cur, r.obst, r.disp);
 }
 
 static double *SEEDS; static int NSEEDS;
 
 EXPORT void hl_reset(void) {
-    free(N); N = NULL; NN = NCAP = 0; free(H); H = NULL; HCAP = 0; hcount = 0; free(SEEDS); SEEDS = NULL; NSEEDS = 0; g_traces = 0;
+    free(N); N = NULL; NN = NCAP = 0; free(H); H = NULL; HCAP = 0; hcount = 0; free(SEEDS); SEEDS = NULL; NSEEDS = 0; g_traces = 0; g_memo_hits = g_memo_misses = 0;
 }
 
 EXPORT int hl_add_seed(double x, double y, double z) {
@@ -418,6 +526,9 @@ EXPORT void hl_nodes(double *d14, int *i15) {
 }
 
 EXPORT long long hl_trace_count(void) { return g_traces; }
+EXPORT long long hl_memo_hits(void) { return g_memo_hits; }
+EXPORT long long hl_memo_misses(void) { return g_memo_misses; }
+EXPORT int hl_memo_size(void) { return NM; }
 
 /* ---------------------------------------------------------------- areas (navareas.Generator.create_areas) */
 #define AREA_MAX_SIZE 50

@@ -32,6 +32,9 @@ def available() -> bool:
                 lib.hl_has_node.argtypes = [ctypes.c_double] * 3
                 lib.hl_node_count.restype = ctypes.c_int
                 lib.hl_create_areas.restype = ctypes.c_int
+                lib.hl_memo_invalidate.restype = ctypes.c_int
+                lib.hl_memo_hits.restype = ctypes.c_longlong
+                lib.hl_memo_misses.restype = ctypes.c_longlong
                 _lib = lib
             except OSError:
                 _lib = False
@@ -43,6 +46,50 @@ def _arr(ctype, values):
 
 
 _current = None          # the CollisionWorld the DLL holds
+_memo_keys = None        # brushes the DLL's sweep memory was made with
+MEMO_MAX_CHANGED = 2000  # more changed brushes than this: start the memory afresh
+last_memo = {}           # what the last load did to the memory (for tests and the status line)
+
+
+def _update_memo(world, bounds, sides7, bevel, flags, first, count) -> None:
+    """Keep the DLL's sweep memory valid for this world: drop results near brushes that changed.
+    Brushes are compared by their exact planes. The ones that stayed must keep their order (trace
+    results can depend on brush order on exact ties), otherwise the memory starts afresh."""
+    global _memo_keys
+    keys = []
+    for i in range(len(world.brushes)):
+        f, c = first[i], count[i]
+        keys.append((tuple(bounds[6 * i:6 * i + 6]), tuple(sides7[7 * f:7 * (f + c)]),
+                     tuple(bevel[f:f + c]), tuple(flags[f:f + c])))
+    old, _memo_keys = _memo_keys, keys
+    if old is None:
+        _lib.hl_memo_clear()
+        last_memo.update(mode="fresh", changed=len(keys), dropped=0)
+        return
+    from collections import Counter
+    co, cn = Counter(old), Counter(keys)
+    gone, added = co - cn, cn - co
+    changed = list(gone.elements()) + list(added.elements())
+    if not changed:
+        last_memo.update(mode="reuse", changed=0, dropped=0)
+        return
+
+    def stayed(seq, extra):
+        extra = Counter(extra)
+        out = []
+        for k in seq:
+            if extra[k]:
+                extra[k] -= 1
+            else:
+                out.append(k)
+        return out
+    if len(changed) > MEMO_MAX_CHANGED or stayed(old, gone) != stayed(keys, added):
+        _lib.hl_memo_clear()
+        last_memo.update(mode="fresh", changed=len(changed), dropped=0)
+        return
+    boxes = [v for k in changed for v in k[0]]
+    dropped = _lib.hl_memo_invalidate(ctypes.c_int(len(changed)), _arr(ctypes.c_double, boxes))
+    last_memo.update(mode="update", changed=len(changed), dropped=dropped)
 
 
 class _Tracer:
@@ -107,6 +154,7 @@ def load_world(world) -> None:
             cnt[gx * h + gy] = len(lst)
             ids += lst
     D, I = ctypes.c_double, ctypes.c_int
+    _update_memo(world, bounds, sides7, bevel, flags, first, count)
     _lib.hl_world(I(len(world.brushes)), _arr(D, bounds), _arr(I, first), _arr(I, count), I(len(bevel)),
                   _arr(D, sides7), _arr(I, bevel), _arr(I, flags), D(world.CELL), I(cx0), I(cy0), I(w), I(h),
                   _arr(I, start), _arr(I, cnt), I(len(ids)), _arr(I, ids))

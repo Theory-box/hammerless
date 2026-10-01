@@ -387,6 +387,12 @@ class TestNavFile(unittest.TestCase):
         self.assertEqual(sorted(rep.islands[0]), [4, 5])
 
 
+def _crate_ir():
+    ir = box_room_ir()
+    ir.brushes.append(g.box_brush((-60, 40, 0), (4, 104, 48), "dev/dev_measuregeneric01b", "crate"))
+    return ir
+
+
 class TestNavGen(unittest.TestCase):
     """Our reimplementation of the game's nav sampling (stage A)."""
 
@@ -435,6 +441,34 @@ class TestNavGen(unittest.TestCase):
             runs.append([(n.pos, n.normal, n.attributes, tuple(n.crouch), tuple(n.blocked), tuple(n.obstacle),
                           tuple(m.id if m else 0 for m in n.to)) for n in s.nodes])
         self.assertEqual(runs[0], runs[1])
+
+    def test_sweep_memory_after_edits(self):
+        # the native sweep memory, kept across runs and patched for changed brushes, gives the
+        # nodes a fresh run gives: for adding, moving and removing a brush
+        from hammerless.core import fastnav
+        from hammerless.core.collision import CollisionWorld
+        from hammerless.core.navgen import Sampler
+        if not fastnav.available():
+            self.skipTest("native DLL not built")
+        _text, base = self.world(step=16)
+        crate = CollisionWorld.from_vmf(build_vmf(_crate_ir())[0]).brushes
+
+        def nodes(brushes, fresh):
+            if fresh:
+                fastnav._memo_keys = None
+            s = Sampler(CollisionWorld(brushes))
+            s.add_seed((-150, 0, 10))
+            s.sample()
+            return [(n.pos, n.normal, n.attributes, tuple(n.crouch), tuple(n.blocked), tuple(n.obstacle),
+                     tuple(n.ground), tuple(m.id if m else 0 for m in n.to)) for n in s.nodes]
+        edits = [base.brushes + crate[-1:],                  # add a crate
+                 base.brushes[:-1],                          # remove the step
+                 base.brushes[:-1] + crate[-1:]]             # and the crate instead of the step
+        for edited in edits:
+            nodes(base.brushes, True)                        # memory made with the original
+            remembered = nodes(edited, False)
+            self.assertEqual(fastnav.last_memo["mode"], "update")
+            self.assertEqual(remembered, nodes(edited, True))
 
     def test_flat_room(self):
         s = self.sample()
