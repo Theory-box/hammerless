@@ -42,8 +42,45 @@ def _arr(ctype, values):
     return (ctype * max(1, len(values)))(*values)
 
 
+_current = None          # the CollisionWorld the DLL holds
+
+
+class _Tracer:
+    """CollisionWorld.trace_hull done by the DLL (same results; for the steps after sampling)."""
+
+    def __init__(self):
+        D = ctypes.c_double
+        self.buf = [(D * 3)(), (D * 3)(), (D * 3)(), (D * 3)()]
+        self.out = (D * 10)()
+        self.fn = _lib.hl_trace
+        self.fn.restype = None
+        self.args = [ctypes.byref(b) for b in self.buf] + [ctypes.byref(self.out)]
+
+    def __call__(self, start, end, mins, maxs):
+        from .collision import DISPLACEMENT, Trace
+        a, b, c, d = self.buf
+        a[0], a[1], a[2] = start[0], start[1], start[2]
+        b[0], b[1], b[2] = end[0], end[1], end[2]
+        c[0], c[1], c[2] = mins[0], mins[1], mins[2]
+        d[0], d[1], d[2] = maxs[0], maxs[1], maxs[2]
+        self.fn(*self.args)
+        o = self.out
+        tr = Trace(o[0], (o[1], o[2], o[3]), (o[4], o[5], o[6]), bool(o[7]), bool(o[8]))
+        flags = int(o[9])
+        if flags & 1:
+            tr.material = "tools/toolsskybox"
+        elif flags & 2:
+            tr.material = DISPLACEMENT
+        return tr
+
+
 def load_world(world) -> None:
-    """Hand a CollisionWorld's brushes and brush grid to the DLL."""
+    """Hand a CollisionWorld's brushes and brush grid to the DLL (its traces then go there too)."""
+    global _current
+    if _current is not None and _current is not world:
+        _current.native_trace = None
+    _current = world
+    world.native_trace = None          # not while loading
     from .collision import DISPLACEMENT, SKY
     bounds, first, count, sides7, bevel, flags = [], [], [], [], [], []
     for b in world.brushes:
@@ -73,6 +110,7 @@ def load_world(world) -> None:
     _lib.hl_world(I(len(world.brushes)), _arr(D, bounds), _arr(I, first), _arr(I, count), I(len(bevel)),
                   _arr(D, sides7), _arr(I, bevel), _arr(I, flags), D(world.CELL), I(cx0), I(cy0), I(w), I(h),
                   _arr(I, start), _arr(I, cnt), I(len(ids)), _arr(I, ids))
+    world.native_trace = _Tracer()
 
 
 def sample(world, raw_seeds, max_nodes: int = 500000):
@@ -109,13 +147,14 @@ def collect(world):
     d14 = (ctypes.c_double * (14 * max(1, n)))()
     i15 = (ctypes.c_int * (15 * max(1, n)))()
     _lib.hl_nodes(d14, i15)
+    D, K = list(d14), list(i15)                # one conversion; slicing ctypes arrays is slow
     nodes = []
     for i in range(n):
-        d = d14[14 * i:14 * i + 14]
-        k = i15[15 * i:15 * i + 15]
+        d = D[14 * i:14 * i + 14]
+        k = K[15 * i:15 * i + 15]
         node = Node((d[0], d[1], d[2]), (d[3], d[4], d[5]), None, i + 1)
-        node.obstacle = [d[6], d[7], d[8], d[9]]
-        node.ground = [d[10], d[11], d[12], d[13]]
+        node.obstacle = d[6:10]
+        node.ground = d[10:14]
         node.attributes = k[5]
         node.crouch = [bool(v) for v in k[6:10]]
         node.blocked = [bool(v) for v in k[10:14]]
@@ -124,7 +163,7 @@ def collect(world):
         node.visited = 15
         nodes.append(node)
     for i in range(n):
-        k = i15[15 * i:15 * i + 5]
+        k = K[15 * i:15 * i + 5]
         nodes[i].to = [nodes[j] if j >= 0 else None for j in k[:4]]
         nodes[i].parent = nodes[k[4]] if k[4] >= 0 else None
     world.traces += int(_lib.hl_trace_count())

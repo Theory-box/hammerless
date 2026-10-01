@@ -319,6 +319,7 @@ class CollisionWorld:
                 for cy in range(int(math.floor(b.mins[1] / self.CELL)), int(math.floor(b.maxs[1] / self.CELL)) + 1):
                     self.grid.setdefault((cx, cy), []).append(i)
         self.traces = 0
+        self.native_trace = None
 
     @classmethod
     def from_vmf(cls, text: str) -> "CollisionWorld":
@@ -372,6 +373,8 @@ class CollisionWorld:
     def trace_hull(self, start, end, mins, maxs) -> Trace:
         """UTIL_TraceHull against the brushes: sweep box [mins, maxs] from start to end."""
         self.traces += 1
+        if self.native_trace is not None:          # the DLL holds this world: same trace, faster
+            return self.native_trace(start, end, mins, maxs)
         ex, ey, ez = (maxs[0] - mins[0]) * 0.5, (maxs[1] - mins[1]) * 0.5, (maxs[2] - mins[2]) * 0.5
         ox, oy, oz = (maxs[0] + mins[0]) * 0.5, (maxs[1] + mins[1]) * 0.5, (maxs[2] + mins[2]) * 0.5
         p1x, p1y, p1z = start[0] + ox, start[1] + oy, start[2] + oz

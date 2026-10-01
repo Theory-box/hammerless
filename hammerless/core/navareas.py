@@ -27,6 +27,9 @@ MERGE_MAX_TOTAL_CELLS = 32
 NAV_MESH_STAIRS = 0x1000
 
 
+_CHECK_FORGET = False          # tests: prove split_edit's neighbour-only forget misses nothing
+
+
 @dataclass(eq=False)
 class Area:
     id: int
@@ -597,41 +600,45 @@ class Generator(Sampler):
 
     def merge_areas(self):
         """MergeGeneratedAreas: after each merge the game rescans from the first area. An area that
-        failed and whose neighbourhood hasn't changed fails again, so we remember those ('clean')
-        and only re-test areas a merge touched. Same merges, same order."""
+        failed and whose neighbourhood hasn't changed fails again, so only areas a merge touched
+        ('dirty') need re-testing, and the rescan goes straight to the first dirty one (areas are
+        in creation order here, so a heap on seq finds it). Same merges, same order."""
+        import heapq
         limit = GENERATION_STEP * AREA_MAX_SIZE
-        clean: set[int] = set()
-        while True:
-            merged = None
-            for area in self.areas:
-                if id(area) in clean:
-                    continue
-                if not area.nodes or area.attributes & NAV_MESH_NO_MERGE:
-                    clean.add(id(area))
-                    continue
-                for d, axis, test, mine, theirs in self.MERGE_TESTS:
-                    for adj in list(area.connect[d]):
-                        if not self._can_merge(area, adj):
-                            continue
-                        size = (area.size_y + adj.size_y) if axis == 1 else (area.size_x + adj.size_x)
-                        if size > limit:
-                            continue
-                        if test(area, adj) and area.attributes == adj.attributes and area.is_coplanar(adj):
-                            touched = [o for dd in range(4) for o in
-                                       area.connect[dd] + area.incoming[dd] + adj.connect[dd] + adj.incoming[dd]]
-                            area.nodes[mine[0]], area.nodes[mine[1]] = adj.nodes[theirs[0]], adj.nodes[theirs[1]]
-                            self._finish_merge(area, adj)
-                            for o in touched + [area] + [o for dd in range(4) for o in area.connect[dd] + area.incoming[dd]]:
-                                clean.discard(id(o))
-                            merged = area
-                            break
-                    if merged:
+        alive = {id(a): a for a in self.areas}
+        assert all(a.seq < b.seq for a, b in zip(self.areas, self.areas[1:])), "areas out of creation order"
+        heap = [(a.seq, id(a)) for a in self.areas]          # sorted, so already a heap
+        dirty = set(alive)
+        while heap:
+            _seq, aid = heapq.heappop(heap)
+            if aid not in dirty or aid not in alive:
+                continue
+            dirty.discard(aid)
+            area = alive[aid]
+            if not area.nodes or area.attributes & NAV_MESH_NO_MERGE:
+                continue
+            merged = False
+            for d, axis, test, mine, theirs in self.MERGE_TESTS:
+                for adj in list(area.connect[d]):
+                    if not self._can_merge(area, adj):
+                        continue
+                    size = (area.size_y + adj.size_y) if axis == 1 else (area.size_x + adj.size_x)
+                    if size > limit:
+                        continue
+                    if test(area, adj) and area.attributes == adj.attributes and area.is_coplanar(adj):
+                        touched = [o for dd in range(4) for o in
+                                   area.connect[dd] + area.incoming[dd] + adj.connect[dd] + adj.incoming[dd]]
+                        area.nodes[mine[0]], area.nodes[mine[1]] = adj.nodes[theirs[0]], adj.nodes[theirs[1]]
+                        self._finish_merge(area, adj)
+                        del alive[id(adj)]
+                        for o in touched + [area] + [o for dd in range(4) for o in area.connect[dd] + area.incoming[dd]]:
+                            if id(o) in alive and id(o) not in dirty:
+                                dirty.add(id(o))
+                                heapq.heappush(heap, (o.seq, id(o)))
+                        merged = True
                         break
                 if merged:
                     break
-                clean.add(id(area))
-            if not merged:
-                break
         self._index_areas()
 
 
@@ -665,8 +672,11 @@ class Generator(Sampler):
             self._finish_split(area, alpha, EAST)
             self._finish_split(area, beta, WEST)
         self.areas.remove(area)
-        for other in self.areas:
+        # only areas linked with it (either way) can hold a reference to it
+        for other in {id(o): o for d in range(4) for o in area.connect[d] + area.incoming[d]}.values():
             other.forget(area)
+        if _CHECK_FORGET:
+            assert not any(area in o.connect[d] or area in o.incoming[d] for o in self.areas for d in range(4))
         return alpha, beta
 
     def _finish_split(self, old: Area, new: Area, ignore: int):
