@@ -692,6 +692,21 @@ class TestLaddersAndClimbs(unittest.TestCase):
         self.assertIn(lad.id, by[lad.bottom_area].ladders[0])
         self.assertTrue(any(a.nw[2] > 190 for a in mesh.areas))   # sampling carried on up the ladder
 
+    def test_native_area_pipeline_matches_python(self):
+        # the DLL's area stages give exactly the Python mesh: ladders, a slope, a ledge, stairs,
+        # wall climbs and a Zombie Climb
+        from hammerless.core import fastnav
+        from hammerless.core.navpredict import check_native
+        if not fastnav.available():
+            self.skipTest("native DLL not built")
+        ir = self.tower_map(climb=True)
+        m = "dev/dev_measuregeneric01b"
+        ir.brushes.append(g.box_brush((-400, 200, 0), (-200, 400, 40), m, "ledge"))
+        for i in range(6):                                   # stairs up to the ledge
+            ir.brushes.append(g.box_brush((-400 + 32 * i, 100, 0), (-368 + 32 * i, 200, 8 * (i + 1)), m, f"stair{i}"))
+        text, _rep = build_vmf(ir)
+        self.assertIsNone(check_native(text, [], [], True))
+
     def test_zombie_ladder_export(self):
         text, _rep = build_vmf(self.tower_map(zombies=True))
         self.assertIn('"classname" "func_simpleladder"', text)

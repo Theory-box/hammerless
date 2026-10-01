@@ -366,7 +366,12 @@ class Sampler:
         return False
 
     # ------------------------------------------------------------ SampleStep
-    def sample(self, max_nodes: int = 500000) -> list[Node]:
+    @property
+    def node_count(self) -> int:
+        return len(self.nodes) or getattr(self, "_native_count", 0)
+
+    def sample(self, max_nodes: int = 500000, collect: bool = True) -> list[Node]:
+        """collect=False (native only): the nodes stay in the DLL, for Generator.native_areas."""
         from . import fastnav
         if self.native is not False and fastnav.available():
             fastnav.start(self.world, self.raw_seeds, max_nodes)
@@ -375,6 +380,11 @@ class Sampler:
                 if not found:
                     break
                 fastnav.sample_from(found[0], found[1], max_nodes)
+            if not collect:
+                self.nodes, self.hash = [], {}
+                self._native_count = fastnav.node_count()
+                self.native_nodes = True
+                return self.nodes
             self.nodes = fastnav.collect(self.world)
             self.native_nodes = True            # the DLL still holds these nodes (create_areas uses them)
             self.hash = {}

@@ -102,28 +102,75 @@ def predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False)
     return mesh
 
 
-def _predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False) -> NavMesh:
+def _generator(vmf_text: str) -> Generator:
     gen = Generator(CollisionWorld.from_vmf(vmf_text))
     for p in seed_positions(vmf_text):
         gen.add_seed(p)
     for mins, maxs in ladder_bounds(vmf_text):
         gen.add_ladder(mins, maxs)
-    steps = (("Sampling walkable space", gen.sample), ("Building areas", gen.create_areas),
+    return gen
+
+
+def mesh_signature(mesh: NavMesh):
+    return ([(a.id, a.flags, a.spawn_attributes, a.nw, a.se, a.ne_z, a.sw_z, a.connections, a.ladders)
+             for a in mesh.areas],
+            [(l.id, l.width, l.top, l.bottom, l.length, l.direction, l.top_forward, l.top_left, l.top_right,
+              l.top_behind, l.bottom_area) for l in mesh.ladders])
+
+
+def check_native(vmf_text: str, regions=(), climbs=(), wall_climbs=False) -> str | None:
+    """Builds the mesh with the DLL's area pipeline and with the Python steps; None when they
+    match exactly, else where they first differ. (Set HAMMERLESS_NAV_CHECK=1 to run this on
+    every Build Navmesh.)"""
+    fast = _predict(vmf_text, regions, None, climbs, wall_climbs, native_areas=True)
+    slow = _predict(vmf_text, regions, None, climbs, wall_climbs, native_areas=False)
+    a, b = mesh_signature(fast), mesh_signature(slow)
+    if a == b:
+        return None
+    if len(a[0]) != len(b[0]):
+        return f"native {len(a[0])} areas, Python {len(b[0])}"
+    for x, y in zip(a[0], b[0]):
+        if x != y:
+            return f"area {x[0]} differs: native {x}, Python {y}"
+    return "ladders differ"
+
+
+def _predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False, native_areas=None) -> NavMesh:
+    import os
+    if native_areas is None and os.environ.get("HAMMERLESS_NAV_CHECK"):
+        problem = check_native(vmf_text, regions, climbs, wall_climbs)
+        if problem:
+            raise RuntimeError(f"native nav pipeline doesn't match the Python one: {problem}")
+    gen = _generator(vmf_text)
+    from . import fastnav
+    if native_areas is not False and fastnav.available():   # the area pipeline in the DLL: same mesh, faster
+        steps = (("Sampling walkable space", lambda: gen.sample(collect=False)),
+                 ("Building areas", gen.native_areas), ("Connecting ladders", gen.connect_ladders))
+    else:
+        steps = python_steps(gen)
+    for label, step in steps:
+        if progress:
+            progress(label, gen.node_count)
+        step()
+    return _finish(gen, regions, progress, climbs, wall_climbs)
+
+
+def python_steps(gen):
+    return (("Sampling walkable space", gen.sample), ("Building areas", gen.create_areas),
              ("Connecting areas", gen.connect_areas), ("Marking jump areas", gen.mark_jump_areas),
              ("Merging areas", gen.merge_areas), ("Splitting areas under overhangs", gen.split_areas_under_overhangs),
              ("Squaring up areas", gen.square_up_areas), ("Marking stairs", gen.mark_stair_areas),
              ("Removing jump areas", gen.stitch_and_remove_jump_areas),
              ("Fixing corners", gen.fix_corner_on_corner_areas), ("Fixing connections", gen.fix_connections),
              ("Connecting ladders", gen.connect_ladders))
-    for label, step in steps:
-        if progress:
-            progress(label, len(gen.nodes))
-        step()
+
+
+def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     problems = []
     if wall_climbs:
         from .entities import ZOMBIE_CLIMB_MAX
         if progress:
-            progress("Adding wall climbs", len(gen.nodes))
+            progress("Adding wall climbs", gen.node_count)
         gen.add_wall_climbs(ZOMBIE_CLIMB_MAX)
     for c in climbs:
         err = gen.add_climb(c.bottom, c.top)

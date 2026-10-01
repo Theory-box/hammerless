@@ -572,12 +572,30 @@ static int valid_crouch_area(int i) {
 static unsigned char *COVERED, *CLOSED;
 
 /* TestArea (navareas.Generator.test_area) */
+/* where the last test failed, for skipping tests that must fail again (navareas._still_fails) */
+#define F_NONE 0
+#define F_DEAD 1
+#define F_CELL 2
+#define F_EAST 3
+#define F_SOUTH 4
+typedef struct { unsigned char kind, multi_only; short x, y; } Fail;
+static Fail g_fail;
+static int fail_at(int kind, int x, int y, int multi_only) { g_fail.kind = (unsigned char)kind; g_fail.x = (short)x; g_fail.y = (short)y; g_fail.multi_only = (unsigned char)multi_only; return 0; }
+static int still_fails(const Fail *f, int width, int height) {
+    if (f->kind == F_NONE) return 0;
+    if (f->multi_only && width == 1 && height == 1) return 0;
+    if (f->kind == F_DEAD) return 1;
+    if (f->kind == F_CELL) return f->x < width && f->y < height;
+    if (f->kind == F_EAST) return f->x <= width && f->y < height;
+    return f->y <= height;
+}
 static int test_area(int node, int width, int height) {
+    g_fail.kind = F_NONE;
     const double *normal = N[node].normal, *pos = N[node].pos;
     double d = -(normal[0] * pos[0] + normal[1] * pos[1] + normal[2] * pos[2]);
 #define OFF_PLANE(k) (fabs(N[k].pos[0] * normal[0] + N[k].pos[1] * normal[1] + N[k].pos[2] * normal[2] + d) > OFF_PLANE_TOLERANCE)
     int node_crouch = N[node].crouch[C_SE];
-    if (N[node].blocked[C_SE]) return 0;
+    if (N[node].blocked[C_SE]) return fail_at(F_DEAD, 0, 0, 0);
     int node_attr = N[node].attributes & ~NAV_MESH_CROUCH;
     int multi = width > 1 || height > 1;
     int vert = node, horiz;
@@ -585,22 +603,22 @@ static int test_area(int node, int width, int height) {
         horiz = vert;
         for (int x = 0; x < width; x++) {
             Node *h = &N[horiz]; int hc;
-            if (y == 0 && x == 0) { hc = h->crouch[C_SE]; if (h->blocked[C_SE]) return 0; }
-            else if (y == 0) { hc = h->crouch[C_SE] || h->crouch[C_SW]; if (h->blocked[C_SE] || h->blocked[C_SW]) return 0; }
-            else if (x == 0) { hc = h->crouch[C_SE] || h->crouch[C_NE]; if (h->blocked[C_SE] || h->blocked[C_NE]) return 0; }
-            else { hc = (h->attributes & NAV_MESH_CROUCH) != 0; if (blocked_any(horiz)) return 0; }
-            if ((node_crouch != 0) != (hc != 0)) return 0;
-            if ((h->attributes & ~NAV_MESH_CROUCH) != node_attr) return 0;
-            if (COVERED[horiz] || !CLOSED[horiz]) return 0;
+            if (y == 0 && x == 0) { hc = h->crouch[C_SE]; if (h->blocked[C_SE]) return fail_at(F_CELL, x, y, 0); }
+            else if (y == 0) { hc = h->crouch[C_SE] || h->crouch[C_SW]; if (h->blocked[C_SE] || h->blocked[C_SW]) return fail_at(F_CELL, x, y, 0); }
+            else if (x == 0) { hc = h->crouch[C_SE] || h->crouch[C_NE]; if (h->blocked[C_SE] || h->blocked[C_NE]) return fail_at(F_CELL, x, y, 0); }
+            else { hc = (h->attributes & NAV_MESH_CROUCH) != 0; if (blocked_any(horiz)) return fail_at(F_CELL, x, y, 0); }
+            if ((node_crouch != 0) != (hc != 0)) return fail_at(F_CELL, x, y, 0);
+            if ((h->attributes & ~NAV_MESH_CROUCH) != node_attr) return fail_at(F_CELL, x, y, 0);
+            if (COVERED[horiz] || !CLOSED[horiz]) return fail_at(F_CELL, x, y, 0);
             if (!check_obstacles(horiz, width, height, x, y)) return 0;
             horiz = h->to[GEN_EAST];
-            if (horiz < 0) return 0;
-            if (multi && OFF_PLANE(horiz)) return 0;
+            if (horiz < 0) return fail_at(F_EAST, x + 1, y, 0);
+            if (multi && OFF_PLANE(horiz)) return fail_at(F_EAST, x + 1, y, 1);
         }
         if (!check_obstacles(horiz, width, height, width, y)) return 0;
         vert = N[vert].to[GEN_SOUTH];
-        if (vert < 0) return 0;
-        if (multi && OFF_PLANE(vert)) return 0;
+        if (vert < 0) return fail_at(F_SOUTH, 0, y + 1, 0);
+        if (multi && OFF_PLANE(vert)) return fail_at(F_SOUTH, 0, y + 1, 1);
     }
     if (multi) {
         horiz = vert;
@@ -616,7 +634,7 @@ static int test_area(int node, int width, int height) {
         for (int y = 0; y < height; y++) {
             horiz = vert;
             for (int x = 0; x < width; x++) {
-                if (!valid_crouch_area(horiz)) return 0;
+                if (!valid_crouch_area(horiz)) return fail_at(F_CELL, x, y, 0);
                 horiz = N[horiz].to[GEN_EAST];
             }
             vert = N[vert].to[GEN_SOUTH];
@@ -658,19 +676,23 @@ EXPORT int hl_create_areas(int *out, int cap) {
     for (int i = 0; i < NN; i++) CLOSED[i] = (unsigned char)closed_cell(i);
     int *east = malloc(sizeof(int) * (NN + 1)), *south = malloc(sizeof(int) * (NN + 1));
     runs(GEN_EAST, east); runs(GEN_SOUTH, south);
+    Fail *memo = calloc(NN + 1, sizeof(Fail));
     int width = AREA_MAX_SIZE, height = AREA_MAX_SIZE, uncovered = NN, count = 0;
     while (uncovered > 0) {
         for (int node = NN - 1; node >= 0; node--) {          /* CNavNode::m_list: newest first */
             if (COVERED[node] || east[node] < width || south[node] < height) continue;
+            if (still_fails(&memo[node], width, height)) continue;
             if (test_area(node, width, height)) {
                 uncovered -= covered_count(node, width, height);
                 if (count < cap) { out[3 * count] = node; out[3 * count + 1] = width; out[3 * count + 2] = height; }
                 count++;
-            }
+            } else if (g_fail.kind != F_NONE) memo[node] = g_fail;
         }
         if (width >= height) width--; else height--;
         if (width <= 0 || height <= 0) break;
     }
-    free(east); free(south);
+    free(east); free(south); free(memo);
     return count;
 }
+
+#include "hlareas.c"

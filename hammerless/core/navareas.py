@@ -1182,6 +1182,22 @@ class Generator(Sampler):
                 other.forget(a)
         self._index_areas()
 
+    def native_areas(self, upto: int = 10) -> bool:
+        """Everything from create_areas through fix_connections, done in the DLL on the nodes it
+        holds (sample(collect=False)). Same areas, connections and orders as the Python steps
+        (checked stage by stage); the areas come back without nodes (nothing after needs them)."""
+        from . import fastnav
+        data, seq = fastnav.run_areas(upto)
+        areas = [Area(s, nw, se, ne_z, sw_z, [None, None, None, None], attr, seq=s)
+                 for nw, se, ne_z, sw_z, s, attr, _nodes, _c, _i in data]
+        for a, (*_rest, conn, inc) in zip(areas, data):
+            a.connect = [[areas[j] for j in conn[d] if j >= 0] for d in range(4)]
+            a.incoming = [[areas[j] for j in inc[d] if j >= 0] for d in range(4)]
+        self.areas = areas
+        self._seq = seq
+        self._index_areas()
+        return True
+
     def generate(self):
         self.sample()
         self.create_areas()

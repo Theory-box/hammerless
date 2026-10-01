@@ -230,3 +230,32 @@ def create_areas(world, count: int):
             world.traces += int(_lib.hl_trace_count()) - before
             return [(out[3 * i], out[3 * i + 1], out[3 * i + 2]) for i in range(n)]
         cap = n
+
+
+AREA_STAGES = ("build", "connect", "mark jump", "merge", "overhangs", "square up", "stairs",
+               "remove jump areas", "corners", "connections")
+
+
+def run_areas(upto: int = len(AREA_STAGES)):
+    """The area stages (navareas.Generator from create_areas through fix_connections) on the
+    DLL's nodes. Returns (areas, last seq): per area in list order (nw, se, ne_z, sw_z, seq,
+    attributes, node indices, connect[4], incoming[4]) with links as list positions (-1: an
+    area no longer listed)."""
+    n = _lib.hl_areas_run(ctypes.c_int(upto))
+    d8 = (ctypes.c_double * (8 * max(1, n)))()
+    i6 = (ctypes.c_int * (6 * max(1, n)))()
+    cn8 = (ctypes.c_int * (8 * max(1, n)))()
+    need = _lib.hl_areas_get(d8, i6, cn8, (ctypes.c_int * 1)(), 0)
+    links = (ctypes.c_int * max(1, need))()
+    _lib.hl_areas_get(d8, i6, cn8, links, need)
+    D, I, C, L = list(d8), list(i6), list(cn8), list(links)
+    out, li = [], 0
+    for k in range(n):
+        lists = []
+        for c in C[8 * k:8 * k + 8]:
+            lists.append(L[li:li + c])
+            li += c
+        out.append(((D[8 * k], D[8 * k + 1], D[8 * k + 2]), (D[8 * k + 3], D[8 * k + 4], D[8 * k + 5]),
+                    D[8 * k + 6], D[8 * k + 7], I[6 * k], I[6 * k + 1], tuple(I[6 * k + 2:6 * k + 6]),
+                    lists[:4], lists[4:]))
+    return out, _lib.hl_areas_seq()
