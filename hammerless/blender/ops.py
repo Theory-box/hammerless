@@ -647,7 +647,9 @@ class HL_OT_build(bpy.types.Operator):
             return self._finish(context, {"CANCELLED"})
         import time
         s = context.scene.hammerless
-        compiled = "Map unchanged, skipped compiling" if self._job.skipped else "Compiled"
+        compiled = ("Map unchanged, skipped compiling" if self._job.skipped else
+                    {"entities": "Updated entities only (geometry and lighting kept)",
+                     "lighting": "Updated entities and relit (geometry kept)"}.get(self._job.plan, "Compiled"))
         timing = f"Export {self._export_s:.1f}s, " + (", ".join(f"{n} {t:.1f}s" for n, t in self._job.timings)
                                                       or "compile skipped")
         write_log([timing], append=True)

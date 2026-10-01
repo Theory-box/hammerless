@@ -393,6 +393,53 @@ def _crate_ir():
     return ir
 
 
+class TestSmartBuild(unittest.TestCase):
+    """buildplan: the least compile work that gives the same map."""
+
+    def vmf(self, speed="50", light="255 255 255 200", wall=128, prop_x=0):
+        ir = box_room_ir()
+        ir.brushes.append(g.box_brush((wall, -64, 0), (wall + 16, 64, 128), "dev/dev_measuregeneric01b", "wall"))
+        ir.entities.append(Entity("light", (0, 0, 100), (0, 0, 0), {"_light": light}))
+        ir.entities.append(Entity("prop_static", (prop_x, 50, 0), (0, 0, 0), {"model": "models/props/cs_office/box.mdl"}))
+        ir.entities.append(Entity("logic_relay", (0, 0, 16), (0, 0, 0), {"targetname": "r", "delay": speed}))
+        return build_vmf(ir)[0]
+
+    def test_plans(self):
+        from hammerless.core.buildplan import plan
+        a = self.vmf()
+        self.assertEqual(plan(None, a)[0], "full")
+        self.assertEqual(plan(a, a)[0], "same")
+        self.assertEqual(plan(a, self.vmf(speed="60"))[0], "entities")
+        self.assertEqual(plan(a, self.vmf(light="255 0 0 200"))[0], "lighting")
+        self.assertEqual(plan(a, self.vmf(prop_x=32))[0], "lighting")      # static props are baked
+        self.assertEqual(plan(a, self.vmf(wall=160))[0], "full")
+
+    def test_strip_stale(self):
+        import io
+        import struct
+        import tempfile
+        import zipfile
+        from hammerless.core.buildplan import strip_stale
+        z = io.BytesIO()
+        with zipfile.ZipFile(z, "w", zipfile.ZIP_STORED) as f:
+            f.writestr("materials/a.vtf", b"x" * 100)
+            f.writestr("stale.txt", b"stale")
+        pak = z.getvalue()
+        header = bytearray(8 + 16 * 64 + 4)
+        header[0:4] = b"VBSP"
+        off = len(header)
+        struct.pack_into("<iiii", header, 8 + 16 * 40, 0, off, len(pak), 0)
+        with tempfile.NamedTemporaryFile(suffix=".bsp", delete=False) as t:
+            t.write(bytes(header) + pak)
+        self.assertTrue(strip_stale(t.name))
+        data = open(t.name, "rb").read()
+        _v, o, ln, _c = struct.unpack_from("<iiii", data, 8 + 16 * 40)
+        names = zipfile.ZipFile(io.BytesIO(data[o:o + ln])).namelist()
+        self.assertEqual(names, ["materials/a.vtf"])
+        self.assertFalse(strip_stale(t.name))
+        os.remove(t.name)
+
+
 class TestNavGen(unittest.TestCase):
     """Our reimplementation of the game's nav sampling (stage A)."""
 

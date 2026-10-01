@@ -215,6 +215,7 @@ class CompileJob:
             self.steps.append(("vvis", [tools.exe("vvis")] + vvis + game + [self.base]))
         if vrad is not None:
             self.steps.append(("vrad", [tools.exe("vrad")] + vrad + game + [self.base]))
+        self.plan = "full"            # what a smart build decided (buildplan.plan); see _choose_steps
         self.log: list[str] = []
         self.done = False
         self.failed = False
@@ -254,9 +255,11 @@ class CompileJob:
                 self._q.put("Map unchanged since the last build: skipped compiling")
                 self._q.put(("OK",))
                 return
-            if os.path.exists(self.base + ".stamp"):   # a failed compile mustn't look up to date
-                os.remove(self.base + ".stamp")
-            for name, cmd in self.steps:
+            steps = self._choose_steps() if self.skip_if_unchanged else self.steps
+            for stale in (self.base + ".stamp", self.base + ".built.vmf"):   # a failed compile mustn't look
+                if os.path.exists(stale):                                     # up to date or be built on
+                    os.remove(stale)
+            for name, cmd in steps:
                 self._q.put(f"==== {name} ====")
                 t0 = time.time()
                 proc = subprocess.Popen(
@@ -283,17 +286,51 @@ class CompileJob:
                         self._q.put(f"(lighting check skipped: {ex})")
                     for msg, _loc, _obj in self.lighting:
                         self._q.put(f"!! {msg}")
+            if self.plan != "full":
+                from .buildplan import strip_stale
+                strip_stale(self.base + ".bsp")
             if self.copy_to_game:
                 os.makedirs(self.tools.maps_dir, exist_ok=True)
                 self._copy_bsp(os.path.join(self.tools.maps_dir, self.name + ".bsp"))
                 self._q.put(f"Copied {self.name}.bsp to {self.tools.maps_dir}")
             with open(self.base + ".stamp", "w", encoding="utf-8") as f:
                 f.write(self._stamp())
+            shutil.copy2(self.vmf, self.base + ".built.vmf")      # what this BSP was made from
+            with open(self.base + ".built.opts", "w", encoding="utf-8") as f:
+                f.write(repr(self._opts))
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
             self._q.put(("OK",))
         except Exception as ex:  # surfaced to the user in the log
             self._q.put(f"!! {ex}")
             self._q.put(("FAILED",))
+
+    def _choose_steps(self) -> list[tuple[str, list[str]]]:
+        """Smart build: the least work that gives the same map as a full compile, judged against
+        the VMF the current BSP was compiled from (buildplan.plan). A doubt means a full compile."""
+        from .buildplan import plan
+        old = None
+        try:
+            with open(self.base + ".built.opts", encoding="utf-8") as f:
+                same_opts = f.read() == repr(self._opts)
+            if same_opts and os.path.exists(self.base + ".bsp"):
+                with open(self.base + ".built.vmf", encoding="utf-8") as f:
+                    old = f.read()
+        except OSError:
+            pass
+        with open(self.vmf, encoding="utf-8") as f:
+            kind, why = plan(old, f.read())
+        if kind == "full":
+            self.plan = "full"
+            return self.steps
+        self.plan = "entities" if kind == "same" else kind
+        game = ["-game", self.tools.gamedir]
+        steps = [("vbsp (entities only)", [self.tools.exe("vbsp"), "-onlyents"] + game + [self.base])]
+        if self.plan == "lighting":
+            steps += [st for st in self.steps if st[0] == "vrad"]
+            self._q.put(f"Smart build: {why}: updating entities and relighting, keeping geometry and visibility")
+        else:
+            self._q.put(f"Smart build: {why}: updating entities only, keeping geometry, visibility and lighting")
+        return steps
 
     def _copy_bsp(self, dest: str):
         """Copy the BSP into the game. While the game has this map loaded it keeps the file

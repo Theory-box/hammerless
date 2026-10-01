@@ -51,7 +51,8 @@ def end_landmark_renames(ir: MapIR) -> dict[str, tuple[Entity, Entity, str]]:
 # Auto detail: world brushes cut the map into visibility regions (vvis time grows fast
 # with them); func_detail brushes don't, but still block players and cast shadows.
 DETAIL_MIN_PLANES = 9       # round things: cylinders, arches (a box has 6, a wedge 5)
-DETAIL_MAX_SIZE = 128.0     # small things: crates, steps, trim
+DETAIL_MAX_SIZE = 256.0     # small things: crates, steps, trim, short walls. Measured on a real map: under
+                            # 256 cuts vvis ~25% and the game culls the same (24% vs 23% drawn); 512 culls worse
 SEAL_MATERIALS = {"tools/toolsskybox", "tools/toolsnodraw", "tools/toolsblack"}
 
 
@@ -64,7 +65,7 @@ def is_auto_detail(brush: Brush, mode: str) -> bool:
         return True
     lo, hi = g.bounds([v for f in brush.faces for v in f.verts])
     return (len(g.merge_coplanar(brush.faces)) >= DETAIL_MIN_PLANES
-            or max(b - a for a, b in zip(lo, hi)) <= DETAIL_MAX_SIZE)
+            or max(b - a for a, b in zip(lo, hi)) < DETAIL_MAX_SIZE)
 
 
 def bad_next_map(cl: Entity, map_name: str) -> bool:

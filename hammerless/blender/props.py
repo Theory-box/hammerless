@@ -346,7 +346,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         description="Turn brushes into func_detail so the visibility compile (vvis) stays fast. "
                     "Detail brushes still block players and cast shadows",
         items=[("OFF", "Off", "Every brush cuts visibility, like plain Hammer (slowest vvis)"),
-               ("SMART", "Round and Small", "Cylinders, arches and pieces under 128 units (recommended)"),
+               ("SMART", "Round and Small", "Cylinders, arches and pieces under 256 units (recommended)"),
                ("ALL", "Everything", "Fastest vvis: the map becomes one visibility region. Fine for "
                                      "small maps; big maps may render more than needed")])
     auto_seal: BoolProperty(name="Auto Seal (skybox shell)", default=True,
