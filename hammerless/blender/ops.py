@@ -72,12 +72,37 @@ def needs_nav(context, root) -> bool:
     return s.generate_nav or not os.path.exists(nav) or cc.nav_marks_changed(tools, s.map_name)
 
 
-def launch(context, root, nav_written: bool = False) -> None:
-    """nav_written: Hammerless just wrote the nav mesh; the game only analyzes it."""
+def launch(context, root, nav_written: bool = False, analyzed: bool = False) -> None:
+    """nav_written: Hammerless just wrote the nav mesh; the game only analyzes it (unless it's
+    already analyzed: then the game just loads the map)."""
     s = context.scene.hammerless
     generate = False if nav_written else needs_nav(context, root)
     cc.launch_game(cc.Tools(root), s.map_name, generate_nav=generate, window=launch_options(s),
-                   analyze_nav=nav_written)
+                   analyze_nav=nav_written and not analyzed)
+
+
+def _start_nav_analysis(mesh, vmf_path: str, bsp_path: str, root: str) -> dict:
+    """Run navanalyze (visibility, hiding spots) on our nav mesh in a background thread."""
+    import threading
+    import time
+    box = {"stage": "starting", "done": False, "error": None, "seconds": 0.0}
+
+    def work():
+        t0 = time.time()
+        try:
+            from ..core.navanalyze import analyze
+            from ..core.vpk import GameContent
+            with open(vmf_path, encoding="utf-8") as f:
+                text = f.read()
+            analyze(mesh, text, bsp_path, GameContent(root), os.path.join(root, "left4dead2"),
+                    progress=lambda stage: box.update(stage=stage.lower()))
+            box["done"] = True
+        except Exception as ex:          # reported; the game analyzes the nav mesh instead
+            box["error"] = str(ex)
+        box["seconds"] = time.time() - t0
+    box["thread"] = threading.Thread(target=work, daemon=True)
+    box["thread"].start()
+    return box
 
 
 def work_dir(context) -> str:
@@ -652,7 +677,6 @@ class HL_OT_build(bpy.types.Operator):
                      "lighting": "Updated entities and relit (geometry kept)"}.get(self._job.plan, "Compiled"))
         timing = f"Export {self._export_s:.1f}s, " + (", ".join(f"{n} {t:.1f}s" for n, t in self._job.timings)
                                                       or "compile skipped")
-        write_log([timing], append=True)
         if self._job.lighting and not getattr(self, "_lighting_listed", False):
             from .problems import add_rows
             self._lighting_listed = True
@@ -668,8 +692,25 @@ class HL_OT_build(bpy.types.Operator):
                 self.report({"WARNING"}, f"Nav mesh couldn't be built in Blender ({self._nav['error']}); "
                                          "the game will make it")
                 self._nav = None
+            elif s.nav_analysis == "BLENDER" and not self._nav.get("analysis_finished"):
+                an = self._nav.get("analysis")
+                if an is None:
+                    an = self._nav["analysis"] = _start_nav_analysis(self._nav["mesh"], self._job.vmf,
+                                                                     self._job.base + ".bsp", self._root)
+                if an["thread"].is_alive():
+                    context.workspace.status_text_set(f"Hammerless: analyzing the nav mesh: {an['stage']}...")
+                    return {"PASS_THROUGH"}
+                self._nav["analysis_finished"] = True
+                if not an["done"]:
+                    self.report({"WARNING"}, f"Nav analysis in Blender failed ({an['error']}); the game will "
+                                             "analyze the nav mesh")
+                return {"PASS_THROUGH"}
             else:
-                cc.write_generated_nav(cc.Tools(self._root), s.map_name, self._nav["mesh"])
+                analyzed = bool(self._nav.get("analysis") and self._nav["analysis"]["done"])
+                self._nav["analyzed"] = analyzed
+                cc.write_generated_nav(cc.Tools(self._root), s.map_name, self._nav["mesh"], analyzed=analyzed)
+                if analyzed:
+                    timing += f", nav analysis {self._nav['analysis']['seconds']:.1f}s"
                 for problem in self._nav["mesh"].problems:
                     self.report({"WARNING"}, problem)
                 if self._nav["mesh"].problems:
@@ -679,12 +720,14 @@ class HL_OT_build(bpy.types.Operator):
                     write_log(self._nav["mesh"].problems, append=True)
                 s.generate_nav = False
                 timing += f", nav mesh {self._nav['seconds']:.1f}s (during the compile)"
+        write_log([timing], append=True)       # (once: the waits above return before this)
         if self.play:
             written = self._nav is not None
+            analyzed = written and self._nav.get("analyzed", False)
             nav = needs_nav(context, self._root) and not written
-            nav_note = (" (the game adds its visibility data: one reload)" if written else
+            nav_note = ("" if analyzed else " (the game adds its visibility data: one reload)" if written else
                         " (building its nav mesh first: the map reloads twice)" if nav else "")
-            launch(context, self._root, nav_written=written)
+            launch(context, self._root, nav_written=written, analyzed=analyzed)
             _watch_load(time.time() - self._t0, timing, nav)
             self.report({"INFO"}, f"{compiled}. Launching L4D2 on {s.map_name}{nav_note}  [{timing}]")
         else:

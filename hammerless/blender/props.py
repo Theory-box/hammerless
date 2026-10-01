@@ -302,6 +302,12 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                              "generator), then the game only adds its visibility data: one reload"),
                ("GAME", "Made by the game", "The game generates it after loading: slower (two extra reloads), "
                                            "kept as a fallback")])
+    nav_analysis: EnumProperty(
+        name="Nav Analysis", default="BLENDER",
+        description="Who works out what each nav area can see and where the hiding spots are",
+        items=[("BLENDER", "In Blender", "Hammerless analyzes the nav mesh after the compile; the game loads the map "
+                                         "once (no analysis reload)"),
+               ("GAME", "By the game", "The game analyzes it after loading, then reloads the map")])
     wall_climbs: BoolProperty(
         name="Zombies Climb Walls", default=False,
         description="Common infected can climb any wall up to 160 units (about 3 m) high, as if it had a "

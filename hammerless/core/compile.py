@@ -464,13 +464,14 @@ def analyze_steps() -> list[tuple[str, list[str]]]:
             (READY, ["nav_edit 0", "sv_cheats 0"])]
 
 
-def write_generated_nav(tools: Tools, map_name: str, mesh) -> str:
-    """Write a nav mesh from our generator (navpredict) as maps/<map>.nav, ready for the game's
-    nav_analyze. Records the marks it was made with, like an in-game generation does."""
+def write_generated_nav(tools: Tools, map_name: str, mesh, analyzed: bool = False) -> str:
+    """Write a nav mesh from our generator (navpredict) as maps/<map>.nav: ready for the game's
+    nav_analyze, or (analyzed=True, after navanalyze.analyze) for loading as it is. Records the
+    marks it was made with, like an in-game generation does."""
     from .navfile import write_nav
     for a in mesh.areas:
         a.flags |= 0x20000000        # set on every area of L4D2's own generated navs
-    mesh.analyzed = False
+    mesh.analyzed = analyzed
     bsp = os.path.join(tools.maps_dir, map_name + ".bsp")
     mesh.bsp_size = os.path.getsize(bsp) if os.path.exists(bsp) else 0
     path = os.path.join(tools.maps_dir, map_name + ".nav")

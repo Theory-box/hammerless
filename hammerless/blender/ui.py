@@ -37,6 +37,9 @@ class HL_PT_map(bpy.types.Panel):
         col.prop(s, "nav_source")
         row = col.row()
         row.enabled = s.nav_source == "BLENDER"
+        row.prop(s, "nav_analysis")
+        row = col.row()
+        row.enabled = s.nav_source == "BLENDER"
         row.prop(s, "wall_climbs")
         col.prop(s, "generate_nav", text="Rebuild Nav Mesh")
         col.label(text=_nav_status(context), icon="MOD_PHYSICS")
