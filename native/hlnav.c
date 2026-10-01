@@ -171,7 +171,12 @@ static Node *N; static int NN, NCAP;
 /* hash from exact (x, y) to the newest node there (then next_xy) */
 static int *H; static uint64_t *HK; static int HCAP;
 
-static uint64_t key_xy(double x, double y) { uint64_t a, b; memcpy(&a, &x, 8); memcpy(&b, &y, 8); return a * 0x9E3779B97F4A7C15ULL ^ (b + 0x632BE59BD9B4E019ULL + (a << 6) + (a >> 2)); }
+static uint64_t key_xy(double x, double y) {   /* grid coordinates have all-zero low bits: mix everything down */
+    uint64_t a, b; memcpy(&a, &x, 8); memcpy(&b, &y, 8);
+    uint64_t h = a ^ (b * 0x9E3779B97F4A7C15ULL);
+    h ^= h >> 33; h *= 0xFF51AFD7ED558CCDULL; h ^= h >> 33; h *= 0xC4CEB9FE1A85EC53ULL; h ^= h >> 33;
+    return h;
+}
 static int hslot(double x, double y) {
     uint64_t k = key_xy(x, y); int i = (int)(k & (uint64_t)(HCAP - 1));
     while (H[i] >= 0) { Node *n = &N[H[i]]; if (n->pos[0] == x && n->pos[1] == y) return i; i = (i + 1) & (HCAP - 1); }
