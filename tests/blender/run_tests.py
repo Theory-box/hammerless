@@ -285,7 +285,7 @@ def test_map_check_problem_list():
     text, _rep = build_vmf(ir)
     finish_prediction(bpy.context, predict(text, collect_regions(ir)[0]))
     path = next(p for p in s.problems if p.ingame and p.severity == "ERROR")
-    assert "predicted" in path.name and path.has_location
+    assert "built from the scene" in path.name and path.has_location
     assert 17 <= path.location.x <= 21, tuple(path.location)   # break at the edge of ground_a
 
 
