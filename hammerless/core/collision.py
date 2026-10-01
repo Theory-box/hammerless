@@ -111,8 +111,25 @@ def _windings(planes):
     return out
 
 
+_BRUSH_CACHE: dict = {}
+_BRUSH_CACHE_MAX = 200000
+
+
 def make_brush(sides: list[Side], source: str = "") -> CollisionBrush | None:
-    """Add vbsp's bevel planes (AddBrushBevels) to a brush's sides."""
+    """Add vbsp's bevel planes (AddBrushBevels) to a brush's sides. Remembered, since the same
+    sides always give the same brush and most brushes don't change between nav runs."""
+    key = tuple((s.normal, s.dist, s.material, s.bevel) for s in sides)
+    hit = _BRUSH_CACHE.get(key, False)
+    if hit is False:
+        if len(_BRUSH_CACHE) >= _BRUSH_CACHE_MAX:
+            _BRUSH_CACHE.clear()
+        hit = _BRUSH_CACHE[key] = _make_brush(sides)
+    if hit is None:
+        return None
+    return CollisionBrush(hit.sides, hit.mins, hit.maxs, source)
+
+
+def _make_brush(sides: list[Side], source: str = "") -> CollisionBrush | None:
     planes = [(s.normal, s.dist) for s in sides]
     wind = _windings(planes)
     verts = [p for w in wind for p in w]
