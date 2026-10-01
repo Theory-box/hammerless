@@ -137,7 +137,7 @@ def check_placement(ir: MapIR) -> list[Problem]:
 
 def check_map(ir: MapIR) -> list[Problem]:
     """Quick checks for Check / Build. The start-to-end path isn't checked here: the grid walk above
-    is only an approximation (it missed ledges L4D2 doesn't link). Nav > Predict Nav Mesh runs a copy
+    is only an approximation (it missed ledges L4D2 doesn't link). Nav > Build Navmesh runs a copy
     of the game's own generator instead (navpredict.py)."""
     return check_placement(ir)
 

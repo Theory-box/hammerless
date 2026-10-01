@@ -189,7 +189,7 @@ class HL_OT_nav_load(bpy.types.Operator):
 
 class HL_OT_nav_predict(bpy.types.Operator):
     bl_idname = "hammerless.nav_predict"
-    bl_label = "Predict Nav Mesh"
+    bl_label = "Build Navmesh"
     bl_description = ("Work out the nav mesh the game will generate, from this scene, without compiling "
                       "(our copy of the game's generator). Shows where survivors can go and where the path "
                       "from start to end breaks")
@@ -243,7 +243,7 @@ class HL_OT_nav_predict(bpy.types.Operator):
         context.window_manager.event_timer_remove(self._timer)
         context.workspace.status_text_set(None)
         if box["error"] or box["mesh"] is None:
-            self.report({"ERROR"}, f"Nav prediction failed: {box['error']}")
+            self.report({"ERROR"}, f"Navmesh build failed: {box['error']}")
             return {"CANCELLED"}
         finish_prediction(context, box["mesh"])
         for problem in box["mesh"].problems:
@@ -254,11 +254,11 @@ class HL_OT_nav_predict(bpy.types.Operator):
             add_rows(context, [("WARNING", p, _quoted_object(p), None) for p in box["mesh"].problems])
         rep = _state["report"]
         if not rep.end:
-            self.report({"INFO"}, f"Predicted {rep.total} nav areas (no end safe room to check the path)")
+            self.report({"INFO"}, f"Built {rep.total} nav areas (no end safe room to check the path)")
         elif rep.end_reached:
-            self.report({"INFO"}, f"Predicted {rep.total} nav areas: the path from start to end works")
+            self.report({"INFO"}, f"Built {rep.total} nav areas: the path from start to end works")
         else:
-            self.report({"WARNING"}, "Predicted nav: survivors can't reach the end safe room (see the marker)")
+            self.report({"WARNING"}, "Navmesh: survivors can't reach the end safe room (see the marker)")
         return {"FINISHED"}
 
 
@@ -274,17 +274,17 @@ def draw_panel(layout, context):
     rep = _state["report"]
     big = layout.row()
     big.scale_y = 1.3
-    big.operator("hammerless.nav_predict", text="Predict Nav Mesh", icon="VIEWZOOM")
+    big.operator("hammerless.nav_predict", text="Build Navmesh", icon="VIEWZOOM")
     row = layout.row(align=True)
     row.operator("hammerless.nav_load", text="Show the Game's Nav Mesh", icon="MOD_MESHDEFORM")
     if rep is None:
         col = layout.column(align=True)
         col.scale_y = 0.8
-        col.label(text="Predict: before building, from this scene", icon="INFO")
+        col.label(text="Build Navmesh: from this scene, no compile", icon="INFO")
         col.label(text="Game's: what the last Build & Play made", icon="BLANK1")
         return
     row.prop(s, "show_nav", text="", icon="HIDE_OFF" if s.show_nav else "HIDE_ON")
-    layout.label(text="Showing: predicted from the scene" if _state["source"] == "predicted"
+    layout.label(text="Showing: built from the scene" if _state["source"] == "predicted"
                  else "Showing: the game's nav mesh", icon="RESTRICT_VIEW_OFF")
     box = layout.box()
     col = box.column(align=True)

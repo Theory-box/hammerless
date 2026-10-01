@@ -555,7 +555,7 @@ def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False) 
     with open(vmf_path, encoding="utf-8") as f:
         text = f.read()
     box = {"stage": "starting", "mesh": None, "error": None, "seconds": 0.0}
-    reuse = cached(text, regions, climbs, wall_climbs)  # Predict was pressed on this exact map: no waiting
+    reuse = cached(text, regions, climbs, wall_climbs)  # Build Navmesh was pressed on this exact map: no waiting
     if reuse is not None:
         box["mesh"] = reuse
         box["thread"] = threading.Thread(target=lambda: None)

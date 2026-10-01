@@ -86,7 +86,7 @@ def store_flow(report: dict) -> None:
 
 
 PREDICTED_BROKEN = ("Survivors won't be able to get from the start to the end safe room: the nav mesh the "
-                    "game will generate (predicted from the scene) stops at the marker. Look there for a gap, "
+                    "game will generate (built from the scene) stops at the marker. Look there for a gap, "
                     "a ledge between 19 and 64 units (L4D2 links neither way) or a blocked path. Without this "
                     "path no zombies wander")
 
