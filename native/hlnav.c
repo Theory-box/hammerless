@@ -8,6 +8,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <windows.h>
 
 #define EXPORT __declspec(dllexport)
 #define DIST_EPSILON 0.03125
@@ -44,9 +45,6 @@ EXPORT void hl_world(int nbrushes, const double *bounds, const int *side_first, 
     g_cell_start = malloc(sizeof(int) * (w * h ? w * h : 1)); memcpy(g_cell_start, cell_start, sizeof(int) * w * h);
     g_cell_count = malloc(sizeof(int) * (w * h ? w * h : 1)); memcpy(g_cell_count, cell_count, sizeof(int) * w * h);
     g_cell_ids = malloc(sizeof(int) * (nids ? nids : 1)); memcpy(g_cell_ids, cell_ids, sizeof(int) * nids);
-    if (nbrushes > g_mark_cap) {          /* grow only: worlds can be swapped (hlvis.c slots) */
-        free(g_mark); g_mark_cap = nbrushes; g_mark = calloc(g_mark_cap, sizeof(int)); g_mark_gen = 0;
-    }
     g_world_gen++;
 }
 
@@ -54,12 +52,12 @@ typedef struct { double fraction, ex, ey, ez, nx, ny, nz, left; int startsolid, 
 
 static int cmp_int(const void *a, const void *b) { return (*(const int *)a > *(const int *)b) - (*(const int *)a < *(const int *)b); }
 
-static void clip(const Brush *br, double p1x, double p1y, double p1z, double p2x, double p2y, double p2z,
+static void clip(const Side *sides, const Brush *br, double p1x, double p1y, double p1z, double p2x, double p2y, double p2z,
                  double ex, double ey, double ez, int is_point, Tr *tr) {
     double enter = NEVER_UPDATED, leave = 1.0;
     int getout = 0, startout = 0; const Side *clipside = NULL;
     for (int k = 0; k < br->count; k++) {
-        const Side *s = &g_sides[br->first + k];
+        const Side *s = &sides[br->first + k];
         double dist = s->dist;
         if (is_point) { if (s->bevel) continue; }
         else { dist = dist + s->ax * ex; dist = dist + s->ay * ey; dist = dist + s->az * ez; }
@@ -88,8 +86,12 @@ static int g_acc; static double g_acc_box[6];      /* while g_acc: union of the 
 static void acc_begin(void) { g_acc = 1; for (int i = 0; i < 3; i++) { g_acc_box[i] = 1e300; g_acc_box[3 + i] = -1e300; } }
 static void acc_end(double *box) { g_acc = 0; memcpy(box, g_acc_box, sizeof g_acc_box); }
 
-static Tr trace(const double *start, const double *end, const double *mins, const double *maxs) {
-    g_traces++;
+/* a collision world and a per-thread scratch buffer, so traces can run on several threads */
+typedef struct { Side *sides; Brush *brushes; int nb; double cell; int cx0, cy0, w, h; int *cs, *cc, *ci; } World;
+typedef struct { int *ids; int cap; int *mark; int markcap; int markgen; float *samples; int samplecap; int last_n; } Scratch;
+
+static Tr trace_w(const World *W, Scratch *S, double *acc, const double *start, const double *end,
+                  const double *mins, const double *maxs) {
     double ex = (maxs[0] - mins[0]) * 0.5, ey = (maxs[1] - mins[1]) * 0.5, ez = (maxs[2] - mins[2]) * 0.5;
     double ox = (maxs[0] + mins[0]) * 0.5, oy = (maxs[1] + mins[1]) * 0.5, oz = (maxs[2] + mins[2]) * 0.5;
     double p1x = start[0] + ox, p1y = start[1] + oy, p1z = start[2] + oz;
@@ -98,39 +100,60 @@ static Tr trace(const double *start, const double *end, const double *mins, cons
     Tr tr; memset(&tr, 0, sizeof tr); tr.fraction = 1.0;
     double x0 = (p1x < p2x ? p1x : p2x) - ex - 1, y0 = (p1y < p2y ? p1y : p2y) - ey - 1, z0 = (p1z < p2z ? p1z : p2z) - ez - 1;
     double x1 = (p1x > p2x ? p1x : p2x) + ex + 1, y1 = (p1y > p2y ? p1y : p2y) + ey + 1, z1 = (p1z > p2z ? p1z : p2z) + ez + 1;
-    if (g_acc) {
-        if (x0 < g_acc_box[0]) g_acc_box[0] = x0; if (y0 < g_acc_box[1]) g_acc_box[1] = y0; if (z0 < g_acc_box[2]) g_acc_box[2] = z0;
-        if (x1 > g_acc_box[3]) g_acc_box[3] = x1; if (y1 > g_acc_box[4]) g_acc_box[4] = y1; if (z1 > g_acc_box[5]) g_acc_box[5] = z1;
+    if (acc) {
+        if (x0 < acc[0]) acc[0] = x0; if (y0 < acc[1]) acc[1] = y0; if (z0 < acc[2]) acc[2] = z0;
+        if (x1 > acc[3]) acc[3] = x1; if (y1 > acc[4]) acc[4] = y1; if (z1 > acc[5]) acc[5] = z1;
     }
-    int cx0 = (int)floor(x0 / g_cell), cx1 = (int)floor(x1 / g_cell), cy0 = (int)floor(y0 / g_cell), cy1 = (int)floor(y1 / g_cell);
+    int cx0 = (int)floor(x0 / W->cell), cx1 = (int)floor(x1 / W->cell), cy0 = (int)floor(y0 / W->cell), cy1 = (int)floor(y1 / W->cell);
     int n = 0;
     if (cx0 == cx1 && cy0 == cy1) {
-        int gx = cx0 - g_cx0, gy = cy0 - g_cy0;
-        if (gx >= 0 && gy >= 0 && gx < g_w && gy < g_h) {
-            int c = gx * g_h + gy; n = g_cell_count[c];
-            if (n > g_scratch_cap) { g_scratch_cap = n * 2 + 64; g_scratch = realloc(g_scratch, sizeof(int) * g_scratch_cap); }
-            memcpy(g_scratch, g_cell_ids + g_cell_start[c], sizeof(int) * n);
+        int gx = cx0 - W->cx0, gy = cy0 - W->cy0;
+        if (gx >= 0 && gy >= 0 && gx < W->w && gy < W->h) {
+            int c = gx * W->h + gy; n = W->cc[c];
+            if (n > S->cap) { S->cap = n * 2 + 64; S->ids = realloc(S->ids, sizeof(int) * S->cap); }
+            memcpy(S->ids, W->ci + W->cs[c], sizeof(int) * n);
         }
     } else {
-        g_mark_gen++;
-        for (int cx = cx0; cx <= cx1; cx++) for (int cy = cy0; cy <= cy1; cy++) {
-            int gx = cx - g_cx0, gy = cy - g_cy0;
-            if (gx < 0 || gy < 0 || gx >= g_w || gy >= g_h) continue;
-            int c = gx * g_h + gy;
-            for (int k = 0; k < g_cell_count[c]; k++) {
-                int id = g_cell_ids[g_cell_start[c] + k];
-                if (g_mark[id] == g_mark_gen) continue;
-                g_mark[id] = g_mark_gen;
-                if (n >= g_scratch_cap) { g_scratch_cap = n * 2 + 64; g_scratch = realloc(g_scratch, sizeof(int) * g_scratch_cap); }
-                g_scratch[n++] = id;
+        if (S->markcap < W->nb) { free(S->mark); S->markcap = W->nb; S->mark = calloc(S->markcap ? S->markcap : 1, sizeof(int)); S->markgen = 0; }
+        S->markgen++;
+        /* the cells the swept box can touch: the whole rectangle for short spans; for long ones only
+         * the rectangles of short pieces along it (a brush outside them can't be hit, so the brushes
+         * tested, and their order after the sort, are the ones that matter either way) */
+        int pieces = 1;
+        if ((cx1 - cx0) + (cy1 - cy0) > 4) {
+            double lx = fabs(p2x - p1x), ly = fabs(p2y - p1y);
+            pieces = (int)((lx > ly ? lx : ly) / W->cell) + 1;
+        }
+        for (int pc = 0; pc < pieces; pc++) {
+            int qx0 = cx0, qx1 = cx1, qy0 = cy0, qy1 = cy1;
+            if (pieces > 1) {
+                double ta = (double)pc / pieces, tb = (double)(pc + 1) / pieces;
+                double ax = p1x + ta * (p2x - p1x), bx = p1x + tb * (p2x - p1x);
+                double ay = p1y + ta * (p2y - p1y), by = p1y + tb * (p2y - p1y);
+                qx0 = (int)floor(((ax < bx ? ax : bx) - ex - 2) / W->cell); qx1 = (int)floor(((ax > bx ? ax : bx) + ex + 2) / W->cell);
+                qy0 = (int)floor(((ay < by ? ay : by) - ey - 2) / W->cell); qy1 = (int)floor(((ay > by ? ay : by) + ey + 2) / W->cell);
+                if (qx0 < cx0) qx0 = cx0; if (qx1 > cx1) qx1 = cx1; if (qy0 < cy0) qy0 = cy0; if (qy1 > cy1) qy1 = cy1;
+            }
+            for (int cx = qx0; cx <= qx1; cx++) for (int cy = qy0; cy <= qy1; cy++) {
+                int gx = cx - W->cx0, gy = cy - W->cy0;
+                if (gx < 0 || gy < 0 || gx >= W->w || gy >= W->h) continue;
+                int c = gx * W->h + gy;
+                for (int k = 0; k < W->cc[c]; k++) {
+                    int id = W->ci[W->cs[c] + k];
+                    if (S->mark[id] == S->markgen) continue;
+                    S->mark[id] = S->markgen;
+                    if (n >= S->cap) { S->cap = n * 2 + 64; S->ids = realloc(S->ids, sizeof(int) * S->cap); }
+                    S->ids[n++] = id;
+                }
             }
         }
-        qsort(g_scratch, n, sizeof(int), cmp_int);
+        qsort(S->ids, n, sizeof(int), cmp_int);
     }
+    S->last_n = n;
     for (int k = 0; k < n; k++) {
-        const Brush *b = &g_brushes[g_scratch[k]];
+        const Brush *b = &W->brushes[S->ids[k]];
         if (b->b[0] <= x1 && b->b[3] >= x0 && b->b[1] <= y1 && b->b[4] >= y0 && b->b[2] <= z1 && b->b[5] >= z0) {
-            clip(b, p1x, p1y, p1z, p2x, p2y, p2z, ex, ey, ez, is_point, &tr);
+            clip(W->sides, b, p1x, p1y, p1z, p2x, p2y, p2z, ex, ey, ez, is_point, &tr);
             if (tr.allsolid) break;
         }
     }
@@ -140,6 +163,76 @@ static Tr trace(const double *start, const double *end, const double *mins, cons
         tr.ex = start[0] + f * (end[0] - start[0]); tr.ey = start[1] + f * (end[1] - start[1]); tr.ez = start[2] + f * (end[2] - start[2]);
     }
     return tr;
+}
+
+/* Is a line clear? (trace_w(...).fraction >= 1 for a zero-size trace, answered sooner.) Within one
+ * world a hit can only be undone by a brush the line starts inside (the leave-solid rule resets the
+ * fraction to 1), so when no candidate brush holds the start point the first hit is the answer.
+ * Returns 1 clear, 0 blocked, -1 the start is inside a brush (*inside_out: let the caller decide). */
+static int line_clear_w(const World *W, Scratch *S, const double *start, const double *end, int *inside_out) {
+    double p1x = start[0], p1y = start[1], p1z = start[2], p2x = end[0], p2y = end[1], p2z = end[2];
+    double x0 = (p1x < p2x ? p1x : p2x) - 1, y0 = (p1y < p2y ? p1y : p2y) - 1, z0 = (p1z < p2z ? p1z : p2z) - 1;
+    double x1 = (p1x > p2x ? p1x : p2x) + 1, y1 = (p1y > p2y ? p1y : p2y) + 1, z1 = (p1z > p2z ? p1z : p2z) + 1;
+    int cx0 = (int)floor(x0 / W->cell), cx1 = (int)floor(x1 / W->cell), cy0 = (int)floor(y0 / W->cell), cy1 = (int)floor(y1 / W->cell);
+    int n = 0, pieces = 1;
+    if (S->markcap < W->nb) { free(S->mark); S->markcap = W->nb; S->mark = calloc(S->markcap ? S->markcap : 1, sizeof(int)); S->markgen = 0; }
+    S->markgen++;
+    if ((cx1 - cx0) + (cy1 - cy0) > 4) {
+        double lx = fabs(p2x - p1x), ly = fabs(p2y - p1y);
+        pieces = (int)((lx > ly ? lx : ly) / W->cell) + 1;
+    }
+    for (int pc = 0; pc < pieces; pc++) {
+        int qx0 = cx0, qx1 = cx1, qy0 = cy0, qy1 = cy1;
+        if (pieces > 1) {
+            double ta = (double)pc / pieces, tb = (double)(pc + 1) / pieces;
+            double ax = p1x + ta * (p2x - p1x), bx = p1x + tb * (p2x - p1x);
+            double ay = p1y + ta * (p2y - p1y), by = p1y + tb * (p2y - p1y);
+            qx0 = (int)floor(((ax < bx ? ax : bx) - 2) / W->cell); qx1 = (int)floor(((ax > bx ? ax : bx) + 2) / W->cell);
+            qy0 = (int)floor(((ay < by ? ay : by) - 2) / W->cell); qy1 = (int)floor(((ay > by ? ay : by) + 2) / W->cell);
+            if (qx0 < cx0) qx0 = cx0; if (qx1 > cx1) qx1 = cx1; if (qy0 < cy0) qy0 = cy0; if (qy1 > cy1) qy1 = cy1;
+        }
+        for (int cx = qx0; cx <= qx1; cx++) for (int cy = qy0; cy <= qy1; cy++) {
+            int gx = cx - W->cx0, gy = cy - W->cy0;
+            if (gx < 0 || gy < 0 || gx >= W->w || gy >= W->h) continue;
+            int c = gx * W->h + gy;
+            for (int k = 0; k < W->cc[c]; k++) {
+                int id = W->ci[W->cs[c] + k];
+                if (S->mark[id] == S->markgen) continue;
+                S->mark[id] = S->markgen;
+                const Brush *b = &W->brushes[id];
+                if (!(b->b[0] <= x1 && b->b[3] >= x0 && b->b[1] <= y1 && b->b[4] >= y0 && b->b[2] <= z1 && b->b[5] >= z0)) continue;
+                if (n >= S->cap) { S->cap = n * 2 + 64; S->ids = realloc(S->ids, sizeof(int) * S->cap); }
+                S->ids[n++] = id;
+            }
+        }
+    }
+    /* does any candidate hold the start point? (clip's startout: some non-bevel plane has d1 > 0) */
+    for (int k = 0; k < n; k++) {
+        const Brush *b = &W->brushes[S->ids[k]];
+        if (p1x < b->b[0] || p1x > b->b[3] || p1y < b->b[1] || p1y > b->b[4] || p1z < b->b[2] || p1z > b->b[5]) continue;
+        int out = 0;
+        for (int j = 0; j < b->count && !out; j++) {
+            const Side *sd = &W->sides[b->first + j];
+            if (sd->bevel) continue;
+            double d1 = p1x * sd->nx; d1 = d1 + p1y * sd->ny; d1 = d1 + p1z * sd->nz; d1 = d1 - sd->dist;
+            if (d1 > 0) out = 1;
+        }
+        if (!out) { if (inside_out) *inside_out = 1; return -1; }
+    }
+    if (inside_out) *inside_out = 0;
+    for (int k = 0; k < n; k++) {
+        Tr tr; memset(&tr, 0, sizeof tr); tr.fraction = 1.0;
+        clip(W->sides, &W->brushes[S->ids[k]], p1x, p1y, p1z, p2x, p2y, p2z, 0, 0, 0, 1, &tr);
+        if (tr.fraction < 1.0) return 0;
+    }
+    return 1;
+}
+
+static Scratch g_scr;                 /* the nav generator's (single-threaded) scratch */
+static Tr trace(const double *start, const double *end, const double *mins, const double *maxs) {
+    g_traces++;
+    World W = {g_sides, g_brushes, g_nbrushes, g_cell, g_cx0, g_cy0, g_w, g_h, g_cell_start, g_cell_count, g_cell_ids};
+    return trace_w(&W, &g_scr, g_acc ? g_acc_box : NULL, start, end, mins, maxs);
 }
 
 EXPORT void hl_trace(const double *start, const double *end, const double *mins, const double *maxs, double *out10) {

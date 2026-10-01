@@ -369,19 +369,19 @@ static void finish_merge(int area, int adj) {
         il_free(&snap);
     }
     disconnect(area, adj);
-    IL near = {0};
+    IL nearby = {0};
     for (int d = 0; d < 4; d++) {
-        for (int i = 0; i < A[adj].connect[d].n; i++) if (!il_has(&near, A[adj].connect[d].v[i])) il_push(&near, A[adj].connect[d].v[i]);
-        for (int i = 0; i < A[adj].incoming[d].n; i++) if (!il_has(&near, A[adj].incoming[d].v[i])) il_push(&near, A[adj].incoming[d].v[i]);
+        for (int i = 0; i < A[adj].connect[d].n; i++) if (!il_has(&nearby, A[adj].connect[d].v[i])) il_push(&nearby, A[adj].connect[d].v[i]);
+        for (int i = 0; i < A[adj].incoming[d].n; i++) if (!il_has(&nearby, A[adj].incoming[d].v[i])) il_push(&nearby, A[adj].incoming[d].v[i]);
     }
-    qsort(near.v, near.n, sizeof(int), cmp_seq);
-    for (int i = 0; i < near.n; i++) {
-        int other = near.v[i];
+    qsort(nearby.v, nearby.n, sizeof(int), cmp_seq);
+    for (int i = 0; i < nearby.n; i++) {
+        int other = nearby.v[i];
         if (other == area || other == adj) continue;
         for (int d = 0; d < 4; d++)
             if (il_has(&A[other].connect[d], adj)) { disconnect(other, adj); disconnect(other, area); connect_to(other, area, d); }
     }
-    il_free(&near);
+    il_free(&nearby);
     il_remove(&AL, adj);
     forget_everywhere(adj);
 }

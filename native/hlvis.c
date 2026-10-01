@@ -10,15 +10,14 @@
  */
 
 /* ---------------------------------------------------------------- world slots */
-typedef struct {
-    Side *sides; Brush *brushes; int nb; double cell; int cx0, cy0, w, h;
-    int *cs, *cc, *ci; int physics, used, rays;   /* rays: 0 = boxes only (a custom ray test lets lines through) */
-} WSlot;
+static int g_stats;
+typedef struct { World w; int physics, used, rays; double lo[3], hi[3]; } WSlot;   /* rays: 0 = boxes only (custom ray test) */
 #define MAX_SLOTS 1024
 static WSlot SL[MAX_SLOTS];
+static int g_nslots;                  /* slots in use are below this */
 
 static void slot_free(WSlot *s) {
-    free(s->sides); free(s->brushes); free(s->cs); free(s->cc); free(s->ci);
+    free(s->w.sides); free(s->w.brushes); free(s->w.cs); free(s->w.cc); free(s->w.ci);
     memset(s, 0, sizeof *s);
 }
 /* move the loaded world (hl_world) into a slot */
@@ -26,9 +25,16 @@ EXPORT int hl_world_stash(int slot, int physics, int rays) {
     if (slot < 0 || slot >= MAX_SLOTS) return 0;
     slot_free(&SL[slot]);
     WSlot *s = &SL[slot];
-    s->sides = g_sides; s->brushes = g_brushes; s->nb = g_nbrushes; s->cell = g_cell;
-    s->cx0 = g_cx0; s->cy0 = g_cy0; s->w = g_w; s->h = g_h; s->cs = g_cell_start; s->cc = g_cell_count; s->ci = g_cell_ids;
+    World w = {g_sides, g_brushes, g_nbrushes, g_cell, g_cx0, g_cy0, g_w, g_h, g_cell_start, g_cell_count, g_cell_ids};
+    s->w = w;
     s->physics = physics; s->rays = rays; s->used = 1;
+    for (int i = 0; i < 3; i++) { s->lo[i] = 1e300; s->hi[i] = -1e300; }
+    for (int k = 0; k < s->w.nb; k++)
+        for (int i = 0; i < 3; i++) {
+            if (s->w.brushes[k].b[i] < s->lo[i]) s->lo[i] = s->w.brushes[k].b[i];
+            if (s->w.brushes[k].b[3 + i] > s->hi[i]) s->hi[i] = s->w.brushes[k].b[3 + i];
+        }
+    if (slot + 1 > g_nslots) g_nslots = slot + 1;
     g_sides = NULL; g_brushes = NULL; g_nbrushes = 0; g_cell_start = g_cell_count = g_cell_ids = NULL; g_w = g_h = 0;
     g_world_gen++;
     return 1;
@@ -37,35 +43,35 @@ EXPORT int hl_world_stash(int slot, int physics, int rays) {
 EXPORT void hl_world_restore(int slot) {
     free(g_sides); free(g_brushes); free(g_cell_start); free(g_cell_count); free(g_cell_ids);
     WSlot *s = &SL[slot];
-    g_sides = s->sides; g_brushes = s->brushes; g_nbrushes = s->nb; g_cell = s->cell;
-    g_cx0 = s->cx0; g_cy0 = s->cy0; g_w = s->w; g_h = s->h; g_cell_start = s->cs; g_cell_count = s->cc; g_cell_ids = s->ci;
+    g_sides = s->w.sides; g_brushes = s->w.brushes; g_nbrushes = s->w.nb; g_cell = s->w.cell;
+    g_cx0 = s->w.cx0; g_cy0 = s->w.cy0; g_w = s->w.w; g_h = s->w.h; g_cell_start = s->w.cs; g_cell_count = s->w.cc; g_cell_ids = s->w.ci;
     memset(s, 0, sizeof *s);
     g_world_gen++;
 }
-EXPORT void hl_world_drop(int slot) { if (slot >= 0 && slot < MAX_SLOTS) slot_free(&SL[slot]); }
-
-static Tr trace_slot(WSlot *s, const double *a, const double *b, const double *mn, const double *mx) {
-    Side *o1 = g_sides; Brush *o2 = g_brushes; int o3 = g_nbrushes; double o4 = g_cell;
-    int o5 = g_cx0, o6 = g_cy0, o7 = g_w, o8 = g_h; int *o9 = g_cell_start, *o10 = g_cell_count, *o11 = g_cell_ids;
-    g_sides = s->sides; g_brushes = s->brushes; g_nbrushes = s->nb; g_cell = s->cell;
-    g_cx0 = s->cx0; g_cy0 = s->cy0; g_w = s->w; g_h = s->h; g_cell_start = s->cs; g_cell_count = s->cc; g_cell_ids = s->ci;
-    g_world_gen++;                       /* the brush marks belong to whichever world is loaded */
-    Tr t = trace(a, b, mn, mx);
-    g_sides = o1; g_brushes = o2; g_nbrushes = o3; g_cell = o4;
-    g_cx0 = o5; g_cy0 = o6; g_w = o7; g_h = o8; g_cell_start = o9; g_cell_count = o10; g_cell_ids = o11;
-    g_world_gen++;
-    return t;
+EXPORT void hl_world_drop(int slot) {
+    if (slot >= 0 && slot < MAX_SLOTS) slot_free(&SL[slot]);
+    while (g_nslots > 0 && !SL[g_nslots - 1].used) g_nslots--;
 }
 
 /* UTIL_TraceHull / UTIL_TraceLine with MASK_NAV_VISION through every slot */
-static Tr vis_trace(const float *a, const float *b, const float *mn, const float *mx) {
+static volatile LONG64 g_st_rays, g_st_hulls, g_st_cands, g_st_slots, g_st_pvsms;
+static Tr vis_trace(Scratch *S, const float *a, const float *b, const float *mn, const float *mx) {
     double A[3] = {a[0], a[1], a[2]}, B[3] = {b[0], b[1], b[2]}, MN[3] = {mn[0], mn[1], mn[2]}, MX[3] = {mx[0], mx[1], mx[2]};
     int is_ray = mn[0] == 0 && mn[1] == 0 && mn[2] == 0 && mx[0] == 0 && mx[1] == 0 && mx[2] == 0;
-    Tr best = trace_slot(&SL[0], A, B, MN, MX);
-    for (int k = 1; k < MAX_SLOTS; k++) {
+    if (g_stats) { if (is_ray) InterlockedIncrement64(&g_st_rays); else InterlockedIncrement64(&g_st_hulls); }
+    Tr best = trace_w(&SL[0].w, S, NULL, A, B, MN, MX);
+    if (g_stats) InterlockedAdd64(&g_st_cands, S->last_n);
+    double lo[3], hi[3];                 /* the swept box, with trace_w's 1-unit candidate margin */
+    for (int i = 0; i < 3; i++) {
+        lo[i] = (A[i] < B[i] ? A[i] : B[i]) + MN[i] - 1; hi[i] = (A[i] > B[i] ? A[i] : B[i]) + MX[i] + 1;
+    }
+    for (int k = 1; k < g_nslots; k++) {
         WSlot *s = &SL[k];
         if (!s->used || (is_ray && !s->rays)) continue;
-        Tr t = trace_slot(s, A, B, MN, MX);
+        if (s->lo[0] > hi[0] || s->hi[0] < lo[0] || s->lo[1] > hi[1] || s->hi[1] < lo[1] || s->lo[2] > hi[2] || s->hi[2] < lo[2])
+            continue;                    /* trace_w would find no candidate brush: no hit */
+        if (g_stats) InterlockedIncrement64(&g_st_slots);
+        Tr t = trace_w(&s->w, S, NULL, A, B, MN, MX);
         if (s->physics && t.startsolid) { t.fraction = 0.0; t.ex = A[0]; t.ey = A[1]; t.ez = A[2]; }
         if (t.fraction < best.fraction) best = t;
     }
@@ -106,10 +112,10 @@ static int pvs_box_side(const float *lo, const float *hi, int pl) {   /* BOX_ON_
         if (n[3] >= hi[t]) return 2;
         return 3;
     }
-    int sb = PLS[pl]; float far[3], near[3];
-    for (int i = 0; i < 3; i++) { far[i] = (sb & (1 << i)) ? lo[i] : hi[i]; near[i] = (sb & (1 << i)) ? hi[i] : lo[i]; }
-    float d1 = n[0] * far[0] + n[1] * far[1] + n[2] * far[2];
-    float d2 = n[0] * near[0] + n[1] * near[1] + n[2] * near[2];
+    int sb = PLS[pl]; float farp[3], nearp[3];
+    for (int i = 0; i < 3; i++) { farp[i] = (sb & (1 << i)) ? lo[i] : hi[i]; nearp[i] = (sb & (1 << i)) ? hi[i] : lo[i]; }
+    float d1 = n[0] * farp[0] + n[1] * farp[1] + n[2] * farp[2];
+    float d2 = n[0] * nearp[0] + n[1] * nearp[1] + n[2] * nearp[2];
     int sides = 0;
     if (d1 >= n[3]) sides = 1;
     if (d2 < n[3]) sides |= 2;
@@ -184,24 +190,46 @@ static void vnormalize(float *v) {                                     /* Vector
     v[0] *= ir; v[1] *= ir; v[2] *= ir;
 }
 static const float ZERO3[3] = {0, 0, 0};
-static int ray_clear(const float *a, const float *b) { return vis_trace(a, b, ZERO3, ZERO3).fraction >= 1.0; }
+/* vis_trace(...).fraction >= 1 for a line, answered sooner: the world first (blocked there means
+ * blocked), then each entity the line can reach; anything unusual falls back to the full trace. */
+static int ray_clear(Scratch *S, const float *a, const float *b) {
+    double A[3] = {a[0], a[1], a[2]}, B[3] = {b[0], b[1], b[2]};
+    int r = line_clear_w(&SL[0].w, S, A, B, NULL);
+    if (r < 0) return vis_trace(S, a, b, ZERO3, ZERO3).fraction >= 1.0;
+    if (r == 0) return 0;
+    double lo[3], hi[3];
+    for (int i = 0; i < 3; i++) { lo[i] = (A[i] < B[i] ? A[i] : B[i]) - 1; hi[i] = (A[i] > B[i] ? A[i] : B[i]) + 1; }
+    for (int k = 1; k < g_nslots; k++) {
+        WSlot *s = &SL[k];
+        if (!s->used || !s->rays) continue;
+        if (s->lo[0] > hi[0] || s->hi[0] < lo[0] || s->lo[1] > hi[1] || s->hi[1] < lo[1] || s->lo[2] > hi[2] || s->hi[2] < lo[2]) continue;
+        int inside = 0;
+        int e = line_clear_w(&s->w, S, A, B, &inside);
+        if (e == 0) return 0;
+        if (e < 0) {
+            if (s->physics) return 0;                    /* starts inside a physics entity: stuck */
+            return vis_trace(S, a, b, ZERO3, ZERO3).fraction >= 1.0;
+        }
+    }
+    return 1;
+}
 
-static int partially_visible(const VArea *a, const float *eye) {      /* IsPartiallyVisible */
+static int partially_visible(Scratch *S, const VArea *a, const float *eye) {      /* IsPartiallyVisible */
     float off = VIS_EYE;
     float ctr[3] = {a->c[0], a->c[1], a->c[2] + off};
-    if (ray_clear(eye, ctr)) return 1;
+    if (ray_clear(S, eye, ctr)) return 1;
     float e2c[3] = {ctr[0] - eye[0], ctr[1] - eye[1], ctr[2] - eye[2]}; vnormalize(e2c);
     for (int c = 0; c < 4; c++) {
         float corner[3]; area_corner(a, c, corner); corner[2] += off;
         float e2k[3] = {corner[0] - eye[0], corner[1] - eye[1], corner[2] - eye[2]}; vnormalize(e2k);
         if (e2k[0] * e2c[0] + e2k[1] * e2c[1] + e2k[2] * e2c[2] >= VIS_DOT_TOLERANCE) continue;
         float tgt[3] = {corner[0], corner[1], corner[2] + off};       /* (sic) the eye height again */
-        if (ray_clear(eye, tgt)) return 1;
+        if (ray_clear(S, eye, tgt)) return 1;
     }
     return 0;
 }
 
-static int compute_vis(int ti, int ai) {                              /* this->ComputeVisibility(area) */
+static int compute_vis(Scratch *S, int ti, int ai) {                              /* this->ComputeVisibility(area) */
     const VArea *t = &VA[ti], *a = &VA[ai];
     float dx = a->c[0] - t->c[0], dy = a->c[1] - t->c[1], dz = a->c[2] - t->c[2];
     float dist_sq = dx * dx + dy * dy + dz * dz;
@@ -215,25 +243,36 @@ static int compute_vis(int ti, int ai) {                              /* this->C
     float tgt[3];
     for (int i = 0; i < 3; i++) tgt[i] = tc[i] < omin[i] ? omin[i] : (tc[i] > omax[i] ? omax[i] : tc[i]);
     tgt[2] = area_z(a, tgt[0], tgt[1]) + VIS_EYE;
-    Tr tr = vis_trace(tc, tgt, mn, mx);
+    Tr tr = vis_trace(S, tc, tgt, mn, mx);
     float ex = (float)tr.ex, ey = (float)tr.ey;
     if (tr.fraction == 1.0 || (ex > omin[0] && ex < omax[0] && ey > omin[1] && ey < omax[1])) return VIS_COMPLETE;
 
     int vis = VIS_COMPLETE;
-    if (partially_visible(a, tc)) vis |= VIS_POTENTIAL; else vis &= ~VIS_COMPLETE;
+    if (partially_visible(S, a, tc)) vis |= VIS_POTENTIAL; else vis &= ~VIS_COMPLETE;
     float e2c[3] = {t->c[0] - a->c[0], t->c[1] - a->c[1], t->c[2] - a->c[2]}; vnormalize(e2c);
+    /* The game walks the sample grid row by row and stops once vis is POTENTIALLY_VISIBLE (one sample
+     * seen, one not). The answer only depends on whether any / all of the tested samples are seen,
+     * so the same samples are tested here in a spread-out (bit-reversed) order, which finds a seen
+     * and an unseen one much sooner. Same samples, same skips, same result. */
     float margin = VIS_STEP / 2.0f, sx = t->se[0] - t->nw[0], sy = t->se[1] - t->nw[1];
-    for (float yy = margin; yy <= sy - margin; yy += VIS_STEP) {
+    int ns = 0;
+    for (float yy = margin; yy <= sy - margin; yy += VIS_STEP)
         for (float xx = margin; xx <= sx - margin; xx += VIS_STEP) {
-            if (vis == VIS_POTENTIAL) return VIS_POTENTIAL;
             float tp[3] = {t->nw[0] + xx, t->nw[1] + yy, 0};
             tp[2] = area_z(t, tp[0], tp[1]) + VIS_EYE;
             if (dist_sq > 1000.0f * 1000.0f) {
                 float e2k[3] = {tp[0] - tc[0], tp[1] - tc[1], tp[2] - tc[2]}; vnormalize(e2k);
                 if (e2k[0] * e2c[0] + e2k[1] * e2c[1] + e2k[2] * e2c[2] >= VIS_DOT_TOLERANCE) continue;
             }
-            if (partially_visible(a, tp)) vis |= VIS_POTENTIAL; else vis &= ~VIS_COMPLETE;
+            if (ns == S->samplecap) { S->samplecap = S->samplecap ? S->samplecap * 2 : 1024; S->samples = realloc(S->samples, sizeof(float) * 3 * S->samplecap); }
+            memcpy(S->samples + 3 * ns, tp, sizeof tp); ns++;
         }
+    int bits = 0; while ((1 << bits) < ns) bits++;
+    for (int k = 0; k < (1 << bits); k++) {
+        int idx = 0; for (int b = 0; b < bits; b++) if (k & (1 << b)) idx |= 1 << (bits - 1 - b);
+        if (idx >= ns) continue;
+        if (vis == VIS_POTENTIAL) return VIS_POTENTIAL;
+        if (partially_visible(S, a, S->samples + 3 * idx)) vis |= VIS_POTENTIAL; else vis &= ~VIS_COMPLETE;
     }
     return vis;
 }
@@ -257,31 +296,70 @@ static void area_eye_box(int i, float *lo, float *hi) {
 }
 
 static IL *VL;                                                        /* per area: (other << 2) | attributes */
+static IL *VR;                                                        /* per area i: j, (o2t << 2) | t2o for j > i */
+static volatile LONG g_vis_next;
+static float g_vis_r2;
+static int g_vis_threads = 0;                                         /* 0: one per core */
 
-/* ComputeVisibilityToMesh for every area, in list order. radius: nav_max_view_distance (0: 1500). */
+static void vis_area(Scratch *S, unsigned char *pvs, int i) {
+    area_pvs(i, pvs);
+    for (int j = i + 1; j < NVA; j++) {
+        float dx = VA[j].c[0] - VA[i].c[0], dy = VA[j].c[1] - VA[i].c[1], dz = VA[j].c[2] - VA[i].c[2];
+        if (!(dx * dx + dy * dy + dz * dz <= g_vis_r2)) continue;
+        float lo[3], hi[3]; area_eye_box(j, lo, hi);
+        if (!pvs_box_in(lo, hi, pvs)) continue;                      /* outside the PVS: neither way */
+        int o2t = compute_vis(S, i, j);
+        int t2o = compute_vis(S, j, i);                              /* L4D2: always when inside the PVS (measured) */
+        if (!o2t && t2o) o2t = VIS_POTENTIAL;
+        if (!t2o && o2t) t2o = VIS_POTENTIAL;
+        if (o2t || t2o) { il_push(&VR[i], j); il_push(&VR[i], (o2t << 2) | t2o); }
+    }
+}
+static DWORD WINAPI vis_worker(LPVOID arg) {
+    (void)arg;
+    Scratch S; memset(&S, 0, sizeof S);
+    unsigned char *pvs = malloc(ROWB + 1);
+    for (;;) {
+        int i = (int)InterlockedIncrement(&g_vis_next) - 1;
+        if (i >= NVA) break;
+        vis_area(&S, pvs, i);
+    }
+    free(pvs); free(S.ids); free(S.mark); free(S.samples);
+    return 0;
+}
+EXPORT void hl_vis_threads(int n) { g_vis_threads = n; }
+EXPORT void hl_vis_stats(long long *out) { out[0] = g_st_rays; out[1] = g_st_hulls; out[2] = g_st_cands; out[3] = g_st_slots; g_st_rays = g_st_hulls = g_st_cands = g_st_slots = 0; }
+EXPORT void hl_vis_stats_on(int on) { g_stats = on; }
+
+/* ComputeVisibilityToMesh for every area, in list order. radius: nav_max_view_distance (0: 1500).
+ * Each area's pairs (with the areas after it) are independent, so they run on every core; the
+ * lists are then assembled in exactly the order the one-thread loop builds them. */
 EXPORT int hl_vis_run(float radius) {
     if (VL) { for (int i = 0; i < NVA; i++) il_free(&VL[i]); free(VL); }
-    VL = calloc(NVA + 1, sizeof(IL));
+    VL = calloc(NVA + 1, sizeof(IL)); VR = calloc(NVA + 1, sizeof(IL));
     if (radius <= 0.0f) radius = 1500.0f;
-    float r2 = radius * radius;
-    unsigned char *pvs = malloc(ROWB + 1);
+    g_vis_r2 = radius * radius;
+    int threads = g_vis_threads;
+    if (threads <= 0) { SYSTEM_INFO si; GetSystemInfo(&si); threads = (int)si.dwNumberOfProcessors; }
+    if (threads > 64) threads = 64;
+    g_vis_next = 0;
+    if (threads <= 1) vis_worker(NULL);
+    else {
+        HANDLE h[64];
+        for (int t = 0; t < threads; t++) h[t] = CreateThread(NULL, 0, vis_worker, NULL, 0, NULL);
+        WaitForMultipleObjects(threads, h, TRUE, INFINITE);
+        for (int t = 0; t < threads; t++) CloseHandle(h[t]);
+    }
     for (int i = 0; i < NVA; i++) {
-        area_pvs(i, pvs);
         il_push(&VL[i], (i << 2) | VIS_COMPLETE);
-        for (int j = i + 1; j < NVA; j++) {
-            float dx = VA[j].c[0] - VA[i].c[0], dy = VA[j].c[1] - VA[i].c[1], dz = VA[j].c[2] - VA[i].c[2];
-            if (!(dx * dx + dy * dy + dz * dz <= r2)) continue;
-            float lo[3], hi[3]; area_eye_box(j, lo, hi);
-            int outside = !pvs_box_in(lo, hi, pvs);
-            int o2t = outside ? VIS_NOT : compute_vis(i, j), t2o = VIS_NOT;
-            if (!outside) t2o = compute_vis(j, i);          /* L4D2: always when inside the PVS (measured) */
-            if (!o2t && t2o) o2t = VIS_POTENTIAL;
-            if (!t2o && o2t) t2o = VIS_POTENTIAL;
+        for (int k = 0; k < VR[i].n; k += 2) {
+            int j = VR[i].v[k], o2t = VR[i].v[k + 1] >> 2, t2o = VR[i].v[k + 1] & 3;
             if (t2o) il_push(&VL[i], (j << 2) | t2o);
             if (o2t) il_push(&VL[j], (i << 2) | o2t);
         }
+        il_free(&VR[i]);
     }
-    free(pvs);
+    free(VR); VR = NULL;
     int total = 0;
     for (int i = 0; i < NVA; i++) total += VL[i].n;
     return total;
@@ -294,4 +372,4 @@ EXPORT int hl_vis_get(int *counts, int *entries, int cap) {
     }
     return k;
 }
-EXPORT int hl_vis_compute(int ti, int ai) { return compute_vis(ti, ai); }   /* one direction (tests) */
+EXPORT int hl_vis_compute(int ti, int ai) { return compute_vis(&g_scr, ti, ai); }   /* one direction (tests) */
