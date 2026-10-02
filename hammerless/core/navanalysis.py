@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from .navfile import NavMesh
 
 PLAYER_START, CHECKPOINT, OBSCURED, FINALE = 0x80, 0x800, 0x1000, 0x40
+EMPTY, NO_MOBS = 0x2, 0x2000          # no wandering commons / no hordes from here
 STEP_HEIGHT = 18.0            # nav.h StepHeight: above this a link needs a jump
 JUMP_DOWN_MIN = 64.0          # JumpCrouchHeight: L4D2 only makes drop-down links for drops above this
 EDGE_GAP = 26.0               # neighbouring areas can be one node step (25) apart at a ledge

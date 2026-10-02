@@ -9,7 +9,7 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 from mathutils import Vector
 
-from ..core.navanalysis import CHECKPOINT, OBSCURED, PLAYER_START, analyse
+from ..core.navanalysis import CHECKPOINT, EMPTY, NO_MOBS, OBSCURED, PLAYER_START, analyse
 from ..core.navfile import load_nav
 
 _state = {"path": None, "mtime": None, "mesh": None, "report": None, "batches": None, "key": None,
@@ -21,6 +21,7 @@ COLORS = {
     "start": (0.25, 0.55, 1.0, 0.45), "end": (0.75, 0.35, 1.0, 0.45),
     "reach": (0.2, 0.85, 0.35, 0.3), "unreach": (0.95, 0.1, 0.05, 0.55),
     "obscured": (1.0, 0.6, 0.1, 0.4), "plain": (0.55, 0.75, 0.95, 0.25),
+    "no_spawn": (0.95, 0.15, 0.15, 0.5), "no_wander": (0.95, 0.45, 0.6, 0.45), "no_mobs": (0.65, 0.3, 0.95, 0.45),
     "drop": (1.0, 0.55, 0.1, 1.0), "jump": (0.1, 0.9, 1.0, 1.0), "outline": (0.05, 0.05, 0.05, 0.6),
     "break": (1.0, 0.1, 0.1, 1.0), "ladder": (1.0, 0.9, 0.1, 1.0),
     "seen_complete": (0.2, 0.9, 0.3, 0.5), "seen_partly": (1.0, 0.85, 0.1, 0.45), "seen_both": (0.55, 0.95, 0.25, 0.5),
@@ -118,7 +119,14 @@ def _area_color(a, rep, mode, viewer=None):
     if mode == "REACH":
         return COLORS["reach"] if a.id in rep.reachable else COLORS["unreach"]
     if mode == "SPAWN":
-        return COLORS["obscured"] if a.spawn_attributes & OBSCURED else COLORS["plain"]
+        attrs = a.spawn_attributes
+        if attrs & EMPTY and attrs & NO_MOBS:
+            return COLORS["no_spawn"]
+        if attrs & EMPTY:
+            return COLORS["no_wander"]
+        if attrs & NO_MOBS:
+            return COLORS["no_mobs"]
+        return COLORS["obscured"] if attrs & OBSCURED else COLORS["plain"]
     # FLOW: heat by walking distance from the start room
     if a.id not in rep.distance:
         return COLORS["unreach"]
@@ -459,7 +467,10 @@ def draw_panel(layout, context):
             legend.label(text="From the area under the 3D cursor (white):", icon="INFO")
             legend.label(text="green completely visible, yellow partly, grey not", icon="BLANK1")
     else:
-        legend.label(text="Orange: Zombie Spawn Area (OBSCURED)", icon="INFO")
+        legend.label(text="Red: no zombies spawn (EMPTY + NO_MOBS)", icon="INFO")
+        legend.label(text="Pink: no wanderers (EMPTY). Violet: no hordes (NO_MOBS)", icon="BLANK1")
+        legend.label(text="Orange: Zombie Spawn Area (OBSCURED). Light blue: normal", icon="BLANK1")
+        legend.label(text="An area takes a box's marks when its centre is inside it", icon="BLANK1")
     legend.label(text="Blue: start room. Purple: end room", icon="BLANK1")
     if s.show_nav_links:
         legend.label(text="Arrows: orange drop-down, cyan jump-up", icon="BLANK1")
