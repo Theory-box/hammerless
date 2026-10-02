@@ -473,15 +473,67 @@ def finish_prediction(context, mesh) -> None:
     store_nav(context, mesh, _state["report"], predicted=True)
 
 
+def built_shown() -> bool:
+    """A navmesh built from the scene (Build Navmesh / Analyze) is on screen."""
+    return _state["mesh"] is not None and _state["source"] == "predicted"
+
+
+def analysis_shown() -> bool:
+    m = _state["mesh"]
+    return built_shown() and (m.analyzed or any(a.visible or a.inherit_visibility or a.hiding_spots for a in m.areas))
+
+
+class HL_OT_nav_clear(bpy.types.Operator):
+    bl_idname = "hammerless.nav_clear"
+    bl_label = "Clear Navmesh"
+    bl_description = ("Remove the navmesh built from the scene (and its analysis) from the viewport, and forget it, "
+                      "so the next Build Navmesh or Build & Play makes a fresh one")
+
+    def execute(self, context):
+        from ..core import navpredict
+        navpredict._last.update(key=None, mesh=None)
+        _state.update(path=None, mtime=None, mesh=None, report=None, batches=None, key=None, source=None, vis=None)
+        if context.scene.hammerless.nav_color_mode == "VIS":
+            context.scene.hammerless.nav_color_mode = "REACH"
+        _redraw()
+        self.report({"INFO"}, "Navmesh cleared")
+        return {"FINISHED"}
+
+
+class HL_OT_nav_clear_analysis(bpy.types.Operator):
+    bl_idname = "hammerless.nav_clear_analysis"
+    bl_label = "Clear Analysis"
+    bl_description = "Remove the visibility data and hiding spots from the shown navmesh (the navmesh itself stays)"
+
+    def execute(self, context):
+        m = _state["mesh"]
+        if m is not None:
+            for a in m.areas:
+                a.visible, a.inherit_visibility, a.hiding_spots = [], 0, []
+            m.analyzed = False
+        _state.update(batches=None, vis=None)
+        if context.scene.hammerless.nav_color_mode == "VIS":
+            context.scene.hammerless.nav_color_mode = "REACH"
+        _redraw()
+        self.report({"INFO"}, "Analysis cleared")
+        return {"FINISHED"}
+
+
 def draw_panel(layout, context):
     s = context.scene.hammerless
     rep = _state["report"]
     big = layout.row()
     big.scale_y = 1.3
-    big.operator("hammerless.nav_predict", text="Build Navmesh", icon="VIEWZOOM")
+    if built_shown():
+        big.operator("hammerless.nav_clear", text="Clear Navmesh", icon="X")
+    else:
+        big.operator("hammerless.nav_predict", text="Build Navmesh", icon="VIEWZOOM")
     row = layout.row(align=True)
     row.operator("hammerless.nav_load", text="Show the Game's Nav Mesh", icon="MOD_MESHDEFORM")
-    layout.operator("hammerless.nav_analyze", text="Analyze Navmesh (visibility, hiding spots)", icon="HIDE_OFF")
+    if analysis_shown():
+        layout.operator("hammerless.nav_clear_analysis", text="Clear Analysis", icon="X")
+    else:
+        layout.operator("hammerless.nav_analyze", text="Analyze Navmesh (visibility, hiding spots)", icon="HIDE_OFF")
     if rep is None:
         col = layout.column(align=True)
         col.scale_y = 0.8
@@ -546,7 +598,7 @@ def draw_panel(layout, context):
         legend.label(text="Arrows: orange drop-down, cyan jump-up", icon="BLANK1")
 
 
-CLASSES = (HL_OT_nav_load, HL_OT_nav_predict, HL_OT_nav_analyze)
+CLASSES = (HL_OT_nav_load, HL_OT_nav_predict, HL_OT_nav_analyze, HL_OT_nav_clear, HL_OT_nav_clear_analysis)
 
 
 def register():

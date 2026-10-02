@@ -287,6 +287,17 @@ def test_map_check_problem_list():
     path = next(p for p in s.problems if p.ingame and p.severity == "ERROR")
     assert "built from the scene" in path.name and path.has_location
     assert 17 <= path.location.x <= 21, tuple(path.location)   # break at the edge of ground_a
+    # the buttons turn into Clear buttons; clearing the analysis keeps the navmesh, Clear Navmesh removes it
+    from hammerless.blender import navview
+    from hammerless.core import navpredict
+    from hammerless.core.navfile import HidingSpot
+    assert navview.built_shown() and not navview.analysis_shown()
+    navview.mesh().areas[0].hiding_spots = [HidingSpot(0, (0.0, 0.0, 0.0), 1)]
+    assert navview.analysis_shown()
+    assert bpy.ops.hammerless.nav_clear_analysis() == {"FINISHED"}
+    assert navview.built_shown() and not navview.analysis_shown()
+    assert bpy.ops.hammerless.nav_clear() == {"FINISHED"}
+    assert not navview.built_shown() and navview.mesh() is None and navpredict._last["mesh"] is None
 
 
 def test_auto_detail_default():
