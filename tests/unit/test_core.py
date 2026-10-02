@@ -460,6 +460,49 @@ class TestNavAnalysis(unittest.TestCase):
         for i, a in enumerate(mesh.areas):
             self.assertEqual(expanded[a.id], {mesh.areas[k].id: v for k, v in lists[i].items()})
 
+    def test_props_block_by_the_games_rules(self):
+        # props whose model the game keeps block sight with their hull: a bounding-box static prop
+        # as the upright box around its turned hull, an entity's unturned; props the game or vbsp
+        # deletes (prop_physics without prop_data, ...) block nothing
+        import struct
+        from hammerless.core.navanalyze import _prop_pieces
+        from hammerless.core.vmf import Block
+
+        def mdl(flags, keyvalues=""):
+            kv = keyvalues.encode()
+            data = bytearray(400) + kv
+            struct.pack_into("<6f", data, 104, -10, -20, 0, 10, 20, 40)      # hull_min, hull_max
+            struct.pack_into("<i", data, 152, flags)
+            struct.pack_into("<ii", data, 312, 400, len(kv))
+            return bytes(data)
+
+        class Content:
+            files = {"models/box.mdl": mdl(0x10),
+                     "models/phys.mdl": mdl(0x10, 'mdlkeyvalue { prop_data { "base" "Metal.Large" } }'),
+                     "models/both.mdl": mdl(0x10, 'mdlkeyvalue { prop_data { "base" "Metal.Large" "allowstatic" "1" } }')}
+
+            def read(self, path):
+                return self.files.get(path)
+
+        def ent(cls, model, yaw=0, solid="2"):
+            b = Block("entity")
+            b.items = [("classname", cls), ("model", model), ("origin", "100 0 0"), ("angles", f"0 {yaw} 0"),
+                       ("solid", solid)]
+            return b
+
+        def bounds(pieces):
+            (piece,) = pieces
+            return tuple(round(v, 3) + 0.0 for v in tuple(piece.mins) + tuple(piece.maxs))
+        c = Content()
+        self.assertEqual(bounds(_prop_pieces(ent("prop_static", "models/box.mdl", 90), c)), (80, -10, 0, 120, 10, 40))
+        self.assertEqual(bounds(_prop_pieces(ent("prop_dynamic", "models/box.mdl", 90), c)), (90, -20, 0, 110, 20, 40))
+        self.assertEqual(_prop_pieces(ent("prop_static", "models/box.mdl", 0, "0"), c), [])      # not solid
+        self.assertEqual(_prop_pieces(ent("prop_static", "models/phys.mdl"), c), [])      # vbsp: "Deleted."
+        self.assertEqual(_prop_pieces(ent("prop_dynamic", "models/phys.mdl"), c), [])     # the game deletes it
+        self.assertEqual(_prop_pieces(ent("prop_physics", "models/box.mdl"), c), [])      # no prop_data: deleted
+        self.assertTrue(_prop_pieces(ent("prop_static", "models/both.mdl"), c))
+        self.assertTrue(_prop_pieces(ent("prop_dynamic_override", "models/phys.mdl"), c))
+
 
 class TestNavGen(unittest.TestCase):
     """Our reimplementation of the game's nav sampling (stage A)."""

@@ -81,9 +81,13 @@ def launch(context, root, nav_written: bool = False, analyzed: bool = False) -> 
     """nav_written: Hammerless just wrote the nav mesh; the game only analyzes it (unless it's
     already analyzed: then the game just loads the map)."""
     s = context.scene.hammerless
+    tools = cc.Tools(root)
     generate = False if nav_written else needs_nav(context, root, by_game=True)
-    cc.launch_game(cc.Tools(root), s.map_name, generate_nav=generate, window=launch_options(s),
-                   analyze_nav=nav_written and not analyzed)
+    if nav_written:
+        analyze = not analyzed
+    else:      # a nav whose analysis never got saved (the game was closed first): the game adds it now
+        analyze = not generate and cc.nav_analyzed(tools, s.map_name) is False
+    cc.launch_game(tools, s.map_name, generate_nav=generate, window=launch_options(s), analyze_nav=analyze)
 
 
 def _start_nav_analysis(mesh, vmf_path: str, bsp_path: str, root: str) -> dict:

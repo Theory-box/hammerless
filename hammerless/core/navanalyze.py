@@ -10,7 +10,9 @@ What blocks sight is what the engine's traces hit with MASK_NAV_VISION:
     doors, func_brush...) stick a trace that starts inside them;
   - doors, with their collision model at the position they spawn in (the end safe room door
     starts open): they block both sight lines and boxes in the analysis (measured against the
-    game's lists; a VScript TraceLine with the same mask passes through them, its filter differs).
+    game's lists; a VScript TraceLine with the same mask passes through them, its filter differs);
+  - solid props: static, dynamic and physics props block sight with their collision model
+    (measured: a container, a trailer and a van each hid what's behind them in the game's lists).
 """
 from __future__ import annotations
 
@@ -25,6 +27,10 @@ from .vision import (MASK_BLOCKLOS, PHYSICS_BRUSH_CLASSES, SOLID_BRUSH_CLASSES, 
 
 NOT_VISIBLE, POTENTIALLY_VISIBLE, COMPLETELY_VISIBLE = 0, 1, 2
 DOOR_CLASSES = {"prop_door_rotating", "prop_door_rotating_checkpoint"}
+# props that are always VPhysics-solid (their 'solid' key isn't used) / whose 'solid' key picks it
+PHYSICS_PROP_CLASSES = {"prop_physics", "prop_physics_override", "prop_physics_multiplayer", "prop_car_alarm"}
+SOLID_KEY_PROP_CLASSES = {"prop_static", "prop_dynamic", "prop_dynamic_override"}
+SOLID_BBOX, SOLID_VPHYSICS = 2, 6
 
 
 DOOR_MODE = "all"          # doors block sight lines and boxes (measured: "none" and "boxes" leave every
@@ -72,30 +78,115 @@ def _slots(vmf, bsp_path: str, materials: MaterialContents, content=None):
                 for disp in side.blocks("dispinfo"):
                     world.extend(displacement_brushes(side.get("plane"), disp))
     ents = [(brushes, physics, True) for brushes, physics in _entity_solids(top, materials, MASK_BLOCKLOS)]
-    if content is not None and DOOR_MODE != "none":
+    if content is not None:
+        hulls = {}                           # model -> its collision pieces' planes, read once
+        props = []
         for e in (b for b in top if b.name == "entity"):
-            if (e.get("classname") or "").lower() in DOOR_CLASSES:
-                pieces = _prop_pieces(e, content)
+            cls = (e.get("classname") or "").lower()
+            if cls in DOOR_CLASSES and DOOR_MODE != "none":
+                pieces = _prop_pieces(e, content, hulls)
                 if pieces:
                     ents.append((pieces, True, DOOR_MODE == "all"))
+            elif cls in PHYSICS_PROP_CLASSES or cls in SOLID_KEY_PROP_CLASSES:
+                props += _prop_pieces(e, content, hulls)
+        if props:
+            # one slot for all of them: each prop is a VPhysics object (a trace starting inside one
+            # is stuck at 0, else the closest hit wins), and that's what one physics slot gives
+            ents.append((props, True, True))
     if len(ents) >= fastnav.NAV_STASH_SLOT:
         raise RuntimeError(f"{len(ents)} solid entities and doors: more than the nav analysis handles "
                            f"({fastnav.NAV_STASH_SLOT - 1})")
     return world, ents
 
 
-def _prop_pieces(ent, content):
-    """A prop's collision pieces in world space (convex brushes), from its model's .phy."""
-    from .phy import convex_brush, place, read_phy
-    model = (ent.get("model") or "").replace("\\", "/")
-    if not model.endswith(".mdl"):
+def _model_info(model: str, content, cache: dict) -> tuple[int, str | None]:
+    """(studiohdr flags, its prop_data: None, "static" when it has allowstatic, else "dynamic")."""
+    key = ("info", model)
+    if key not in cache:
+        import re
+        import struct
+        data = content.read(model)
+        flags, prop_data = 0, None
+        if data and len(data) >= 320:
+            flags = struct.unpack_from("<i", data, 152)[0]
+            at, size = struct.unpack_from("<ii", data, 312)        # keyvalueindex, keyvaluesize
+            text = data[at:at + size].decode("latin-1", "replace") if size > 0 else ""
+            m = re.search(r'"?prop_data"?\s*\{([^}]*)\}', text, re.I)
+            if m:
+                static = re.search(r'"allowstatic"\s*"([^"]*)"', m.group(1), re.I)
+                prop_data = "static" if static and static.group(1).strip() not in ("", "0") else "dynamic"
+        cache[key] = (flags, prop_data)
+    return cache[key]
+
+
+def _prop_exists(cls: str, model: str, content, cache: dict) -> bool:
+    """Whether the prop is in the running map. vbsp drops a prop_static whose model isn't a
+    $staticprop or has prop_data that doesn't allow static; the game deletes a prop_physics whose
+    model has no prop_data and a prop_dynamic whose model has prop_data without allowstatic
+    (CBaseProp::Spawn; the _override classes skip the check). Measured: prop_physics fire
+    barrels (no prop_data) are gone in the game and don't block sight."""
+    flags, prop_data = _model_info(model, content, cache)
+    if cls == "prop_static":
+        return bool(flags & 0x10) and prop_data != "dynamic"
+    if cls == "prop_physics":
+        return prop_data is not None
+    if cls == "prop_dynamic":
+        return prop_data != "dynamic"
+    return True
+
+
+def _prop_solid(ent) -> int:
+    """How a prop collides at spawn: SOLID_VPHYSICS (its .phy), SOLID_BBOX (its model's hull box)
+    or 0 (not solid)."""
+    cls = (ent.get("classname") or "").lower()
+    if cls in PHYSICS_PROP_CLASSES or cls in DOOR_CLASSES:
+        return SOLID_VPHYSICS
+    try:
+        solid = int(float(ent.get("solid") or SOLID_VPHYSICS))
+    except ValueError:
+        solid = SOLID_VPHYSICS
+    return solid if solid in (SOLID_BBOX, SOLID_VPHYSICS) else 0
+
+
+def _model_hulls(model: str, solid: int, content, cache: dict):
+    """A model's collision pieces as plane lists (normal, dist) in model space: its .phy's convex
+    pieces, or (SOLID_BBOX) the box of its hull (studiohdr hull_min / hull_max)."""
+    key = (model, solid)
+    if key not in cache:
+        from .phy import convex_planes, read_phy
+        pieces = []
+        if solid == SOLID_VPHYSICS:
+            data = content.read(model[:-4] + ".phy")
+            pieces = [convex_planes(pts) for pts in read_phy(data)] if data else []
+        elif solid == SOLID_BBOX:
+            from .vpk import model_bounds
+            data = content.read(model)
+            if data and len(data) >= 128:
+                lo, hi = model_bounds(data)
+                if all(h > l for l, h in zip(lo, hi)):
+                    pieces = [[((1.0, 0.0, 0.0), hi[0]), ((-1.0, 0.0, 0.0), -lo[0]), ((0.0, 1.0, 0.0), hi[1]),
+                               ((0.0, -1.0, 0.0), -lo[1]), ((0.0, 0.0, 1.0), hi[2]), ((0.0, 0.0, -1.0), -lo[2])]]
+        cache[key] = [p for p in pieces if len(p) >= 4]
+    return cache[key]
+
+
+def _prop_pieces(ent, content, cache: dict | None = None):
+    """A prop's collision pieces in world space (convex brushes), from its model's .phy (or its
+    hull box for 'solid' 2: turned with the prop when static, an upright box on an entity)."""
+    from .collision import Side, make_brush
+    from .phy import angle_matrix
+    model = (ent.get("model") or "").replace("\\", "/").lower()
+    solid = _prop_solid(ent)
+    cls = (ent.get("classname") or "").lower()
+    cache = {} if cache is None else cache
+    if not model.endswith(".mdl") or not solid or not _prop_exists(cls, model, content, cache):
         return []
-    data = content.read(model[:-4] + ".phy")
-    if not data:
+    hulls = _model_hulls(model, solid, content, cache)
+    if not hulls:
         return []
     origin = tuple(float(v) for v in (ent.get("origin") or "0 0 0").split())
     angles = tuple(float(v) for v in (ent.get("angles") or "0 0 0").split())
-    if (ent.get("classname") or "").lower() in DOOR_CLASSES:
+    if cls in DOOR_CLASSES:
         # a door that spawns open stands rotated by its distance (measured: the end safe room door,
         # spawnpos 1 at yaw -90, is at yaw -180 in the game); 2 opens the other way
         spawnpos = int(float(ent.get("spawnpos") or 0))
@@ -104,9 +195,27 @@ def _prop_pieces(ent, content):
             angles = (angles[0], angles[1] - distance, angles[2])
         elif spawnpos == 2:
             angles = (angles[0], angles[1] + distance, angles[2])
+    m = angle_matrix(*angles)
+    if solid == SOLID_BBOX:
+        # an upright box: an entity's is its hull box (it doesn't turn with the entity), a static
+        # prop's the box around its turned hull (measured: a container at yaw 45 / 30)
+        (_n, hx), (_n, lx), (_n, hy), (_n, ly), (_n, hz), (_n, lz) = hulls[0]
+        corners = [(x, y, z) for x in (-lx, hx) for y in (-ly, hy) for z in (-lz, hz)]
+        if cls == "prop_static":
+            corners = [tuple(m[r][0] * c[0] + m[r][1] * c[1] + m[r][2] * c[2] for r in range(3)) for c in corners]
+        lo = [min(c[i] for c in corners) for i in range(3)]
+        hi = [max(c[i] for c in corners) for i in range(3)]
+        hulls = [[((1.0, 0.0, 0.0), hi[0]), ((-1.0, 0.0, 0.0), -lo[0]), ((0.0, 1.0, 0.0), hi[1]),
+                  ((0.0, -1.0, 0.0), -lo[1]), ((0.0, 0.0, 1.0), hi[2]), ((0.0, 0.0, -1.0), -lo[2])]]
+        m = angle_matrix(0.0, 0.0, 0.0)
     out = []
-    for pts in read_phy(data):
-        br = convex_brush(place(pts, origin, angles), ent.get("classname"))
+    for planes in hulls:
+        sides = []
+        for (nx, ny, nz), d in planes:      # world = origin + M p, so n' = M n, d' = d + n'.origin
+            n = (m[0][0] * nx + m[0][1] * ny + m[0][2] * nz, m[1][0] * nx + m[1][1] * ny + m[1][2] * nz,
+                 m[2][0] * nx + m[2][1] * ny + m[2][2] * nz)
+            sides.append(Side(n, d + n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2]))
+        br = make_brush(sides, ent.get("classname"))
         if br:
             out.append(br)
     return out

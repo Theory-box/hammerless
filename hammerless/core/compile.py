@@ -538,6 +538,17 @@ def nav_maker(tools: Tools, map_name: str) -> str | None:
         return None
 
 
+def nav_analyzed(tools: Tools, map_name: str) -> bool | None:
+    """Whether maps/<map>.nav holds the analysis (visibility, hiding spots): the header's
+    'analyzed' byte. None when there's no readable nav."""
+    try:
+        with open(os.path.join(tools.maps_dir, map_name + ".nav"), "rb") as f:
+            head = f.read(17)
+    except OSError:
+        return None
+    return bool(head[16]) if len(head) == 17 and head[:4] == bytes((0xCE, 0xFA, 0xED, 0xFE)) else None
+
+
 def nav_marks_changed(tools: Tools, map_name: str) -> bool:
     """True when the safe room / spawn area marks differ from the ones the current nav
     mesh was built with. Marks only add flags, so a change needs a fresh nav mesh."""
