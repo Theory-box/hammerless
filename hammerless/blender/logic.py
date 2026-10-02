@@ -569,9 +569,11 @@ class HL_NodeMove(_Node, bpy.types.Node):
                              description="Units to move (auto = the object's own size in that direction)")
     seconds: FloatProperty(name="Seconds", default=4.0, min=0.0,
                            description="How long the whole move takes (the speed is worked out from this)")
-    block_nav: BoolProperty(name="Blocks Nav While Closed", default=True,
-                            description="Zombies and bots treat the way through as blocked until it has moved "
-                                        "(Valve's gates do this), so they don't pile up behind it")
+    block_nav: BoolProperty(name="Blocks Nav While Closed", default=False,
+                            description="Zombies and bots treat the way through as blocked until it has moved. "
+                                        "Off by default: L4D2 blocks the nav from the moment the map loads, and "
+                                        "the Director then places no wandering zombies behind a closed gate "
+                                        "(measured: the room behind the first gate stayed empty)")
 
     def make_sockets(self):
         self.obj_in("object", "Object")

@@ -608,7 +608,12 @@ def test_logic_nodes_convert_plain_meshes():
     name = mover[0].get("targetname")
     conns = button[0].blocks("connections")[0]
     assert conns.get("OnPressed").startswith(name + ",Open"), conns.get("OnPressed")
-    assert entities(blocks, "func_nav_blocker"), "no nav blocker for the gate"
+    # no nav blocker by default: L4D2 blocks from map load and the Director then puts no wandering
+    # zombies behind the closed gate; it's there when asked for
+    assert not entities(blocks, "func_nav_blocker"), "gate blocks the nav by default"
+    mv.block_nav = True
+    blocks2, log2 = export()
+    assert entities(blocks2, "func_nav_blocker"), "no nav blocker when Block Nav While Closed is on"
     # the meshes left the world: only the floor (plus the sky shell) stays world geometry
     assert len(world_solids(blocks)) == 1 + 6, len(world_solids(blocks))
 

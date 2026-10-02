@@ -343,7 +343,8 @@ class _Compiler:
             take("back", name, "Close")
             fire("arrived", e, "OnFullyOpen")
             fire("returned", e, "OnFullyClosed")
-            if s.get("block_nav", True):
+            if s.get("block_nav", False):      # off by default: a blocked gate hides what's behind it
+                                               # from the Director's wandering population
                 # the nav mesh runs through a closed gate (nav generation ignores moving brushes):
                 # block the nav areas it covers while closed, like Valve's gates and barricades
                 pts = [v for b in e.brushes for f in b.faces for v in f.verts]
