@@ -157,9 +157,10 @@ class MaterialContents:
         return self.cache[key]
 
 
-def blocks_sight(solid_block, materials: MaterialContents) -> bool:
+def blocks_sight(solid_block, materials: MaterialContents, mask: int = MASK_BLOCKLOS) -> bool:
+    """Does a VMF solid's compiled contents meet 'mask' (by default: does it block sight)?"""
     sides = [side_contents(materials(s.get("material", ""))) for s in solid_block.blocks("side")]
-    return bool(brush_contents(sides) & MASK_BLOCKLOS)
+    return bool(brush_contents(sides) & mask)
 
 
 def vision_world(vmf_text: str, materials: MaterialContents, split: bool = False):

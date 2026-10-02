@@ -951,14 +951,30 @@ class TestCompileSkip(unittest.TestCase):
         work = tempfile.mkdtemp()
         vmf = os.path.join(work, "m.vmf")
         open(vmf, "w").write("world {}")
-        open(os.path.join(work, "m.bsp"), "wb").write(b"x" * 10)
+        import struct
+
+        def bsp(pak: bytes, other: bytes = b"geometry") -> bytes:
+            # a minimal BSP: lump 1 holds 'other', lump 40 (the pakfile) holds 'pak'
+            header = bytearray(b"VBSP" + struct.pack("<i", 21) + bytes(16 * 64) + struct.pack("<i", 1))
+            body = other + pak
+            base = len(header)
+            struct.pack_into("<iiii", header, 8 + 16 * 1, 0, base, len(other), 0)
+            struct.pack_into("<iiii", header, 8 + 16 * 40, 0, base + len(other), len(pak), 0)
+            return bytes(header) + body
+        open(os.path.join(work, "m.bsp"), "wb").write(bsp(b"pak"))
         tools = cc.Tools(root)
         job = cc.CompileJob(tools, vmf, "FAST", skip_if_unchanged=True)
         self.assertFalse(job.up_to_date())                       # never compiled
         open(os.path.join(work, "m.stamp"), "w").write(job._stamp())
         self.assertFalse(job.up_to_date())                       # game has no BSP yet
-        open(os.path.join(tools.maps_dir, "m.bsp"), "wb").write(b"x" * 10)
+        open(os.path.join(tools.maps_dir, "m.bsp"), "wb").write(bsp(b"pak"))
         self.assertTrue(job.up_to_date())
+        # the game saves its stringtable into its copy's pakfile on every load: still the same map
+        open(os.path.join(tools.maps_dir, "m.bsp"), "wb").write(bsp(b"pak + stringtable dictionary"))
+        self.assertTrue(job.up_to_date())
+        open(os.path.join(tools.maps_dir, "m.bsp"), "wb").write(bsp(b"pak", b"other map"))
+        self.assertFalse(job.up_to_date())                       # a different compile
+        open(os.path.join(tools.maps_dir, "m.bsp"), "wb").write(bsp(b"pak"))
         self.assertFalse(cc.CompileJob(tools, vmf, "NORMAL").up_to_date())   # other options
         open(vmf, "w").write("world { changed }")
         self.assertFalse(job.up_to_date())

@@ -188,6 +188,25 @@ def read_pointfile(path: str) -> list[tuple[float, float, float]]:
 
 # ---------------------------------------------------------------- compile job
 
+def bsp_signature(path: str) -> str:
+    """Fingerprint of a compiled map without its pakfile (lump 40): the game saves its stringtable
+    dictionary there whenever it loads the map (measured: the only lump that changes)."""
+    import hashlib
+    import struct
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:4] != b"VBSP":
+        raise ValueError(f"{path} is not a BSP")
+    h = hashlib.sha1(data[:8])
+    for i in range(64):
+        if i == 40:
+            continue
+        ver, off, length, cc = struct.unpack_from("<iiii", data, 8 + 16 * i)
+        h.update(struct.pack("<iiii", ver, off, length, cc))
+        h.update(data[off:off + length])
+    return h.hexdigest()
+
+
 class CompileJob:
     """Runs the compile steps one after another without blocking the caller.
 
@@ -238,13 +257,14 @@ class CompileJob:
             return hashlib.sha1(f.read() + repr(self._opts).encode()).hexdigest()
 
     def up_to_date(self) -> bool:
-        """The last successful compile used the same VMF and options, and the game has its BSP."""
+        """The last successful compile used the same VMF and options, and the game has its BSP
+        (compared without the pakfile, which the game rewrites on every load)."""
         try:
             with open(self.base + ".stamp", encoding="utf-8") as f:
                 same = f.read() == self._stamp()
             game_bsp = os.path.join(self.tools.maps_dir, self.name + ".bsp")
-            return same and os.path.getsize(game_bsp) == os.path.getsize(self.base + ".bsp")
-        except OSError:
+            return same and bsp_signature(game_bsp) == bsp_signature(self.base + ".bsp")
+        except (OSError, ValueError):
             return False
 
     def _run(self):
@@ -502,10 +522,18 @@ def set_nav_maker(tools: Tools, map_name: str, maker: str) -> None:
 
 
 def nav_maker(tools: Tools, map_name: str) -> str | None:
-    """Who made the current nav mesh ("blender" / "game"), or None when unknown (older builds)."""
+    """Who made the current nav mesh ("blender" / "game"), or None when unknown (older builds, or
+    a game generation that never saved: the marker is written when it starts, so the nav has to
+    be newer than the marker)."""
+    marker = _nav_maker_path(tools, map_name)
     try:
-        with open(_nav_maker_path(tools, map_name), encoding="utf-8") as f:
-            return f.read().strip() or None
+        with open(marker, encoding="utf-8") as f:
+            maker = f.read().strip() or None
+        if maker == "game":
+            nav = os.path.join(tools.maps_dir, map_name + ".nav")
+            if not os.path.exists(nav) or os.path.getmtime(nav) < os.path.getmtime(marker):
+                return None
+        return maker
     except OSError:
         return None
 

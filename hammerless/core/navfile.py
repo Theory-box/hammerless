@@ -36,8 +36,8 @@ class Encounter:
 
 def _f32(v: float) -> float:
     """Round to a 32-bit float (the game's Vector maths)."""
-    import struct
-    return struct.unpack("<f", struct.pack("<f", v))[0]
+    from .bsppvs import f32
+    return f32(v)
 
 
 @dataclass

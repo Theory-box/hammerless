@@ -136,6 +136,12 @@ def check_native(vmf_text: str, regions=(), climbs=(), wall_climbs=False) -> str
 
 
 def _predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False, native_areas=None) -> NavMesh:
+    from . import fastnav
+    with fastnav.LOCK:                 # the DLL's world is shared with the nav analysis (other threads)
+        return _predict_locked(vmf_text, regions, progress, climbs, wall_climbs, native_areas)
+
+
+def _predict_locked(vmf_text: str, regions, progress, climbs, wall_climbs, native_areas) -> NavMesh:
     import os
     if native_areas is None and os.environ.get("HAMMERLESS_NAV_CHECK"):
         problem = check_native(vmf_text, regions, climbs, wall_climbs)

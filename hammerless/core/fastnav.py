@@ -11,6 +11,8 @@ import math
 import os
 
 _DLL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_hlnav.dll")
+import threading
+LOCK = threading.RLock()     # the DLL keeps one loaded world (and the analysis' slots): one user at a time
 _lib = None
 
 

@@ -90,6 +90,65 @@ static void acc_end(double *box) { g_acc = 0; memcpy(box, g_acc_box, sizeof g_ac
 typedef struct { Side *sides; Brush *brushes; int nb; double cell; int cx0, cy0, w, h; int *cs, *cc, *ci; } World;
 typedef struct { int *ids; int cap; int *mark; int markcap; int markgen; float *samples; int samplecap; int last_n; } Scratch;
 
+/* The brushes a trace can touch, in ascending id order: those in the grid cells the swept box can
+ * reach whose bounds overlap 'box' (the swept box plus 1 unit). Short spans take the whole cell
+ * rectangle; long ones only the rectangles of short pieces along the path (a brush outside them
+ * can't be hit, so the brushes tested, and their order after the sort, are the same). */
+static int gather(const World *W, Scratch *S, double p1x, double p1y, double p2x, double p2y, double ex, double ey,
+                  const double *box) {
+    int cx0 = (int)floor(box[0] / W->cell), cx1 = (int)floor(box[3] / W->cell);
+    int cy0 = (int)floor(box[1] / W->cell), cy1 = (int)floor(box[4] / W->cell);
+    int n = 0;
+#define GATHER_OVERLAPS(bb) ((bb)->b[0] <= box[3] && (bb)->b[3] >= box[0] && (bb)->b[1] <= box[4] && (bb)->b[4] >= box[1] && \
+                             (bb)->b[2] <= box[5] && (bb)->b[5] >= box[2])
+    if (cx0 == cx1 && cy0 == cy1) {
+        int gx = cx0 - W->cx0, gy = cy0 - W->cy0;
+        if (gx >= 0 && gy >= 0 && gx < W->w && gy < W->h) {
+            int c = gx * W->h + gy;
+            if (W->cc[c] > S->cap) { S->cap = W->cc[c] * 2 + 64; S->ids = realloc(S->ids, sizeof(int) * S->cap); }
+            for (int k = 0; k < W->cc[c]; k++) {
+                int id = W->ci[W->cs[c] + k];
+                if (GATHER_OVERLAPS(&W->brushes[id])) S->ids[n++] = id;
+            }
+        }
+        return n;
+    }
+    if (S->markcap < W->nb) { free(S->mark); S->markcap = W->nb; S->mark = calloc(S->markcap ? S->markcap : 1, sizeof(int)); S->markgen = 0; }
+    S->markgen++;
+    int pieces = 1;
+    if ((cx1 - cx0) + (cy1 - cy0) > 4) {
+        double lx = fabs(p2x - p1x), ly = fabs(p2y - p1y);
+        pieces = (int)((lx > ly ? lx : ly) / W->cell) + 1;
+    }
+    for (int pc = 0; pc < pieces; pc++) {
+        int qx0 = cx0, qx1 = cx1, qy0 = cy0, qy1 = cy1;
+        if (pieces > 1) {
+            double ta = (double)pc / pieces, tb = (double)(pc + 1) / pieces;
+            double ax = p1x + ta * (p2x - p1x), bx = p1x + tb * (p2x - p1x);
+            double ay = p1y + ta * (p2y - p1y), by = p1y + tb * (p2y - p1y);
+            qx0 = (int)floor(((ax < bx ? ax : bx) - ex - 2) / W->cell); qx1 = (int)floor(((ax > bx ? ax : bx) + ex + 2) / W->cell);
+            qy0 = (int)floor(((ay < by ? ay : by) - ey - 2) / W->cell); qy1 = (int)floor(((ay > by ? ay : by) + ey + 2) / W->cell);
+            if (qx0 < cx0) qx0 = cx0; if (qx1 > cx1) qx1 = cx1; if (qy0 < cy0) qy0 = cy0; if (qy1 > cy1) qy1 = cy1;
+        }
+        for (int cx = qx0; cx <= qx1; cx++) for (int cy = qy0; cy <= qy1; cy++) {
+            int gx = cx - W->cx0, gy = cy - W->cy0;
+            if (gx < 0 || gy < 0 || gx >= W->w || gy >= W->h) continue;
+            int c = gx * W->h + gy;
+            for (int k = 0; k < W->cc[c]; k++) {
+                int id = W->ci[W->cs[c] + k];
+                if (S->mark[id] == S->markgen) continue;
+                S->mark[id] = S->markgen;
+                if (!GATHER_OVERLAPS(&W->brushes[id])) continue;
+                if (n >= S->cap) { S->cap = n * 2 + 64; S->ids = realloc(S->ids, sizeof(int) * S->cap); }
+                S->ids[n++] = id;
+            }
+        }
+    }
+#undef GATHER_OVERLAPS
+    qsort(S->ids, n, sizeof(int), cmp_int);
+    return n;
+}
+
 static Tr trace_w(const World *W, Scratch *S, double *acc, const double *start, const double *end,
                   const double *mins, const double *maxs) {
     double ex = (maxs[0] - mins[0]) * 0.5, ey = (maxs[1] - mins[1]) * 0.5, ez = (maxs[2] - mins[2]) * 0.5;
@@ -104,58 +163,12 @@ static Tr trace_w(const World *W, Scratch *S, double *acc, const double *start, 
         if (x0 < acc[0]) acc[0] = x0; if (y0 < acc[1]) acc[1] = y0; if (z0 < acc[2]) acc[2] = z0;
         if (x1 > acc[3]) acc[3] = x1; if (y1 > acc[4]) acc[4] = y1; if (z1 > acc[5]) acc[5] = z1;
     }
-    int cx0 = (int)floor(x0 / W->cell), cx1 = (int)floor(x1 / W->cell), cy0 = (int)floor(y0 / W->cell), cy1 = (int)floor(y1 / W->cell);
-    int n = 0;
-    if (cx0 == cx1 && cy0 == cy1) {
-        int gx = cx0 - W->cx0, gy = cy0 - W->cy0;
-        if (gx >= 0 && gy >= 0 && gx < W->w && gy < W->h) {
-            int c = gx * W->h + gy; n = W->cc[c];
-            if (n > S->cap) { S->cap = n * 2 + 64; S->ids = realloc(S->ids, sizeof(int) * S->cap); }
-            memcpy(S->ids, W->ci + W->cs[c], sizeof(int) * n);
-        }
-    } else {
-        if (S->markcap < W->nb) { free(S->mark); S->markcap = W->nb; S->mark = calloc(S->markcap ? S->markcap : 1, sizeof(int)); S->markgen = 0; }
-        S->markgen++;
-        /* the cells the swept box can touch: the whole rectangle for short spans; for long ones only
-         * the rectangles of short pieces along it (a brush outside them can't be hit, so the brushes
-         * tested, and their order after the sort, are the ones that matter either way) */
-        int pieces = 1;
-        if ((cx1 - cx0) + (cy1 - cy0) > 4) {
-            double lx = fabs(p2x - p1x), ly = fabs(p2y - p1y);
-            pieces = (int)((lx > ly ? lx : ly) / W->cell) + 1;
-        }
-        for (int pc = 0; pc < pieces; pc++) {
-            int qx0 = cx0, qx1 = cx1, qy0 = cy0, qy1 = cy1;
-            if (pieces > 1) {
-                double ta = (double)pc / pieces, tb = (double)(pc + 1) / pieces;
-                double ax = p1x + ta * (p2x - p1x), bx = p1x + tb * (p2x - p1x);
-                double ay = p1y + ta * (p2y - p1y), by = p1y + tb * (p2y - p1y);
-                qx0 = (int)floor(((ax < bx ? ax : bx) - ex - 2) / W->cell); qx1 = (int)floor(((ax > bx ? ax : bx) + ex + 2) / W->cell);
-                qy0 = (int)floor(((ay < by ? ay : by) - ey - 2) / W->cell); qy1 = (int)floor(((ay > by ? ay : by) + ey + 2) / W->cell);
-                if (qx0 < cx0) qx0 = cx0; if (qx1 > cx1) qx1 = cx1; if (qy0 < cy0) qy0 = cy0; if (qy1 > cy1) qy1 = cy1;
-            }
-            for (int cx = qx0; cx <= qx1; cx++) for (int cy = qy0; cy <= qy1; cy++) {
-                int gx = cx - W->cx0, gy = cy - W->cy0;
-                if (gx < 0 || gy < 0 || gx >= W->w || gy >= W->h) continue;
-                int c = gx * W->h + gy;
-                for (int k = 0; k < W->cc[c]; k++) {
-                    int id = W->ci[W->cs[c] + k];
-                    if (S->mark[id] == S->markgen) continue;
-                    S->mark[id] = S->markgen;
-                    if (n >= S->cap) { S->cap = n * 2 + 64; S->ids = realloc(S->ids, sizeof(int) * S->cap); }
-                    S->ids[n++] = id;
-                }
-            }
-        }
-        qsort(S->ids, n, sizeof(int), cmp_int);
-    }
+    double box[6] = {x0, y0, z0, x1, y1, z1};
+    int n = gather(W, S, p1x, p1y, p2x, p2y, ex, ey, box);
     S->last_n = n;
     for (int k = 0; k < n; k++) {
-        const Brush *b = &W->brushes[S->ids[k]];
-        if (b->b[0] <= x1 && b->b[3] >= x0 && b->b[1] <= y1 && b->b[4] >= y0 && b->b[2] <= z1 && b->b[5] >= z0) {
-            clip(W->sides, b, p1x, p1y, p1z, p2x, p2y, p2z, ex, ey, ez, is_point, &tr);
-            if (tr.allsolid) break;
-        }
+        clip(W->sides, &W->brushes[S->ids[k]], p1x, p1y, p1z, p2x, p2y, p2z, ex, ey, ez, is_point, &tr);
+        if (tr.allsolid) break;
     }
     if (tr.fraction == 1.0) { tr.ex = end[0]; tr.ey = end[1]; tr.ez = end[2]; }
     else {
@@ -173,39 +186,8 @@ static int line_clear_w(const World *W, Scratch *S, const double *start, const d
     double p1x = start[0], p1y = start[1], p1z = start[2], p2x = end[0], p2y = end[1], p2z = end[2];
     double x0 = (p1x < p2x ? p1x : p2x) - 1, y0 = (p1y < p2y ? p1y : p2y) - 1, z0 = (p1z < p2z ? p1z : p2z) - 1;
     double x1 = (p1x > p2x ? p1x : p2x) + 1, y1 = (p1y > p2y ? p1y : p2y) + 1, z1 = (p1z > p2z ? p1z : p2z) + 1;
-    int cx0 = (int)floor(x0 / W->cell), cx1 = (int)floor(x1 / W->cell), cy0 = (int)floor(y0 / W->cell), cy1 = (int)floor(y1 / W->cell);
-    int n = 0, pieces = 1;
-    if (S->markcap < W->nb) { free(S->mark); S->markcap = W->nb; S->mark = calloc(S->markcap ? S->markcap : 1, sizeof(int)); S->markgen = 0; }
-    S->markgen++;
-    if ((cx1 - cx0) + (cy1 - cy0) > 4) {
-        double lx = fabs(p2x - p1x), ly = fabs(p2y - p1y);
-        pieces = (int)((lx > ly ? lx : ly) / W->cell) + 1;
-    }
-    for (int pc = 0; pc < pieces; pc++) {
-        int qx0 = cx0, qx1 = cx1, qy0 = cy0, qy1 = cy1;
-        if (pieces > 1) {
-            double ta = (double)pc / pieces, tb = (double)(pc + 1) / pieces;
-            double ax = p1x + ta * (p2x - p1x), bx = p1x + tb * (p2x - p1x);
-            double ay = p1y + ta * (p2y - p1y), by = p1y + tb * (p2y - p1y);
-            qx0 = (int)floor(((ax < bx ? ax : bx) - 2) / W->cell); qx1 = (int)floor(((ax > bx ? ax : bx) + 2) / W->cell);
-            qy0 = (int)floor(((ay < by ? ay : by) - 2) / W->cell); qy1 = (int)floor(((ay > by ? ay : by) + 2) / W->cell);
-            if (qx0 < cx0) qx0 = cx0; if (qx1 > cx1) qx1 = cx1; if (qy0 < cy0) qy0 = cy0; if (qy1 > cy1) qy1 = cy1;
-        }
-        for (int cx = qx0; cx <= qx1; cx++) for (int cy = qy0; cy <= qy1; cy++) {
-            int gx = cx - W->cx0, gy = cy - W->cy0;
-            if (gx < 0 || gy < 0 || gx >= W->w || gy >= W->h) continue;
-            int c = gx * W->h + gy;
-            for (int k = 0; k < W->cc[c]; k++) {
-                int id = W->ci[W->cs[c] + k];
-                if (S->mark[id] == S->markgen) continue;
-                S->mark[id] = S->markgen;
-                const Brush *b = &W->brushes[id];
-                if (!(b->b[0] <= x1 && b->b[3] >= x0 && b->b[1] <= y1 && b->b[4] >= y0 && b->b[2] <= z1 && b->b[5] >= z0)) continue;
-                if (n >= S->cap) { S->cap = n * 2 + 64; S->ids = realloc(S->ids, sizeof(int) * S->cap); }
-                S->ids[n++] = id;
-            }
-        }
-    }
+    double box[6] = {x0, y0, z0, x1, y1, z1};
+    int n = gather(W, S, p1x, p1y, p2x, p2y, 0.0, 0.0, box);
     /* does any candidate hold the start point? (clip's startout: some non-bevel plane has d1 > 0) */
     for (int k = 0; k < n; k++) {
         const Brush *b = &W->brushes[S->ids[k]];

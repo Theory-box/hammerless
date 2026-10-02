@@ -58,8 +58,24 @@ class HL_PT_map(bpy.types.Panel):
         row.operator("hammerless.load_leak", icon="ERROR")
 
 
+_status_cache = {"key": None, "time": 0.0, "text": ""}
+
+
 def _nav_status(context) -> str:
-    """One-line nav mesh status for the map (bots and zombies need one)."""
+    """One-line nav mesh status for the map (bots and zombies need one). Worked out at most once
+    a second: it reads files in the game folder and the panel redraws on every mouse move."""
+    import time
+    s = context.scene.hammerless
+    key = (s.map_name, s.nav_source, s.generate_nav, s.game_root if hasattr(s, "game_root") else None)
+    now = time.monotonic()
+    if _status_cache["key"] == key and now - _status_cache["time"] < 1.0:
+        return _status_cache["text"]
+    text = _nav_status_now(context)
+    _status_cache.update(key=key, time=now, text=text)
+    return text
+
+
+def _nav_status_now(context) -> str:
     import os
     import time
     from .ops import game_root

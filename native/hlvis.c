@@ -128,7 +128,7 @@ static int pvs_box_in(const float *lo, const float *hi, const unsigned char *pvs
         for (;;) {
             if (num < 0) {
                 int c = LC[-1 - num];
-                if (c >= 0 && (pvs[c >> 3] & (1 << (c & 7)))) return 1;
+                if (c >= 0 && c < NCL && (pvs[c >> 3] & (1 << (c & 7)))) return 1;
                 break;
             }
             int s = pvs_box_side(lo, hi, ND[3 * num]);
@@ -301,13 +301,15 @@ static volatile LONG g_vis_next;
 static float g_vis_r2;
 static int g_vis_threads = 0;                                         /* 0: one per core */
 
+/* A map compiled without vvis has no visibility data: the engine treats every cluster as visible,
+ * so the PVS check is skipped (NCL == 0). */
 static void vis_area(Scratch *S, unsigned char *pvs, int i) {
-    area_pvs(i, pvs);
+    if (NCL > 0) area_pvs(i, pvs);
     for (int j = i + 1; j < NVA; j++) {
         float dx = VA[j].c[0] - VA[i].c[0], dy = VA[j].c[1] - VA[i].c[1], dz = VA[j].c[2] - VA[i].c[2];
         if (!(dx * dx + dy * dy + dz * dz <= g_vis_r2)) continue;
         float lo[3], hi[3]; area_eye_box(j, lo, hi);
-        if (!pvs_box_in(lo, hi, pvs)) continue;                      /* outside the PVS: neither way */
+        if (NCL > 0 && !pvs_box_in(lo, hi, pvs)) continue;           /* outside the PVS: neither way */
         int o2t = compute_vis(S, i, j);
         int t2o = compute_vis(S, j, i);                              /* L4D2: always when inside the PVS (measured) */
         if (!o2t && t2o) o2t = VIS_POTENTIAL;

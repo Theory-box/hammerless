@@ -17,6 +17,7 @@ from __future__ import annotations
 import ctypes
 
 from . import fastnav
+from .bsppvs import f32 as _f32
 from .bsppvs import BspPVS, bsp_brushes
 from .collision import CollisionWorld, displacement_brushes
 from .vision import (MASK_BLOCKLOS, PHYSICS_BRUSH_CLASSES, SOLID_BRUSH_CLASSES, MaterialContents,
@@ -30,10 +31,38 @@ DOOR_MODE = "all"          # doors block sight lines and boxes (measured: "none"
                            # doorway area different from the game; "all" none)
 
 
-def _slots(vmf_text: str, bsp_path: str, materials: MaterialContents, content=None):
+def _parsed(vmf):
+    """The VMF's top-level blocks (text or already parsed)."""
+    if isinstance(vmf, str):
+        from .vmf import parse
+        return parse(vmf)
+    return vmf
+
+
+def _entity_solids(top, materials: MaterialContents, mask: int):
+    """[(brushes, physics)] per solid brush entity: its brushes whose vbsp contents meet 'mask'."""
+    from .collision import brush_from_vmf_sides
+    out = []
+    for e in (b for b in top if b.name == "entity"):
+        cls = (e.get("classname") or "").lower()
+        if cls not in SOLID_BRUSH_CLASSES:
+            continue
+        if cls == "func_brush" and (e.get("Solidity") or "0").strip() == "1":
+            continue                        # Solidity: Never Solid
+        brushes = []
+        for solid in e.blocks("solid"):
+            if blocks_sight(solid, materials, mask):
+                br = brush_from_vmf_sides([(sd.get("plane"), sd.get("material", "")) for sd in solid.blocks("side")], cls)
+                if br:
+                    brushes.append(br)
+        if brushes:
+            out.append((brushes, cls in PHYSICS_BRUSH_CLASSES))
+    return out
+
+
+def _slots(vmf, bsp_path: str, materials: MaterialContents, content=None):
     """(world brushes, [(brushes, physics, rays)]) for the vision traces."""
-    from .vmf import parse
-    top = parse(vmf_text)
+    top = _parsed(vmf)
     world = bsp_brushes(bsp_path, model=0, mask=MASK_BLOCKLOS)
     for b in top:
         if b.name != "world":
@@ -42,25 +71,16 @@ def _slots(vmf_text: str, bsp_path: str, materials: MaterialContents, content=No
             for side in solid.blocks("side"):
                 for disp in side.blocks("dispinfo"):
                     world.extend(displacement_brushes(side.get("plane"), disp))
-    ents = []
-    from .collision import brush_from_vmf_sides
-    for e in (b for b in top if b.name == "entity"):
-        cls = (e.get("classname") or "").lower()
-        if cls in SOLID_BRUSH_CLASSES:
-            if cls == "func_brush" and (e.get("Solidity") or "0").strip() == "1":
-                continue
-            brushes = []
-            for solid in e.blocks("solid"):
-                if blocks_sight(solid, materials):
-                    br = brush_from_vmf_sides([(s.get("plane"), s.get("material", "")) for s in solid.blocks("side")], cls)
-                    if br:
-                        brushes.append(br)
-            if brushes:
-                ents.append((brushes, cls in PHYSICS_BRUSH_CLASSES, True))
-        elif cls in DOOR_CLASSES and content is not None and DOOR_MODE != "none":
-            pieces = _prop_pieces(e, content)
-            if pieces:
-                ents.append((pieces, True, DOOR_MODE == "all"))   # custom ray test: lines pass
+    ents = [(brushes, physics, True) for brushes, physics in _entity_solids(top, materials, MASK_BLOCKLOS)]
+    if content is not None and DOOR_MODE != "none":
+        for e in (b for b in top if b.name == "entity"):
+            if (e.get("classname") or "").lower() in DOOR_CLASSES:
+                pieces = _prop_pieces(e, content)
+                if pieces:
+                    ents.append((pieces, True, DOOR_MODE == "all"))
+    if len(ents) >= fastnav.NAV_STASH_SLOT:
+        raise RuntimeError(f"{len(ents)} solid entities and doors: more than the nav analysis handles "
+                           f"({fastnav.NAV_STASH_SLOT - 1})")
     return world, ents
 
 
@@ -94,7 +114,8 @@ def _prop_pieces(ent, content):
 
 def _load_slot(slot: int, brushes, physics: bool, rays: bool) -> None:
     fastnav.load_world(CollisionWorld(brushes), memo=False)
-    fastnav._lib.hl_world_stash(slot, int(physics), int(rays))
+    if not fastnav._lib.hl_world_stash(slot, int(physics), int(rays)):
+        raise RuntimeError(f"nav analysis: no room for collision slot {slot}")
 
 
 def _load_pvs(bsp_path: str) -> None:
@@ -110,18 +131,23 @@ def _load_pvs(bsp_path: str) -> None:
                              I(pv.numclusters), I(pv.rowbytes), ctypes.create_string_buffer(rows, max(1, len(rows))))
 
 
-def visibility(areas, vmf_text: str, bsp_path: str, materials: MaterialContents, content=None,
+def visibility(areas, vmf, bsp_path: str, materials: MaterialContents, content=None,
                radius: float = 0.0) -> list[dict[int, int]]:
     """ComputeVisibilityToMesh for every area (in list order). areas: objects with nw, se,
     ne_z, sw_z. Returns, per area, {index of a visible area: attributes} (1 potentially,
     2 completely, 3 both)."""
     if not fastnav.available():
         raise RuntimeError("the nav analysis needs the native DLL")
+    with fastnav.LOCK:                                    # the DLL's worlds are shared: one user at a time
+        return _visibility(areas, vmf, bsp_path, materials, content, radius)
+
+
+def _visibility(areas, vmf, bsp_path, materials, content, radius):
     lib = fastnav._lib
     prev = fastnav.stash_current()                       # keep the nav generator's world
     ents = []
     try:
-        world, ents = _slots(vmf_text, bsp_path, materials, content)
+        world, ents = _slots(vmf, bsp_path, materials, content)
         _load_slot(0, world, False, True)
         for k, (brushes, physics, rays) in enumerate(ents, 1):
             _load_slot(k, brushes, physics, rays)
@@ -151,21 +177,20 @@ NAV_MESH_JUMP, NAV_MESH_DONT_HIDE = 0x2, 0x200
 HIDING_IN_COVER, HIDING_EXPOSED = 0x1, 0x8
 
 
-def _f32(v: float) -> float:
-    import struct
-    return struct.unpack("<f", struct.pack("<f", v))[0]
-
-
-def hiding_spots(mesh, vmf_text: str, bsp_path: str, materials: MaterialContents) -> list[list[tuple]]:
+def hiding_spots(mesh, vmf, bsp_path: str, materials: MaterialContents) -> list[list[tuple]]:
     """Per area, its hiding spots as (position, flags), like CNavArea::ComputeHidingSpots: a
     corner with walls on both sides (no two-way, non-jump neighbour within 20 units of it) gets a
     spot 12.5 units in, IN_COVER when something is overhead or at least half of 16 lines around
     it hit (MASK_NPCSOLID_BRUSHONLY), else EXPOSED. Matches the game's spots exactly (positions,
     order and flags, measured on a 2330-area map)."""
+    ents = [b for brushes, _phys in _entity_solids(_parsed(vmf), materials, MASK_NPCSOLID_BRUSHONLY) for b in brushes]
+    world = CollisionWorld(bsp_brushes(bsp_path, model=0, mask=MASK_NPCSOLID_BRUSHONLY) + ents)
+    with fastnav.LOCK:
+        return _hiding_spots(mesh, world)
+
+
+def _hiding_spots(mesh, world):
     import math
-    from .vision import vision_world
-    _w, phys, bents = vision_world(vmf_text, materials, split=True)
-    world = CollisionWorld(bsp_brushes(bsp_path, model=0, mask=MASK_NPCSOLID_BRUSHONLY) + phys.brushes + bents.brushes)
     prev = fastnav.stash_current()
     try:
         fastnav.load_world(world, memo=False)
@@ -291,9 +316,10 @@ def analyze(mesh, vmf_text: str, bsp_path: str, content, game_dir: str | None = 
     """nav_analyze on our nav mesh: hiding spots, visibility, occupy times. Marks it analyzed so
     the game loads it as is. (Light intensity: pending; left at the game's default 1.0.)"""
     materials = MaterialContents(content, game_dir)
+    top = _parsed(vmf_text)                    # parsed once for both steps
     if progress:
         progress("Finding hiding spots")
-    spots = hiding_spots(mesh, vmf_text, bsp_path, materials)
+    spots = hiding_spots(mesh, top, bsp_path, materials)
     from .navfile import HidingSpot
     next_id = 0
     for a, lst in zip(mesh.areas, spots):
@@ -303,7 +329,7 @@ def analyze(mesh, vmf_text: str, bsp_path: str, content, game_dir: str | None = 
             next_id += 1
     if progress:
         progress("Computing visibility")
-    lists = visibility(mesh.areas, vmf_text, bsp_path, materials, content)
+    lists = visibility(mesh.areas, top, bsp_path, materials, content)
     compress_visibility(mesh, lists)
     for a in mesh.areas:
         a.occupy = (120.0, 120.0)          # ComputeEarliestOccupyTimes: only Counter-Strike changes it

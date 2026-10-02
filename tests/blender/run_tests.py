@@ -444,6 +444,9 @@ def test_nav_generated_when_missing():
     assert needs_nav(bpy.context, FAKE_GAME)          # switched to the game's nav -> regenerate
     assert needs_nav(bpy.context, FAKE_GAME, by_game=True)
     open(os.path.join(marks, "navmaker_test_map.txt"), "w").write("game")
+    assert needs_nav(bpy.context, FAKE_GAME)          # the game was asked but never saved a nav
+    later = os.path.getmtime(os.path.join(marks, "navmaker_test_map.txt")) + 5
+    os.utime(nav, (later, later))                     # ...now it has
     assert not needs_nav(bpy.context, FAKE_GAME)
     s.nav_source = "BLENDER"
     assert needs_nav(bpy.context, FAKE_GAME)          # back to ours: Build makes it

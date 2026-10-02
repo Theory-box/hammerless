@@ -23,9 +23,7 @@ NOT_VISIBLE, POTENTIALLY_VISIBLE, COMPLETELY_VISIBLE = 0, 1, 2
 _ZERO = (0.0, 0.0, 0.0)
 
 
-def _f32(v: float) -> float:
-    import struct
-    return struct.unpack("<f", struct.pack("<f", v))[0]
+from .bsppvs import f32 as _f32
 
 
 def in_radius(centre, pos, radius: float) -> bool:
