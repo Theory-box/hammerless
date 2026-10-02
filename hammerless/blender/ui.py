@@ -70,8 +70,11 @@ def _nav_status(context) -> str:
     nav = os.path.join(root, "left4dead2", "maps", f"{s.map_name}.nav")
     if not os.path.exists(nav):
         return "Nav mesh: none yet (built on next Build & Play)"
+    from ..core import compile as cc
+    from .ops import needs_nav
     age = time.strftime("%b %d %H:%M", time.localtime(os.path.getmtime(nav)))
-    return f"Nav mesh: built {age}" + (" - rebuilding next time" if s.generate_nav else "")
+    maker = {"blender": "made in Blender", "game": "made by the game"}.get(cc.nav_maker(cc.Tools(root), s.map_name), "built")
+    return f"Nav mesh: {maker} {age}" + (" - rebuilding next time" if needs_nav(context, root) else "")
 
 
 class _SubPanel:

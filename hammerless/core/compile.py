@@ -477,6 +477,7 @@ def write_generated_nav(tools: Tools, map_name: str, mesh, analyzed: bool = Fals
     path = os.path.join(tools.maps_dir, map_name + ".nav")
     with open(path, "wb") as f:
         f.write(write_nav(mesh))
+    set_nav_maker(tools, map_name, "blender")
     script, used = _navmark_paths(tools, map_name)
     if os.path.exists(script):
         shutil.copyfile(script, used)
@@ -486,6 +487,27 @@ def write_generated_nav(tools: Tools, map_name: str, mesh, analyzed: bool = Fals
 def _navmark_paths(tools: Tools, map_name: str) -> tuple[str, str]:
     d = os.path.join(tools.gamedir, "scripts", "vscripts", "hammerless")
     return os.path.join(d, f"navmark_{map_name}.nut"), os.path.join(d, f"navmark_{map_name}.used")
+
+
+def _nav_maker_path(tools: Tools, map_name: str) -> str:
+    return os.path.join(tools.gamedir, "scripts", "vscripts", "hammerless", f"navmaker_{map_name}.txt")
+
+
+def set_nav_maker(tools: Tools, map_name: str, maker: str) -> None:
+    """Record who made maps/<map>.nav: "blender" (our generator) or "game" (nav_generate)."""
+    path = _nav_maker_path(tools, map_name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(maker)
+
+
+def nav_maker(tools: Tools, map_name: str) -> str | None:
+    """Who made the current nav mesh ("blender" / "game"), or None when unknown (older builds)."""
+    try:
+        with open(_nav_maker_path(tools, map_name), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
 
 
 def nav_marks_changed(tools: Tools, map_name: str) -> bool:
@@ -598,6 +620,7 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
         threading.Thread(target=_run_console_script, args=(tools, analyze_steps(), log_start),
                          daemon=True).start()
     if generate_nav:
+        set_nav_maker(tools, map_name, "game")
         script, used = _navmark_paths(tools, map_name)
         mark = os.path.exists(script)
         if mark:

@@ -63,20 +63,25 @@ def _quoted_object(message: str) -> str:
     return next((q for q in re.findall(r"'([^']+)'", message) if bpy.data.objects.get(q)), "")
 
 
-def needs_nav(context, root) -> bool:
+def needs_nav(context, root, by_game: bool = False) -> bool:
     """Generate nav when asked to, when the map has no nav mesh yet (without one, bots
-    can't move and zombies can't spawn), or when safe rooms / spawn areas changed."""
+    can't move and zombies can't spawn), when safe rooms / spawn areas changed, or when the
+    nav mesh on disk was made by the other source than the one chosen (Nav Mesh setting).
+    by_game: only the game can make it now (Launch): a game-made nav then stays when the
+    setting is Made in Blender (our generator replaces it on the next Build)."""
     s = context.scene.hammerless
     tools = cc.Tools(root)
     nav = os.path.join(tools.maps_dir, f"{s.map_name}.nav")
-    return s.generate_nav or not os.path.exists(nav) or cc.nav_marks_changed(tools, s.map_name)
+    wanted = "game" if s.nav_source == "GAME" else "blender"
+    maker_differs = cc.nav_maker(tools, s.map_name) != wanted and (wanted == "game" or not by_game)
+    return s.generate_nav or not os.path.exists(nav) or cc.nav_marks_changed(tools, s.map_name) or maker_differs
 
 
 def launch(context, root, nav_written: bool = False, analyzed: bool = False) -> None:
     """nav_written: Hammerless just wrote the nav mesh; the game only analyzes it (unless it's
     already analyzed: then the game just loads the map)."""
     s = context.scene.hammerless
-    generate = False if nav_written else needs_nav(context, root)
+    generate = False if nav_written else needs_nav(context, root, by_game=True)
     cc.launch_game(cc.Tools(root), s.map_name, generate_nav=generate, window=launch_options(s),
                    analyze_nav=nav_written and not analyzed)
 
@@ -724,7 +729,7 @@ class HL_OT_build(bpy.types.Operator):
         if self.play:
             written = self._nav is not None
             analyzed = written and self._nav.get("analyzed", False)
-            nav = needs_nav(context, self._root) and not written
+            nav = needs_nav(context, self._root, by_game=True) and not written
             nav_note = ("" if analyzed else " (the game adds its visibility data: one reload)" if written else
                         " (building its nav mesh first: the map reloads twice)" if nav else "")
             launch(context, self._root, nav_written=written, analyzed=analyzed)
