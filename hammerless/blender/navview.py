@@ -326,18 +326,12 @@ class HL_OT_nav_predict(bpy.types.Operator):
 
     def execute(self, context):
         import threading
-        from ..core.build import Report, build_vmf
         from ..core.nav import collect_climbs, collect_regions
         from ..core.navpredict import predict
-        from .extract import extract_scene
-        rep = Report()
-        ir, _ = extract_scene(context, rep, None)
-        if rep.errors:
-            self.report({"ERROR"}, rep.errors[0])
-            return {"CANCELLED"}
-        from .logic import compile_logic     # the map as it's built: gates are movers, volumes triggers...
-        compile_logic(context, ir, rep)
-        text, rep2 = build_vmf(ir, None)
+        from .ops import build_map_text, game_root
+        # the map exactly as Build exports it (gates are movers, volumes triggers...), so Build & Play
+        # can reuse this navmesh
+        ir, text, rep2 = build_map_text(context, game_root(context))
         if text is None:
             self.report({"ERROR"}, rep2.errors[0] if rep2.errors else "The map doesn't build")
             return {"CANCELLED"}
@@ -401,24 +395,15 @@ class HL_OT_nav_analyze(bpy.types.Operator):
 
     def execute(self, context):
         import threading
-        from ..core.build import Report, build_vmf
         from ..core.buildplan import plan
         from ..core.nav import collect_climbs, collect_regions
         from ..core.navpredict import predict
-        from .extract import extract_scene
-        from .ops import game_root, work_dir
+        from .ops import build_map_text, game_root, work_dir
         root = game_root(context)
         if not root:
             self.report({"ERROR"}, "Left 4 Dead 2 not found. Set the L4D2 Folder in the Hammerless panel")
             return {"CANCELLED"}
-        rep = Report()
-        ir, _ = extract_scene(context, rep, None)
-        if rep.errors:
-            self.report({"ERROR"}, rep.errors[0])
-            return {"CANCELLED"}
-        from .logic import compile_logic
-        compile_logic(context, ir, rep)
-        text, rep2 = build_vmf(ir, None)
+        ir, text, rep2 = build_map_text(context, root)       # exactly what Build exports
         if text is None:
             self.report({"ERROR"}, rep2.errors[0] if rep2.errors else "The map doesn't build")
             return {"CANCELLED"}
@@ -429,10 +414,15 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         except OSError:
             built = None
         if built is None or not os.path.exists(base + ".bsp"):
-            self.report({"ERROR"}, "Build the map first: the analysis looks at the compiled map")
+            self.report({"ERROR"}, "The map hasn't been compiled yet: click Build (or Build & Play), then Analyze. "
+                                   "(Build Navmesh doesn't compile the map)")
             return {"CANCELLED"}
         if plan(built, text)[0] == "full":
-            self.report({"ERROR"}, "Walls or floors changed since the last build: Build first, then Analyze")
+            import time
+            when = time.strftime("%b %d %H:%M", time.localtime(os.path.getmtime(base + ".built.vmf")))
+            self.report({"ERROR"}, f"Walls or floors changed since the map was last compiled ({when}): click Build "
+                                   "(or Build & Play) to compile it, then Analyze. (Build Navmesh doesn't compile "
+                                   "the map)")
             return {"CANCELLED"}
         regions, _ = collect_regions(ir)
         climbs, _ = collect_climbs(ir)

@@ -147,20 +147,29 @@ def surface_report(op, rep: Report) -> None:
         op.report({"WARNING"}, f"{len(rep.warnings)} warning(s). See the '{LOG_TEXT}' text block")
 
 
-def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
-    """Extract + build + write. Returns (vmf_path, game_root, report)."""
+def build_map_text(context, root: str | None):
+    """The scene as VMF text, exactly as Build exports it: (ir, text or None, report). Anything
+    else that compares against the last build (Analyze Navmesh) must use this too."""
     s = context.scene.hammerless
-    root = game_root(context)
     rep = Report()
     gamedir = os.path.join(root, "left4dead2") if root else None
     ir, _mats = extract_scene(context, rep, gamedir)
     if rep.errors:
-        return None, root, rep
+        return ir, None, rep
     from .logic import compile_logic
     compile_logic(context, ir, rep)
     text, rep2 = build_vmf(ir, game_content(root) if s.check_game_content else None)
     rep2.errors[:0] = rep.errors
     rep2.warnings[:0] = rep.warnings
+    return ir, text, rep2
+
+
+def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
+    """Extract + build + write. Returns (vmf_path, game_root, report)."""
+    s = context.scene.hammerless
+    root = game_root(context)
+    gamedir = os.path.join(root, "left4dead2") if root else None
+    ir, text, rep2 = build_map_text(context, root)
     if text is None:
         return None, root, rep2
     path = os.path.join(work_dir(context), f"{s.map_name}.vmf")
