@@ -437,7 +437,18 @@ def test_nav_generated_when_missing():
     open(os.path.join(marks, "navmark_test_map.nut"), "w").write("marks v1")
     assert needs_nav(bpy.context, FAKE_GAME)          # marks never used for this nav -> rebuild
     open(os.path.join(marks, "navmark_test_map.used"), "w").write("marks v1")
+    assert needs_nav(bpy.context, FAKE_GAME)          # nobody recorded who made this nav -> rebuild
+    open(os.path.join(marks, "navmaker_test_map.txt"), "w").write("blender")
     assert not needs_nav(bpy.context, FAKE_GAME)      # nav exists, marks same, toggle off -> skip
+    s.nav_source = "GAME"
+    assert needs_nav(bpy.context, FAKE_GAME)          # switched to the game's nav -> regenerate
+    assert needs_nav(bpy.context, FAKE_GAME, by_game=True)
+    open(os.path.join(marks, "navmaker_test_map.txt"), "w").write("game")
+    assert not needs_nav(bpy.context, FAKE_GAME)
+    s.nav_source = "BLENDER"
+    assert needs_nav(bpy.context, FAKE_GAME)          # back to ours: Build makes it
+    assert not needs_nav(bpy.context, FAKE_GAME, by_game=True)   # Launch doesn't make the game replace it
+    open(os.path.join(marks, "navmaker_test_map.txt"), "w").write("blender")
     open(os.path.join(marks, "navmark_test_map.nut"), "w").write("marks v2")
     assert needs_nav(bpy.context, FAKE_GAME)          # safe rooms moved -> rebuild
     open(os.path.join(marks, "navmark_test_map.used"), "w").write("marks v2")
