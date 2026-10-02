@@ -21,6 +21,7 @@ COLORS = {
     "start": (0.25, 0.55, 1.0, 0.45), "end": (0.75, 0.35, 1.0, 0.45),
     "reach": (0.2, 0.85, 0.35, 0.3), "unreach": (0.95, 0.1, 0.05, 0.55),
     "obscured": (1.0, 0.6, 0.1, 0.4), "plain": (0.55, 0.75, 0.95, 0.25),
+    "can_spawn": (0.2, 0.85, 0.3, 0.45), "too_close": (1.0, 0.45, 0.05, 0.5), "in_view": (1.0, 0.85, 0.1, 0.45),
     "no_spawn": (0.95, 0.15, 0.15, 0.5), "no_wander": (0.95, 0.45, 0.6, 0.45), "no_mobs": (0.65, 0.3, 0.95, 0.45),
     "drop": (1.0, 0.55, 0.1, 1.0), "jump": (0.1, 0.9, 1.0, 1.0), "outline": (0.05, 0.05, 0.05, 0.6),
     "break": (1.0, 0.1, 0.1, 1.0), "ladder": (1.0, 0.9, 0.1, 1.0),
@@ -103,7 +104,69 @@ def cursor_area(scale: float):
     return best[1] if best else None
 
 
-def _area_color(a, rep, mode, viewer=None):
+SPAWN_SAFETY_RANGE = 550.0     # z_spawn_safety_range. Measured: the first zombies after leaving the start
+                               # room were never closer than ~680 units walking (326 in a straight line)
+
+
+def survivor_areas(mesh, viewer=None) -> list:
+    """Where the survivors are: the area under the 3D cursor, or (None) the areas just outside the
+    start room, where they stand when they leave it (the Director places its first zombies then)."""
+    if viewer is not None:
+        return [viewer]
+    by = mesh.by_id()
+    start = {a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START}
+    out = []
+    for a in mesh.areas:
+        if a.id in start:
+            continue
+        linked = any(c in start for d in a.connections for c in d) or any(
+            a.id in by[c].connections[d] for c in start for d in range(4))
+        if linked:
+            out.append(a)
+    return out
+
+
+def spawn_reasons(mesh, viewer=None) -> dict:
+    """{area id: "can_spawn" | "no_spawn" | "too_close" | "in_view"} for wandering zombies, with
+    the survivors at survivor_areas(): the first rule that stops a spawn wins (no-spawn mark,
+    walking distance under z_spawn_safety_range, seen by a survivor if the nav is analyzed)."""
+    import heapq
+    import math
+    by = mesh.by_id()
+    sources = survivor_areas(mesh, viewer)
+    dist = {a.id: 0.0 for a in sources}
+    heap = [(0.0, a.id) for a in sources]
+    while heap:
+        d, i = heapq.heappop(heap)
+        if d > dist[i] or d > SPAWN_SAFETY_RANGE:
+            continue
+        a = by[i]
+        for side in a.connections:
+            for j in side:
+                b = by.get(j)
+                if b is not None:
+                    nd = d + math.dist(a.centre, b.centre)
+                    if nd < dist.get(j, 1e18):
+                        dist[j] = nd
+                        heapq.heappush(heap, (nd, j))
+    lists = visibility_lists() or {}
+    seen = set()
+    for s in sources:
+        seen.update(k for k, v in lists.get(s.id, {}).items() if v)
+    out = {}
+    for a in mesh.areas:
+        if a.spawn_attributes & EMPTY:
+            out[a.id] = "no_spawn"
+        elif dist.get(a.id, 1e18) < SPAWN_SAFETY_RANGE:
+            out[a.id] = "too_close"
+        elif a.id in seen:
+            out[a.id] = "in_view"
+        else:
+            out[a.id] = "can_spawn"
+    return out
+
+
+def _area_color(a, rep, mode, viewer=None, reasons=None):
     if mode == "VIS":
         lists = visibility_lists() or {}
         if viewer is None:
@@ -112,10 +175,14 @@ def _area_color(a, rep, mode, viewer=None):
             return COLORS["viewer"]
         v = lists.get(viewer.id, {}).get(a.id, 0)
         return {1: COLORS["seen_partly"], 2: COLORS["seen_complete"], 3: COLORS["seen_both"]}.get(v, COLORS["unseen"])
+    if mode == "WHY" and viewer is not None and a.id == viewer.id:
+        return COLORS["viewer"]
     if a.spawn_attributes & PLAYER_START:
         return COLORS["start"]
     if a.spawn_attributes & CHECKPOINT:
         return COLORS["end"]
+    if mode == "WHY":
+        return COLORS[reasons.get(a.id, "can_spawn")] if reasons else COLORS["plain"]
     if mode == "REACH":
         return COLORS["reach"] if a.id in rep.reachable else COLORS["unreach"]
     if mode == "SPAWN":
@@ -137,6 +204,7 @@ def _area_color(a, rep, mode, viewer=None):
 
 def _build(scale: float, mode: str, links: bool, spots: bool = False, viewer=None):
     m, rep = _state["mesh"], _state["report"]
+    reasons = spawn_reasons(m, viewer) if mode == "WHY" else None
     tris, tri_cols, outline = [], [], []
     spot_lines = {"spot_cover": [], "spot_exposed": []}
     if spots:
@@ -149,7 +217,7 @@ def _build(scale: float, mode: str, links: bool, spots: bool = False, viewer=Non
                                      p, p + Vector((0, 0, 2 * r))]
     for a in m.areas:
         c = [Vector((x, y, z + LIFT)) / scale for x, y, z in a.corners]
-        col = _area_color(a, rep, mode, viewer)
+        col = _area_color(a, rep, mode, viewer, reasons)
         tris += [c[0], c[1], c[2], c[0], c[2], c[3]]
         tri_cols += [col] * 6
         for i in range(4):
@@ -194,8 +262,10 @@ def _draw():
     s = bpy.context.scene.hammerless
     if not s.show_nav or _state["mesh"] is None:
         return
-    viewer = cursor_area(s.units_per_meter) if s.nav_color_mode == "VIS" else None
-    key = (s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer.id if viewer else None)
+    use_cursor = s.nav_color_mode == "VIS" or (s.nav_color_mode == "WHY" and s.spawn_from == "CURSOR")
+    viewer = cursor_area(s.units_per_meter) if use_cursor else None
+    key = (s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer.id if viewer else None,
+           s.spawn_from)
     if _state["batches"] is None or _state["key"] != key:
         _state["batches"] = _build(s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer)
         _state["key"] = key
@@ -460,6 +530,16 @@ def draw_panel(layout, context):
         legend.label(text="Green: survivors can reach it. Red: they can't", icon="INFO")
     elif s.nav_color_mode == "FLOW":
         legend.label(text="Blue near the start, red far along the path", icon="INFO")
+    elif s.nav_color_mode == "WHY":
+        legend.prop(s, "spawn_from")
+        legend.label(text="Green: wandering zombies can spawn", icon="INFO")
+        legend.label(text="Red: no-spawn mark (EMPTY)", icon="BLANK1")
+        legend.label(text=f"Orange: too close, under {SPAWN_SAFETY_RANGE:.0f} units walking", icon="BLANK1")
+        if visibility_lists():
+            legend.label(text="Yellow: a survivor can see it", icon="BLANK1")
+        else:
+            legend.label(text="(Analyze Navmesh to also show what's in view)", icon="BLANK1")
+        legend.label(text="Nothing spawns until someone leaves the start room", icon="BLANK1")
     elif s.nav_color_mode == "VIS":
         if not visibility_lists():
             legend.label(text="No visibility in this nav: Analyze Navmesh, or show the game's nav", icon="INFO")

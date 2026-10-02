@@ -207,6 +207,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("FLOW", "Distance from the start", "Heat map of walking distance along the path"),
         ("SPAWN", "Zombie spawn marks", "Red: no zombies spawn (EMPTY + NO_MOBS). Pink: no wanderers. "
                  "Violet: no hordes. Orange: Zombie Spawn Area (OBSCURED). Light blue: normal"),
+        ("WHY", "Where zombies can spawn", "Why an area gets zombies or not, for survivors stepping out of the "
+                "start room (or at the 3D cursor): green can spawn, red no-spawn mark, orange too close (walking "
+                "distance), yellow in view"),
         ("VIS", "What can be seen from the 3D cursor", "From the area under the 3D cursor (Shift + right-click to "
                 "place it): green completely visible, yellow partly, grey not visible (needs an analyzed nav)"),
     ])
@@ -214,6 +217,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                     description="Hiding spots from the nav analysis: blue in cover, orange exposed")
     show_nav_links: BoolProperty(name="Drops and Jumps", default=True, update=lambda self, c: _nav_display(self, c),
                                  description="Arrows for one-way drop-downs (orange) and jump-ups (cyan)")
+    spawn_from: EnumProperty(name="Survivors At", default="START", update=lambda self, c: _nav_display(self, c), items=[
+        ("START", "Leaving the start room", "Where survivors stand when they step out of the start room: the "
+                  "Director places its first zombies then"),
+        ("CURSOR", "3D cursor", "Survivors standing in the area under the 3D cursor"),
+    ])
     nav_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _nav_display(self, c),
                            description="Draw the nav mesh through walls")
     show_problem_markers: BoolProperty(name="Show Markers", default=True,
