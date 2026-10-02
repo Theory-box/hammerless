@@ -386,19 +386,22 @@ class HL_OT_nav_analyze(bpy.types.Operator):
     bl_idname = "hammerless.nav_analyze"
     bl_label = "Analyze Navmesh"
     bl_description = ("Build the navmesh and run the game's nav analysis on it here (visibility between areas, "
-                      "hiding spots), against the last compiled map. Then colour the nav by what the area under "
+                      "hiding spots). Compiles the map first when walls or floors changed since the last compile "
+                      "(the analysis looks through the compiled map). Then colour the nav by what the area under "
                       "the 3D cursor can see")
 
     _timer = None
     _thread = None
     _box: dict = {}
+    _job = None
 
     def execute(self, context):
         import threading
+        from ..core import compile as cc
         from ..core.buildplan import plan
         from ..core.nav import collect_climbs, collect_regions
         from ..core.navpredict import predict
-        from .ops import build_map_text, game_root, work_dir
+        from .ops import build_map_text, compile_options, export_vmf, game_root, surface_report, work_dir
         root = game_root(context)
         if not root:
             self.report({"ERROR"}, "Left 4 Dead 2 not found. Set the L4D2 Folder in the Hammerless panel")
@@ -413,20 +416,26 @@ class HL_OT_nav_analyze(bpy.types.Operator):
                 built = f.read()
         except OSError:
             built = None
-        if built is None or not os.path.exists(base + ".bsp"):
-            self.report({"ERROR"}, "The map hasn't been compiled yet: click Build (or Build & Play), then Analyze. "
-                                   "(Build Navmesh doesn't compile the map)")
-            return {"CANCELLED"}
-        if plan(built, text)[0] == "full":
-            import time
-            when = time.strftime("%b %d %H:%M", time.localtime(os.path.getmtime(base + ".built.vmf")))
-            self.report({"ERROR"}, f"Walls or floors changed since the map was last compiled ({when}): click Build "
-                                   "(or Build & Play) to compile it, then Analyze. (Build Navmesh doesn't compile "
-                                   "the map)")
-            return {"CANCELLED"}
+        self._job = None
+        if built is None or not os.path.exists(base + ".bsp") or plan(built, text)[0] == "full":
+            # the walls the analysis looks through are the compiled map's: compile this version first
+            tools = cc.Tools(root)
+            if tools.missing():
+                self.report({"ERROR"}, "L4D2 Authoring Tools not installed (Steam > Library > Tools > "
+                                       "Left 4 Dead 2 Authoring Tools): the analysis needs the compiled map")
+                return {"CANCELLED"}
+            path, _root, rep = export_vmf(self, context)
+            surface_report(self, rep)
+            if not path:
+                return {"CANCELLED"}
+            self._job = cc.CompileJob(tools, path, compile_options(context.scene.hammerless),
+                                      skip_if_unchanged=True).start()
         regions, _ = collect_regions(ir)
         climbs, _ = collect_climbs(ir)
-        box = {"stage": "Building the navmesh", "mesh": None, "error": None}
+        compiled = threading.Event()
+        if self._job is None:
+            compiled.set()
+        box = {"stage": "Building the navmesh", "mesh": None, "error": None, "compiled": compiled}
         self._box = box
         wall_climbs = context.scene.hammerless.wall_climbs
 
@@ -434,7 +443,11 @@ class HL_OT_nav_analyze(bpy.types.Operator):
             try:
                 from ..core.navanalyze import analyze
                 from ..core.vpk import GameContent
-                mesh = predict(text, regions, None, climbs, wall_climbs)
+                mesh = predict(text, regions, None, climbs, wall_climbs)     # needs no compiled map
+                box["stage"] = "Compiling the map"
+                compiled.wait()
+                if box["error"]:
+                    return
                 analyze(mesh, text, base + ".bsp", GameContent(root), os.path.join(root, "left4dead2"),
                         progress=lambda stage: box.update(stage=stage))
                 box["mesh"] = mesh
@@ -450,6 +463,20 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
         box = self._box
+        job = self._job
+        if job is not None and not box["compiled"].is_set():
+            new = job.poll()
+            if new:
+                from .ops import write_log
+                write_log(new, append=True)
+                context.workspace.status_text_set(f"Hammerless: compiling for the analysis: {new[-1][:100]}")
+            if job.done:
+                if job.failed:
+                    summ = job.summary
+                    box["error"] = ("the map leaks (use Load Leak to see where)" if summ and summ.leaked else
+                                    summ.errors[0] if summ and summ.errors else "the compile failed, see the log")
+                box["compiled"].set()
+            return {"PASS_THROUGH"}
         if self._thread.is_alive():
             context.workspace.status_text_set(f"Hammerless: analyzing the navmesh: {box['stage']}...")
             return {"PASS_THROUGH"}
@@ -458,10 +485,22 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         if box["error"] or box["mesh"] is None:
             self.report({"ERROR"}, f"Nav analysis failed: {box['error']}")
             return {"CANCELLED"}
-        finish_prediction(context, box["mesh"])
-        context.scene.hammerless.nav_color_mode = "VIS"
-        spots = sum(len(a.hiding_spots) for a in box["mesh"].areas)
-        self.report({"INFO"}, f"Analyzed {len(box['mesh'].areas)} areas: {spots} hiding spots. Put the 3D cursor "
+        mesh = box["mesh"]
+        s = context.scene.hammerless
+        if job is not None and not job.skipped:
+            # the game's map changed: give it a nav mesh that fits (this one, analyzed) or have it make one
+            from .ops import game_root
+            from ..core import compile as cc
+            if s.nav_source == "BLENDER":
+                import copy
+                cc.write_generated_nav(cc.Tools(game_root(context)), s.map_name, copy.deepcopy(mesh), analyzed=True)
+            else:
+                s.generate_nav = True
+        finish_prediction(context, mesh)
+        s.nav_color_mode = "VIS"
+        spots = sum(len(a.hiding_spots) for a in mesh.areas)
+        done = "Compiled the map and analyzed" if job is not None and not job.skipped else "Analyzed"
+        self.report({"INFO"}, f"{done} {len(mesh.areas)} areas: {spots} hiding spots. Put the 3D cursor "
                               "on an area (Shift + right-click) to see what it can see")
         return {"FINISHED"}
 
