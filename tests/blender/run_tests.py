@@ -548,6 +548,47 @@ def test_collection_instances_export():
     assert "hidden object" not in log, log          # the kit's own objects aren't 'hidden' walls
 
 
+def test_entity_tools_audit():
+    # pre-release audit, round 2: hidden entities, Turn Selected into, preset copies, Change Entity
+    reset_scene()
+    add_box("floor", (10, 10, 0.2), (0, 0, -0.1))
+    bpy.ops.hammerless.add_preset(preset="TANK_AMBUSH")
+    bpy.context.scene.cursor.location = (3, 0, 0)
+    bpy.ops.hammerless.add_preset(preset="TANK_AMBUSH")
+    names = sorted(kv.value for o in bpy.data.objects for kv in o.hammerless.keyvalues
+                   if kv.key == "targetname" and o.hammerless.classname == "commentary_zombie_spawner")
+    assert len(names) == 2 and names[0] != names[1], names          # each copy has its own spawner
+    trig_targets = sorted(op.target for o in bpy.data.objects for op in o.hammerless.outputs)
+    assert trig_targets == names, (trig_targets, names)              # ...and its trigger points at its own
+
+    bpy.context.scene.cursor.location = (0, 0, 0)
+    bpy.ops.hammerless.add_entity(classname="weapon_first_aid_kit_spawn")
+    kit = bpy.context.object
+    wall = add_box("wall", (1, 1, 1), (2, 2, 0.5))
+    twin = wall.copy()                                               # shares the wall's mesh
+    bpy.context.scene.collection.objects.link(twin)
+    for o in bpy.context.selected_objects:
+        o.select_set(False)
+    kit.select_set(True)
+    wall.select_set(True)
+    bpy.ops.hammerless.set_brush_entity(classname="trigger_once")
+    assert kit.hammerless.classname == "weapon_first_aid_kit_spawn" and kit.hammerless.role == "ENTITY"
+    assert wall.hammerless.classname == "trigger_once" and wall.data is not twin.data   # twin untouched
+
+    for o in bpy.context.selected_objects:
+        o.select_set(False)
+    bpy.context.view_layer.objects.active = kit
+    bpy.ops.hammerless.set_entity_class(classname="weapon_pain_pills_spawn")
+    assert kit.hammerless.classname == "weapon_pain_pills_spawn"     # changed in place, no new object
+    assert not [o for o in bpy.data.objects if o.hammerless.classname == "weapon_first_aid_kit_spawn"]
+
+    kit.hide_set(True)
+    blocks, log = export()
+    assert blocks, log
+    assert not entities(blocks, "weapon_pain_pills_spawn"), "a hidden entity was exported"
+    assert "hidden object" in log, log
+
+
 def test_game_material_by_name():
     reset_scene()
     mat = bpy.data.materials.new("concrete/concrete_floor_01")

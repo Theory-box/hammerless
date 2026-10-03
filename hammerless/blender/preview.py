@@ -16,7 +16,8 @@ NODE_TAG = "hammerless_preview"
 
 def _image_for_texture(texture: str, content, game_dir):
     """Blender image for a game texture (cached by name). Returns (image, full_width, full_height)."""
-    name = f"HL_tex_{texture}"
+    from .ops import cache_name
+    name = cache_name("HL_tex_", texture)
     img = bpy.data.images.get(name)
     if img is not None and "hl_full_size" in img:
         w, h = img["hl_full_size"]
@@ -102,7 +103,8 @@ def update_mapping(mat, units_per_meter: float) -> None:
 
 def _model_material(material_path: str, content, game_dir):
     """Blender material showing a model's texture through its UVs (cached)."""
-    name = f"HL_mdl_{material_path}"
+    from .ops import cache_name
+    name = cache_name("HL_mdl_", material_path)
     mat = bpy.data.materials.get(name)
     if mat is not None:
         return mat
@@ -131,7 +133,8 @@ def _model_material(material_path: str, content, game_dir):
 def model_mesh(model_path: str, content, game_dir, units_per_meter: float):
     """Blender mesh of a game model (LOD 0, textured), cached per model. None if unreadable."""
     from ..core.mdl import find_material, load_model
-    name = f"HL_mdl_{model_path}"
+    from .ops import cache_name
+    name = cache_name("HL_mdl_", model_path, units_per_meter)
     mesh = bpy.data.meshes.get(name)
     if mesh is not None:
         return mesh

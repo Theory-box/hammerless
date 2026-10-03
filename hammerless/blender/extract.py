@@ -453,12 +453,14 @@ def extract_scene(context, report, game_dir: str | None = None) -> tuple[MapIR, 
 
     hidden = []
     for obj in context.scene.objects:
-        if not obj.visible_get() and obj.hammerless.role == "AUTO":
-            in_layer = obj.name in context.view_layer.objects     # not in an excluded collection
-            if (in_layer and (obj.hide_get() or obj.hide_viewport) and obj.type == "MESH"
-                    and effective_role(obj) in ("BRUSH", "TERRAIN")):
+        if not obj.visible_get():
+            # hidden (H, the eye or monitor icon) or in an excluded / hidden collection: left out of
+            # the map, like everything you can't see. Ones hidden by hand are listed
+            in_layer = obj.name in context.view_layer.objects
+            if (in_layer and (obj.hide_get() or obj.hide_viewport) and obj.hammerless.preset_part == ""
+                    and effective_role(obj) in ("BRUSH", "TERRAIN", "BRUSH_ENTITY", "ENTITY")):
                 hidden.append(obj.name)
-            continue  # hidden objects are skipped unless explicitly tagged
+            continue
         role = effective_role(obj)
         if role in ("BRUSH", "BRUSH_ENTITY", "TERRAIN") and obj.type != "MESH":
             report.warnings.append(f"'{obj.name}' is a {obj.type.lower()}, not a mesh, so it can't be a brush or "

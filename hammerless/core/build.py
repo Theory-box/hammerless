@@ -1,6 +1,8 @@
 """MapIR -> VMF text, with validation and automatic fixes (sealing, director, sun)."""
 from __future__ import annotations
 
+import os
+
 import dataclasses
 
 from dataclasses import dataclass, field
@@ -76,6 +78,14 @@ def is_auto_detail(brush: Brush, mode: str) -> bool:
             or max(b - a for a, b in zip(lo, hi)) < DETAIL_MAX_SIZE)
 
 
+def _map_exists(content, name: str) -> bool:
+    """A map the game can load: in its VPKs (Valve's maps) or in left4dead2/maps (custom maps)."""
+    if f"maps/{name}.bsp" in getattr(content, "files", ()):
+        return True
+    root = getattr(content, "game_root", None)
+    return bool(root) and os.path.exists(os.path.join(root, "left4dead2", "maps", f"{name}.bsp"))
+
+
 def bad_next_map(cl: Entity, map_name: str) -> bool:
     nxt = cl.keyvalues.get("map", "").strip().lower()
     return not nxt or nxt == map_name.strip().lower()
@@ -127,6 +137,20 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
         r.info.append("No info_player_start. Adding one next to the first survivor spawn.")
     if classes.count("info_director") > 1:
         r.errors.append("More than one info_director.")
+    directors = [e for e in ir.entities if e.classname == "info_director"]
+    if directors and all(e.keyvalues.get("targetname", "director") != "director" for e in directors) and any(
+            o.target.lower() == "director" for e in ir.entities for o in e.outputs):
+        r.warnings.append("The Director entity was renamed, but hordes and crescendos send their outputs to "
+                          "'director': name it 'director' again")
+    if SURVIVOR_SPAWNS & set(classes) and "info_changelevel" not in classes:
+        r.warnings.append("No End Safe Room: without a path from start to end the Director doesn't place "
+                          "wandering zombies, Tanks or Witches (only timed hordes come)")
+    for e in ir.entities:
+        nxt = e.keyvalues.get("map", "").strip().lower() if e.classname == "info_changelevel" else ""
+        if nxt and content is not None and not _map_exists(content, nxt):
+            r.warnings.append(f"The End Safe Room's Next Map '{nxt}' isn't installed: closing the door won't "
+                              "load anything (and the Director may find no path). Check the name, or build "
+                              "that map first")
     if "prop_door_rotating_checkpoint" not in classes:
         r.info.append("No safe room doors. Fine for testing, but a campaign map needs them.")
     names = [e.keyvalues.get("targetname") for e in ir.entities if e.classname == "info_landmark"]
@@ -211,8 +235,10 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
 def resolve_crescendo(ir: MapIR, parameter: str) -> str | None:
     """Crescendo name an output refers to. Accepts 'crescendo_1' and the v0.1 form
     'hammerless/crescendo_crescendo_1'."""
+    from .gamefiles import crescendo_key
     name = parameter.split("/")[-1].removeprefix(f"hammerless_{ir.settings.name}_")  # already resolved
-    for candidate in (name, name.removeprefix("crescendo_")):
+    for candidate in (name, name.removeprefix("crescendo_"), crescendo_key(name),
+                      crescendo_key(name).removeprefix("crescendo_")):
         if candidate in ir.crescendos:
             return candidate
     return None
@@ -458,6 +484,9 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
                 if name:
                     o.parameter = director_input_script(s.name, name)
     for e in entities:
+        if e.classname in ("trigger_once", "trigger_multiple") and not e.keyvalues.get("spawnflags", "").strip():
+            e.keyvalues = {**e.keyvalues, "spawnflags": "1"}      # players (without a flag nothing triggers it)
+    for e in entities:
         if e.classname == "info_changelevel" and bad_next_map(e, s.name):
             e.keyvalues = {**e.keyvalues, "map": FALLBACK_NEXT_MAP}
     entities = [zombie_ladder_entity(e, report) if e.classname == "func_ladder" else e for e in entities]
@@ -496,6 +525,14 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     if s.director_enabled:
         entities.append(Entity("logic_auto", HELPER_SPOT, (0, 0, 0), {"spawnflags": "1"}, outputs=[
             Output("OnMapSpawn", "director", "BeginScript", director_input_script(s.name, "director"), 1.0, 1)]))
+        if ir.crescendos:
+            # a crescendo's script takes the Director's script slot and leaves it empty when it ends:
+            # load the map-wide settings again afterwards
+            director = next((e for e in entities if e.classname == "info_director"), None)
+            if director is not None:
+                director.outputs = list(director.outputs) + [Output(
+                    "OnPanicEventFinished", "director", "BeginScript", director_input_script(s.name, "director"),
+                    0.5, -1)]
     if "info_player_start" not in classes:
         first = next((e for e in entities if e.classname == "info_survivor_position"), None)
         origin = clear_spawn_spot(ir, entities, first.origin) if first else (0.0, 0.0, 0.0)

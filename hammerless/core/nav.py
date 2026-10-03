@@ -38,6 +38,29 @@ class NavRegion:
     maxs: tuple[float, float, float]
     bits: int
     source: str = ""
+    # the volume's brushes as plane lists (nx, ny, nz, d: inside where n.p <= d), padded like the
+    # box (sideways and down, not up). Empty: the box alone decides
+    hulls: tuple = ()
+
+    def contains(self, p) -> bool:
+        if not all(self.mins[i] <= p[i] <= self.maxs[i] for i in range(3)):
+            return False
+        return not self.hulls or any(all(nx * p[0] + ny * p[1] + nz * p[2] <= d for nx, ny, nz, d in hull)
+                                     for hull in self.hulls)
+
+
+def _region_hulls(brushes) -> tuple:
+    hulls = []
+    for b in brushes:
+        planes = []
+        for f in g.merge_coplanar(b.faces):
+            pl = g.Plane.from_polygon(f.verts)
+            nx, ny, nz = pl.normal
+            pad = 0.0 if nz > 0.7 else PAD        # never upward (a roof marked CHECKPOINT breaks the flow)
+            planes.append((round(nx, 6), round(ny, 6), round(nz, 6), round(pl.dist + pad, 3)))
+        if planes:
+            hulls.append(tuple(planes))
+    return tuple(hulls)
 
 
 def parse_attributes(text: str) -> tuple[int, list[str]]:
@@ -66,7 +89,7 @@ def collect_regions(ir: MapIR) -> tuple[list[NavRegion], list[str]]:
             continue
         mins, maxs = g.bounds(pts)
         regions.append(NavRegion(tuple(c - PAD for c in mins), (maxs[0] + PAD, maxs[1] + PAD, maxs[2]),
-                                 bits, e.source))
+                                 bits, e.source, _region_hulls(e.brushes)))
     return regions, problems
 
 
@@ -105,6 +128,11 @@ def collect_climbs(ir: MapIR) -> tuple[list[NavClimb], list[str]]:
     return climbs, problems
 
 
+def _hulls_sq(hulls) -> str:
+    return "[" + ", ".join("[" + ", ".join(f"[{nx:g}, {ny:g}, {nz:g}, {d:g}]" for nx, ny, nz, d in h) + "]"
+                           for h in hulls) + "]"
+
+
 def _vec(v) -> str:
     return f"Vector({v[0]:.1f}, {v[1]:.1f}, {v[2]:.1f})"
 
@@ -115,6 +143,11 @@ def climb_direction(bottom, top) -> int:
     return (1 if dx > 0 else 3) if abs(dx) > abs(dy) else (2 if dy > 0 else 0)
 
 
+def sq_text(text: str) -> str:
+    """Text for inside a Squirrel "..." string literal."""
+    return str(text).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").replace("\r", " ")
+
+
 def navmark_script(regions: list[NavRegion], map_name: str, climbs: list[NavClimb] = (),
                    wall_climbs: bool = False) -> str:
     lines = [
@@ -123,11 +156,21 @@ def navmark_script(regions: list[NavRegion], map_name: str, climbs: list[NavClim
         f"// Zombies Climb Walls: {'on' if wall_climbs else 'off'}",
         "local areas = {};",
         "NavMesh.GetAllAreas(areas);",
-        "function HL_Mark(areas, mins, maxs, bits) {",
+        "function HL_In(c, hulls) {",
+        "    if (hulls.len() == 0) return true;",
+        "    foreach (h in hulls) {",
+        "        local inside = true;",
+        "        foreach (p in h) if (c.x * p[0] + c.y * p[1] + c.z * p[2] > p[3]) { inside = false; break; }",
+        "        if (inside) return true;",
+        "    }",
+        "    return false;",
+        "}",
+        "function HL_Mark(areas, mins, maxs, bits, hulls) {",
         "    local n = 0;",
         "    foreach (id, a in areas) {",
         "        local c = a.GetCenter();",
-        "        if (c.x >= mins.x && c.x <= maxs.x && c.y >= mins.y && c.y <= maxs.y && c.z >= mins.z && c.z <= maxs.z) {",
+        "        if (c.x >= mins.x && c.x <= maxs.x && c.y >= mins.y && c.y <= maxs.y && c.z >= mins.z && c.z <= maxs.z",
+        "            && HL_In(c, hulls)) {",
         "            a.SetSpawnAttributes(a.GetSpawnAttributes() | bits);",
         "            n++;",
         "        }",
@@ -136,7 +179,7 @@ def navmark_script(regions: list[NavRegion], map_name: str, climbs: list[NavClim
         "}",
     ]
     for r in regions:
-        lines.append(f'printl("HAMMERLESS_NAVMARK {r.source}: " + HL_Mark(areas, {_vec(r.mins)}, {_vec(r.maxs)}, {r.bits}) + " areas");')
+        lines.append(f'printl("HAMMERLESS_NAVMARK {sq_text(r.source)}: " + HL_Mark(areas, {_vec(r.mins)}, {_vec(r.maxs)}, {r.bits}, {_hulls_sq(r.hulls)}) + " areas");')
     if climbs:
         lines += [
             "function HL_Area(p) {",
@@ -151,7 +194,7 @@ def navmark_script(regions: list[NavRegion], map_name: str, climbs: list[NavClim
             "}",
         ]
         for c in climbs:
-            lines.append(f'printl("HAMMERLESS_NAVMARK climb {c.source}: " + HL_Climb({_vec(c.bottom)}, '
+            lines.append(f'printl("HAMMERLESS_NAVMARK climb {sq_text(c.source)}: " + HL_Climb({_vec(c.bottom)}, '
                          f'{_vec(c.top)}, {climb_direction(c.bottom, c.top)}));')
     lines.append('SendToConsole("nav_save");')
     lines.append('printl("HAMMERLESS_NAVMARK done");')

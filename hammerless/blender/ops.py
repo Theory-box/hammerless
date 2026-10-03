@@ -211,6 +211,19 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
 
 # ---------------------------------------------------------------- preview meshes
 
+def cache_name(prefix: str, key: str, scale: float | None = None) -> str:
+    """A cached data-block's name: Blender cuts names at 63 characters, so long keys get a hash
+    (otherwise the cache is never found and a new copy is made every time); per scale for meshes."""
+    import hashlib
+    if scale is not None and abs(scale - 52.49) > 1e-6:
+        key = f"{key}@{scale:g}"
+    name = prefix + key
+    if len(name) <= 60:
+        return name
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
+    return prefix + key[-(60 - len(prefix) - 9):] + "~" + digest
+
+
 def preview_mesh(classname: str, scale: float, model: str = ""):
     """Shared wireframe box + forward arrow showing an entity's size and facing.
     With a model path, the box is the model's real bounds (read from the game)."""
@@ -219,13 +232,13 @@ def preview_mesh(classname: str, scale: float, model: str = ""):
         full = real_model_mesh(model, scale)
         if full is not None:
             return full
-        name = f"HL_model_{model}"
+        name = cache_name("HL_model_", model, scale)
         mesh = bpy.data.meshes.get(name)
         if mesh:
             return mesh
         bounds = model_bounds_from_game(model)
     if bounds is None:
-        name = f"HL_preview_{classname}"
+        name = cache_name("HL_preview_", classname, scale)
         mesh = bpy.data.meshes.get(name)
         if mesh:
             return mesh
@@ -367,18 +380,24 @@ def refresh_material_preview(mat) -> bool:
 
 # ---------------------------------------------------------------- operators
 
+_ENTITY_ITEMS: list = []           # built once and kept: Blender only borrows the strings
+_BRUSH_ENTITY_ITEMS: list = []
+
+
 def _entity_enum(self, context):
-    items = []
-    for cat in CATEGORIES:
-        for cls, d in sorted(CATALOG.items(), key=lambda kv: kv[1].label):
-            if d.category == cat and not d.brush:
-                items.append((cls, f"{d.label}", f"{cls}: {d.description}"))
-    return items
+    if not _ENTITY_ITEMS:
+        for cat in CATEGORIES:
+            for cls, d in sorted(CATALOG.items(), key=lambda kv: kv[1].label):
+                if d.category == cat and not d.brush:
+                    _ENTITY_ITEMS.append((cls, f"{d.label}", f"{cls}: {d.description}"))
+    return _ENTITY_ITEMS
 
 
 def _brush_entity_enum(self, context):
-    return [(cls, d.label, f"{cls}: {d.description}")
-            for cls, d in sorted(CATALOG.items(), key=lambda kv: kv[1].label) if d.brush]
+    if not _BRUSH_ENTITY_ITEMS:
+        _BRUSH_ENTITY_ITEMS.extend((cls, d.label, f"{cls}: {d.description}")
+                                   for cls, d in sorted(CATALOG.items(), key=lambda kv: kv[1].label) if d.brush)
+    return _BRUSH_ENTITY_ITEMS
 
 
 class HL_OT_add_entity(bpy.types.Operator):
@@ -405,6 +424,35 @@ class HL_OT_add_entity(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class HL_OT_set_entity_class(bpy.types.Operator):
+    bl_idname = "hammerless.set_entity_class"
+    bl_label = "Change Entity"
+    bl_description = "Change the selected entity's class (its settings reset to the new class's defaults)"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_property = "classname"
+
+    classname: EnumProperty(name="Entity", items=_entity_enum)
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None and bool(context.object.hammerless.classname)
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        obj = context.object
+        if obj.hammerless.classname != self.classname:
+            obj.hammerless.classname = self.classname
+        if obj.type == "MESH" and obj.hammerless.role in ("ENTITY", "AUTO"):
+            kv = {k.key: k.value for k in obj.hammerless.keyvalues}
+            obj.data = preview_mesh(self.classname, context.scene.hammerless.units_per_meter,
+                                    preview_model(self.classname, kv) or "")
+            style_entity_object(obj)
+        return {"FINISHED"}
+
+
 class HL_OT_set_brush_entity(bpy.types.Operator):
     bl_idname = "hammerless.set_brush_entity"
     bl_label = "Make Brush Entity"
@@ -419,18 +467,67 @@ class HL_OT_set_brush_entity(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
     def execute(self, context):
+        changed = 0
         for o in context.selected_objects:
-            if o.type == "MESH":
-                o.hammerless.role = "BRUSH_ENTITY"
-                o.hammerless.classname = self.classname
-                if self.classname in ("info_changelevel", "trigger_once", "trigger_multiple",
-                                      "env_player_blocker", "func_playerinfected_clip"):
-                    o.display_type = "WIRE"
-                    mat = "tools/toolstrigger" if "trigger" in self.classname or self.classname == "info_changelevel" \
-                        else "tools/toolsplayerclip"
-                    o.data.materials.clear()
-                    o.data.materials.append(game_material(mat))
+            hs = o.hammerless
+            # point entities (their previews are meshes too) and preset pieces stay what they are
+            if o.type != "MESH" or hs.role == "ENTITY" or hs.preset_part or (
+                    hs.role == "AUTO" and hs.classname and not CATALOG.get(hs.classname, None) is None
+                    and not CATALOG[hs.classname].brush):
+                continue
+            hs.role = "BRUSH_ENTITY"
+            if hs.classname != self.classname:      # (setting it resets the keyvalues to the defaults)
+                hs.classname = self.classname
+            changed += 1
+            if self.classname in ("info_changelevel", "trigger_once", "trigger_multiple",
+                                  "env_player_blocker", "func_playerinfected_clip"):
+                o.display_type = "WIRE"
+                mat = "tools/toolstrigger" if "trigger" in self.classname or self.classname == "info_changelevel" \
+                    else "tools/toolsplayerclip"
+                if o.data.users > 1:
+                    o.data = o.data.copy()          # don't change the other objects sharing this mesh
+                o.data.materials.clear()
+                o.data.materials.append(game_material(mat))
+        if not changed:
+            self.report({"WARNING"}, "Select plain meshes to turn into brush entities (entities and preset parts "
+                                     "are left as they are)")
+            return {"CANCELLED"}
         return {"FINISHED"}
+
+
+NAME_KEYS = ("targetname", "climb")              # keys whose value names a preset's own piece
+REFERENCE_KEYS = ("targetname", "climb", "target", "parentname", "landmark", "filtername")
+
+
+def _unique_preset_names(preset) -> None:
+    """Names a preset gives its pieces (e.g. 'tank_ambush_spawner', 'gate_1', 'climb_1') that are already
+    used in the file get a number, everywhere in the preset, so two copies don't set each other off."""
+    import re
+    used = {kv.value for o in bpy.data.objects for kv in o.hammerless.keyvalues if kv.key in NAME_KEYS and kv.value}
+    renames: dict[str, str] = {}
+    for part in preset.parts:
+        e = part.entity
+        if e is None:
+            continue
+        for key in NAME_KEYS:
+            old = e.keyvalues.get(key)
+            if not old or old not in used or old in renames:
+                continue
+            stem = re.sub(r"_\d+$", "", old)
+            n = 2
+            while f"{stem}_{n}" in used or f"{stem}_{n}" in renames.values():
+                n += 1
+            renames[old] = f"{stem}_{n}"
+    if not renames:
+        return
+    for part in preset.parts:
+        e = part.entity
+        if e is None:
+            continue
+        e.keyvalues = {k: (renames.get(v, v) if k in REFERENCE_KEYS else v) for k, v in e.keyvalues.items()}
+        for o in e.outputs:
+            o.target = renames.get(o.target, o.target)
+            o.parameter = renames.get(o.parameter, o.parameter)
 
 
 class HL_OT_add_preset(bpy.types.Operator):
@@ -481,6 +578,7 @@ class HL_OT_add_preset(bpy.types.Operator):
             preset = builder(name=f"crescendo_{n}")
         else:
             preset = builder()
+        _unique_preset_names(preset)
         from .presets import make_root, parent_to
         coll = context.collection
         base = context.scene.cursor.location.copy()
@@ -845,6 +943,8 @@ _SKY_ITEMS: list[tuple[str, str, str]] = []
 
 
 def _sky_items(self, context):
+    if _SKY_ITEMS and _SKY_ITEMS[0][0] != "sky_day01_09_hdr":
+        return _SKY_ITEMS          # filled from the game: keep it (Blender holds on to its strings)
     root = game_root(context)
     content = game_content(root)
     _SKY_ITEMS.clear()
@@ -917,10 +1017,13 @@ class HL_OT_pick_model(bpy.types.Operator):
         if not self.model:
             return {"CANCELLED"}
         s = context.scene.hammerless
-        for obj in context.selected_objects or [context.object]:
+        active = context.object
+        if active is None or not active.hammerless.classname:
+            self.report({"WARNING"}, "Select the prop to give this model")
+            return {"CANCELLED"}
+        for obj in {active, *[o for o in context.selected_objects
+                              if o.hammerless.classname == active.hammerless.classname]}:
             hs = obj.hammerless
-            if not hs.classname:
-                continue
             kv = next((x for x in hs.keyvalues if x.key == "model"), None) or hs.keyvalues.add()
             kv.key, kv.value = "model", self.model
             if obj.type == "MESH" and hs.role in ("ENTITY", "AUTO"):
@@ -972,6 +1075,8 @@ class HL_OT_refresh_previews(bpy.types.Operator):
         done = failed = 0
         for mat in bpy.data.materials:
             hs = mat.hammerless
+            if mat.name.startswith("HL_"):
+                continue                  # Hammerless's own preview materials
             if not hs.source_material and "/" in mat.name and not mat.name.startswith("hammerless/"):
                 hs.source_material = mat.name.lower()
             if not hs.source_material or hs.source_material.startswith("tools/"):
@@ -1020,6 +1125,10 @@ class HL_OT_kv_add(bpy.types.Operator):
     bl_label = "Add Keyvalue"
     bl_options = {"UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
     def execute(self, context):
         context.object.hammerless.keyvalues.add()
         return {"FINISHED"}
@@ -1029,6 +1138,10 @@ class HL_OT_kv_remove(bpy.types.Operator):
     bl_idname = "hammerless.kv_remove"
     bl_label = "Remove Keyvalue"
     bl_options = {"UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
 
     def execute(self, context):
         hs = context.object.hammerless
@@ -1043,6 +1156,10 @@ class HL_OT_output_add(bpy.types.Operator):
     bl_description = "Add an output: when this entity's event fires, tell another entity to do something"
     bl_options = {"UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
     def execute(self, context):
         hs = context.object.hammerless
         hs.outputs.add()
@@ -1054,6 +1171,10 @@ class HL_OT_output_remove(bpy.types.Operator):
     bl_idname = "hammerless.output_remove"
     bl_label = "Remove Output"
     bl_options = {"UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
 
     def execute(self, context):
         hs = context.object.hammerless
@@ -1067,6 +1188,10 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
     bl_label = "Reset to Defaults"
     bl_options = {"UNDO"}
 
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None
+
     def execute(self, context):
         hs = context.object.hammerless
         hs.keyvalues.clear()
@@ -1076,7 +1201,7 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (HL_OT_pick_sky, HL_OT_pick_model, HL_OT_pick_material, HL_OT_refresh_previews, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
+CLASSES = (HL_OT_pick_sky, HL_OT_pick_model, HL_OT_pick_material, HL_OT_refresh_previews, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_entity_class, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
            HL_OT_export_vmf, HL_OT_build, HL_OT_launch, HL_OT_load_leak,
            HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues)
 

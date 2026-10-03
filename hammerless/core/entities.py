@@ -22,6 +22,10 @@ class KeyDef:
     choices: tuple[tuple[str, str], ...] = ()  # (value, label)
 
 
+# trigger spawnflags: who can set it off (Source: 1 clients, 2 NPCs, 64 everything)
+TRIGGER_FLAGS = (("1", "Players"), ("3", "Players and NPCs"), ("64", "Everything"))
+
+
 @dataclass(frozen=True)
 class EntityDef:
     classname: str
@@ -150,7 +154,8 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               "A game model that falls, can be pushed and shot around (barrels, crates, cans).",
               (KeyDef("model", "models/props_c17/oildrum001.mdl", "Model"),
                KeyDef("skin", "0", "Skin"),
-               KeyDef("spawnflags", "0", "Spawn flags", (("0", "Normal"), ("8", "Start asleep (motion disabled until hit)")))),
+               KeyDef("spawnflags", "0", "Spawn flags", (("0", "Normal"), ("1", "Start asleep (still until hit)"),
+                                                          ("8", "Motion disabled (never moves)")))),
               model="models/props_c17/oildrum001.mdl"),
     EntityDef("prop_door_rotating", "Door", "Props",
               "An ordinary door that opens with Use. Infected can break it.",
@@ -247,10 +252,12 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
                   ("0", "Everyone"), ("1", "Survivors"), ("2", "Player infected"),
                   ("3", "All players and PZ"))),), brush=True),
     EntityDef("trigger_once", "Trigger (once)", "Brush Entities",
-              "Fires its outputs once when touched.", brush=True),
+              "Fires its outputs once when a player touches it.",
+              (KeyDef("spawnflags", "1", "Touched by", TRIGGER_FLAGS),), brush=True),
     EntityDef("trigger_multiple", "Trigger (multiple)", "Brush Entities",
-              "Fires its outputs each time it's touched.",
-              (KeyDef("wait", "1", "Delay before reset"),), brush=True),
+              "Fires its outputs each time a player touches it.",
+              (KeyDef("spawnflags", "1", "Touched by", TRIGGER_FLAGS), KeyDef("wait", "1", "Delay before reset")),
+              brush=True),
 
     EntityDef("func_ladder", "Ladder", "Brush Entities",
               "Climbable volume. Give the side players climb from the tools/toolsinvisibleladder "

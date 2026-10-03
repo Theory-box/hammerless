@@ -305,7 +305,7 @@ class HL_PT_object(bpy.types.Panel):
             row = col.row(align=True)
             row.prop(hs, "classname", text="Class")
             if eff == "ENTITY":
-                row.operator("hammerless.add_entity", text="", icon="VIEWZOOM")
+                row.operator("hammerless.set_entity_class", text="", icon="VIEWZOOM")
             else:
                 row.operator("hammerless.set_brush_entity", text="", icon="VIEWZOOM")
             d = CATALOG.get(hs.classname)

@@ -20,6 +20,17 @@
   - After *Compile Only* the old nav mesh was kept; now the next Build & Play makes a new one.
   - Brush planes from three points on a line; terrain patches near the size limit broke the compile; tool brushes (hint, clip, areaportal) were made func_detail; spawns snapped up onto tables.
   - Map Name is cleaned up (lowercase, `a-z 0-9 _`).
+- **Pre-release audit, round 2 (entities and presets):**
+  - Triggers made from the catalog or *Make Brush Entity* never fired (no "touched by" flag); old scenes are fixed at build time.
+  - Hidden or excluded entities and presets were still exported.
+  - *Turn Selected into* also converted point entities, reset settings and changed materials on shared meshes.
+  - A second copy of a preset (Tank Ambush, Gate + Button, Zombie Climb) shared names with the first, so either copy set off both.
+  - Rotated safe rooms marked nav outside the room; marks now follow the room's real shape.
+  - Crescendo names with capitals or spaces never started; bad stage values broke the script; the map's Director settings weren't restored after a crescendo, and No Random Hordes / Tank limit 0 cancelled crescendo stages.
+  - Object names with quotes broke the generated nav-marking and Bot Walkthrough scripts.
+  - Model previews with long paths were duplicated on every refresh and ignored *Units per Meter*.
+  - The search button next to an entity's Class now changes that entity instead of adding a new one.
+  - New warnings: no End Safe Room (no wandering zombies), Next Map not installed, renamed Director.
 - **Rooms behind a gate got no wandering zombies**: Mover gates no longer block the nav by default (L4D2 blocks from map load, before the Director places zombies).
 - A lit map loaded into a running game after an unlit one looked unlit (`mat_fullbright` stayed on).
 - Build Navmesh and Analyze Navmesh now export the map exactly as Build does.

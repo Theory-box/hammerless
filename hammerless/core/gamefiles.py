@@ -162,6 +162,16 @@ def director_script(ir: MapIR) -> str:
     return "\n".join(lines) + "\n"
 
 
+def sq_text(text: str) -> str:
+    """Text for inside a Squirrel "..." string literal (object names can hold quotes, backslashes...)."""
+    return (str(text).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").replace("\r", " "))
+
+
+def crescendo_key(name: str) -> str:
+    """A crescendo's name as used for its script file (and to match the outputs that start it)."""
+    return "".join(c if c.isalnum() or c == "_" else "_" for c in name.strip().lower())
+
+
 # ---------------------------------------------------------------- crescendo scripts
 
 STAGE_TYPES = {"PANIC": 0, "TANK": 1, "DELAY": 2}
@@ -181,6 +191,25 @@ def director_option_lines(ir: MapIR) -> list[str]:
     if s.dir_no_wanderers:
         lines.append("    WanderingZombieDensityModifier = 0")
     return lines
+
+
+def crescendo_options(ir: MapIR, stages) -> list[str]:
+    """The map-wide Director settings a crescendo repeats while it runs, minus those that would stop
+    its own stages: No Random Hordes (its PANIC waves are hordes) and a Tank limit below its TANK stage."""
+    tanks = max((int(v) for kind, v in stages if kind == "TANK"), default=0)
+    out = []
+    for line in director_option_lines(ir):
+        key, _, value = (p.strip() for p in line.partition("="))
+        if key == "NoMobSpawns":
+            continue
+        if key == "TankLimit" and tanks:
+            try:
+                if int(value) < tanks:
+                    line = f"    TankLimit = {tanks}"
+            except ValueError:
+                pass
+        out.append(line)
+    return out
 
 
 def crescendo_script(name: str, stages: list[tuple[str, float]], extra_options: list[str] | None = None) -> str:
@@ -216,6 +245,13 @@ def parse_stages(text: str) -> tuple[list[tuple[str, float]], list[str]]:
         except ValueError:
             problems.append(f"stage '{chunk.strip()}' needs a number")
             continue
+        import math
+        if not math.isfinite(value) or value < 0 or value > 3600:
+            problems.append(f"stage '{chunk.strip()}' needs a number from 0 to 3600")
+            continue
+        if kind in ("PANIC", "TANK") and not value.is_integer():
+            problems.append(f"stage '{chunk.strip()}' needs a whole number")
+            continue
         stages.append((kind, value))
     if not stages:
         problems.append("has no stages")
@@ -229,7 +265,7 @@ def collect_crescendos(ir: MapIR) -> list[str]:
     for e in ir.entities:
         if e.classname != CRESCENDO:
             continue
-        name = "".join(c if c.isalnum() or c == "_" else "_" for c in e.keyvalues.get("name", "crescendo").lower())
+        name = crescendo_key(e.keyvalues.get("name", "crescendo"))
         if name == "director":
             problems.append("A crescendo can't be named 'director' (that name is the map's Director settings): "
                             "rename it")
@@ -262,6 +298,8 @@ def game_files(ir: MapIR) -> dict[str, str]:
         files[f"{SCRIPT_DIR}/autotest_{s.name}.nut"] = autotest_script(route, s.name, start_door(ir))
     files.update(ir.extra_scripts)
     for name, stages in ir.crescendos.items():
+        if f"scripts/vscripts/{director_input_script(s.name, name)}.nut" in ir.extra_scripts:
+            continue          # reported by collect_crescendos_conflicts (a Director Settings node has this name)
         files[f"scripts/vscripts/{director_input_script(s.name, name)}.nut"] = crescendo_script(
-            name, stages, director_option_lines(ir))
+            name, stages, crescendo_options(ir, stages))
     return files

@@ -28,6 +28,9 @@ class Waypoint:
     target: str = ""           # entity targetname to fire (buttons, end door)
 
 
+from .gamefiles import sq_text  # noqa: E402
+
+
 def _centre(entity):
     pts = [v for b in entity.brushes for f in b.faces for v in f.verts]
     (x0, y0, z0), (x1, y1, z1) = g.bounds(pts)
@@ -36,13 +39,20 @@ def _centre(entity):
 
 def start_door(ir: MapIR) -> tuple[str, str]:
     """(start door name, name of an entity inside the start room to open the door away from)."""
-    door = next((e for e in ir.entities if e.classname == "prop_door_rotating_checkpoint"
-                 and e.keyvalues.get("spawnpos", "0") == "0" and e.keyvalues.get("targetname")), None)
+    doors = [e for e in ir.entities if e.classname == "prop_door_rotating_checkpoint" and e.origin
+             and e.keyvalues.get("targetname")]
+    start = _start_spot(ir)
+    door = min(doors, key=lambda e: g.length(g.sub(e.origin, start)), default=None)
     if door is None:
         return "", ""
     inside = [e for e in ir.entities if e.classname == "info_landmark" and e.origin and e.keyvalues.get("targetname")]
     inside.sort(key=lambda e: g.length(g.sub(e.origin, door.origin)))
     return door.keyvalues["targetname"], (inside[0].keyvalues["targetname"] if inside else "")
+
+
+def _start_spot(ir: MapIR):
+    return next((e.origin for e in ir.entities if e.classname in ("info_survivor_position", "info_player_start")
+                 and e.origin is not None), (0.0, 0.0, 0.0))
 
 
 def plan_route(ir: MapIR) -> tuple[list[Waypoint], list[str]]:
@@ -63,17 +73,20 @@ def plan_route(ir: MapIR) -> tuple[list[Waypoint], list[str]]:
     points.sort(key=lambda w: g.length(g.sub(w.pos, start)))
     end = next((e for e in ir.entities if e.classname == "info_changelevel" and e.brushes), None)
     if end is not None:
-        door = next((e.keyvalues.get("targetname") for e in ir.entities
-                     if e.classname == "prop_door_rotating_checkpoint"
-                     and e.keyvalues.get("spawnpos") == "1" and e.keyvalues.get("targetname")), "")
-        points.append(Waypoint("END", _centre(end), "end safe room", door))
+        doors = [e for e in ir.entities if e.classname == "prop_door_rotating_checkpoint" and e.origin
+                 and e.keyvalues.get("targetname")]
+        start_name = start_door(ir)[0]
+        doors = [e for e in doors if e.keyvalues["targetname"] != start_name] or doors
+        centre = _centre(end)
+        door = min(doors, key=lambda e: g.length(g.sub(e.origin, centre)), default=None)
+        points.append(Waypoint("END", centre, "end safe room", door.keyvalues["targetname"] if door else ""))
     return points, []
 
 
 def autotest_script(waypoints: list[Waypoint], map_name: str, start_door_name: tuple[str, str] = ("", "")) -> str:
     rows = ",\n".join(
         f'    {{ kind = "{w.kind}", pos = Vector({w.pos[0]:.0f}, {w.pos[1]:.0f}, {w.pos[2]:.0f}), '
-        f'label = "{w.label}", target = "{w.target}" }}' for w in waypoints)
+        f'label = "{sq_text(w.label)}", target = "{sq_text(w.target)}" }}' for w in waypoints)
     return (AUTOTEST_TEMPLATE.replace("%MAP%", map_name).replace("%WAYPOINTS%", rows)
             .replace("%START_DOOR%", start_door_name[0]).replace("%DOOR_AWAY_FROM%", start_door_name[1]))
 
@@ -110,10 +123,17 @@ function HLT_Survivors() {
     return list;
 }
 
+function HLT_Ground(pos) {
+    // a button sits in a wall: stand on the walkable nav nearest to it instead
+    local a = NavMesh.GetNearestNavArea(pos, 256.0, false, false);
+    return a != null ? a.GetCenter() : pos;
+}
+
 function HLT_Order(wp) {
     local i = 0;
+    local base = wp.kind == "BUTTON" ? HLT_Ground(wp.pos) : wp.pos;
     foreach (p in HLT_Survivors()) {
-        local spot = wp.pos + Vector((i % 2) * 48 - 24, (i / 2) * 48 - 24, 0);
+        local spot = base + Vector((i % 2) * 48 - 24, (i / 2) * 48 - 24, 0);
         if (IsPlayerABot(p)) {
             CommandABot({ cmd = 1, pos = spot, bot = p });   // BOT_CMD_MOVE
         } else if (!::HLT.human_active && (p.GetOrigin() - spot).Length() > 400) {

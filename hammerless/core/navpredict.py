@@ -62,7 +62,7 @@ def to_navmesh(areas, regions, ladders=()) -> NavMesh:
         n.connections = [[ids[id(b)] for b in a.connect[d] if id(b) in ids] for d in range(4)]
         c = n.centre
         for r in regions:
-            if all(r.mins[i] <= c[i] <= r.maxs[i] for i in range(3)):
+            if r.contains(c):
                 n.spawn_attributes |= r.bits
         mesh.areas.append(n)
     lids = {id(lad): i + 1 for i, lad in enumerate(ladders)}
@@ -81,7 +81,7 @@ _last: dict = {"key": None, "mesh": None}
 
 def _key(vmf_text: str, regions, climbs=(), wall_climbs=False) -> str:
     import hashlib
-    return hashlib.sha1((vmf_text + repr([(r.mins, r.maxs, r.bits) for r in regions])
+    return hashlib.sha1((vmf_text + repr([(r.mins, r.maxs, r.bits, r.hulls) for r in regions])
                          + repr([(c.bottom, c.top) for c in climbs]) + repr(wall_climbs)).encode()).hexdigest()
 
 

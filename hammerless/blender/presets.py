@@ -135,6 +135,9 @@ class HL_OT_group_preset(bpy.types.Operator):
         label = PRESETS[key].label
         parts = [o for o in coll.objects if o.parent is None and o.name.startswith(label + " ")
                  and not o.hammerless.preset]
+        if not parts:
+            self.report({"WARNING"}, "This preset's parts are already grouped under another object")
+            return {"CANCELLED"}
         corners = [o.matrix_world @ Vector(c) for o in parts for c in o.bound_box]
         base = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
         root = make_root(context, key, base, coll)

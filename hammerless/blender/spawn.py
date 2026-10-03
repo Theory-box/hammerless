@@ -97,7 +97,7 @@ class HL_OT_spawn_favorite(bpy.types.Operator):
     bl_idname = "hammerless.spawn_favorite"
     bl_label = "Favorite"
     bl_description = "Star this to find it under Favorites"
-    bl_options = {"INTERNAL"}
+    bl_options = {"INTERNAL", "UNDO"}
 
     item: StringProperty()
 

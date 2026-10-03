@@ -194,6 +194,47 @@ class TestGeometryAudit(unittest.TestCase):
         self.assertLessEqual(2048 / brush.faces[0].lightmap_scale, 125)
 
 
+class TestEntityAudit(unittest.TestCase):
+    """Fixes from the pre-release audit (entities, presets, generated scripts)."""
+
+    def test_rotated_safe_room_marks_only_its_own_nav(self):
+        import math
+        from hammerless.core.nav import NavRegion, collect_regions, NAV_REGION
+        ir = box_room_ir()
+        c, s_ = math.cos(math.radians(45)), math.sin(math.radians(45))
+        rot = lambda x, y: (x * c - y * s_, x * s_ + y * c)
+        box = g.box_brush((-100, -100, 0), (100, 100, 128), "tools/toolstrigger", "room")
+        for f in box.faces:
+            f.verts = [(*rot(v[0], v[1]), v[2]) for v in f.verts]
+        ir.entities.append(Entity("info_changelevel", None, (0, 0, 0), {"map": "c1m2_streets"}, [box]))
+        (region,), _ = collect_regions(ir)
+        self.assertTrue(region.contains((0, 0, 10)))
+        self.assertFalse(region.contains((130, 130, 10)))      # inside the square box around it, outside the room
+        self.assertTrue(region.contains((0, 0, -10)))          # padded down (areas sit on the floor)
+        self.assertFalse(region.contains((0, 0, 140)))         # never up (a marked roof breaks the flow)
+
+    def test_triggers_fire_for_players(self):
+        from hammerless.core.entities import default_keyvalues
+        self.assertEqual(default_keyvalues("trigger_once").get("spawnflags"), "1")
+        ir = box_room_ir()
+        ir.entities.append(Entity("trigger_once", None, (0, 0, 0), {}, [g.box_brush((-32, -32, 0), (32, 32, 64),
+                                                                                    "tools/toolstrigger")]))
+        text, rep = build_vmf(ir)
+        trig = next(e for e in parse(text) if e.name == "entity" and e.get("classname") == "trigger_once")
+        self.assertEqual(trig.get("spawnflags"), "1")          # old scenes without the key are fixed at build
+
+    def test_names_in_scripts_are_escaped(self):
+        from hammerless.core.nav import NavRegion, navmark_script
+        nut = navmark_script([NavRegion((0, 0, 0), (1, 1, 1), 2048, 'End "B" \\')], "m")
+        self.assertIn('End \\"B\\" \\\\', nut)
+
+    def test_crescendo_name_with_spaces_starts(self):
+        from hammerless.core.build import resolve_crescendo
+        ir = box_room_ir()
+        ir.crescendos["lift_event"] = [("PANIC", 1.0)]
+        self.assertEqual(resolve_crescendo(ir, "Lift Event"), "lift_event")
+
+
 class TestBuild(unittest.TestCase):
     def test_box_room_builds(self):
         text, rep = build_vmf(box_room_ir())
@@ -1189,7 +1230,7 @@ class TestNav(unittest.TestCase):
         regions, _ = collect_regions(self.preset_ir())
         nut = navmark_script(regions, "m")
         self.assertIn("SetSpawnAttributes", nut)
-        self.assertIn(", 2176)", nut)  # PLAYER_START | CHECKPOINT
+        self.assertIn(", 2176, [", nut)  # PLAYER_START | CHECKPOINT (then the room's shape)
         self.assertIn('SendToConsole("nav_save")', nut)
 
     def test_unknown_attribute_reported(self):
@@ -1212,7 +1253,7 @@ class TestOutputs(unittest.TestCase):
         self.assertTrue(rep.ok, rep.errors)
         trig = next(b for b in parse(text) if b.name == "entity" and b.get("classname") == "trigger_once")
         self.assertEqual(trig.blocks("connections")[0].get("OnTrigger"), "director,ForcePanicEvent,,0,1")
-        self.assertEqual(rep.warnings, [])
+        self.assertEqual([w for w in rep.warnings if not w.startswith("No End Safe Room")], [])
 
     def test_tank_ambush_targets_resolve(self):
         text, rep = build_vmf(self.preset_ir("TANK_AMBUSH"))
@@ -1265,13 +1306,13 @@ class TestSettingsAndScripts(unittest.TestCase):
             ir.entities.append(part.entity)
         text, rep = build_vmf(ir)
         self.assertTrue(rep.ok, rep.errors)
-        self.assertEqual(rep.warnings, [])
+        self.assertEqual([w for w in rep.warnings if not w.startswith("No End Safe Room")], [])
         self.assertNotIn("hammerless_crescendo", text)
         self.assertIn("director,ScriptedPanicEvent,hammerless_m_c7,0,1", text)
         nut = game_files(ir)["scripts/vscripts/hammerless_m_c7.nut"]
         # building again (outputs already rewritten) stays clean
         text2, rep2 = build_vmf(ir)
-        self.assertEqual(rep2.warnings, [])
+        self.assertEqual([w for w in rep2.warnings if not w.startswith("No End Safe Room")], [])
         self.assertIn("A_CustomFinale_StageCount = 5", nut)
         self.assertIn("A_CustomFinaleValue2 = 10", nut)
 
