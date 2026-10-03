@@ -235,6 +235,25 @@ class TestEntityAudit(unittest.TestCase):
         self.assertEqual(resolve_crescendo(ir, "Lift Event"), "lift_event")
 
 
+class TestNavReportAudit(unittest.TestCase):
+    def test_drop_off_roof_is_not_an_island_and_distance_is_walking(self):
+        from hammerless.core.navanalysis import PLAYER_START, analyse
+        from hammerless.core.navfile import NavArea, NavMesh
+
+        def area(i, x, z=0.0):
+            a = NavArea(i, 0, (x, 0.0, z), (x + 100.0, 100.0, z), z, z)
+            a.connections = [[], [], [], []]
+            return a
+        start, street, roof, sealed = area(1, 0), area(2, 100), area(3, 300, 200.0), area(4, 600, 200.0)
+        start.spawn_attributes = PLAYER_START
+        start.connections[1] = [2]
+        street.connections[3] = [1]
+        roof.connections[3] = [2]            # one way: drop down into the street
+        rep = analyse(NavMesh(areas=[start, street, roof, sealed]))
+        self.assertEqual(rep.islands, [[4]])            # only the closed-off spot
+        self.assertAlmostEqual(rep.distance[2], 100.0)
+
+
 class TestBuild(unittest.TestCase):
     def test_box_room_builds(self):
         text, rep = build_vmf(box_room_ir())

@@ -19,14 +19,15 @@ def store(context, rep, new_build: bool = False) -> None:
     report from the last Build & Play is kept until the next build."""
     s = context.scene.hammerless
     scale = s.units_per_meter
-    kept = [] if new_build else [(p.name, p.severity, tuple(p.location), p.has_location)
+    kept = [] if new_build else [(p.name, p.severity, tuple(p.location), p.has_location, p.kind)
                                  for p in s.problems if p.ingame]
     s.problems.clear()
     if new_build:
         s["ingame_flow"] = ""
-    for name, severity, loc, has_loc in kept:
+    for name, severity, loc, has_loc, kind in kept:
         item = s.problems.add()
         item.name, item.severity, item.location, item.has_location, item.ingame = name, severity, loc, has_loc, True
+        item.kind = kind
     located = {p.message for p in rep.problems}
     rows = [("ERROR", m, "", None) for m in rep.errors if m not in located]
     rows += [(p.severity, p.message, p.source, p.location) for p in rep.problems]
@@ -46,12 +47,17 @@ def store(context, rep, new_build: bool = False) -> None:
     _redraw(context)
 
 
-def add_rows(context, rows) -> None:
-    """Append (severity, message, object name, location in Hammer units or None) to the list."""
+def add_rows(context, rows, kind: str = "") -> None:
+    """Append (severity, message, object name, location in Hammer units or None) to the list. With a
+    kind, earlier rows of that kind are replaced (e.g. the last Build Navmesh's warnings)."""
     s = context.scene.hammerless
+    if kind:
+        for n in reversed(range(len(s.problems))):
+            if s.problems[n].kind == kind:
+                s.problems.remove(n)
     for severity, message, source, loc in rows:
         item = s.problems.add()
-        item.name, item.severity, item.source = message, severity, _PART.sub("", source or "")
+        item.name, item.severity, item.source, item.kind = message, severity, _PART.sub("", source or ""), kind
         if loc is not None:
             item.location = Vector(loc) / s.units_per_meter
             item.has_location = True
@@ -71,12 +77,12 @@ def store_flow(report: dict) -> None:
     scene = bpy.context.scene
     s = scene.hammerless
     for n in reversed(range(len(s.problems))):
-        if s.problems[n].ingame:
+        if s.problems[n].kind == "flow":
             s.problems.remove(n)
     if report["state"] == "broken":
         item = s.problems.add()
         item.name = INGAME_CONNECTED if report.get("connected") else INGAME_BROKEN
-        item.severity, item.ingame = "ERROR", True
+        item.severity, item.ingame, item.kind = "ERROR", True, "flow"
         if not report.get("connected"):
             item.location = Vector(report["location"]) / s.units_per_meter
             item.has_location = True
@@ -97,10 +103,13 @@ def store_nav(context, mesh, rep, predicted: bool = False) -> None:
     s = context.scene.hammerless
     scale = s.units_per_meter
     for n in reversed(range(len(s.problems))):
-        if s.problems[n].ingame:
+        if s.problems[n].kind == "nav" or (s.problems[n].ingame and not s.problems[n].kind):
             s.problems.remove(n)
     by = mesh.by_id()
     rows = []
+    if not rep.start:
+        rows.append(("ERROR", "The nav has no start safe room (no area is marked as the start): add a Start "
+                     "Safe Room, or check its box covers the room's floor", None))
     if rep.end and not rep.end_reached and rep.break_area is not None:
         # mark the spot of the last reachable area nearest the end room (where the path stops),
         # not its middle: areas can be hundreds of units across
@@ -119,8 +128,9 @@ def store_nav(context, mesh, rep, predicted: bool = False) -> None:
         if goal and any(e in group for e in rep.end):
             continue
         centre = tuple(sum(by[i].centre[k] for i in group) / len(group) for k in range(3))
-        rows.append(("WARNING", f"{len(group)} nav areas here can't be reached from the start (tops of walls, "
-                     "closed-off spots). Zombies can spawn there and never reach survivors. Make it unwalkable "
+        rows.append(("WARNING", f"{len(group)} nav areas here can't be reached from the start, and zombies there "
+                     "can't get down to the rest of the map (tops of walls, closed-off spots). Zombies can spawn "
+                     "there and never reach survivors. Make it unwalkable "
                      "(player clip, a sloped or skybox top) or connect it", centre))
     for spot, dz in rep.dead_ledges[:12]:
         rows.append(("WARNING", f"A {dz:.0f}-unit ledge that bots and zombies can't use either way: L4D2 only links "
@@ -128,9 +138,10 @@ def store_nav(context, mesh, rep, predicted: bool = False) -> None:
                      "drop of 65+ for a drop-down, or 18 or less to walk it", spot))
     for severity, msg, loc in reversed(rows):
         item = s.problems.add()
-        item.name, item.severity, item.ingame = msg, severity, True
-        item.location = Vector(loc) / scale + Vector((0, 0, 0.3))
-        item.has_location = True
+        item.name, item.severity, item.ingame, item.kind = msg, severity, True, "nav"
+        if loc is not None:
+            item.location = Vector(loc) / scale + Vector((0, 0, 0.3))
+            item.has_location = True
         s.problems.move(len(s.problems) - 1, 0)
     s.problems_checked = True
     s["problem_index"] = -1

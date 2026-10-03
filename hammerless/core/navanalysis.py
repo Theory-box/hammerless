@@ -80,15 +80,19 @@ def analyse(mesh: NavMesh) -> NavReport:
                 kind = "walk"
             rep.links.append(Link(a, b, kind, dz))
 
-    # walk from the start room (breadth first, remembering distance)
-    queue = deque(rep.start)
+    # walk from the start room: shortest walking distance (centre to centre)
+    import heapq
     rep.distance = {s: 0.0 for s in rep.start}
-    while queue:
-        a = queue.popleft()
+    heap = [(0.0, s) for s in rep.start]
+    while heap:
+        d, a = heapq.heappop(heap)
+        if d > rep.distance[a]:
+            continue
         for b in out[a]:
-            if b not in rep.distance:
-                rep.distance[b] = rep.distance[a] + math.dist(by_id[a].centre, by_id[b].centre)
-                queue.append(b)
+            nd = d + math.dist(by_id[a].centre, by_id[b].centre)
+            if nd < rep.distance.get(b, float("inf")):
+                rep.distance[b] = nd
+                heapq.heappush(heap, (nd, b))
     rep.reachable = set(rep.distance)
     rep.end_reached = any(e in rep.reachable for e in rep.end)
     if rep.end and rep.reachable and not rep.end_reached:
@@ -101,7 +105,20 @@ def analyse(mesh: NavMesh) -> NavReport:
         for b in targets:
             undirected[a].add(b)
             undirected[b].add(a)
-    seen = set(rep.reachable)
+    # areas zombies can get from to the playable map (a roof with a drop into the street isn't an island)
+    into = {i: set() for i in out}
+    for a, targets in out.items():
+        for b in targets:
+            into.setdefault(b, set()).add(a)
+    joins = set(rep.reachable)
+    q = deque(rep.reachable)
+    while q:
+        x = q.popleft()
+        for y in into.get(x, ()):
+            if y not in joins:
+                joins.add(y)
+                q.append(y)
+    seen = set(rep.reachable) | (joins if rep.reachable else set())
     for a in by_id:
         if a in seen:
             continue

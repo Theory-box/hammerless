@@ -693,7 +693,6 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
             scene.hammerless["ingame_flow"] = (
                 f"In game: path from start to end works ({report['length']:.0f} units)"
                 if report["state"] == "ok" else "In game: no path from start to end")
-            store_flow(report)
             write_log([scene.hammerless["ingame_flow"]], append=True)
             try:        # the game saved its nav mesh by now: read it for the viewport and islands
                 from . import navview
@@ -703,6 +702,7 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
                     store_nav(bpy.context, navview.mesh(), navview.report())
             except Exception as ex:
                 print("Hammerless: couldn't read the nav mesh:", ex)
+            store_flow(report)                  # after the nav rows, which replace only their own
         return 1.0
     bpy.app.timers.register(check, first_interval=1.0)
 
@@ -868,7 +868,8 @@ class HL_OT_build(bpy.types.Operator):
                     self.report({"WARNING"}, problem)
                 if self._nav["mesh"].problems:
                     from .problems import add_rows
-                    add_rows(context, [("WARNING", p, _quoted_object(p), None) for p in self._nav["mesh"].problems])
+                    add_rows(context, [("WARNING", p, _quoted_object(p), None) for p in self._nav["mesh"].problems],
+                             kind="navgen")
                 if self._nav["mesh"].problems:
                     write_log(self._nav["mesh"].problems, append=True)
                 s.generate_nav = False

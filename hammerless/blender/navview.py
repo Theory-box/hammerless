@@ -14,7 +14,9 @@ from ..core.navfile import load_nav
 
 _state = {"path": None, "mtime": None, "mesh": None, "report": None, "batches": None, "key": None,
           "source": None,         # "game" (read from maps/<map>.nav) or "predicted" (our generator)
-          "vis": None}            # expanded visibility lists {area id: {area id: attributes}} (analyzed navs)
+          "vis": None,            # expanded visibility lists {area id: {area id: attributes}} (analyzed navs)
+          "owner": None,          # (scene name, map name) the nav on screen is for
+          "busy": None}           # "build" / "analyze" while a nav thread runs
 _handlers = []
 
 COLORS = {
@@ -48,13 +50,19 @@ def load(context) -> str:
         return "No nav mesh yet: Build & Play makes one"
     mesh = load_nav(path)
     _state.update(path=path, mtime=os.path.getmtime(path), mesh=mesh, report=analyse(mesh), batches=None,
-                  source="game", vis=None)
+                  source="game", vis=None, owner=_owner(context))
     _redraw()
     return f"Loaded {len(mesh.areas)} nav areas"
 
 
-def set_predicted(mesh) -> None:
-    _state.update(path=None, mtime=None, mesh=mesh, report=analyse(mesh), batches=None, source="predicted", vis=None)
+def _owner(context=None):
+    scene = (context or bpy.context).scene
+    return (scene.name, scene.hammerless.map_name)
+
+
+def set_predicted(mesh, owner=None) -> None:
+    _state.update(path=None, mtime=None, mesh=mesh, report=analyse(mesh), batches=None, source="predicted", vis=None,
+                  owner=owner or _owner())
     _redraw()
 
 
@@ -115,15 +123,9 @@ def survivor_areas(mesh, viewer=None) -> list:
         return [viewer]
     by = mesh.by_id()
     start = {a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START}
-    out = []
-    for a in mesh.areas:
-        if a.id in start:
-            continue
-        linked = any(c in start for d in a.connections for c in d) or any(
-            a.id in by[c].connections[d] for c in start for d in range(4))
-        if linked:
-            out.append(a)
-    return out
+    from_start = {c for sid in start for d in by[sid].connections for c in d}
+    return [a for a in mesh.areas if a.id not in start
+            and (a.id in from_start or any(c in start for d in a.connections for c in d))]
 
 
 def spawn_reasons(mesh, viewer=None) -> dict:
@@ -197,7 +199,9 @@ def _area_color(a, rep, mode, viewer=None, reasons=None):
     # FLOW: heat by walking distance from the start room
     if a.id not in rep.distance:
         return COLORS["unreach"]
-    far = max(rep.distance.values()) or 1.0
+    far = rep.__dict__.get("_far")
+    if far is None:
+        far = rep.__dict__["_far"] = max(rep.distance.values()) or 1.0
     t = rep.distance[a.id] / far
     return (0.2 + 0.8 * t, 0.85 - 0.6 * t, 1.0 - 0.9 * t, 0.35)
 
@@ -260,8 +264,8 @@ def _build(scale: float, mode: str, links: bool, spots: bool = False, viewer=Non
 
 def _draw():
     s = bpy.context.scene.hammerless
-    if not s.show_nav or _state["mesh"] is None:
-        return
+    if not s.show_nav or _state["mesh"] is None or _state["owner"] != _owner():
+        return                  # (a nav of another scene, map or file isn't drawn)
     use_cursor = s.nav_color_mode == "VIS" or (s.nav_color_mode == "WHY" and s.spawn_from == "CURSOR")
     viewer = cursor_area(s.units_per_meter) if use_cursor else None
     key = (s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer.id if viewer else None,
@@ -324,6 +328,10 @@ class HL_OT_nav_predict(bpy.types.Operator):
     _thread = None
     _box: dict = {}
 
+    @classmethod
+    def poll(cls, context):
+        return not _state["busy"]
+
     def execute(self, context):
         import threading
         from ..core.nav import collect_climbs, collect_regions
@@ -339,20 +347,30 @@ class HL_OT_nav_predict(bpy.types.Operator):
         climbs, _ = collect_climbs(ir)
         box = {"stage": "Starting", "nodes": 0, "mesh": None, "error": None}
         self._box = box
+        self._owner = _owner(context)
+        wall_climbs = context.scene.hammerless.wall_climbs        # (read here, not in the thread)
 
         def work():
             try:
                 box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage, nodes=n), climbs,
-                                      context.scene.hammerless.wall_climbs)
+                                      wall_climbs)
             except Exception as ex:          # shown to the user
                 box["error"] = str(ex)
         self._thread = threading.Thread(target=work, daemon=True)
         self._thread.start()
+        _state["busy"] = "build"
         self._timer = context.window_manager.event_timer_add(0.3, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
+    def cancel(self, context):
+        _end_job(context, self._timer)
+
     def modal(self, context, event):
+        if event.type == "ESC" and event.value == "PRESS":
+            _end_job(context, self._timer)
+            self.report({"WARNING"}, "Stopped the navmesh build")
+            return {"CANCELLED"}
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
         box = self._box
@@ -360,10 +378,12 @@ class HL_OT_nav_predict(bpy.types.Operator):
             context.workspace.status_text_set(f"Hammerless: building the navmesh: {box['stage']}... "
                                               f"({box['nodes']} nodes)")
             return {"PASS_THROUGH"}
-        context.window_manager.event_timer_remove(self._timer)
-        context.workspace.status_text_set(None)
+        _end_job(context, self._timer)
         if box["error"] or box["mesh"] is None:
             self.report({"ERROR"}, f"Navmesh build failed: {box['error']}")
+            return {"CANCELLED"}
+        if _owner(context) != self._owner:
+            self.report({"WARNING"}, "The scene or Map Name changed while the navmesh was being built: not shown")
             return {"CANCELLED"}
         finish_prediction(context, box["mesh"])
         for problem in box["mesh"].problems:
@@ -371,7 +391,8 @@ class HL_OT_nav_predict(bpy.types.Operator):
         if box["mesh"].problems:
             from .ops import _quoted_object
             from .problems import add_rows
-            add_rows(context, [("WARNING", p, _quoted_object(p), None) for p in box["mesh"].problems])
+            add_rows(context, [("WARNING", p, _quoted_object(p), None) for p in box["mesh"].problems],
+                     kind="navgen")
         rep = _state["report"]
         if not rep.end:
             self.report({"INFO"}, f"Built {rep.total} nav areas (no end safe room to check the path)")
@@ -394,6 +415,10 @@ class HL_OT_nav_analyze(bpy.types.Operator):
     _thread = None
     _box: dict = {}
     _job = None
+
+    @classmethod
+    def poll(cls, context):
+        return not _state["busy"]
 
     def execute(self, context):
         import threading
@@ -462,11 +487,28 @@ class HL_OT_nav_analyze(bpy.types.Operator):
                 box["error"] = str(ex)
         self._thread = threading.Thread(target=work, daemon=True)
         self._thread.start()
+        _state["busy"] = "analyze"
+        self._owner = _owner(context)
+        self._settings = (context.scene.hammerless.map_name, context.scene.hammerless.nav_source)
         self._timer = context.window_manager.event_timer_add(0.5, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
+    def cancel(self, context):
+        self._stop(context)
+
+    def _stop(self, context):
+        box = self._box
+        if box.get("compiled") is not None and not box["compiled"].is_set():
+            box["error"] = box.get("error") or "stopped"
+            box["compiled"].set()                 # let the thread end instead of waiting for ever
+        _end_job(context, self._timer)
+
     def modal(self, context, event):
+        if event.type == "ESC" and event.value == "PRESS":
+            self._stop(context)
+            self.report({"WARNING"}, "Stopped the nav analysis (a compile it started finishes in the background)")
+            return {"CANCELLED"}
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
         box = self._box
@@ -487,22 +529,26 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         if self._thread.is_alive():
             context.workspace.status_text_set(f"Hammerless: analyzing the navmesh: {box['stage']}...")
             return {"PASS_THROUGH"}
-        context.window_manager.event_timer_remove(self._timer)
-        context.workspace.status_text_set(None)
+        _end_job(context, self._timer)
         if box["error"] or box["mesh"] is None:
             self.report({"ERROR"}, f"Nav analysis failed: {box['error']}")
             return {"CANCELLED"}
         mesh = box["mesh"]
         s = context.scene.hammerless
+        map_name, nav_source = self._settings          # the map this analysis was made for
         if job is not None and not job.skipped:
             # the game's map changed: give it a nav mesh that fits (this one, analyzed) or have it make one
             from .ops import game_root
             from ..core import compile as cc
-            if s.nav_source == "BLENDER":
+            if nav_source == "BLENDER":
                 import copy
-                cc.write_generated_nav(cc.Tools(game_root(context)), s.map_name, copy.deepcopy(mesh), analyzed=True)
-            else:
+                cc.write_generated_nav(cc.Tools(game_root(context)), map_name, copy.deepcopy(mesh), analyzed=True)
+            elif _owner(context) == self._owner:
                 s.generate_nav = True
+        if _owner(context) != self._owner:
+            self.report({"WARNING"}, f"Analyzed '{map_name}' (the scene or Map Name changed meanwhile, so it isn't "
+                                     "shown here)")
+            return {"FINISHED"}
         finish_prediction(context, mesh)
         s.nav_color_mode = "VIS"
         spots = sum(len(a.hiding_spots) for a in mesh.areas)
@@ -512,8 +558,21 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _end_job(context, timer) -> None:
+    _state["busy"] = None
+    if timer is not None:
+        try:
+            context.window_manager.event_timer_remove(timer)
+        except Exception:
+            pass
+    try:
+        context.workspace.status_text_set(None)
+    except Exception:
+        pass
+
+
 def finish_prediction(context, mesh) -> None:
-    set_predicted(mesh)
+    set_predicted(mesh, _owner(context))
     context.scene.hammerless.show_nav = True
     from .problems import store_nav
     store_nav(context, mesh, _state["report"], predicted=True)
@@ -535,6 +594,10 @@ class HL_OT_nav_clear(bpy.types.Operator):
     bl_description = ("Remove the navmesh built from the scene (and its analysis) from the viewport, and forget it, "
                       "so the next Build Navmesh or Build & Play makes a fresh one")
 
+    @classmethod
+    def poll(cls, context):
+        return not _state["busy"]
+
     def execute(self, context):
         from ..core import navpredict
         navpredict._last.update(key=None, mesh=None)
@@ -550,6 +613,10 @@ class HL_OT_nav_clear_analysis(bpy.types.Operator):
     bl_idname = "hammerless.nav_clear_analysis"
     bl_label = "Clear Analysis"
     bl_description = "Remove the visibility data and hiding spots from the shown navmesh (the navmesh itself stays)"
+
+    @classmethod
+    def poll(cls, context):
+        return not _state["busy"]
 
     def execute(self, context):
         m = _state["mesh"]
@@ -647,13 +714,23 @@ def draw_panel(layout, context):
 CLASSES = (HL_OT_nav_load, HL_OT_nav_predict, HL_OT_nav_analyze, HL_OT_nav_clear, HL_OT_nav_clear_analysis)
 
 
+@bpy.app.handlers.persistent
+def _forget_on_load(*_args):
+    """Another .blend was opened: its nav isn't the one on screen."""
+    _state.update(path=None, mtime=None, mesh=None, report=None, batches=None, key=None, source=None, vis=None,
+                  owner=None)
+
+
 def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
+    bpy.app.handlers.load_post.append(_forget_on_load)
     _handlers.append(bpy.types.SpaceView3D.draw_handler_add(_draw, (), "WINDOW", "POST_VIEW"))
 
 
 def unregister():
+    if _forget_on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_forget_on_load)
     for h in _handlers:
         bpy.types.SpaceView3D.draw_handler_remove(h, "WINDOW")
     _handlers.clear()

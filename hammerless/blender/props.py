@@ -201,6 +201,8 @@ class HL_Problem(bpy.types.PropertyGroup):
     location: FloatVectorProperty(size=3, subtype="TRANSLATION")   # Blender units
     has_location: BoolProperty()
     ingame: BoolProperty()                  # reported by the game after Build & Play
+    kind: StringProperty()                  # "flow" (the game's path report), "nav" (nav mesh checks),
+                                            # "navgen" (nav build warnings): each replaces only its own rows
 
 
 class HL_SpawnListItem(bpy.types.PropertyGroup):
