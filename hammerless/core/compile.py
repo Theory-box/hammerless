@@ -619,6 +619,19 @@ def _watch_ready(log: str, start: int, launch_id: int, timeout: float = 300.0):
                     LOAD_STATUS["flow_seq"] += 1
 
 
+def bsp_has_lighting(path: str) -> bool:
+    """Whether a compiled map has baked lighting (LDR or HDR lighting lump)."""
+    import struct
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8 + 16 * 64)
+    except OSError:
+        return False
+    if len(head) < 8 + 16 * 64 or head[:4] != b"VBSP":
+        return False
+    return any(struct.unpack_from("<iiii", head, 8 + 16 * lump)[1] > 0 for lump in (8, 53))
+
+
 def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: list[str] | None = None,
                 window: LaunchOptions | None = None, analyze_nav: bool = False):
     """Load the map. Reuses a running game if there is one.
@@ -634,7 +647,11 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
         # sv_cheats 0 resets every cheat cvar (nb_stop, z_common_limit, ...) left over
         # from earlier testing or play, so each build starts from a clean game.
         pre = [f"z_difficulty {window.difficulty}"] if window.difficulty else []
-        proc = send_commands(tools, ["sv_cheats 0"] + pre + [f"map {map_name}"])
+        if bsp_has_lighting(os.path.join(tools.maps_dir, map_name + ".bsp")):
+            # the engine turns mat_fullbright on for a map without lighting (a Quick build) and leaves
+            # it on for the rest of the session: a lit map loaded after one would look unlit
+            pre = ["sv_cheats 1", "mat_fullbright 0"] + pre
+        proc = send_commands(tools, pre + ["sv_cheats 0", f"map {map_name}"])
     else:
         cmd = [os.path.join(tools.root, "left4dead2.exe"), "-game", "left4dead2",
                "-novid", "-console", "-condebug", "-windowed",

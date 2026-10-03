@@ -986,6 +986,23 @@ class TestAutoDetail(unittest.TestCase):
 
 
 class TestCompileSkip(unittest.TestCase):
+    def test_bsp_has_lighting(self):
+        # a lit map loaded into a running game switches mat_fullbright back off (the engine leaves it
+        # on after a map without lighting): detect lighting from the LDR / HDR lighting lumps
+        import struct
+        import tempfile
+        from hammerless.core.compile import bsp_has_lighting
+        with tempfile.TemporaryDirectory() as d:
+            for lump, lit in ((None, False), (8, True), (53, True)):
+                head = bytearray(b"VBSP" + struct.pack("<i", 21) + bytes(16 * 64))
+                if lump is not None:
+                    struct.pack_into("<iiii", head, 8 + 16 * lump, len(head), 4, 0, 0)
+                path = os.path.join(d, "m.bsp")
+                with open(path, "wb") as f:
+                    f.write(head + bytes(4))
+                self.assertEqual(bsp_has_lighting(path), lit)
+            self.assertFalse(bsp_has_lighting(os.path.join(d, "missing.bsp")))
+
     def test_up_to_date(self):
         import tempfile
         from hammerless.core import compile as cc
