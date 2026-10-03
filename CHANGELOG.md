@@ -11,6 +11,15 @@
 - A nav whose analysis never got saved is analyzed on the next launch.
 
 ### Fixed
+- **Pre-release audit, round 1 (export and compile):**
+  - A map built away from the world origin leaked from Hammerless's own helper entities.
+  - Material *Surface* was ignored on the first build after opening Blender.
+  - Collection instances and geometry-node instances were dropped; they now export.
+  - Transparent textures rendered opaque (now `$alphatest` / `$translucent`). Different materials could overwrite each other's texture, and the wrong image (e.g. a normal map) could be used as the colour.
+  - A stale map could be marked up to date when the scene changed during a compile; two compiles of one map could run at once.
+  - After *Compile Only* the old nav mesh was kept; now the next Build & Play makes a new one.
+  - Brush planes from three points on a line; terrain patches near the size limit broke the compile; tool brushes (hint, clip, areaportal) were made func_detail; spawns snapped up onto tables.
+  - Map Name is cleaned up (lowercase, `a-z 0-9 _`).
 - **Rooms behind a gate got no wandering zombies**: Mover gates no longer block the nav by default (L4D2 blocks from map load, before the Director places zombies).
 - A lit map loaded into a running game after an unlit one looked unlit (`mat_fullbright` stayed on).
 - Build Navmesh and Analyze Navmesh now export the map exactly as Build does.
