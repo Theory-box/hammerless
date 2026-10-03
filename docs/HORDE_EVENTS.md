@@ -20,6 +20,8 @@ Two ways to give it room:
 - **Design with cover:** walls, buildings you can walk behind, hills, alleys. This is the best option.
 - **Zombie Spawn Area** preset (*Shift+A > L4D2 > Zombie Spawn Area*). This marks the nav mesh inside the box as `OBSCURED`, meaning "treat this as hidden". Use it for open fields, tall grass, fog.
 
+To see which areas qualify, and why one doesn't (too close, in view, a no-spawn mark, a blocking gate), use the nav views described in [Nav Mesh & Zombie Spawns](NAV_AND_ZOMBIES.md#why-does-an-area-get-no-zombies).
+
 ### Rule 2: the Director needs the nav mesh and the flow
 
 The nav mesh is the map of walkable areas. The **flow** is the path from the start safe room to the end safe room; the Director measures survivors' progress along it and spawns commons ahead of or behind them.
