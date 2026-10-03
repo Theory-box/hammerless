@@ -81,8 +81,8 @@ _last: dict = {"key": None, "mesh": None}
 
 def _key(vmf_text: str, regions, climbs=(), wall_climbs=False) -> str:
     import hashlib
-    return hashlib.sha1((vmf_text + repr([(r.mins, r.maxs, r.bits, r.hulls) for r in regions])
-                         + repr([(c.bottom, c.top) for c in climbs]) + repr(wall_climbs)).encode()).hexdigest()
+    return hashlib.sha1((vmf_text + repr([(r.mins, r.maxs, r.bits, r.hulls, r.source) for r in regions])
+                         + repr([(c.bottom, c.top, c.source) for c in climbs]) + repr(wall_climbs)).encode()).hexdigest()
 
 
 def cached(vmf_text: str, regions, climbs=(), wall_climbs=False) -> NavMesh | None:
@@ -183,8 +183,15 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
         if err:
             problems.append(f"Zombie Climb '{c.source}': {err}")
     mesh = to_navmesh(gen.areas, regions, gen.ladders)
+    if gen.node_count >= MAX_NODES:
+        problems.insert(0, f"The map has more walkable space than the nav builder covers ({MAX_NODES:,} nav points): "
+                           "part of it has no nav mesh (and building it is slow). Split the level into two maps, "
+                           "or remove unreachable floors (roofs, areas outside the playable space)")
     mesh.problems = problems + spawn_block_problems(mesh, regions)
     return mesh
+
+
+MAX_NODES = 500000           # navgen.Generator.sample's default
 
 
 EMPTY, NO_MOBS = 2, 8192

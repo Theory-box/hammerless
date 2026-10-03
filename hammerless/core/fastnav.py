@@ -92,6 +92,10 @@ def _update_memo(world, bounds, sides7, bevel, flags, first, count) -> None:
         _lib.hl_memo_clear()
         last_memo.update(mode="fresh", changed=len(changed), dropped=0)
         return
+    if _lib.hl_memo_size() > max(200000, 3 * _last_nodes[0]):
+        _lib.hl_memo_clear()                # (old positions pile up across edits: about 660 bytes each)
+        last_memo.update(mode="fresh", changed=len(changed), dropped=0)
+        return
     boxes = [v for k in changed for v in k[0]]
     dropped = _lib.hl_memo_invalidate(ctypes.c_int(len(changed)), _arr(ctypes.c_double, boxes))
     last_memo.update(mode="update", changed=len(changed), dropped=dropped)
@@ -210,8 +214,13 @@ def has_node(pos) -> bool:
     return bool(_lib.hl_has_node(pos[0], pos[1], pos[2]))
 
 
+_last_nodes = [0]          # nodes the last sampling made (the memo's useful size)
+
+
 def node_count() -> int:
-    return _lib.hl_node_count()
+    n = _lib.hl_node_count()
+    _last_nodes[0] = max(_last_nodes[0], n) if n else _last_nodes[0]
+    return n
 
 
 def collect(world):

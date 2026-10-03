@@ -79,16 +79,23 @@ def _slots(vmf, bsp_path: str, materials: MaterialContents, content=None):
                     world.extend(displacement_brushes(side.get("plane"), disp))
     ents = [(brushes, physics, True) for brushes, physics in _entity_solids(top, materials, MASK_BLOCKLOS)]
     if content is not None:
-        hulls = {}                           # model -> its collision pieces' planes, read once
+        hulls = _HULL_CACHE                  # model -> its collision pieces' planes (kept between runs)
         props = []
         for e in (b for b in top if b.name == "entity"):
             cls = (e.get("classname") or "").lower()
             if cls in DOOR_CLASSES and DOOR_MODE != "none":
-                pieces = _prop_pieces(e, content, hulls)
+                try:
+                    pieces = _prop_pieces(e, content, hulls)
+                except (ValueError, TypeError) as ex:
+                    SKIPPED.append(f"'{e.get('targetname') or cls}': {ex}")
+                    pieces = []
                 if pieces:
                     ents.append((pieces, True, DOOR_MODE == "all"))
             elif cls in PHYSICS_PROP_CLASSES or cls in SOLID_KEY_PROP_CLASSES:
-                props += _prop_pieces(e, content, hulls)
+                try:
+                    props += _prop_pieces(e, content, hulls)
+                except (ValueError, TypeError) as ex:     # odd keyvalues or a damaged model: skip this prop
+                    SKIPPED.append(f"'{e.get('targetname') or e.get('model') or cls}': {ex}")
         if props:
             # one slot for all of them: each prop is a VPhysics object (a trace starting inside one
             # is stuck at 0, else the closest hit wins), and that's what one physics slot gives
@@ -148,16 +155,21 @@ def _prop_solid(ent) -> int:
     return solid if solid in (SOLID_BBOX, SOLID_VPHYSICS) else 0
 
 
+_HULL_CACHE: dict = {}
+SKIPPED: list[str] = []          # props left out of the last analysis (odd keyvalues, damaged model)
+
+
 def _model_hulls(model: str, solid: int, content, cache: dict):
     """A model's collision pieces as plane lists (normal, dist) in model space: its .phy's convex
     pieces, or (SOLID_BBOX) the box of its hull (studiohdr hull_min / hull_max)."""
     key = (model, solid)
     if key not in cache:
-        from .phy import convex_planes, read_phy
+        from .phy import convex_planes, hull_planes, read_phy_pieces
         pieces = []
         if solid == SOLID_VPHYSICS:
             data = content.read(model[:-4] + ".phy")
-            pieces = [convex_planes(pts) for pts in read_phy(data)] if data else []
+            pieces = [hull_planes(pts, tris) if tris else convex_planes(pts)
+                      for pts, tris in read_phy_pieces(data)] if data else []
         elif solid == SOLID_BBOX:
             from .vpk import model_bounds
             data = content.read(model)
@@ -292,8 +304,11 @@ def hiding_spots(mesh, vmf, bsp_path: str, materials: MaterialContents) -> list[
     spot 12.5 units in, IN_COVER when something is overhead or at least half of 16 lines around
     it hit (MASK_NPCSOLID_BRUSHONLY), else EXPOSED. Matches the game's spots exactly (positions,
     order and flags, measured on a 2330-area map)."""
-    ents = [b for brushes, _phys in _entity_solids(_parsed(vmf), materials, MASK_NPCSOLID_BRUSHONLY) for b in brushes]
-    world = CollisionWorld(bsp_brushes(bsp_path, model=0, mask=MASK_NPCSOLID_BRUSHONLY) + ents)
+    top = _parsed(vmf)
+    ents = [b for brushes, _phys in _entity_solids(top, materials, MASK_NPCSOLID_BRUSHONLY) for b in brushes]
+    disp = [b for w in top if w.name == "world" for so in w.blocks("solid") for sd in so.blocks("side")
+            for di in sd.blocks("dispinfo") for b in displacement_brushes(sd.get("plane"), di)]
+    world = CollisionWorld(bsp_brushes(bsp_path, model=0, mask=MASK_NPCSOLID_BRUSHONLY) + ents + disp)
     with fastnav.LOCK:
         return _hiding_spots(mesh, world)
 
@@ -426,6 +441,7 @@ def analyze(mesh, vmf_text: str, bsp_path: str, content, game_dir: str | None = 
     the game loads it as is. (Light intensity: pending; left at the game's default 1.0.)"""
     materials = MaterialContents(content, game_dir)
     top = _parsed(vmf_text)                    # parsed once for both steps
+    SKIPPED.clear()
     if progress:
         progress("Finding hiding spots")
     spots = hiding_spots(mesh, top, bsp_path, materials)
@@ -443,4 +459,6 @@ def analyze(mesh, vmf_text: str, bsp_path: str, content, game_dir: str | None = 
     for a in mesh.areas:
         a.occupy = (120.0, 120.0)          # ComputeEarliestOccupyTimes: only Counter-Strike changes it
     mesh.analyzed = True
+    if SKIPPED and hasattr(mesh, "problems"):
+        mesh.problems.append("Nav analysis left out these props (they won't block sight): " + "; ".join(SKIPPED[:5]))
     return mesh

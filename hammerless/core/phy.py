@@ -24,6 +24,19 @@ def _ivp_to_hl(x: float, y: float, z: float) -> tuple[float, float, float]:
 
 def read_phy(data: bytes) -> list[list[tuple[float, float, float]]]:
     """Convex pieces of every solid in a .phy file, as point lists (Hammer units)."""
+    return [pts for pts, _tris in read_phy_pieces(data)]
+
+
+def read_phy_pieces(data: bytes):
+    """[(points, triangles as index triples into points)] for every convex piece. A damaged file
+    raises ValueError (instead of reading past the end or looping)."""
+    try:
+        return _read_phy_pieces(data)
+    except (struct.error, IndexError, RecursionError) as ex:
+        raise ValueError(f"damaged collision model ({ex})") from None
+
+
+def _read_phy_pieces(data: bytes):
     if not data or len(data) < 16:
         return []
     header, _ident, solids, _checksum = struct.unpack_from("<iiii", data, 0)
@@ -41,29 +54,64 @@ def read_phy(data: bytes) -> list[list[tuple[float, float, float]]]:
         cs = 28
         (root,) = struct.unpack_from("<i", body, cs + 32)
         stack = [cs + root]
+        visited = set()
         while stack:
             node = stack.pop()
+            if node in visited or not 0 <= node <= len(body) - 28:
+                raise ValueError("bad ledge tree")
+            visited.add(node)
             right, ledge_off = struct.unpack_from("<ii", body, node)
             if right == 0:                 # leaf: one convex piece
                 ledge = node + ledge_off
                 point_off, _client, _flags, ntri = struct.unpack_from("<iiih", body, ledge)
                 points_at = ledge + point_off
-                used = set()
+                tris = []
                 for t in range(ntri):
                     tri = ledge + 16 + 16 * t
-                    for e in range(3):
-                        (edge,) = struct.unpack_from("<I", body, tri + 4 + 4 * e)
-                        used.add(edge & 0xFFFF)
+                    tris.append(tuple(struct.unpack_from("<I", body, tri + 4 + 4 * e)[0] & 0xFFFF for e in range(3)))
+                used = sorted({i for tri in tris for i in tri})
+                where = {i: k for k, i in enumerate(used)}
                 pts = []
-                for i in sorted(used):
+                for i in used:
                     x, y, z, _w = struct.unpack_from("<ffff", body, points_at + 16 * i)
                     pts.append(_ivp_to_hl(x, y, z))
                 if len(pts) >= 4:
-                    pieces.append(pts)
+                    pieces.append((pts, [tuple(where[i] for i in tri) for tri in tris]))
             else:
                 stack.append(node + 28)         # left child follows the node (28-byte nodes)
                 stack.append(node + right)
     return pieces
+
+
+def hull_planes(points, triangles, eps: float = 0.01):
+    """The outward planes of a convex piece from its own triangles (as the .phy stores them): the
+    same planes convex_planes finds, without trying every three points (that took minutes on
+    detailed models). Triangles that aren't hull faces are skipped the same way."""
+    planes = []
+    n = len(points)
+    for a, b, c in triangles:
+        if max(a, b, c) >= n:
+            continue
+        p, q, r = points[a], points[b], points[c]
+        u = (q[0] - p[0], q[1] - p[1], q[2] - p[2])
+        v = (r[0] - p[0], r[1] - p[1], r[2] - p[2])
+        nrm = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+        length = (nrm[0] ** 2 + nrm[1] ** 2 + nrm[2] ** 2) ** 0.5
+        if length < 1e-6:
+            continue
+        nrm = (nrm[0] / length, nrm[1] / length, nrm[2] / length)
+        d = nrm[0] * p[0] + nrm[1] * p[1] + nrm[2] * p[2]
+        side = [nrm[0] * s[0] + nrm[1] * s[1] + nrm[2] * s[2] - d for s in points]
+        if all(x <= eps for x in side):
+            pass
+        elif all(x >= -eps for x in side):
+            nrm, d = (-nrm[0], -nrm[1], -nrm[2]), -d
+        else:
+            continue
+        if not any(abs(nrm[0] - m[0]) < 1e-4 and abs(nrm[1] - m[1]) < 1e-4 and abs(nrm[2] - m[2]) < 1e-4
+                   and abs(d - e) < 1e-3 for m, e in planes):
+            planes.append((nrm, d))
+    return planes
 
 
 def convex_planes(points, eps: float = 0.01):

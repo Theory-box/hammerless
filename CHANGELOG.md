@@ -38,6 +38,13 @@
   - Delays and event relays ignored triggers while a delay was running (e.g. several kills in one moment counted once).
   - Graphs leaked into every scene's map, could be lost on save, ignored reroutes and muted nodes, and kept deleted objects; *Graph from Outputs* dropped delays, "only once" and parameters.
   - Logic entities sat slightly off the origin (could leak maps built elsewhere); several naming clashes between nodes and graphs; When "only once" stopped *On False*; Special Killed counted Tanks.
+- **Pre-release audit, round 4 (nav):**
+  - **Visibility analysis in Blender was off in real use**: the nav generator's world was also treated as a sight blocker (glass, fences, ladders), so after building the nav only 96.2% of area pairs matched the game. Now 99.92% in real use too (measured).
+  - Running the analysis twice in a session on a bigger mesh could crash Blender (native memory bug).
+  - Detailed prop models made the analysis take minutes (a train tank: 466 s, now 0.07 s); a damaged model or odd prop keyvalues no longer abort the analysis.
+  - The game's flow-error row in the Problems list was deleted as soon as it appeared; repeated Build Navmesh stacked warnings; rooftops with drops were reported as unreachable islands.
+  - Analyze could write its nav for whichever scene was active when it finished; the nav view showed another file's or map's nav; Build/Analyze/Clear could run on top of each other (now one at a time, Esc stops them).
+  - Very large maps hitting the nav builder's limit are reported; the nav builder's cache no longer grows without limit across edits.
 - **Rooms behind a gate got no wandering zombies**: Mover gates no longer block the nav by default (L4D2 blocks from map load, before the Director places zombies).
 - A lit map loaded into a running game after an unlit one looked unlit (`mat_fullbright` stayed on).
 - Build Navmesh and Analyze Navmesh now export the map exactly as Build does.

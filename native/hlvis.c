@@ -27,14 +27,17 @@ EXPORT int hl_world_stash(int slot, int physics, int rays) {
     WSlot *s = &SL[slot];
     World w = {g_sides, g_brushes, g_nbrushes, g_cell, g_cx0, g_cy0, g_w, g_h, g_cell_start, g_cell_count, g_cell_ids};
     s->w = w;
-    s->physics = physics; s->rays = rays; s->used = 1;
+    /* the last slot only holds the nav generator's world while the analysis borrows the DLL: it is
+     * not a sight blocker, so it isn't 'used' and doesn't count in g_nslots */
+    int holding = slot == MAX_SLOTS - 1;
+    s->physics = physics; s->rays = rays; s->used = !holding;
     for (int i = 0; i < 3; i++) { s->lo[i] = 1e300; s->hi[i] = -1e300; }
     for (int k = 0; k < s->w.nb; k++)
         for (int i = 0; i < 3; i++) {
             if (s->w.brushes[k].b[i] < s->lo[i]) s->lo[i] = s->w.brushes[k].b[i];
             if (s->w.brushes[k].b[3 + i] > s->hi[i]) s->hi[i] = s->w.brushes[k].b[3 + i];
         }
-    if (slot + 1 > g_nslots) g_nslots = slot + 1;
+    if (!holding && slot + 1 > g_nslots) g_nslots = slot + 1;
     g_sides = NULL; g_brushes = NULL; g_nbrushes = 0; g_cell_start = g_cell_count = g_cell_ids = NULL; g_w = g_h = 0;
     g_world_gen++;
     return 1;
@@ -46,6 +49,7 @@ EXPORT void hl_world_restore(int slot) {
     g_sides = s->w.sides; g_brushes = s->w.brushes; g_nbrushes = s->w.nb; g_cell = s->w.cell;
     g_cx0 = s->w.cx0; g_cy0 = s->w.cy0; g_w = s->w.w; g_h = s->w.h; g_cell_start = s->w.cs; g_cell_count = s->w.cc; g_cell_ids = s->w.ci;
     memset(s, 0, sizeof *s);
+    while (g_nslots > 0 && !SL[g_nslots - 1].used) g_nslots--;
     g_world_gen++;
 }
 EXPORT void hl_world_drop(int slot) {
@@ -336,9 +340,11 @@ EXPORT void hl_vis_stats_on(int on) { g_stats = on; }
 /* ComputeVisibilityToMesh for every area, in list order. radius: nav_max_view_distance (0: 1500).
  * Each area's pairs (with the areas after it) are independent, so they run on every core; the
  * lists are then assembled in exactly the order the one-thread loop builds them. */
+static int NVL;                   /* how many lists VL holds (NVA may have changed since) */
 EXPORT int hl_vis_run(float radius) {
-    if (VL) { for (int i = 0; i < NVA; i++) il_free(&VL[i]); free(VL); }
+    if (VL) { for (int i = 0; i < NVL; i++) il_free(&VL[i]); free(VL); }
     VL = calloc(NVA + 1, sizeof(IL)); VR = calloc(NVA + 1, sizeof(IL));
+    NVL = NVA;
     if (radius <= 0.0f) radius = 1500.0f;
     g_vis_r2 = radius * radius;
     int threads = g_vis_threads;
@@ -348,9 +354,14 @@ EXPORT int hl_vis_run(float radius) {
     if (threads <= 1) vis_worker(NULL);
     else {
         HANDLE h[64];
-        for (int t = 0; t < threads; t++) h[t] = CreateThread(NULL, 0, vis_worker, NULL, 0, NULL);
-        WaitForMultipleObjects(threads, h, TRUE, INFINITE);
-        for (int t = 0; t < threads; t++) CloseHandle(h[t]);
+        int made = 0;
+        for (int t = 0; t < threads; t++) {
+            HANDLE th = CreateThread(NULL, 0, vis_worker, NULL, 0, NULL);
+            if (th) h[made++] = th;
+        }
+        if (made < threads) vis_worker(NULL);          /* a thread didn't start: this one helps instead */
+        if (made) WaitForMultipleObjects(made, h, TRUE, INFINITE);
+        for (int t = 0; t < made; t++) CloseHandle(h[t]);
     }
     for (int i = 0; i < NVA; i++) {
         il_push(&VL[i], (i << 2) | VIS_COMPLETE);
