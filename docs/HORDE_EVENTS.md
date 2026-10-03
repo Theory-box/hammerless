@@ -31,13 +31,13 @@ What spawns with and without flow (measured in-game, Easy):
 | Map | Wanderers (commons already standing around) | Mobs (timed rushes) | Specials |
 |---|---|---|---|
 | Start + End Safe Room | ✅ about 30 within 20 s, even before leaving the room | ✅ | ✅ |
-| Only a survivor spawn | ❌ none | ✅ one rush every *Mob Spawn Min–Max Time* (default 90–180 s) | ✅ |
+| Only a survivor spawn | ❌ none | ✅ one rush every *Horde Every Min / Max (s)* (default 90–180 s) | ✅ |
 
 So on a map without safe rooms it looks like "only specials spawn" until the first rush arrives a minute or more in. For a proper level, add a **Start Safe Room** and an **End Safe Room** preset.
 
 **The End Safe Room's Next Map must be a different, real map** (for example `c1m2_streets`). If it's empty or names the map itself, the game silently skips the flow ("an info_changelevel points to the current map" in the console), and there are no wanderers, Tanks or Witches. Hammerless fills in `c1m2_streets` and warns when it's missing.
 
-Hammerless handles the nav side: Build & Play generates the nav mesh (automatically if the map has none; tick **Rebuild Nav Mesh** after changing geometry), marks the safe rooms and Zombie Spawn Areas, saves, and reloads.
+Hammerless handles the nav side: Build & Play generates the nav mesh (automatically whenever the map has none or its walls or safe rooms changed), marks the safe rooms and Zombie Spawn Areas, saves, and reloads.
 
 Community sources: [Steam mapping help: nav flow](https://steamcommunity.com/app/550/discussions/3/598517032946829432/), [World of Level Design: nav meshes and spawning infected](https://www.worldofleveldesign.com/categories/left4dead_mapping/l4d-gameplay-navigation-meshes-spawn-infected.php).
 
@@ -64,7 +64,7 @@ In Blender: select an entity, and the **Outputs** list is in the Hammerless pane
 | Delay | Seconds to wait | `2.5` |
 | Only Once | Fire just the first time | ✔ |
 
-The Director is always named **`director`** (Hammerless adds it automatically). If you target a name that doesn't exist, **Check for Problems** warns you.
+The Director is always named **`director`** (Hammerless adds it automatically). If you target a name that doesn't exist, the **Check** button (problem list, *L4D2 Map* panel) warns you.
 
 ## 3. Recipes (all verified in-game unless marked)
 
@@ -76,10 +76,10 @@ The Director is always named **`director`** (Hammerless adds it automatically). 
 *Shift+A > L4D2 > Horde Button.* This adds a hazard-striped button that fires `OnPressed > director > ForcePanicEvent`. Put it on a wall. It works like the campaigns' lift buttons and radios.
 ✅ Tested: 33 commons.
 
-To make your own button: select any small convex mesh, then *Make Brush Entity > Button*, then add an output.
+To make your own button: select a small convex mesh, then in the *Add* panel pick *Volumes > Button* and press **Turn Selected into Button**; then add an output.
 
 ### A Tank ambush
-*Shift+A > L4D2 > Tank Ambush.* This adds a **Zombie Spawner** (where the Tank appears) and a trigger 8 m away. Walking into the trigger fires `OnTrigger > tank_ambush_spawner > SpawnZombie (parameter: tank)`. Move the two pieces wherever you like.
+*Shift+A > L4D2 > Tank Ambush.* This adds a **Zombie Spawner** (where the Tank appears) and a trigger about 10 m away. Walking into the trigger fires `OnTrigger > tank_ambush_spawner > SpawnZombie (parameter: tank)`. Move the two pieces wherever you like.
 ⚠ Builds and wires correctly (tested in code), not yet tested in-game.
 
 ### Spawn anything, anywhere, even in plain sight
@@ -108,11 +108,11 @@ A **Relay** (*Logic > Relay*) passes a signal on. Point several things at it, an
 | **Gauntlet** | Endless horde while survivors run a stretch |
 | **Finale** | `trigger_finale` plus a rescue vehicle; waves of hordes and Tanks |
 
-Already available: **crescendos** (recipe above) and **map-wide Director settings** (*L4D2 Map > AI Director* panel: common limit, horde size and frequency, specials, Tanks, Witches). A crescendo keeps the map's Director limits while it runs.
+Already available: **crescendos** (recipe above) and **map-wide Director settings** (*L4D2 Map > AI Director* panel, after ticking **Custom Director Settings** in its header: common limit, horde size and frequency, specials, Tanks, Witches). A crescendo keeps the map's Director limits while it runs.
 
 ## 5. Testing tips
 
-In-game console (enable it in Options > Keyboard > Allow Developer Console, then press `~`):
+In-game console (enable it in Options > Keyboard/Mouse > Allow Developer Console, then press `~`):
 
 ```
 sv_cheats 1                 // needed for the commands below

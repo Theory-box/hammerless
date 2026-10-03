@@ -57,6 +57,11 @@
   - Closing the game while it was making its nav mesh made Hammerless start the game again later. It now stops and says so.
   - Two commands sent to the game in quick succession could lose the first.
   - Messages from the game steps (nav step failed, Steam not ready) now pop up in Blender instead of only going to the log; the in-game path report is collected for the whole nav generation, not only the first 5 minutes.
+- **Pre-release audit, round 7 (docs and first run):**
+  - Two .blend files with the same Map Name (e.g. the default `my_map`) silently replaced each other's map in the game; the build now warns.
+  - Getting Started: delete the default cube first (a safe room placed at the origin ends up inside it), and give the map its own name.
+  - The docs now match the add-on's labels: the Nav Mesh Viewer sub-panel (was "Nav Mesh (from the game)"), the problem list's Check button, the Material box in Selected Object, Custom Director Settings, Horde Every Min/Max, Turn Selected into Button, Shift+A > L4D2 > Start Safe Room. Undocumented settings (Export VMF, Auto Detail, Fog and Director header checkboxes, Launch Options, collection roles, Select All Parts…) are described.
+  - Rebuild Nav Mesh's tooltip said to tick it after every geometry change; it's rebuilt automatically.
 - **Rooms behind a gate got no wandering zombies**: Mover gates no longer block the nav by default (L4D2 blocks from map load, before the Director places zombies).
 - A lit map loaded into a running game after an unlit one looked unlit (`mat_fullbright` stayed on).
 - Build Navmesh and Analyze Navmesh now export the map exactly as Build does.

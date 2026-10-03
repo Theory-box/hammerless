@@ -122,7 +122,7 @@ class HL_PT_logic(_SubPanel, bpy.types.Panel):
 
 
 class HL_PT_nav(_SubPanel, bpy.types.Panel):
-    bl_label = "Nav Mesh (from the game)"
+    bl_label = "Nav Mesh Viewer"
 
     def draw(self, context):
         from .navview import draw_panel

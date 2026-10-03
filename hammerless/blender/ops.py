@@ -209,6 +209,10 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
         return None, root, rep2
     rep2.info.append(f"Wrote {path}")
     if gamedir:
+        other = cc.map_owner(cc.Tools(root), s.map_name)
+        if other and os.path.normcase(other) != os.path.normcase(path) and os.path.exists(other):
+            rep2.warnings.append(f"Another .blend also builds a map called '{s.map_name}' (its build: {other}). "
+                                 "This build replaces that map in the game: give this one its own Map Name")
         files = game_files(ir)
         try:
             for rel, content in files.items():
@@ -216,6 +220,7 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
                 os.makedirs(os.path.dirname(full), exist_ok=True)
                 with open(full, "w", encoding="utf-8") as f:
                     f.write(content)
+            cc.set_map_owner(cc.Tools(root), s.map_name, path)
         except OSError as ex:
             rep2.errors.append(f"Can't write the map's scripts into the game folder ({ex}). Is Left 4 Dead 2 "
                                "installed somewhere that needs administrator rights?")

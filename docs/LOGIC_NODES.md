@@ -25,7 +25,7 @@ Map logic (events, timers, buttons, gates, spawns, Director changes) is built as
 | **Values** | Path Progress (furthest / average / last survivor, 0 to 1), Random Value, Math, Compare, Boolean Math, Infected Count, Value |
 | **Scene** | Object Info (picks a scene object to hand to other nodes), Entity Events (an object's own events, e.g. a door opening), Collision (solid for players and/or the nav) |
 | **Flow** | When (fires when a condition becomes true), If, Sequence, Delay, Once, Gate, Branch, Counter, Random |
-| **Actions** | Move Over Time (Mover), Show/Hide Object, Horde, Crescendo, Spawn Zombie (a spot, or the game picks; *Only If Fewer Than*), Play Sound, Teleport Survivors, Show Message |
+| **Actions** | Move Over Time (Mover), Show / Hide Object, Horde, Crescendo, Spawn Zombie (a spot, or the game picks; *Only If Fewer Than*), Play Sound, Teleport Survivors, Show Message |
 | **Director** | Director, Director Settings |
 | **Objectives** | Objective |
 
@@ -48,7 +48,7 @@ Settings: direction, distance (*auto* = the object's own size in that direction)
 
 ## Director control
 
-*AI Director > Director Spawns* switches a type (Tank, Witch, each special) off for the Director, so only your graph spawns it.
+*AI Director > Director Spawns* (with **Custom Director Settings** ticked) switches a type (Tank, Witch, each special) off for the Director, so only your graph spawns it.
 
 ## Debugging
 

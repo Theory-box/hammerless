@@ -402,9 +402,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                     "ladder, and get back down. Only with Nav Mesh: Made in Blender")
     generate_nav: BoolProperty(
         name="Rebuild Nav Mesh", default=False,
-        description="Rebuild the nav mesh (how bots and zombies find their way) on the next Build & Play. "
-                    "Tick it after changing walls, floors or terrain. A map that has no nav mesh yet "
-                    "gets one automatically")
+        description="Force a fresh nav mesh (how bots and zombies find their way) on the next Build & Play. "
+                    "Normally not needed: the nav is rebuilt automatically when walls, floors, terrain or "
+                    "safe rooms change")
     window_monitor: EnumProperty(name="Monitor", items=_monitor_items,
                                  description="Which monitor the game window opens on")
     window_width: IntProperty(name="Width", default=1600, min=640, max=7680)

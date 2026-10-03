@@ -657,6 +657,27 @@ def _nav_maker_path(tools: Tools, map_name: str) -> str:
     return os.path.join(tools.gamedir, "scripts", "vscripts", "hammerless", f"navmaker_{map_name}.txt")
 
 
+def _owner_path(tools: Tools, map_name: str) -> str:
+    return os.path.join(tools.gamedir, "scripts", "vscripts", "hammerless", f"owner_{map_name}.txt")
+
+
+def map_owner(tools: Tools, map_name: str) -> str | None:
+    """The VMF (in its .blend's build folder) that last wrote maps/<map>: two .blend files with
+    the same Map Name replace each other's map in the game."""
+    try:
+        with open(_owner_path(tools, map_name), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def set_map_owner(tools: Tools, map_name: str, vmf_path: str) -> None:
+    path = _owner_path(tools, map_name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(os.path.abspath(vmf_path))
+
+
 def set_nav_maker(tools: Tools, map_name: str, maker: str) -> None:
     """Record who made maps/<map>.nav: "blender" (our generator) or "game" (nav_generate), and for
     which compiled map (its signature), so a later compile without a new nav is noticed."""

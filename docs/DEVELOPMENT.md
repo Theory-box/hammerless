@@ -36,12 +36,12 @@ Blender tests (headless):
 Real compile of a .blend (prints the full compiler log):
 
 ```bash
-"C:\Program Files\Blender Foundation\Blender 4.5\blender.exe" --background demo/demo_level.blend --python tests/compile/build_blend.py -- FAST
+"C:\Program Files\Blender Foundation\Blender 4.4\blender.exe" --background demo/demo_level.blend --python tests/compile/build_blend.py -- FAST
 ```
 
 ## Native code
 
-The nav generator's hot paths and the nav analysis (visibility, hiding spots) run in `core/_hlnav.dll`, built with zig. The DLL must stay **bit-identical** in output to the Python code it replaces; every native stage has a Python twin used as the reference (and as the fallback when the DLL is missing).
+The nav generator's hot paths and the nav analysis (visibility, hiding spots) run in `core/_hlnav.dll`, built with zig (`pip install ziglang`; the build script runs `python -m ziglang`). The DLL must stay **bit-identical** in output to the Python code it replaces; every native stage has a Python twin used as the reference (and as the fallback when the DLL is missing).
 
 ```bash
 python native/build.py
@@ -53,7 +53,7 @@ python native/build.py
 "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe" --command extension build --source-dir hammerless --output-dir dist
 ```
 
-Install it into a Blender with Blender closed:
+Any Blender 4.2 or newer can build it (the commands here use the versions installed on the dev machine). Install it with Blender closed:
 
 ```bash
 "C:\Program Files\Blender Foundation\Blender 4.4\blender.exe" --command extension install-file --repo user_default --enable dist/hammerless-0.1.0.zip

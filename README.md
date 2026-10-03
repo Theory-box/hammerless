@@ -27,12 +27,12 @@ No Hammer, no VMF editing, no console commands.
 
 1. Download `hammerless-<version>.zip` from [Releases](../../releases) (or build it yourself, see [Development](docs/DEVELOPMENT.md)).
 2. In Blender: *Edit > Preferences > Get Extensions*, then **⌄** (top right) **> Install from Disk…** and pick the zip.
-3. In the 3D view press **N** and open the **Hammerless** tab. If L4D2 isn't found automatically, set *Advanced > L4D2 Folder*.
+3. In the 3D view press **N** and open the **Hammerless** tab. If L4D2 isn't found automatically, set its folder in the add-on's Preferences (*Edit > Preferences > Add-ons > Hammerless*), or per file under *Advanced > L4D2 Folder*.
 
 ## Quick start
 
-1. Save your .blend (the build goes into a `hammerless_build` folder next to it).
-2. **Add > Safe Rooms > Start Safe Room**, then the same for **End Safe Room** further away. Connect them with walkable floors.
+1. Delete the default cube, give the map its own **Map Name**, and save your .blend (the build goes into a `hammerless_build` folder next to it).
+2. **Shift+A > L4D2 > Start Safe Room**, then the same for **End Safe Room** further away (or use the *Add* panel: *Safe Rooms* tile, pick the room, **Add at Cursor**). Connect them with walkable floors.
 3. Press **Build & Play**.
 
 The full walkthrough is in **[Getting Started](docs/GETTING_STARTED.md)**.

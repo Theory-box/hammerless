@@ -1568,5 +1568,18 @@ class TestGameContent(unittest.TestCase):
         self.assertTrue(self.content.has_material("skybox/sky_day01_09_hdrbk"))
 
 
+class TestMapOwner(unittest.TestCase):
+    def test_owner_round_trip(self):
+        import tempfile
+        from types import SimpleNamespace
+        from hammerless.core import compile as cc
+        with tempfile.TemporaryDirectory() as d:
+            tools = SimpleNamespace(gamedir=d)
+            self.assertIsNone(cc.map_owner(tools, "hl_x"))
+            cc.set_map_owner(tools, "hl_x", os.path.join(d, "a", "hl_x.vmf"))
+            self.assertEqual(cc.map_owner(tools, "hl_x"), os.path.abspath(os.path.join(d, "a", "hl_x.vmf")))
+            self.assertIsNone(cc.map_owner(tools, "hl_y"))
+
+
 if __name__ == "__main__":
     unittest.main()

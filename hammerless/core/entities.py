@@ -452,7 +452,7 @@ def tank_ambush() -> Preset:
     trig = Entity("trigger_once", None, (0, 0, 0), {"spawnflags": "1"}, [vol],
                   outputs=[Output("OnTrigger", "tank_ambush_spawner", "SpawnZombie", "tank", times=1)])
     return Preset("TANK_AMBUSH", "Tank Ambush",
-                  "A Tank spawns at the cursor when a survivor walks into the trigger 8 m behind it "
+                  "A Tank spawns at the cursor when a survivor walks into the trigger about 10 m behind it "
                   "(move the pieces apart as you like).",
                   [PresetPart("spawner", entity=spawner), PresetPart("trigger", entity=trig)])
 
