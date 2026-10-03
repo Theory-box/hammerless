@@ -101,14 +101,29 @@ class MaterialResolver:
 
     def _export_custom(self, mat, surfaceprop: str = "concrete") -> str | None:
         img = _base_color_image(mat)
-        if img is None or self.game_dir is None:
+        if img is None:
+            if self.game_dir is not None:
+                self.report.warnings.append(f"Material '{mat.name}' has no Game Material and no image texture: "
+                                            f"it uses the default material")
             return None
-        safe = re.sub(r"[^a-z0-9_]", "_", mat.name.lower())
-        path = f"hammerless/{self.settings.map_name}/{safe}"
+        if self.game_dir is None:
+            self.report.warnings.append(f"Material '{mat.name}': L4D2 wasn't found, so its texture can't be "
+                                        f"converted; it uses the default material")
+            return None
+        path = f"hammerless/{self.settings.map_name}/{texture_file_name(mat.name)}"
+        mode = _alpha_mode(mat)
+        sig = _image_signature(img, surfaceprop, mode)
+        out = os.path.join(self.game_dir, "materials", *path.split("/"))
         try:
-            rgba = image_to_rgba8(img)
-            textures.write_material(self.game_dir, path, rgba, surfaceprop=surfaceprop,
-                                    translucent=mat.blend_method in ("BLEND",))
+            if sig is None or _TEXTURE_CACHE.get(out) != sig or not (os.path.exists(out + ".vtf")
+                                                                     and os.path.exists(out + ".vmt")):
+                rgba = image_to_rgba8(img)
+                if mode != "OPAQUE" and int(rgba[..., 3].min()) == 255:
+                    mode = "OPAQUE"                  # an alpha channel with nothing see-through
+                extra = {"$alphatest": "1"} if mode == "CUTOUT" else None
+                textures.write_material(self.game_dir, path, rgba, surfaceprop=surfaceprop,
+                                        translucent=mode == "BLENDED", extra=extra)
+                _TEXTURE_CACHE[out] = sig
             self.exported.append(path)
         except Exception as ex:
             self.report.warnings.append(f"Couldn't convert texture for material '{mat.name}': {ex}")
@@ -116,16 +131,73 @@ class MaterialResolver:
         return path
 
 
-def _base_color_image(mat):
+_TEXTURE_CACHE: dict[str, tuple] = {}     # output file -> what it was made from (skips re-converting)
+
+
+def texture_file_name(name: str) -> str:
+    """A material name as a file name: a-z, 0-9 and _, plus a short hash when that changed the name
+    (so 'Wall.001' and 'Wall_001' don't overwrite each other's texture)."""
+    import hashlib
+    safe = re.sub(r"[^a-z0-9_]", "_", name.lower())
+    if safe != name.lower():
+        safe += "_" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:6]
+    return safe
+
+
+def _image_signature(img, *extra):
+    """What a converted texture depends on, or None when that can't be told (always convert)."""
+    if img.is_dirty or img.packed_file is not None or img.source != "FILE":
+        return None
+    path = bpy.path.abspath(img.filepath)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (path, st.st_mtime, st.st_size, tuple(img.size), img.colorspace_settings.name) + extra
+
+
+def _alpha_mode(mat) -> str:
+    """How the base colour's alpha is used: OPAQUE (not wired to Alpha), CUTOUT ($alphatest) or
+    BLENDED ($translucent, for materials set to Blended / Alpha Blend)."""
     if not mat.use_nodes or not mat.node_tree:
+        return "OPAQUE"
+    for node in mat.node_tree.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            alpha = node.inputs.get("Alpha")
+            if alpha is None or not alpha.is_linked:
+                return "OPAQUE"
+            blended = getattr(mat, "surface_render_method", "") == "BLENDED" or mat.blend_method == "BLEND"
+            return "BLENDED" if blended else "CUTOUT"
+    return "OPAQUE"
+
+
+def _base_color_image(mat):
+    """The image feeding Base Color (through any nodes in between, e.g. Hue/Saturation or Mix);
+    without a Principled BSDF or a wired Base Color, an image node that isn't wired to anything
+    else (not a normal or roughness map). None when there's no such image."""
+    if not mat.use_nodes or not mat.node_tree:
+        return None
+
+    def upstream(node, seen):
+        if node in seen:
+            return None
+        seen.add(node)
+        if node.type == "TEX_IMAGE":
+            return node.image
+        for inp in node.inputs:
+            for link in inp.links:
+                found = upstream(link.from_node, seen)
+                if found is not None:
+                    return found
         return None
     for node in mat.node_tree.nodes:
         if node.type == "BSDF_PRINCIPLED":
             inp = node.inputs.get("Base Color")
-            if inp and inp.is_linked and inp.links[0].from_node.type == "TEX_IMAGE":
-                return inp.links[0].from_node.image
+            if inp and inp.is_linked:
+                return upstream(inp.links[0].from_node, set())
     for node in mat.node_tree.nodes:
-        if node.type == "TEX_IMAGE" and node.image:
+        if (node.type == "TEX_IMAGE" and node.image and not any(o.is_linked for o in node.outputs)
+                and node.image.colorspace_settings.name != "Non-Color"):
             return node.image
     return None
 
@@ -156,14 +228,15 @@ def image_to_rgba8(img) -> np.ndarray:
 
 # ---------------------------------------------------------------- geometry
 
-def _evaluated_mesh(obj, depsgraph, scale: float):
-    """World-space bmesh (modifiers applied) scaled to Hammer units."""
+def _evaluated_mesh(obj, depsgraph, scale: float, matrix=None):
+    """World-space bmesh (modifiers applied) scaled to Hammer units. matrix: where this copy of
+    the object is (an instance), else the object's own place."""
     eval_obj = obj.evaluated_get(depsgraph)
     mesh = eval_obj.to_mesh()
     bm = bmesh.new()
     bm.from_mesh(mesh)
     eval_obj.to_mesh_clear()
-    bm.transform(Matrix.Scale(scale, 4) @ obj.matrix_world)
+    bm.transform(Matrix.Scale(scale, 4) @ (matrix if matrix is not None else obj.matrix_world))
     return bm
 
 
@@ -189,17 +262,20 @@ def _loose_parts(bm) -> list[list]:
     return parts
 
 
-def mesh_to_brushes(obj, depsgraph, scale: float, materials: MaterialResolver) -> list[Brush]:
-    bm = _evaluated_mesh(obj, depsgraph, scale)
+def mesh_to_brushes(obj, depsgraph, scale: float, materials: MaterialResolver, matrix=None,
+                    label: str | None = None) -> list[Brush]:
+    bm = _evaluated_mesh(obj, depsgraph, scale, matrix)
     slots = [s.material for s in obj.material_slots]
-    mirrored = obj.matrix_world.determinant() < 0  # negative scale flips face winding
+    mirrored = (matrix if matrix is not None else obj.matrix_world).determinant() < 0  # flips face winding
+    label = label or obj.name
     brushes = []
     try:
         for i, part in enumerate(_loose_parts(bm)):
-            name = obj.name if i == 0 else f"{obj.name} (part {i + 1})"
+            name = label if i == 0 else f"{label} (part {i + 1})"
             if obj.hammerless.use_convex_hull:
                 faces = _hull_faces(part)
-                mat = slots[part[0].material_index] if slots else None
+                mi = part[0].material_index
+                mat = slots[mi] if mi < len(slots) else None
                 polys = [Polygon(verts, *materials.resolve(mat)) for verts in faces]
             else:
                 polys = []
@@ -243,12 +319,21 @@ def mesh_to_terrain(obj, depsgraph, scale: float, materials: MaterialResolver) -
     bm.faces.ensure_lookup_table()
     verts = [v.co.copy() for v in bm.verts]
     polys = [[v.index for v in f.verts] for f in bm.faces]
+    vcol = {}           # red channel = blend; from a face-corner or a vertex colour attribute
     color_layer = bm.loops.layers.color.active or bm.loops.layers.float_color.active
-    vcol = {}
+    vert_layer = bm.verts.layers.float_color.active or bm.verts.layers.color.active
+    if color_layer is None and vert_layer is None:
+        color_layer = next(iter(bm.loops.layers.color.values()), None) or next(
+            iter(bm.loops.layers.float_color.values()), None)
+        vert_layer = next(iter(bm.verts.layers.float_color.values()), None) or next(
+            iter(bm.verts.layers.color.values()), None)
     if color_layer is not None:
         for f in bm.faces:
             for loop in f.loops:
-                vcol[loop.vert.index] = loop[color_layer][0]  # red channel = blend
+                vcol[loop.vert.index] = loop[color_layer][0]
+    elif vert_layer is not None:
+        for v in bm.verts:
+            vcol[v.index] = v[vert_layer][0]
     slots = [s.material for s in obj.material_slots]
     material, _, _ = materials.resolve(slots[0] if slots else None)
     if material == materials.settings.default_material:
@@ -308,7 +393,7 @@ def object_outputs(obj) -> list[Output]:
 def light_entity(obj, scale: float) -> Entity:
     lamp = obj.data
     cls = LIGHT_CLASS.get(lamp.type, "light")
-    col = " ".join(str(int(max(0, min(1, c)) * 255)) for c in lamp.color)
+    col = " ".join(str(int(round(_linear_to_srgb(c) * 255))) for c in lamp.color)
     origin = tuple(c * scale for c in obj.matrix_world.translation)
     # Blender lights shine along local -Z; Source lights along +X.
     pitch, yaw, roll = source_angles(obj.matrix_world @ Matrix.Rotation(math.radians(90), 4, "Y"))
@@ -327,6 +412,11 @@ def light_entity(obj, scale: float) -> Entity:
 
 
 # ---------------------------------------------------------------- main
+
+def _linear_to_srgb(c: float) -> float:
+    c = max(0.0, min(1.0, c))
+    return c * 12.92 if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+
 
 def _rgb(color) -> tuple[int, int, int]:
     return tuple(int(round(max(0.0, min(1.0, c)) * 255)) for c in color)
@@ -361,10 +451,19 @@ def extract_scene(context, report, game_dir: str | None = None) -> tuple[MapIR, 
     ir = MapIR(settings=scene_settings_to_ir(s))
     materials = MaterialResolver(s, game_dir, report)
 
+    hidden = []
     for obj in context.scene.objects:
         if not obj.visible_get() and obj.hammerless.role == "AUTO":
+            in_layer = obj.name in context.view_layer.objects     # not in an excluded collection
+            if (in_layer and (obj.hide_get() or obj.hide_viewport) and obj.type == "MESH"
+                    and effective_role(obj) in ("BRUSH", "TERRAIN")):
+                hidden.append(obj.name)
             continue  # hidden objects are skipped unless explicitly tagged
         role = effective_role(obj)
+        if role in ("BRUSH", "BRUSH_ENTITY", "TERRAIN") and obj.type != "MESH":
+            report.warnings.append(f"'{obj.name}' is a {obj.type.lower()}, not a mesh, so it can't be a brush or "
+                                   f"terrain: convert it (Object > Convert > Mesh) to export it")
+            continue
         try:
             if role == "BRUSH" and obj.type == "MESH":
                 ir.brushes.extend(mesh_to_brushes(obj, depsgraph, scale, materials))
@@ -387,4 +486,42 @@ def extract_scene(context, report, game_dir: str | None = None) -> tuple[MapIR, 
                 ir.entities.append(light_entity(obj, scale))
         except Exception as ex:
             report.errors.append(f"'{obj.name}': {ex}")
+    _extract_instances(context, depsgraph, scale, ir, materials, report)
+    if hidden:
+        report.warnings.append(f"{len(hidden)} hidden object(s) are left out of the map (Alt+H shows them; a "
+                               f"missing wall can make the map leak): {', '.join(sorted(hidden)[:5])}"
+                               + (", ..." if len(hidden) > 5 else ""))
     return ir, materials
+
+
+def _extract_instances(context, depsgraph, scale, ir, materials, report) -> None:
+    """Copies made by collection instances (Add > Collection Instance, linked asset kits) and by
+    geometry nodes: each copy exports like the object it copies, at the copy's place."""
+    skipped = set()
+    for inst in depsgraph.object_instances:
+        if not inst.is_instance or inst.parent is None:
+            continue
+        src = inst.object.original
+        holder = inst.parent.original
+        role = effective_role(src)
+        label = f"{holder.name} > {src.name}"
+        matrix = inst.matrix_world.copy()
+        try:
+            if role == "BRUSH" and src.type == "MESH":
+                ir.brushes.extend(mesh_to_brushes(src, depsgraph, scale, materials, matrix, label))
+            elif role == "BRUSH_ENTITY" and src.type == "MESH":
+                cls = src.hammerless.classname or "func_detail"
+                ir.entities.append(Entity(cls, None, (0, 0, 0), object_keyvalues(src),
+                                          mesh_to_brushes(src, depsgraph, scale, materials, matrix, label), label,
+                                          object_outputs(src)))
+            elif role == "ENTITY" and src.hammerless.classname:
+                origin = tuple(c * scale for c in matrix.translation)
+                ir.entities.append(Entity(src.hammerless.classname, origin, source_angles(matrix),
+                                          object_keyvalues(src), [], label, object_outputs(src)))
+            elif role in ("TERRAIN", "LIGHT"):
+                skipped.add(f"{src.name} ({role.lower()})")
+        except Exception as ex:
+            report.errors.append(f"'{label}': {ex}")
+    if skipped:
+        report.warnings.append("Instanced terrain and lights aren't exported yet (make them real objects): "
+                               + ", ".join(sorted(skipped)[:5]))

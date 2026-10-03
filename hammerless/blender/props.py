@@ -113,7 +113,27 @@ def set_surface_list(surfaces) -> None:
         SURFACE_ITEMS.append((s.name, s.name, friction_label(s)))
 
 
+def clean_map_name(name: str) -> str:
+    """A map name the game, its console and file paths all accept: lowercase a-z, 0-9 and _."""
+    import re
+    return re.sub(r"[^a-z0-9_]", "", re.sub(r"[\s\-.]+", "_", name.strip().lower())).strip("_")
+
+
+def _on_map_name(self):
+    clean = clean_map_name(self.map_name)
+    if clean and clean != self.map_name:
+        self.map_name = clean           # (runs this again once, with nothing left to change)
+
+
 def _surface_items(self, context):
+    # Blender stores the choice as a position in this list, so it must always be the game's list
+    # when the game is there (the short fallback list would make saved choices read as nothing)
+    if not SURFACE_ITEMS:
+        try:
+            from .ops import game_content, game_root
+            game_content(game_root(context))           # fills SURFACE_ITEMS from the game
+        except Exception:
+            pass
     if not SURFACE_ITEMS:
         from ..core.surfaces import FALLBACK
         set_surface_list(FALLBACK)
@@ -229,8 +249,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     spawn_index: IntProperty(default=-1, update=_on_spawn_index)
     spawn_favorites: StringProperty(description="Starred Add panel items (comma separated)")
     # --- build
-    map_name: StringProperty(name="Map Name", default="my_map",
-                             description="File name of the map (lowercase, no spaces)")
+    map_name: StringProperty(name="Map Name", default="my_map", update=lambda self, c: _on_map_name(self),
+                             description="File name of the map: lowercase letters, digits and _ (spaces "
+                                         "become _)")
     compile_preset: EnumProperty(name="Quality", items=COMPILE_PRESETS, default="NORMAL")
     vis_mode: EnumProperty(name="Visibility (vvis)", default="FULL", items=[
         ("SKIP", "Skip", "No visibility pass: everything always renders (slow in-game on big maps)"),
@@ -256,14 +277,14 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                             description="Skybox texture name (use the list button to pick one)")
     auto_sun: BoolProperty(name="Add Sun if Missing", default=True,
                            description="Add a sun from these settings when the scene has no Blender sun lamp")
-    sun_color: FloatVectorProperty(name="Sun Color", subtype="COLOR", size=3, min=0, max=1,
+    sun_color: FloatVectorProperty(name="Sun Color", subtype="COLOR_GAMMA", size=3, min=0, max=1,
                                    default=(1.0, 0.96, 0.88))
     sun_brightness: IntProperty(name="Sun Brightness", default=400, min=0, max=5000)
     sun_pitch: FloatProperty(name="Sun Height", default=-50.0, min=-90.0, max=0.0,
                              description="-90 = straight down (noon), near 0 = low evening sun")
     sun_yaw: FloatProperty(name="Sun Direction", default=30.0, min=0.0, max=360.0,
                            description="Compass direction the sunlight travels towards")
-    ambient_color: FloatVectorProperty(name="Sky Light Color", subtype="COLOR", size=3, min=0, max=1,
+    ambient_color: FloatVectorProperty(name="Sky Light Color", subtype="COLOR_GAMMA", size=3, min=0, max=1,
                                        default=(0.55, 0.63, 0.75))
     ambient_brightness: IntProperty(name="Sky Light Brightness", default=80, min=0, max=2000,
                                     description="Light from the sky dome that fills shadows")
@@ -273,7 +294,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
 
     # --- fog
     fog_enabled: BoolProperty(name="Fog", default=False)
-    fog_color: FloatVectorProperty(name="Color", subtype="COLOR", size=3, min=0, max=1,
+    fog_color: FloatVectorProperty(name="Color", subtype="COLOR_GAMMA", size=3, min=0, max=1,
                                    default=(0.43, 0.47, 0.51))
     fog_start: FloatProperty(name="Start", default=512.0, min=0.0, description="Fog begins (Hammer units)")
     fog_end: FloatProperty(name="End", default=4096.0, min=1.0, description="Fog is thickest (Hammer units)")

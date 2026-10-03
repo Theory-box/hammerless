@@ -152,13 +152,19 @@ def build_map_text(context, root: str | None):
     else that compares against the last build (Analyze Navmesh) must use this too."""
     s = context.scene.hammerless
     rep = Report()
+    from .props import clean_map_name
+    if not s.map_name or clean_map_name(s.map_name) != s.map_name:
+        rep.errors.append(f"Map Name '{s.map_name}' can't be used: use lowercase letters, digits and _ only "
+                          f"(for example '{clean_map_name(s.map_name) or 'my_map'}')")
+        return None, None, rep
     gamedir = os.path.join(root, "left4dead2") if root else None
+    content = game_content(root)        # loads the game's surface list before materials are read
     ir, _mats = extract_scene(context, rep, gamedir)
     if rep.errors:
         return ir, None, rep
     from .logic import compile_logic
     compile_logic(context, ir, rep)
-    text, rep2 = build_vmf(ir, game_content(root) if s.check_game_content else None)
+    text, rep2 = build_vmf(ir, content if s.check_game_content else None)
     rep2.errors[:0] = rep.errors
     rep2.warnings[:0] = rep.warnings
     return ir, text, rep2

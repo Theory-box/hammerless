@@ -230,6 +230,10 @@ def collect_crescendos(ir: MapIR) -> list[str]:
         if e.classname != CRESCENDO:
             continue
         name = "".join(c if c.isalnum() or c == "_" else "_" for c in e.keyvalues.get("name", "crescendo").lower())
+        if name == "director":
+            problems.append("A crescendo can't be named 'director' (that name is the map's Director settings): "
+                            "rename it")
+            continue
         stages, probs = parse_stages(e.keyvalues.get("stages", ""))
         problems += [f"Crescendo '{name}' {p}" for p in probs]
         if name in ir.crescendos:

@@ -493,18 +493,59 @@ def test_custom_texture_material():
     tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
     tex.image = img
     bsdf = mat.node_tree.nodes["Principled BSDF"]
-    mat.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    # through a Hue/Saturation node, with an unrelated (normal) map in the material: the base colour wins
+    hue = mat.node_tree.nodes.new("ShaderNodeHueSaturation")
+    mat.node_tree.links.new(tex.outputs["Color"], hue.inputs["Color"])
+    mat.node_tree.links.new(hue.outputs["Color"], bsdf.inputs["Base Color"])
+    normal = mat.node_tree.nodes.new("ShaderNodeTexImage")
+    normal.image = bpy.data.images.new("normal_test", 64, 64)
+    mat.node_tree.nodes.move(normal, 0) if hasattr(mat.node_tree.nodes, "move") else None
     add_box("wall", (4, 0.5, 3), (0, 0, 1.5), mat)
     blocks, log = export()
     assert blocks, log
+    from hammerless.blender.extract import texture_file_name
+    name = texture_file_name("My Brick")
+    assert name.startswith("my_brick_") and name != texture_file_name("My_Brick"), name   # no overwriting
     mats = {s.get("material") for sol in world_solids(blocks) for s in sol.blocks("side")}
-    assert "HAMMERLESS/TEST_MAP/MY_BRICK" in mats, mats
-    vtf = os.path.join(FAKE_GAME, "left4dead2", "materials", "hammerless", "test_map", "my_brick.vtf")
+    assert f"HAMMERLESS/TEST_MAP/{name.upper()}" in mats, mats
+    vtf = os.path.join(FAKE_GAME, "left4dead2", "materials", "hammerless", "test_map", name + ".vtf")
     h = read_vtf_header(vtf)
-    assert (h["width"], h["height"]) == (256, 128), h
+    assert (h["width"], h["height"]) == (256, 128), h          # the brick image, not the 64x64 one
     assert h["mips"] == 9
     with open(vtf.replace(".vtf", ".vmt")) as f:
-        assert "hammerless/test_map/my_brick" in f.read()
+        assert f"hammerless/test_map/{name}" in f.read()
+
+
+def test_collection_instances_export():
+    # a kit collection placed twice with Add > Collection Instance: both copies export as brushes
+    # at the copies' places; the kit itself (excluded from the view layer) doesn't
+    reset_scene()
+    add_box("floor", (10, 10, 0.2), (0, 0, -0.1))
+    kit = bpy.data.collections.new("Kit")
+    bpy.context.scene.collection.children.link(kit)
+    piece = add_box("pillar", (0.5, 0.5, 2), (0, 0, 1))
+    for c in list(piece.users_collection):
+        c.objects.unlink(piece)
+    kit.objects.link(piece)
+    bpy.context.view_layer.layer_collection.children["Kit"].exclude = True
+    for x in (-3.0, 3.0):
+        e = bpy.data.objects.new(f"Kit copy {x}", None)
+        e.instance_type = "COLLECTION"
+        e.instance_collection = kit
+        e.location = (x, 2.0, 0.0)
+        bpy.context.scene.collection.objects.link(e)
+    blocks, log = export()
+    assert blocks, log
+    scale = bpy.context.scene.hammerless.units_per_meter
+    import re
+    xs = []
+    for sol in world_solids(blocks):
+        pts = [tuple(map(float, p.split())) for sd in sol.blocks("side") for p in re.findall(r"\(([^)]*)\)", sd.get("plane"))]
+        if (max(p[0] for p in pts) - min(p[0] for p in pts) < 1.0 * scale       # pillar: 0.5 m wide,
+                and abs(max(p[2] for p in pts) - 2.0 * scale) < 1):                 # 2 m tall (not the shell)
+            xs.append(round(sum(p[0] for p in pts) / len(pts) / scale))
+    assert sorted(xs) == [-3, 3], (xs, log)
+    assert "hidden object" not in log, log          # the kit's own objects aren't 'hidden' walls
 
 
 def test_game_material_by_name():

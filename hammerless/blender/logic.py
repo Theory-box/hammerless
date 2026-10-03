@@ -744,7 +744,7 @@ class HL_NodeMessage(_Node, bpy.types.Node):
     kind, category = "MESSAGE", "Actions"
     text: StringProperty(name="Text", default="Find a way through")
     seconds: FloatProperty(name="Seconds", default=6.0, min=0.0, description="0 = until Hide")
-    color: FloatVectorProperty(name="Colour", subtype="COLOR", size=3, min=0, max=1, default=(1, 1, 1))
+    color: FloatVectorProperty(name="Colour", subtype="COLOR_GAMMA", size=3, min=0, max=1, default=(1, 1, 1))
 
     def make_sockets(self):
         self.ev_in("show", "Show")
