@@ -759,7 +759,8 @@ class TestLogicGraph(unittest.TestCase):
         self.assertIn(("OnPressed", "gate_1", "Open", "", 0.0, -1), outs)
         self.assertIn(("OnPressed", "gate_1", "SetPosition", "0.5", 0.0, -1), outs)
         relay = next(e for e in ir.entities if e.classname == "logic_relay")
-        self.assertEqual([(o.target, o.input, o.delay) for o in relay.outputs], [("director", "ForcePanicEvent", 2.5)])
+        # (plus switching on the Horde node's own "finished" listener)
+        self.assertIn(("director", "ForcePanicEvent", 2.5), [(o.target, o.input, o.delay) for o in relay.outputs])
         trig = next(e for e in ir.entities if e.classname == "trigger_multiple")
         self.assertEqual(trig.brushes[0].faces[0].material, "tools/toolstrigger")
         self.assertEqual([(o.output, o.input, o.parameter, o.times) for o in trig.outputs],

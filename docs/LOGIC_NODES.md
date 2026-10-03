@@ -40,6 +40,12 @@ Path Progress ≥ Random Value (0.2 to 1.0) → **When** → **Spawn Zombie** (T
 
 Settings: direction, distance (*auto* = the object's own size in that direction), seconds. **Block Nav While Closed** is off by default. Turning it on hides the area behind the closed gate from the Director's wandering zombies; see [Nav Mesh & Zombie Spawns](NAV_AND_ZOMBIES.md#gates-and-nav-blocking).
 
+## Hordes and crescendos
+
+- **Horde** and **Crescendo** *On Finished* only fire for their own horde or crescendo. A Crescendo's *On Finished* fires once, after its **last** stage.
+- When a crescendo ends, its Director settings stay in force (the game keeps them). They repeat your map-wide settings, so nothing changes there. But settings a **Director Settings** node applied before the crescendo are replaced; apply them again after the crescendo if you need them. Measured in game: loading Director settings at the very moment a crescendo ends makes the game start another panic event, so Hammerless doesn't do that for you.
+- With the map-wide Director settings on, **Map Start** fires 1.1 s into the map (after those settings load), so a Director Settings node applied at map start isn't overwritten by them.
+
 ## Director control
 
 *AI Director > Director Spawns* switches a type (Tank, Witch, each special) off for the Director, so only your graph spawns it.

@@ -655,8 +655,9 @@ def test_logic_graph_exports():
     assert conns.get("OnStartTouch").startswith("hl_show_message,ShowHint"), conns.get("OnStartTouch")
     hint = entities(blocks, "env_instructor_hint")[0]
     assert hint.get("hint_caption") == "Get to the gate"
-    relay = entities(blocks, "logic_relay")[0]
-    assert relay.blocks("connections")[0].get("OnTrigger") == "director,ForcePanicEvent,,10,-1"
+    sends = [v for r in entities(blocks, "logic_relay") for c in r.blocks("connections")
+             for k, v in c.items if not isinstance(v, type(c)) and k == "OnTrigger"]
+    assert "director,ForcePanicEvent,,10,-1" in sends, sends
     # the volume's mesh became the trigger, not a solid wall
     assert all("toolstrigger" in sd.get("material").lower() for sd in trig[0].blocks("solid")[0].blocks("side"))
     assert not any(sd.get("material").lower() == "tools/toolstrigger"
@@ -682,9 +683,9 @@ def test_logic_graph_editor_audit():
     elsewhere.links.new(s2.outputs["On Map Start"], h2.inputs[0])
     blocks, log = export()
     assert blocks, log
-    autos = [c.get("OnMapSpawn") for e in entities(blocks, "logic_auto") for c in e.blocks("connections")
-             if c.get("OnMapSpawn")]
-    assert any(a.startswith("director,ForcePanicEvent,,0") for a in autos), (autos, log)
+    autos = [v for e in entities(blocks, "logic_auto") for c in e.blocks("connections")
+             for k, v in c.items if k == "OnMapSpawn" and isinstance(v, str)]
+    assert any(a.startswith("director,ForcePanicEvent,,") for a in autos), (autos, log)
     assert not any("crescendo" in a.lower() or "ScriptedPanicEvent" in a for a in autos), autos
 
 

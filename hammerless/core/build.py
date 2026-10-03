@@ -525,14 +525,7 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     if s.director_enabled:
         entities.append(Entity("logic_auto", HELPER_SPOT, (0, 0, 0), {"spawnflags": "1"}, outputs=[
             Output("OnMapSpawn", "director", "BeginScript", director_input_script(s.name, "director"), 1.0, 1)]))
-        if ir.crescendos:
-            # a crescendo's script takes the Director's script slot and leaves it empty when it ends:
-            # load the map-wide settings again afterwards
-            director = next((e for e in entities if e.classname == "info_director"), None)
-            if director is not None:
-                director.outputs = list(director.outputs) + [Output(
-                    "OnPanicEventFinished", "director", "BeginScript", director_input_script(s.name, "director"),
-                    0.5, -1)]
+        # (a crescendo's options stay in force after it ends, measured; they repeat the map-wide ones)
     if "info_player_start" not in classes:
         first = next((e for e in entities if e.classname == "info_survivor_position"), None)
         origin = clear_spawn_spot(ir, entities, first.origin) if first else (0.0, 0.0, 0.0)

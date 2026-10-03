@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 from .entities import CRESCENDO, default_keyvalues
+from .gamefiles import sq_text
 from .ir import Brush, Entity, MapIR, Output
 
 DIRECTOR = "director"
@@ -29,7 +30,7 @@ GAME_EVENTS = {
     "SURVIVOR_DIES": ("A Survivor Dies", "player_death", "p && p.IsSurvivor()"),
     "SURVIVOR_DOWN": ("A Survivor Is Incapacitated", "player_incapacitated", "p && p.IsSurvivor()"),
     "SURVIVOR_REVIVED": ("A Survivor Is Revived", "revive_success", ""),
-    "SPECIAL_KILLED": ("A Special Infected Is Killed", "player_death", "p && !p.IsSurvivor()"),
+    "SPECIAL_KILLED": ("A Special Infected Is Killed", "player_death", "p && !p.IsSurvivor() && p.GetZombieType() != 8"),
     "COMMON_KILLED": ("A Common Infected Is Killed", "infected_death", ""),
     "TANK_SPAWNS": ("A Tank Appears", "tank_spawn", ""),
     "TANK_KILLED": ("A Tank Is Killed", "tank_killed", ""),
@@ -93,6 +94,10 @@ BECAME = {"func_movelinear": "Mover (Move Over Time)", "func_button": "Button", 
           "func_brush": "solid brush (Collision or Show / Hide)", "func_illusionary": "walk-through brush (Collision)"}
 
 
+RELAY = "2"            # logic_relay: allow fast retrigger (else it ignores Trigger until its last delay ran out)
+RELAY_ONCE = "3"       # ...and only trigger once
+
+
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", text.lower()).strip("_") or "node"
 
@@ -123,6 +128,15 @@ class _Compiler:
         self.converted: dict[str, tuple[str, str]] = {}   # object -> (class it became, node that did it)
 
     # -- names and entities
+    def fn_name(self, base: str) -> str:
+        """A script function name no other node (in any graph) uses."""
+        taken = self.ir.__dict__.setdefault("_logic_fn_names", set())
+        name, i = base, 2
+        while name in taken:
+            name, i = f"{base}_{i}", i + 1
+        taken.add(name)
+        return name
+
     def unique(self, base: str) -> str:
         taken = {e.keyvalues.get("targetname") for e in self.ir.entities}
         name, i = base, 2
@@ -137,7 +151,7 @@ class _Compiler:
         return e.keyvalues["targetname"]
 
     def add(self, classname: str, name: str, kv: dict, brushes=None, source: str = "", origin=None) -> Entity:
-        e = Entity(classname, None if brushes else tuple(origin or (0.0, 0.0, 16.0)), (0, 0, 0),
+        e = Entity(classname, None if brushes else tuple(origin or (0.0, 0.0, 0.0)), (0, 0, 0),
                    {"targetname": self.unique(name), **kv}, brushes or [], source or name)
         self.ir.entities.append(e)
         return e
@@ -176,6 +190,8 @@ class _Compiler:
     def director(self) -> Entity:
         for e in self.ir.entities:
             if e.classname == "info_director":
+                if not e.keyvalues.get("targetname") and self.unique("director") == "director":
+                    e.keyvalues = {**e.keyvalues, "targetname": "director"}   # what hordes and crescendos target
                 self.name_of(e, DIRECTOR)
                 return e
         return self.add("info_director", DIRECTOR, {k: v for k, v in default_keyvalues("info_director").items()
@@ -223,7 +239,7 @@ class _Compiler:
             fn = f"HL_Random_{slug}"
             if fn not in self.defined:
                 self.defined.add(fn)
-                say = (f'printl("HAMMERLESS_VALUE {n.id} rolled " + {fn}_v);\n        ' if self.log else "")
+                say = (f'printl("HAMMERLESS_VALUE {sq_text(n.id)} rolled " + {fn}_v);\n        ' if self.log else "")
                 self.functions.append(f"{fn}_v <- null;\nfunction {fn}() {{\n    if ({fn}_v == null) {{\n"
                                       f"        {fn}_v = RandomFloat({lo}, {hi});\n        {say}}}\n"
                                       f"    return {fn}_v;\n}}")
@@ -235,7 +251,7 @@ class _Compiler:
                     "DIVIDE": f"(({b}) != 0 ? ({a}) / ({b}) : 0.0)", "MINIMUM": f"(({a}) < ({b}) ? ({a}) : ({b}))",
                     "MAXIMUM": f"(({a}) > ({b}) ? ({a}) : ({b}))", "POWER": f"pow({a}, {b})",
                     "ABSOLUTE": f"fabs({a})", "ROUND": f"floor(({a}) + 0.5)", "FLOOR": f"floor({a})",
-                    "CEIL": f"ceil({a})", "MODULO": f"(({b}) != 0 ? fmod({a}, {b}) : 0.0)"}.get(op, f"({a} + {b})")
+                    "CEIL": f"ceil({a})", "MODULO": f"(({b}) != 0 ? ({a}) % ({b}) : 0.0)"}.get(op, f"({a} + {b})")
         if k == "COMPARE":
             a, b = self.expr_in(n, "a", 0.0), self.expr_in(n, "b", 0.0)
             op = s.get("op", "GREATER_EQUAL")
@@ -395,19 +411,19 @@ class _Compiler:
             pass                            # value nodes turn into expressions where they're used
         elif k == "WHEN":
             cond = self.expr_in(n, "condition", False)
-            fn = f"HL_When_{slug}"
+            fn = self.fn_name(f"HL_When_{slug}")
             self.functions.append(f"function {fn}() {{ return {cond}; }}")
-            on_true = self.add("logic_relay", f"hl_{slug}_true", {"spawnflags": "0"})
-            on_false = self.add("logic_relay", f"hl_{slug}_false", {"spawnflags": "0"})
+            on_true = self.add("logic_relay", f"hl_{slug}_true", {"spawnflags": RELAY})
+            on_false = self.add("logic_relay", f"hl_{slug}_false", {"spawnflags": RELAY})
             self.whens.append((fn, on_true.keyvalues["targetname"], on_false.keyvalues["targetname"],
                                bool(s.get("once", True))))
             fire("true", on_true, "OnTrigger")
             fire("false", on_false, "OnTrigger")
         elif k == "IF":
             cond = self.expr_in(n, "condition", False)
-            on_true = self.add("logic_relay", f"hl_{slug}_true", {"spawnflags": "0"})
-            on_false = self.add("logic_relay", f"hl_{slug}_false", {"spawnflags": "0"})
-            fn = f"HL_If_{slug}"
+            on_true = self.add("logic_relay", f"hl_{slug}_true", {"spawnflags": RELAY})
+            on_false = self.add("logic_relay", f"hl_{slug}_false", {"spawnflags": RELAY})
+            fn = self.fn_name(f"HL_If_{slug}")
             self.functions.append(f"function {fn}() {{\n    if ({cond}) EntFire(\"{on_true.keyvalues['targetname']}\", "
                                   f"\"Trigger\");\n    else EntFire(\"{on_false.keyvalues['targetname']}\", \"Trigger\");\n}}")
             take("in", *self.script_call(fn))
@@ -415,11 +431,13 @@ class _Compiler:
             fire("false", on_false, "OnTrigger")
         elif k == "MAP_START":
             e = self.add("logic_auto", f"hl_{slug}", {"spawnflags": "1"})
-            fire("start", e, "OnMapSpawn")
+            # after the map-wide Director settings (they load at 1 s), or settings a graph applies at
+            # map start would be replaced by them
+            fire("start", e, "OnMapSpawn", 1.1 if self.ir.settings.director_enabled else 0.0)
         elif k == "GAME_EVENT":
             ev = s.get("event", "LEFT_SAFE_ROOM")
             label, game_event, cond = GAME_EVENTS.get(ev, GAME_EVENTS["LEFT_SAFE_ROOM"])
-            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "1" if s.get("once") else "0"})
+            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": RELAY_ONCE if s.get("once") else RELAY})
             self.events.setdefault(game_event, []).append((cond, e.keyvalues["targetname"]))
             fire("happened", e, "OnTrigger")
         elif k == "TIMER":
@@ -436,18 +454,18 @@ class _Compiler:
             take("now", name, "FireTimer")
             fire("tick", e, "OnTimer")
         elif k in ("DELAY", "ONCE"):
-            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "1" if k == "ONCE" else "0"})
+            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": RELAY_ONCE if k == "ONCE" else RELAY})
             take("in", e.keyvalues["targetname"], "Trigger")
             take("cancel", e.keyvalues["targetname"], "CancelPending")
             fire("out", e, "OnTrigger", float(s.get("seconds", 0)) if k == "DELAY" else 0.0)
         elif k == "SEQUENCE":
             step = float(s.get("seconds", 0) or 0)
-            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "0"})
+            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": RELAY})
             take("in", e.keyvalues["targetname"], "Trigger")
             for i in range(1, 7):     # a hundredth of a second apart keeps the order
                 fire(f"then{i}", e, "OnTrigger", step * (i - 1) + 0.01 * (i - 1))
         elif k == "GATE":
-            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "0", "StartDisabled": "0" if s.get("open", True)
+            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": RELAY, "StartDisabled": "0" if s.get("open", True)
                                                         else "1"})
             name = e.keyvalues["targetname"]
             take("in", name, "Trigger")
@@ -475,16 +493,36 @@ class _Compiler:
             for i in range(1, 5):
                 fire(f"case{i}", e, f"OnCase{i:02d}")
         elif k == "HORDE":
+            # measured: OnPanicEventFinished fires after a ForcePanicEvent horde (any horde): only this
+            # node's "On Finished" listens, from its Start until the next finish
             d = self.director()
-            take("start", self.name_of(d, DIRECTOR), "ForcePanicEvent")
-            fire("finished", d, "OnPanicEventFinished")
+            dname = self.name_of(d, DIRECTOR)
+            done = self.add("logic_relay", f"hl_{slug}_done", {"spawnflags": RELAY, "StartDisabled": "1"})
+            dn = done.keyvalues["targetname"]
+            d.outputs = list(d.outputs) + [Output("OnPanicEventFinished", dn, "Trigger", "", 0.0, -1)]
+            done.outputs = list(done.outputs) + [Output("OnTrigger", dn, "Disable", "", 0.0, -1)]
+            self.takes[(nid, "start")] = [_Take(dn, "Enable"), _Take(dname, "ForcePanicEvent")]
+            fire("finished", done, "OnTrigger")
         elif k == "CRESCENDO":
             name = _slug(s.get("name") or slug)
+            if self.graph and not name.startswith(self.graph):
+                name = f"{self.graph}_{name}"       # two graphs' crescendos can share a node name
             self.ir.entities.append(Entity(CRESCENDO, (0, 0, 0), (0, 0, 0),
                                            {"name": name, "stages": s.get("stages", "PANIC 1")}, [], nid))
+            from .gamefiles import parse_stages
+            stages = max(1, len(parse_stages(s.get("stages", "PANIC 1"))[0]))
             d = self.director()
-            take("start", self.name_of(d, DIRECTOR), "ScriptedPanicEvent", name)
-            fire("finished", d, "OnCustomPanicStageFinished")
+            dname = self.name_of(d, DIRECTOR)
+            count = self.add("math_counter", f"hl_{slug}_stages", {"min": "0", "max": str(stages), "startvalue": "0",
+                                                                   "StartDisabled": "1"})
+            cn = count.keyvalues["targetname"]
+            d.outputs = list(d.outputs) + [Output("OnCustomPanicStageFinished", cn, "Add", "1", 0.0, -1)]
+            # (no Director script is loaded again afterwards: measured, a BeginScript as a crescendo ends
+            # starts another panic event, and when that ends the Director drops its settings altogether)
+            count.outputs = list(count.outputs) + [Output("OnHitMax", cn, "Disable", "", 0.0, -1),
+                                                   Output("OnHitMax", cn, "SetValueNoFire", "0", 0.0, -1)]
+            self.takes[(nid, "start")] = [_Take(cn, "Enable"), _Take(dname, "ScriptedPanicEvent", name)]
+            fire("finished", count, "OnHitMax")
         elif k == "SPAWN":
             what = s.get("what", "tank")
             limit = int(s.get("fewer_than", 0) or 0)
@@ -554,7 +592,8 @@ class _Compiler:
             fire("completed", done, "OnTrigger")
         elif k == "DIRECTOR_SETTINGS":
             from .gamefiles import director_input_script, director_option_lines
-            name = director_input_script(self.ir.settings.name, slug)
+            # (never the map-wide Director script's name, which a node called 'Director' would take)
+            name = director_input_script(self.ir.settings.name, slug if slug != "director" else "director_settings")
             base = {line.split("=")[0].strip(): line for line in director_option_lines(self.ir)}
             for key, opt in DIRECTOR_FIELDS:
                 v = s.get(key, -1)
@@ -574,11 +613,11 @@ class _Compiler:
                     base.pop(opt, None)
             self.ir.extra_scripts[f"scripts/vscripts/{name}.nut"] = (
                 f"// Hammerless Director Settings node '{nid}'\nDirectorOptions <-\n{{\n"
-                + "\n".join(base.values()) + f"\n}}\nprintl(\"HAMMERLESS_DIRECTOR settings '{nid}' active\");\n")
+                + "\n".join(base.values()) + f"\n}}\nprintl(\"HAMMERLESS_DIRECTOR settings '{sq_text(nid)}' active\");\n")
             d = self.director()
             dname = self.name_of(d, DIRECTOR)
-            take("apply", dname, "BeginScript", name)
             main = director_input_script(self.ir.settings.name, "director")
+            take("apply", dname, "BeginScript", name)
             if self.ir.settings.director_enabled:
                 take("reset", dname, "BeginScript", main)
             else:
@@ -604,7 +643,8 @@ class _Compiler:
 
     def hint(self, slug: str, text: str, seconds: float, color: str, icon: str) -> Entity:
         return self.add("env_instructor_hint", f"hl_{slug}", {
-            "hint_caption": text, "hint_timeout": str(int(seconds)), "hint_color": color, "hint_static": "1",
+            "hint_caption": text, "hint_timeout": str(max(1, round(seconds)) if seconds > 0 else 0),
+            "hint_color": color, "hint_static": "1",
             "hint_icon_onscreen": icon, "hint_forcecaption": "1", "hint_range": "0", "hint_auto_start": "0",
             "hint_instance_type": "2"})
 
@@ -614,6 +654,10 @@ class _Compiler:
         if f is None or not takes:
             return            # the node itself already reported what's wrong
         for t in takes:
+            if "," in (t.param or ""):
+                self.problems.append(f"Logic node '{l.to_node}': the value '{t.param}' has a comma, which the game "
+                                     "can't pass in an output (it splits the output's fields): leave it out")
+                continue
             f.entity.outputs.append(Output(f.output, t.target, t.input, t.param, f.delay, f.times))
         if self.log:        # Debug Log: print each wire as it fires
             self.log_names.append(f"{l.from_node}.{l.from_socket} -> {l.to_node}.{l.to_socket}")
@@ -701,9 +745,8 @@ class _Compiler:
                          "    if (Time() < HL_WhenNext) return;\n"
                          "    HL_WhenNext = Time() + 0.5;\n"
                          "    foreach (w in HL_Whens) {\n"
-                         "        if (w.done) continue;\n"
                          "        local v = w.fn.call(this);\n"      # in the script's scope, not the row's
-                         "        if (v && !w.last) { EntFire(w.t, \"Trigger\"); if (w.once) w.done = true; }\n"
+                         "        if (v && !w.last) { if (!w.done) EntFire(w.t, \"Trigger\"); if (w.once) w.done = true; }\n"
                          "        else if (!v && w.last) EntFire(w.f, \"Trigger\");\n"
                          "        w.last = v;\n"
                          "    }\n}\n")
@@ -746,7 +789,7 @@ class _Compiler:
         self.ir.extra_scripts[f"scripts/vscripts/hammerless/logic_{self.ir.settings.name}.nut"] = "".join(parts)
         script = next((e for e in self.ir.entities if e.keyvalues.get("targetname") == LOGIC_SCRIPT), None)
         if script is None:
-            script = Entity("logic_script", (0.0, 0.0, 56.0), (0, 0, 0), {
+            script = Entity("logic_script", (0.0, 0.0, 0.0), (0, 0, 0), {
                 "targetname": LOGIC_SCRIPT, "vscripts": f"hammerless/logic_{self.ir.settings.name}"}, [], LOGIC_SCRIPT)
             self.ir.entities.append(script)
         if thinks:
@@ -760,7 +803,8 @@ def compile_graph(nodes: list[LNode], links: list[LLink], ir: MapIR, graph: str 
     c = _Compiler(ir, problems, graph, log)
     c.nodes = {n.id: n for n in nodes}
     c.data_links = {(l.to_node, l.to_socket): (l.from_node, l.from_socket) for l in links if l.data}
-    for n in sorted(nodes, key=lambda n: n.kind == "COLLISION"):
+    makers = ("BUTTON", "MOVE", "SHOW_HIDE", "VOLUME")
+    for n in sorted(nodes, key=lambda n: (n.kind == "COLLISION", n.kind not in makers)):
         c.node(n)
     for l in links:
         if not l.data:

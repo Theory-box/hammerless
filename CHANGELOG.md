@@ -31,6 +31,13 @@
   - Model previews with long paths were duplicated on every refresh and ignored *Units per Meter*.
   - The search button next to an entity's Class now changes that entity instead of adding a new one.
   - New warnings: no End Safe Room (no wandering zombies), Next Map not installed, renamed Director.
+- **Pre-release audit, round 3 (logic nodes):**
+  - Crescendo *On Finished* fired after every stage (measured: once per stage); now once, after the last. Horde and Crescendo nodes no longer hear each other's "finished".
+  - A Director Settings node applied at Map Start was overwritten by the map-wide settings a second later.
+  - Math *Modulo* used a function the game doesn't have, which stopped every When check in the map.
+  - Delays and event relays ignored triggers while a delay was running (e.g. several kills in one moment counted once).
+  - Graphs leaked into every scene's map, could be lost on save, ignored reroutes and muted nodes, and kept deleted objects; *Graph from Outputs* dropped delays, "only once" and parameters.
+  - Logic entities sat slightly off the origin (could leak maps built elsewhere); several naming clashes between nodes and graphs; When "only once" stopped *On False*; Special Killed counted Tanks.
 - **Rooms behind a gate got no wandering zombies**: Mover gates no longer block the nav by default (L4D2 blocks from map load, before the Director places zombies).
 - A lit map loaded into a running game after an unlit one looked unlit (`mat_fullbright` stayed on).
 - Build Navmesh and Analyze Navmesh now export the map exactly as Build does.
