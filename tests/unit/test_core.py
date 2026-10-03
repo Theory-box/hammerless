@@ -458,6 +458,40 @@ class TestSmartBuild(unittest.TestCase):
         self.assertEqual(plan(a, self.vmf(prop_x=32))[0], "lighting")      # static props are baked
         self.assertEqual(plan(a, self.vmf(wall=160))[0], "full")
 
+    def test_light_order_matters(self):
+        # vbsp numbers switchable light styles (and static prop lighting files) in entity order:
+        # swapping two named lights needs a relight, not 'same'
+        from hammerless.core.buildplan import plan
+
+        def two(first, second):
+            ir = box_room_ir()
+            for name in (first, second):
+                ir.entities.append(Entity("light", (0, 0, 100), (0, 0, 0), {"_light": "255 255 255 200",
+                                                                          "targetname": name}))
+            return build_vmf(ir)[0]
+        self.assertNotEqual(plan(two("lamp_a", "lamp_b"), two("lamp_b", "lamp_a"))[0], "same")
+
+    def test_nav_outdated_after_a_new_compile(self):
+        # Compile Only (or an Esc'd Build) compiles without a new nav: the next build must make one
+        import struct
+        import tempfile
+        from hammerless.core import compile as cc
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "left4dead2", "maps"))
+        tools = cc.Tools(root)
+
+        def bsp(other: bytes) -> bytes:
+            header = bytearray(b"VBSP" + struct.pack("<i", 21) + bytes(16 * 64) + struct.pack("<i", 1))
+            struct.pack_into("<iiii", header, 8 + 16 * 1, 0, len(header), len(other), 0)
+            return bytes(header) + other
+        game_bsp = os.path.join(tools.maps_dir, "m.bsp")
+        open(game_bsp, "wb").write(bsp(b"walls v1"))
+        cc.set_nav_maker(tools, "m", "blender")
+        self.assertFalse(cc.nav_outdated(tools, "m"))
+        self.assertEqual(cc.nav_maker(tools, "m"), "blender")
+        open(game_bsp, "wb").write(bsp(b"walls v2, moved"))
+        self.assertTrue(cc.nav_outdated(tools, "m"))
+
     def test_strip_stale(self):
         import io
         import struct

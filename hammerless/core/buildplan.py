@@ -66,7 +66,7 @@ def _split(text: str):
             entities.append(tuple(kv for kv in canon if kv[0] != "solid" and kv[0] not in LIGHT_KEYS))
         else:
             entities.append(canon)
-    return geometry, sorted(lighting), entities
+    return geometry, lighting, entities      # order kept: vbsp numbers light styles and static props by it
 
 
 def plan(old_text: str | None, new_text: str) -> tuple[str, str]:

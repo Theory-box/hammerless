@@ -188,11 +188,18 @@ def read_pointfile(path: str) -> list[tuple[float, float, float]]:
 
 # ---------------------------------------------------------------- compile job
 
+_SIGNATURES: dict[str, tuple] = {}     # path -> ((size, mtime), signature)
+
+
 def bsp_signature(path: str) -> str:
     """Fingerprint of a compiled map without its pakfile (lump 40): the game saves its stringtable
     dictionary there whenever it loads the map (measured: the only lump that changes)."""
     import hashlib
     import struct
+    st = os.stat(path)
+    key = (st.st_size, st.st_mtime_ns)
+    if _SIGNATURES.get(path, (None,))[0] == key:
+        return _SIGNATURES[path][1]
     with open(path, "rb") as f:
         data = f.read()
     if data[:4] != b"VBSP":
@@ -204,7 +211,8 @@ def bsp_signature(path: str) -> str:
         ver, off, length, cc = struct.unpack_from("<iiii", data, 8 + 16 * i)
         h.update(struct.pack("<iiii", ver, off, length, cc))
         h.update(data[off:off + length])
-    return h.hexdigest()
+    _SIGNATURES[path] = (key, h.hexdigest())
+    return _SIGNATURES[path][1]
 
 
 class CompileJob:
@@ -242,19 +250,30 @@ class CompileJob:
         self.lighting: list = []     # bspcheck.lighting_problems after vrad: (message, location, object)
         self._q: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._run, daemon=True)
+        self._proc = None
+        self._vmf_bytes = b""
 
     def start(self) -> "CompileJob":
+        other = _ACTIVE_JOBS.get(self.base)
+        if other is not None and other._thread.is_alive():
+            raise RuntimeError(f"{self.name} is already compiling: wait for it to finish (see the hammerless_log "
+                               "text) and build again")
+        with open(self.vmf, "rb") as f:
+            self._vmf_bytes = f.read()       # what this job compiles, whatever happens to the file later
         lin = self.base + ".lin"
         if os.path.exists(lin):
             os.remove(lin)
+        _ACTIVE_JOBS[self.base] = self
         self._thread.start()
         return self
 
-    def _stamp(self) -> str:
+    def _stamp(self, vmf_bytes: bytes | None = None) -> str:
         """Fingerprint of what gets compiled: the VMF text and the compile options."""
         import hashlib
-        with open(self.vmf, "rb") as f:
-            return hashlib.sha1(f.read() + repr(self._opts).encode()).hexdigest()
+        if vmf_bytes is None:
+            with open(self.vmf, "rb") as f:
+                vmf_bytes = f.read()
+        return hashlib.sha1(vmf_bytes + repr(self._opts).encode()).hexdigest()
 
     def up_to_date(self) -> bool:
         """The last successful compile used the same VMF and options, and the game has its BSP
@@ -268,6 +287,14 @@ class CompileJob:
             return False
 
     def _run(self):
+        try:
+            self._run_steps()
+        finally:
+            self._proc = None
+            if _ACTIVE_JOBS.get(self.base) is self:
+                del _ACTIVE_JOBS[self.base]
+
+    def _run_steps(self):
         import time
         try:
             if self.skip_if_unchanged and self.up_to_date():
@@ -282,7 +309,7 @@ class CompileJob:
             for name, cmd in steps:
                 self._q.put(f"==== {name} ====")
                 t0 = time.time()
-                proc = subprocess.Popen(
+                proc = self._proc = subprocess.Popen(
                     cmd, cwd=os.path.dirname(self.vmf), stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, text=True, errors="replace",
                     # below-normal priority: the PC stays responsive while vvis/vrad use every core
@@ -314,8 +341,9 @@ class CompileJob:
                 self._copy_bsp(os.path.join(self.tools.maps_dir, self.name + ".bsp"))
                 self._q.put(f"Copied {self.name}.bsp to {self.tools.maps_dir}")
             with open(self.base + ".stamp", "w", encoding="utf-8") as f:
-                f.write(self._stamp())
-            shutil.copy2(self.vmf, self.base + ".built.vmf")      # what this BSP was made from
+                f.write(self._stamp(self._vmf_bytes))
+            with open(self.base + ".built.vmf", "wb") as f:       # what this BSP was made from (the VMF
+                f.write(self._vmf_bytes)                         # as it was when the job started)
             with open(self.base + ".built.opts", "w", encoding="utf-8") as f:
                 f.write(repr(self._opts))
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
@@ -337,8 +365,7 @@ class CompileJob:
                     old = f.read()
         except OSError:
             pass
-        with open(self.vmf, encoding="utf-8") as f:
-            kind, why = plan(old, f.read())
+        kind, why = plan(old, self._vmf_bytes.decode("utf-8", "replace"))
         if kind == "full":
             self.plan = "full"
             return self.steps
@@ -396,6 +423,30 @@ class CompileJob:
         return self
 
 
+_ACTIVE_JOBS: dict[str, "CompileJob"] = {}       # map base path -> its running compile
+
+
+def compile_running(vmf_path: str) -> bool:
+    """A compile of this map (same VMF) is still running."""
+    job = _ACTIVE_JOBS.get(os.path.splitext(os.path.abspath(vmf_path))[0])
+    return job is not None and job._thread.is_alive()
+
+
+def _stop_compilers() -> None:
+    """Blender is closing: don't leave vbsp / vvis / vrad running hidden."""
+    for job in list(_ACTIVE_JOBS.values()):
+        proc = getattr(job, "_proc", None)
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+
+import atexit                                             # noqa: E402
+atexit.register(_stop_compilers)
+
+
 def game_running() -> bool:
     try:
         out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq left4dead2.exe", "/NH"],
@@ -422,34 +473,48 @@ def send_commands(tools: Tools, commands: list[str]):
 
 
 def _run_console_script(tools: Tools, steps: list[tuple[str, list[str]]], log_start: int,
-                        timeout: float = 240.0):
+                        timeout: float = 600.0, launch_id: int | None = None, on_done=None):
     """Tail console.log; for each (marker, commands) step, wait until `marker`
-    appears (after the previous step's match), then send `commands`."""
+    appears (after the previous step's match), then send `commands`. Stops when a newer launch
+    starts; if it gives up, turns cheats (and nav editing) back off. on_done runs after the last
+    step."""
     import time
     log = os.path.join(tools.gamedir, "console.log")
     pos = log_start
     deadline = time.time() + timeout
+    cheats = False
     for marker, commands in steps:
-        marker = marker.lower()
+        needle = marker.lower().encode("utf-8")
         while True:
+            if launch_id is not None and LOAD_STATUS["launch_id"] != launch_id:
+                return                          # a newer Build & Play took over
             if time.time() > deadline:
+                if cheats:
+                    send_commands(tools, ["nav_edit 0", "sv_cheats 0"])
+                LOAD_STATUS["nav_error"] = ("The game didn't finish its nav mesh step in time; the nav may be "
+                                            "missing its marks. Build & Play again (tick Rebuild Nav Mesh)")
                 return
             time.sleep(1.0)
             try:
                 if os.path.getsize(log) < pos:
                     pos = 0  # log was truncated/restarted
-                with open(log, encoding="utf-8", errors="replace") as f:
+                with open(log, "rb") as f:          # bytes: console.log is CRLF, text mode would drift
                     f.seek(pos)
                     chunk = f.read()
             except OSError:
                 continue
-            i = chunk.lower().find(marker)
+            i = chunk.lower().find(needle)
             if i >= 0:
-                pos += len(chunk[:i + len(marker)].encode("utf-8", "replace"))
+                pos += i + len(needle)
                 break
         time.sleep(3.0)  # let the client finish connecting / the map settle
         if commands:
+            cheats = cheats or any(c.startswith("sv_cheats 1") for c in commands)
+            if any(c.startswith("sv_cheats 0") for c in commands):
+                cheats = False
             send_commands(tools, commands)
+    if on_done is not None:
+        on_done()
 
 
 # Printed in the status block at the end of every map load, both on a fresh game
@@ -514,11 +579,29 @@ def _nav_maker_path(tools: Tools, map_name: str) -> str:
 
 
 def set_nav_maker(tools: Tools, map_name: str, maker: str) -> None:
-    """Record who made maps/<map>.nav: "blender" (our generator) or "game" (nav_generate)."""
+    """Record who made maps/<map>.nav: "blender" (our generator) or "game" (nav_generate), and for
+    which compiled map (its signature), so a later compile without a new nav is noticed."""
     path = _nav_maker_path(tools, map_name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        sig = bsp_signature(os.path.join(tools.maps_dir, map_name + ".bsp"))
+    except (OSError, ValueError):
+        sig = ""
     with open(path, "w", encoding="utf-8") as f:
-        f.write(maker)
+        f.write(maker + ("\n" + sig if sig else ""))
+
+
+def nav_outdated(tools: Tools, map_name: str) -> bool:
+    """The map was compiled again since the nav mesh was made (e.g. Compile Only, or a Build stopped
+    with Esc): the nav no longer fits its walls. False when it isn't known (older markers)."""
+    try:
+        with open(_nav_maker_path(tools, map_name), encoding="utf-8") as f:
+            lines = f.read().split()
+        if len(lines) < 2:
+            return False
+        return bsp_signature(os.path.join(tools.maps_dir, map_name + ".bsp")) != lines[1]
+    except (OSError, ValueError):
+        return False
 
 
 def nav_maker(tools: Tools, map_name: str) -> str | None:
@@ -528,7 +611,7 @@ def nav_maker(tools: Tools, map_name: str) -> str | None:
     marker = _nav_maker_path(tools, map_name)
     try:
         with open(marker, encoding="utf-8") as f:
-            maker = f.read().strip() or None
+            maker = (f.read().split() or [None])[0]
         if maker == "game":
             nav = os.path.join(tools.maps_dir, map_name + ".nav")
             if not os.path.exists(nav) or os.path.getmtime(nav) < os.path.getmtime(marker):
@@ -574,7 +657,7 @@ class LaunchOptions:
 
 # How long the last launch took until survivors were in the map, and the latest in-game
 # flow report from the map's ready script (both set by a watcher thread).
-LOAD_STATUS: dict = {"launch_id": 0, "seconds": None, "flow": None, "flow_seq": 0}
+LOAD_STATUS: dict = {"launch_id": 0, "seconds": None, "flow": None, "flow_seq": 0, "nav_error": None}
 FLOW = "hammerless_flow "
 
 
@@ -651,7 +734,7 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
             # the engine turns mat_fullbright on for a map without lighting (a Quick build) and leaves
             # it on for the rest of the session: a lit map loaded after one would look unlit
             pre = ["sv_cheats 1", "mat_fullbright 0"] + pre
-        proc = send_commands(tools, pre + ["sv_cheats 0", f"map {map_name}"])
+        proc = send_commands(tools, ["con_logfile console.log"] + pre + ["sv_cheats 0", f"map {map_name}"])
     else:
         cmd = [os.path.join(tools.root, "left4dead2.exe"), "-game", "left4dead2",
                "-novid", "-console", "-condebug", "-windowed",
@@ -672,15 +755,19 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
     LOAD_STATUS["seconds"] = None
     LOAD_STATUS["flow"] = None
     threading.Thread(target=_watch_ready, args=(log, log_start, LOAD_STATUS["launch_id"]), daemon=True).start()
+    LOAD_STATUS["nav_error"] = None
+    launch_id = LOAD_STATUS["launch_id"]
     if analyze_nav and not generate_nav:
         threading.Thread(target=_run_console_script, args=(tools, analyze_steps(), log_start),
-                         daemon=True).start()
+                         kwargs={"launch_id": launch_id}, daemon=True).start()
     if generate_nav:
         set_nav_maker(tools, map_name, "game")
         script, used = _navmark_paths(tools, map_name)
         mark = os.path.exists(script)
-        if mark:
-            shutil.copyfile(script, used)
+
+        def marked():                       # the marks count as applied only once they are
+            if mark:
+                shutil.copyfile(script, used)
         threading.Thread(target=_run_console_script, args=(tools, nav_steps(map_name, mark), log_start),
-                         daemon=True).start()
+                         kwargs={"launch_id": launch_id, "on_done": marked}, daemon=True).start()
     return proc

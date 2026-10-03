@@ -74,7 +74,8 @@ def needs_nav(context, root, by_game: bool = False) -> bool:
     nav = os.path.join(tools.maps_dir, f"{s.map_name}.nav")
     wanted = "game" if s.nav_source == "GAME" else "blender"
     maker_differs = cc.nav_maker(tools, s.map_name) != wanted and (wanted == "game" or not by_game)
-    return s.generate_nav or not os.path.exists(nav) or cc.nav_marks_changed(tools, s.map_name) or maker_differs
+    return (s.generate_nav or not os.path.exists(nav) or cc.nav_marks_changed(tools, s.map_name) or maker_differs
+            or cc.nav_outdated(tools, s.map_name))
 
 
 def launch(context, root, nav_written: bool = False, analyzed: bool = False) -> None:
@@ -127,6 +128,8 @@ def write_log(lines: list[str], append: bool = False) -> None:
     txt = bpy.data.texts.get(LOG_TEXT) or bpy.data.texts.new(LOG_TEXT)
     if not append:
         txt.clear()
+    last = len(txt.lines) - 1
+    txt.cursor_set(last, character=len(txt.lines[last].body))   # write at the end, wherever the user clicked
     txt.write("\n".join(lines) + "\n")
 
 
@@ -179,6 +182,12 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
     if text is None:
         return None, root, rep2
     path = os.path.join(work_dir(context), f"{s.map_name}.vmf")
+    try:
+        path.encode("mbcs", "strict")
+    except (UnicodeEncodeError, LookupError):
+        rep2.warnings.append(f"The build folder '{os.path.dirname(path)}' has characters the map compilers can't "
+                             "read; if the compile fails, save the .blend in a folder with plain (English) "
+                             "letters or set Advanced > Work Folder")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     import json
@@ -565,9 +574,13 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
     state = {"waited": 0.0, "logged": False, "flow_seq": cc.LOAD_STATUS["flow_seq"]}
 
     def check():
-        if cc.LOAD_STATUS["launch_id"] != launch_id or state["waited"] > 300:
+        if cc.LOAD_STATUS["launch_id"] != launch_id or state["waited"] > 660:
             return None
         state["waited"] += 1.0
+        if cc.LOAD_STATUS.get("nav_error") and not state.get("nav_error"):
+            state["nav_error"] = True
+            write_log([cc.LOAD_STATUS["nav_error"]], append=True)
+            print("Hammerless:", cc.LOAD_STATUS["nav_error"])
         secs = cc.LOAD_STATUS["seconds"]
         if secs is not None and not state["logged"]:
             state["logged"] = True
@@ -642,6 +655,10 @@ class HL_OT_build(bpy.types.Operator):
     def execute(self, context):
         import time
         self._t0 = time.time()
+        if cc.compile_running(os.path.join(work_dir(context), f"{context.scene.hammerless.map_name}.vmf")):
+            self.report({"ERROR"}, "This map is still compiling: wait for it to finish (see the hammerless_log "
+                                   "text), then build again")
+            return {"CANCELLED"}
         path, root, rep = export_vmf(self, context)
         self._export_s = time.time() - self._t0
         from .problems import store
@@ -665,18 +682,32 @@ class HL_OT_build(bpy.types.Operator):
         s = context.scene.hammerless
         if self.play and s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root)):
             self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs)
-        self._job.start()
+        try:
+            self._job.start()
+        except RuntimeError as ex:
+            self.report({"ERROR"}, str(ex))
+            return {"CANCELLED"}
         self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
         self.report({"INFO"}, "Compiling... (see the hammerless_log text block)")
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
-        if event.type == "ESC":
-            self.report({"WARNING"}, "Stopped watching the compile (it continues in the background)")
+        if event.type == "ESC" and event.value == "PRESS":
+            self.report({"WARNING"}, "Stopped watching the compile (it continues in the background; the next "
+                                     "Build & Play makes the nav mesh)")
             return self._finish(context, {"CANCELLED"})
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
+        try:
+            return self._step(context)
+        except Exception as ex:          # never leave the timer and status text behind
+            import traceback
+            traceback.print_exc()
+            self.report({"ERROR"}, f"Build & Play stopped: {ex}")
+            return self._finish(context, {"CANCELLED"})
+
+    def _step(self, context):
         new = self._job.poll()
         if new:
             write_log(new, append=True)

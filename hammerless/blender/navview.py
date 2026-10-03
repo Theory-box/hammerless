@@ -424,12 +424,19 @@ class HL_OT_nav_analyze(bpy.types.Operator):
                 self.report({"ERROR"}, "L4D2 Authoring Tools not installed (Steam > Library > Tools > "
                                        "Left 4 Dead 2 Authoring Tools): the analysis needs the compiled map")
                 return {"CANCELLED"}
+            if cc.compile_running(base + ".vmf"):
+                self.report({"ERROR"}, "This map is still compiling: wait for it to finish, then Analyze again")
+                return {"CANCELLED"}
             path, _root, rep = export_vmf(self, context)
             surface_report(self, rep)
             if not path:
                 return {"CANCELLED"}
-            self._job = cc.CompileJob(tools, path, compile_options(context.scene.hammerless),
-                                      skip_if_unchanged=True).start()
+            try:
+                self._job = cc.CompileJob(tools, path, compile_options(context.scene.hammerless),
+                                          skip_if_unchanged=True).start()
+            except RuntimeError as ex:          # already compiling
+                self.report({"ERROR"}, str(ex))
+                return {"CANCELLED"}
         regions, _ = collect_regions(ir)
         climbs, _ = collect_climbs(ir)
         compiled = threading.Event()
