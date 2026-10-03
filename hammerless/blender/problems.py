@@ -9,6 +9,8 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 from mathutils import Vector
 
+from .props import set_problem_index
+
 _PART = re.compile(r" \(part \d+\)$")
 _QUOTED = re.compile(r"'([^']+)'")
 _handlers = []
@@ -43,7 +45,7 @@ def store(context, rep, new_build: bool = False) -> None:
             item.location = Vector(loc) / scale
             item.has_location = True
     s.problems_checked = True
-    s["problem_index"] = -1      # no jump on refill
+    set_problem_index(s, -1)      # no jump on refill
     _redraw(context)
 
 
@@ -87,7 +89,7 @@ def store_flow(report: dict) -> None:
             item.location = Vector(report["location"]) / s.units_per_meter
             item.has_location = True
         s.problems.move(len(s.problems) - 1, 0)
-    s["problem_index"] = -1
+    set_problem_index(s, -1)
     _redraw(bpy.context)
 
 
@@ -144,7 +146,7 @@ def store_nav(context, mesh, rep, predicted: bool = False) -> None:
             item.has_location = True
         s.problems.move(len(s.problems) - 1, 0)
     s.problems_checked = True
-    s["problem_index"] = -1
+    set_problem_index(s, -1)
     _redraw(context)
 
 

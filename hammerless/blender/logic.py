@@ -30,8 +30,8 @@ class HL_LogicTree(bpy.types.NodeTree):
     bl_label = "L4D2 Logic"
     bl_icon = "NODETREE"
 
-    scene: PointerProperty(type=bpy.types.Scene, name="Scene",
-                           description="The scene (map) this graph belongs to: only that map gets its logic")
+    scene_name: StringProperty(name="Scene", description="The scene (map) this graph belongs to: only that map "
+                                                         "gets its logic")
 
 
 class HL_EventSocket(bpy.types.NodeSocket):
@@ -1058,7 +1058,8 @@ def logic_trees(scene=None):
     trees = [t for t in bpy.data.node_groups if t.bl_idname == TREE]
     if scene is None:
         return trees
-    return [t for t in trees if t.scene == scene or (t.scene is None and len(bpy.data.scenes) == 1)]
+    return [t for t in trees if t.scene_name == scene.name
+            or (not bpy.data.scenes.get(t.scene_name) and len(bpy.data.scenes) == 1)]
 
 
 def _sources(sock, seen=None):
@@ -1141,11 +1142,11 @@ def refresh_entity_node(node) -> None:
 def compile_logic(context, ir, report) -> None:
     """Add the scene's L4D2 Logic graphs' entities, connections and script to the map."""
     for t in logic_trees():
-        if t.scene is None and len(bpy.data.scenes) == 1:
-            t.scene = context.scene               # graphs from before graphs had a scene
+        if not bpy.data.scenes.get(t.scene_name) and len(bpy.data.scenes) == 1:
+            t.scene_name = context.scene.name     # graphs from before graphs had a scene, or appended
         if not t.use_fake_user:
             t.use_fake_user = True                # never dropped on save for having no user
-    unassigned = [t.name for t in logic_trees() if t.scene is None]
+    unassigned = [t.name for t in logic_trees() if not bpy.data.scenes.get(t.scene_name)]
     if unassigned:
         report.warnings.append(f"Logic graph(s) without a scene are left out: {', '.join(unassigned)} "
                                "(open one in the node editor and set its Scene in the sidebar)")
@@ -1171,6 +1172,7 @@ class HL_OT_logic_new(bpy.types.Operator):
     bl_idname = "hammerless.logic_new"
     bl_label = "New Logic Graph"
     bl_description = "Create a logic graph and open it in a node editor"
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         tree = new_tree(context)
@@ -1181,7 +1183,7 @@ class HL_OT_logic_new(bpy.types.Operator):
 def new_tree(context):
     tree = bpy.data.node_groups.new("Map Logic", TREE)
     tree.use_fake_user = True          # kept when saved, even if no editor shows it
-    tree.scene = context.scene
+    tree.scene_name = context.scene.name
     return tree
 
 
@@ -1190,6 +1192,7 @@ class HL_OT_logic_from_outputs(bpy.types.Operator):
     bl_label = "Graph from Outputs"
     bl_description = ("Move the outputs set on objects (the Outputs lists) into a logic graph as nodes and "
                       "wires, so all your map logic is in one place")
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         tree = next(iter(logic_trees(context.scene)), None) or new_tree(context)
@@ -1273,8 +1276,8 @@ class HL_OT_logic_from_outputs(bpy.types.Operator):
 
 
 def _show_tree(context, tree):
-    if tree.scene is None:
-        tree.scene = context.scene
+    if not bpy.data.scenes.get(tree.scene_name):
+        tree.scene_name = context.scene.name
     area = context.area if context.area and context.area.type == "NODE_EDITOR" else None
     if area is None and context.screen:
         area = next((a for a in context.screen.areas if a.type == "NODE_EDITOR"), None)

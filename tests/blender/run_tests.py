@@ -669,7 +669,7 @@ def test_logic_graph_editor_audit():
     reset_scene()
     add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
     tree = bpy.data.node_groups.new("Map Logic", "HL_LogicTree")
-    tree.scene = bpy.context.scene
+    tree.scene_name = bpy.context.scene.name
     start, delay, horde = (tree.nodes.new(t) for t in ("HL_NodeMapStart", "HL_NodeDelay", "HL_NodeHorde"))
     reroute = tree.nodes.new("NodeReroute")
     tree.links.new(start.outputs["On Map Start"], reroute.inputs[0])
@@ -678,7 +678,7 @@ def test_logic_graph_editor_audit():
     delay.mute = True                                           # skip the wait, like Blender draws it
     other = bpy.data.scenes.new("Other map")
     elsewhere = bpy.data.node_groups.new("Other Logic", "HL_LogicTree")
-    elsewhere.scene = other
+    elsewhere.scene_name = other.name
     s2, h2 = elsewhere.nodes.new("HL_NodeMapStart"), elsewhere.nodes.new("HL_NodeCrescendo")
     elsewhere.links.new(s2.outputs["On Map Start"], h2.inputs[0])
     blocks, log = export()
@@ -700,7 +700,7 @@ def test_graph_from_outputs_keeps_delay_and_once():
     assert before
     bpy.ops.hammerless.logic_from_outputs()
     tree = next(t for t in bpy.data.node_groups if t.bl_idname == "HL_LogicTree")
-    assert tree.use_fake_user and tree.scene == bpy.context.scene
+    assert tree.use_fake_user and tree.scene_name == bpy.context.scene.name
     kinds = sorted(n.bl_idname for n in tree.nodes)
     if relay.hammerless.outputs:                               # no game definitions here: kept, not lost
         assert len(relay.hammerless.outputs) == 1

@@ -23,9 +23,11 @@ _content_cache: dict[str, GameContent] = {}
 # ---------------------------------------------------------------- helpers
 
 def game_root(context) -> str | None:
+    from .props import preferences
     s = context.scene.hammerless
-    root = bpy.path.abspath(s.game_root) if s.game_root else ""
-    return cc.find_game_root([root.rstrip("\\/")] if root else None)
+    prefs = preferences()
+    roots = [bpy.path.abspath(r).rstrip("\\/") for r in (s.game_root, prefs.game_root if prefs else "") if r]
+    return cc.find_game_root(roots or None)
 
 
 def game_content(root: str | None) -> GameContent | None:
@@ -181,26 +183,43 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
     ir, text, rep2 = build_map_text(context, root)
     if text is None:
         return None, root, rep2
-    path = os.path.join(work_dir(context), f"{s.map_name}.vmf")
+    try:
+        path = os.path.join(work_dir(context), f"{s.map_name}.vmf")
+    except OSError as ex:
+        rep2.errors.append(f"Can't create the build folder ({ex}): set Advanced > Work Folder to a folder you can "
+                           "write to")
+        return None, root, rep2
+    if not bpy.data.filepath and not os.path.isabs(bpy.path.abspath(s.output_dir or "//")):
+        rep2.warnings.append("The .blend isn't saved: the build goes to a temporary folder Blender deletes on quit "
+                             "(the next build after a restart compiles everything again). Save the .blend first")
     try:
         path.encode("mbcs", "strict")
     except (UnicodeEncodeError, LookupError):
         rep2.warnings.append(f"The build folder '{os.path.dirname(path)}' has characters the map compilers can't "
                              "read; if the compile fails, save the .blend in a folder with plain (English) "
                              "letters or set Advanced > Work Folder")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
     import json
-    with open(cc.sources_path(path), "w", encoding="utf-8") as f:
-        json.dump({str(k): v for k, v in rep2.solid_sources.items()}, f)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        with open(cc.sources_path(path), "w", encoding="utf-8") as f:
+            json.dump({str(k): v for k, v in rep2.solid_sources.items()}, f)
+    except OSError as ex:
+        rep2.errors.append(f"Can't write the map file ({ex}): set Advanced > Work Folder to a folder you can write to")
+        return None, root, rep2
     rep2.info.append(f"Wrote {path}")
     if gamedir:
         files = game_files(ir)
-        for rel, content in files.items():
-            full = os.path.join(gamedir, *rel.split("/"))
-            os.makedirs(os.path.dirname(full), exist_ok=True)
-            with open(full, "w", encoding="utf-8") as f:
-                f.write(content)
+        try:
+            for rel, content in files.items():
+                full = os.path.join(gamedir, *rel.split("/"))
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                with open(full, "w", encoding="utf-8") as f:
+                    f.write(content)
+        except OSError as ex:
+            rep2.errors.append(f"Can't write the map's scripts into the game folder ({ex}). Is Left 4 Dead 2 "
+                               "installed somewhere that needs administrator rights?")
+            return None, root, rep2
         regions, _ = collect_regions(ir)
         rep2.nav_regions = regions
         rep2.nav_climbs = collect_climbs(ir)[0]
@@ -672,10 +691,13 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
     from .problems import store_flow
     launch_id = cc.LOAD_STATUS["launch_id"]
     state = {"waited": 0.0, "logged": False, "flow_seq": cc.LOAD_STATUS["flow_seq"]}
+    owner = (bpy.context.scene.name, bpy.context.scene.hammerless.map_name)
 
     def check():
         if cc.LOAD_STATUS["launch_id"] != launch_id or state["waited"] > 660:
             return None
+        if (bpy.context.scene.name, bpy.context.scene.hammerless.map_name) != owner:
+            return 1.0          # another scene / map is active: its problem list isn't this map's
         state["waited"] += 1.0
         if cc.LOAD_STATUS.get("nav_error") and not state.get("nav_error"):
             state["nav_error"] = True
@@ -706,7 +728,11 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
                 print("Hammerless: couldn't read the nav mesh:", ex)
             store_flow(report)                  # after the nav rows, which replace only their own
         return 1.0
+    _TIMERS.append(check)
     bpy.app.timers.register(check, first_interval=1.0)
+
+
+_TIMERS: list = []           # load watchers, removed when the add-on is turned off
 
 
 def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False) -> dict:
@@ -776,6 +802,7 @@ class HL_OT_build(bpy.types.Operator):
             return {"CANCELLED"}
         write_log(report_lines(rep) + ["", "Compiling..."])
         self._root = root
+        self._owner = (context.scene.name, context.scene.hammerless.map_name)   # what's being built
         self._job = cc.CompileJob(tools, path, compile_options(context.scene.hammerless),
                                   skip_if_unchanged=True)
         self._nav = None
@@ -863,7 +890,7 @@ class HL_OT_build(bpy.types.Operator):
             else:
                 analyzed = bool(self._nav.get("analysis") and self._nav["analysis"]["done"])
                 self._nav["analyzed"] = analyzed
-                cc.write_generated_nav(cc.Tools(self._root), s.map_name, self._nav["mesh"], analyzed=analyzed)
+                cc.write_generated_nav(cc.Tools(self._root), self._owner[1], self._nav["mesh"], analyzed=analyzed)
                 if analyzed:
                     timing += f", nav analysis {self._nav['analysis']['seconds']:.1f}s"
                 for problem in self._nav["mesh"].problems:
@@ -877,6 +904,10 @@ class HL_OT_build(bpy.types.Operator):
                 s.generate_nav = False
                 timing += f", nav mesh {self._nav['seconds']:.1f}s (during the compile)"
         write_log([timing], append=True)       # (once: the waits above return before this)
+        if self.play and (context.scene.name, s.map_name) != self._owner:
+            self.report({"WARNING"}, f"{compiled} '{self._owner[1]}', but the scene or Map Name changed meanwhile: "
+                                     "not launching (press Launch Game)")
+            return self._finish(context, {"FINISHED"})
         if self.play:
             written = self._nav is not None
             analyzed = written and self._nav.get("analyzed", False)
@@ -1235,5 +1266,9 @@ def register():
 
 
 def unregister():
+    for t in _TIMERS:
+        if bpy.app.timers.is_registered(t):
+            bpy.app.timers.unregister(t)
+    _TIMERS.clear()
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

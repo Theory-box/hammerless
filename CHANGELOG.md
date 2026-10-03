@@ -45,6 +45,13 @@
   - The game's flow-error row in the Problems list was deleted as soon as it appeared; repeated Build Navmesh stacked warnings; rooftops with drops were reported as unreachable islands.
   - Analyze could write its nav for whichever scene was active when it finished; the nav view showed another file's or map's nav; Build/Analyze/Clear could run on top of each other (now one at a time, Esc stops them).
   - Very large maps hitting the nav builder's limit are reported; the nav builder's cache no longer grows without limit across edits.
+- **Pre-release audit, round 5 (panels, operators, packaging):**
+  - L4D2 is found in any Steam library; a folder set to the `left4dead2` subfolder works. The L4D2 folder can be set once in the add-on's Preferences for every file, and is stored as a full path.
+  - Check for Problems reported "L4D2 wasn't found" for game materials; Launch Game ran on maps that weren't compiled or were still compiling.
+  - Build & Play no longer launches (or writes the nav for) a different scene or map name if you switch during the compile.
+  - Logic graphs refer to their scene by name, so appending a graph from another file doesn't bring that file's scene along. Undo works for New Logic Graph and Graph from Outputs.
+  - Changing an entity's Class keeps its name and shared settings; Difficulty *Keep Current* can be chosen; the monitor choice survives unplugging another screen; min/max pairs entered the wrong way round are swapped.
+  - A warning when the .blend isn't saved (builds go to a folder Blender deletes on quit); a Work Folder or game folder that can't be written gives a clear error instead of a traceback; timers are removed when the add-on is turned off; the add-on is marked Windows-only.
 - **Rooms behind a gate got no wandering zombies**: Mover gates no longer block the nav by default (L4D2 blocks from map load, before the Director places zombies).
 - A lit map loaded into a running game after an unlit one looked unlit (`mat_fullbright` stayed on).
 - Build Navmesh and Analyze Navmesh now export the map exactly as Build does.

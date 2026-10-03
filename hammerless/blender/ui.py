@@ -112,7 +112,7 @@ class HL_PT_logic(_SubPanel, bpy.types.Panel):
         for t in trees:          # which map each graph belongs to
             row = col.row(align=True)
             row.label(text=t.name, icon="NODETREE")
-            row.prop(t, "scene", text="")
+            row.prop_search(t, "scene_name", bpy.data, "scenes", text="")
         col.operator("hammerless.logic_new", icon="ADD")
         col.operator("hammerless.logic_from_outputs", icon="NODE")
         sub = self.layout.column(align=True)

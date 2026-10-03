@@ -207,9 +207,47 @@ def _nav_display(self, context):
     _on_display_change(self, context)
 
 
+_QUIET = [False]        # set while Hammerless itself resets the problem selection
+
+
+def set_problem_index(s, value: int) -> None:
+    """Select a problem row without jumping to it (Blender 5 no longer lets s["problem_index"] skip
+    the update)."""
+    _QUIET[0] = True
+    try:
+        s.problem_index = value
+    finally:
+        _QUIET[0] = False
+
+
 def _on_problem_index(self, context):
+    if _QUIET[0]:
+        return
     from .problems import go_to_problem
     go_to_problem(context, self.problem_index)
+
+
+def _on_game_root(self, context):
+    if self.game_root.startswith("//"):
+        self.game_root = bpy.path.abspath(self.game_root)     # (a relative path breaks on Save As)
+
+
+class HL_Preferences(bpy.types.AddonPreferences):
+    bl_idname = __package__.rsplit(".", 1)[0]
+
+    game_root: StringProperty(name="L4D2 Folder", subtype="DIR_PATH", update=_on_game_root,
+                              description="Left 4 Dead 2's install folder (the one with left4dead2.exe), for every "
+                                          "file. Empty: found automatically. A scene's own L4D2 Folder overrides it")
+
+    def draw(self, context):
+        self.layout.prop(self, "game_root")
+
+
+def preferences():
+    try:
+        return bpy.context.preferences.addons[HL_Preferences.bl_idname].preferences
+    except (KeyError, AttributeError):
+        return None
 
 
 class HL_Problem(bpy.types.PropertyGroup):
@@ -391,8 +429,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                     "Results in the console (HAMMERLESS_AUTOTEST). Turn off for real play")
 
     # --- advanced / paths
-    game_root: StringProperty(name="L4D2 Folder", subtype="DIR_PATH",
-                              description="Left 4 Dead 2 install folder (auto-detected if empty)")
+    game_root: StringProperty(name="L4D2 Folder", subtype="DIR_PATH", update=_on_game_root,
+                              description="Left 4 Dead 2 install folder for this file (empty: the one in the add-on's "
+                                          "Preferences, or found automatically)")
     output_dir: StringProperty(name="Work Folder", subtype="DIR_PATH", default="//hammerless_build",
                                description="Where the .vmf and compile files are written")
     units_per_meter: FloatProperty(
@@ -423,6 +462,7 @@ CLASSES = (HL_Problem, HL_SpawnListItem, HL_KeyValue, HL_Output, HL_ObjectSettin
 
 
 def register():
+    bpy.utils.register_class(HL_Preferences)
     for c in CLASSES:
         bpy.utils.register_class(c)
     bpy.types.Object.hammerless = PointerProperty(type=HL_ObjectSettings)
@@ -438,3 +478,4 @@ def unregister():
     del bpy.types.Object.hammerless
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
+    bpy.utils.unregister_class(HL_Preferences)
