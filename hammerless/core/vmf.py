@@ -53,9 +53,29 @@ class Block:
                 it.write(out, depth + 1)
             else:
                 k, v = it
-                v = v.replace('"', "'")
+                k = k.replace('"', "'").replace("\n", " ").replace("\r", " ")
+                v = v.replace('"', "'").replace("\n", " ").replace("\r", " ")
                 out.append(f'{ind}\t"{k}" "{v}"\n')
         out.append(f"{ind}}}\n")
+
+
+def _plane_points(r):
+    """Three of a face's points, in winding order, spanning the largest triangle: a face with extra
+    points along one straight edge would otherwise give three points on a line (no plane)."""
+    n = len(r)
+    if n <= 3:
+        return r[0], r[1 % n], r[2 % n]
+
+    def area(a, b, c):
+        u = [b[i] - a[i] for i in range(3)]
+        v = [c[i] - a[i] for i in range(3)]
+        return ((u[1] * v[2] - u[2] * v[1]) ** 2 + (u[2] * v[0] - u[0] * v[2]) ** 2 + (u[0] * v[1] - u[1] * v[0]) ** 2)
+    if n <= 24:
+        best = max(((i, j, k) for i in range(n) for j in range(i + 1, n) for k in range(j + 1, n)),
+                   key=lambda t: area(r[t[0]], r[t[1]], r[t[2]]))
+    else:
+        best = (0, n // 3, (2 * n) // 3)
+    return tuple(r[i] for i in best)
 
 
 def parse(text: str) -> list[Block]:
@@ -94,8 +114,7 @@ class VMFWriter:
     def side(self, face: Polygon, dispinfo: Block | None = None) -> Block:
         # Blender winding is CCW from outside; Hammer wants clockwise -> reverse.
         r = list(reversed(face.verts))
-        n = len(r)
-        p1, p2, p3 = r[0], r[n // 3], r[(2 * n) // 3]
+        p1, p2, p3 = _plane_points(r)
         normal = g.polygon_normal(face.verts)
         u, v = g.world_texture_axes(normal)
         s = Block("side")

@@ -56,11 +56,19 @@ DETAIL_MAX_SIZE = 256.0     # small things: crates, steps, trim, short walls. Me
 SEAL_MATERIALS = {"tools/toolsskybox", "tools/toolsnodraw", "tools/toolsblack"}
 
 
+def _touches_any(brush: Brush, boxes, margin: float = 2.0) -> bool:
+    """Whether the brush's bounds touch any of the boxes (an areaportal must be sealed by world brushes)."""
+    if not boxes:
+        return False
+    lo, hi = g.bounds([v for f in brush.faces for v in f.verts])
+    return any(all(lo[i] <= bh[i] + margin and bl[i] <= hi[i] + margin for i in range(3)) for bl, bh in boxes)
+
+
 def is_auto_detail(brush: Brush, mode: str) -> bool:
     if mode == "OFF":
         return False
-    if all(f.material.lower() in SEAL_MATERIALS for f in brush.faces):
-        return False        # sealing / hidden brushes stay world
+    if all(f.material.lower() in SEAL_MATERIALS or f.material.lower().startswith("tools/") for f in brush.faces):
+        return False        # sealing, hidden and tool brushes (hint, skip, clip...) stay world
     if mode == "ALL":
         return True
     lo, hi = g.bounds([v for f in brush.faces for v in f.verts])
@@ -225,6 +233,10 @@ def _all_points(ir: MapIR) -> list[Vec3]:
 
 
 SNAP_TO_FLOOR = {"info_player_start", "info_survivor_position", "info_survivor_rescue"}
+HELPER_SPOT = (0.0, 0.0, 0.0)   # Hammerless's own logic entities: vbsp's leak check skips entities at
+                                # exactly the origin, so they can't leak a map built anywhere else
+MAX_DISPLACEMENTS = 2048        # MAX_MAP_DISPINFO
+SNAP_SINK = 16.0                # a spawn sunk this far into a floor still counts as standing on it
 SNAP_RANGE = 48.0     # look for a floor this far above/below the spawn point
 SNAP_LIFT = 2.0       # stand this far above it (a spawn touching the floor counts as stuck)
 
@@ -235,7 +247,10 @@ def floor_below(ir: MapIR, x: float, y: float, z: float) -> float | None:
     solids = ir.brushes + [b for e in ir.entities if e.classname == "func_detail" for b in e.brushes]
     for b in solids:
         span = g.vertical_span(b, x, y)
-        if span and abs(span[1] - z) <= SNAP_RANGE and (best is None or span[1] > best):
+        # below the spawn, or the spawn is inside the brush (sunk into it): never up onto a table above it
+        inside = span and span[0] - 1 <= z <= span[1]
+        if span and z - SNAP_RANGE <= span[1] <= z + (SNAP_RANGE if inside else SNAP_SINK) and (
+                best is None or span[1] > best):
             best = span[1]
     for t in ir.terrains:
         rows, cols = len(t.heights), len(t.heights[0]) if t.heights else 0
@@ -247,7 +262,7 @@ def floor_below(ir: MapIR, x: float, y: float, z: float) -> float | None:
             corners = [t.heights[r0][c0], t.heights[r0][c0 + 1], t.heights[r0 + 1][c0], t.heights[r0 + 1][c0 + 1]]
             if None not in corners:
                 h = (corners[0] * (1 - fc) + corners[1] * fc) * (1 - fr) + (corners[2] * (1 - fc) + corners[3] * fc) * fr
-                if abs(h - z) <= SNAP_RANGE and (best is None or h > best):
+                if abs(h - z) <= SNAP_RANGE and (best is None or h > best):   # under terrain = in the ground
                     best = h
     return best
 
@@ -383,6 +398,10 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     report = validate(ir, content)
     if not report.ok:
         return None, report
+    if not ir.brushes and not ir.terrains and not any(e.brushes for e in ir.entities
+                                                       if e.classname in ("func_detail", "func_brush")):
+        report.warnings.append("Nothing to stand on: the map has no brushes or terrain, so players spawn into a "
+                               "void (add some floors and walls)")
     snap_spawns_to_floor(ir, report)
     welded = g.weld_near_misses(solid_geometry(ir))
     if welded:
@@ -401,7 +420,9 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
 
     # detail only when the map is sealed by the automatic shell (func_detail doesn't seal)
     mode = s.auto_detail if s.auto_seal else "OFF"
-    detail = [b for b in ir.brushes if is_auto_detail(b, mode)]
+    portals = [g.bounds([v for f in b.faces for v in f.verts]) for e in ir.entities
+               if e.classname in ("func_areaportal", "func_areaportalwindow") for b in e.brushes]
+    detail = [b for b in ir.brushes if is_auto_detail(b, mode) and not _touches_any(b, portals)]
     detail_ids = {id(b) for b in detail}
     for b in ir.brushes:
         if id(b) not in detail_ids:
@@ -410,9 +431,19 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
         report.info.append(f"Made {len(detail)} round/small brush(es) func_detail so they don't slow down vvis.")
     n_patches = 0
     for t in ir.terrains:
-        for brush, disp in build_patches(t):
+        try:
+            patches = build_patches(t)
+        except ValueError as ex:
+            report.errors.append(f"Terrain '{t.source}': {ex}. Is it flat enough to see from above, and wider "
+                                 f"than one sample?")
+            return None, report
+        for brush, disp in patches:
             world.add(w.solid(brush, {0: disp}))
             n_patches += 1
+    if n_patches > MAX_DISPLACEMENTS:
+        report.errors.append(f"{n_patches} terrain patches: the game allows {MAX_DISPLACEMENTS}. Use a bigger Patch "
+                             f"Size on the terrain objects")
+        return None, report
     if s.auto_seal:
         for b in seal_brushes(ir):
             world.add(w.solid(b))
@@ -442,28 +473,28 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
         entities.append(Entity("light_environment", (0, 0, 0), (s.sun_pitch, s.sun_yaw, 0), kv))
         report.info.append("No sun in the scene. Added one from the Lighting settings.")
     if s.fog_enabled and "env_fog_controller" not in classes:
-        entities.append(Entity("env_fog_controller", (0, 0, 64), (0, 0, 0), {
+        entities.append(Entity("env_fog_controller", HELPER_SPOT, (0, 0, 0), {
             "targetname": "hammerless_fog", "fogenable": "1", "spawnflags": "1",
             "fogcolor": "{} {} {}".format(*s.fog_color), "fogcolor2": "{} {} {}".format(*s.fog_color),
             "fogstart": f"{s.fog_start:g}", "fogend": f"{s.fog_end:g}",
             "fogmaxdensity": f"{s.fog_max_density:g}", "farz": "-1"}))
-    entities.append(Entity("logic_script", (0, 0, 24), (0, 0, 0), {
+    entities.append(Entity("logic_script", HELPER_SPOT, (0, 0, 0), {
         "targetname": "hammerless_ready", "vscripts": script_path("ready"), "thinkfunction": "HLR_Think"}))
     if s.debug_log:
-        entities.append(Entity("logic_script", (0, 0, 32), (0, 0, 0), {
+        entities.append(Entity("logic_script", HELPER_SPOT, (0, 0, 0), {
             "targetname": "hammerless_debug", "vscripts": script_path(f"debug_{s.name}"),
             "thinkfunction": "HL_Think"}))
         report.info.append("Debug log on: Director events and stats go to the console (HAMMERLESS_DEBUG).")
     if s.autotest:
         from .autotest import plan_route
         route, _ = plan_route(ir)   # also names unnamed buttons so the script can press them
-        entities.append(Entity("logic_script", (0, 0, 40), (0, 0, 0), {
+        entities.append(Entity("logic_script", HELPER_SPOT, (0, 0, 0), {
             "targetname": "hammerless_autotest", "vscripts": script_path(f"autotest_{s.name}"),
             "thinkfunction": "HLT_Think"}))
         report.info.append(f"Bot Walkthrough Test on: {len(route)} waypoint(s). Watch for HAMMERLESS_AUTOTEST "
                            "in the console.")
     if s.director_enabled:
-        entities.append(Entity("logic_auto", (0, 0, 48), (0, 0, 0), {"spawnflags": "1"}, outputs=[
+        entities.append(Entity("logic_auto", HELPER_SPOT, (0, 0, 0), {"spawnflags": "1"}, outputs=[
             Output("OnMapSpawn", "director", "BeginScript", director_input_script(s.name, "director"), 1.0, 1)]))
     if "info_player_start" not in classes:
         first = next((e for e in entities if e.classname == "info_survivor_position"), None)

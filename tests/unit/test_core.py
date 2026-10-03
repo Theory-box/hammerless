@@ -150,6 +150,50 @@ class TestDisplacement(unittest.TestCase):
                     self.assertLess(z, lowest - 256)
 
 
+class TestGeometryAudit(unittest.TestCase):
+    """Fixes from the pre-release audit (geometry and map writing)."""
+
+    def test_helper_entities_cant_leak_a_map_away_from_the_origin(self):
+        # vbsp's leak check skips entities at exactly the origin; Hammerless's own logic entities go there
+        ir = MapIR()
+        ir.settings.name = "far"
+        ir.settings.fog_enabled = True
+        ir.brushes.append(g.box_brush((3000, 3000, -16), (3512, 3512, 0), "dev/dev_measuregeneric01b", "floor"))
+        ir.entities.append(Entity("info_survivor_position", (3200, 3200, 1), (0, 0, 0), {"Order": "1"}))
+        text, rep = build_vmf(ir)
+        self.assertIsNotNone(text, rep.errors)
+        for e in (b for b in parse(text) if b.name == "entity"):
+            if e.get("classname") in ("logic_script", "logic_auto", "env_fog_controller"):
+                self.assertEqual(e.get("origin"), "0 0 0", e.get("classname"))
+
+    def test_plane_never_from_three_points_on_a_line(self):
+        from hammerless.core.vmf import _plane_points
+        # a face with extra points along its bottom edge (a knife cut): old picks were all on that edge
+        face = [(16, 0, 0), (32, 0, 0), (48, 0, 0), (64, 0, 0), (64, 64, 0), (0, 64, 0), (0, 0, 0)]
+        a, b, c = _plane_points(face)
+        n = g.cross(g.sub(b, a), g.sub(c, a))
+        self.assertGreater(abs(n[2]), 1000)
+
+    def test_spawn_under_a_table_stays_on_the_floor(self):
+        from hammerless.core.build import floor_below
+        ir = box_room_ir()
+        ir.brushes.append(g.box_brush((-32, -32, 28), (32, 32, 32), "dev/dev_measuregeneric01b", "table top"))
+        self.assertEqual(floor_below(ir, 0, 0, 1), 0)          # not up onto the table (z 32)
+        self.assertEqual(floor_below(ir, 0, 0, 30), 32)        # sunk into the table top: onto it
+
+    def test_tool_brushes_stay_world(self):
+        from hammerless.core.build import is_auto_detail
+        for mat in ("tools/toolshint", "tools/toolsskip", "tools/toolsclip", "tools/toolsareaportal"):
+            self.assertFalse(is_auto_detail(g.box_brush((0, 0, 0), (32, 32, 32), mat), "AUTO"), mat)
+
+    def test_big_terrain_patches_get_a_lightmap_vbsp_accepts(self):
+        n = 9
+        t = Terrain(heights=[[0.0] * n for _ in range(n)], origin=(0, 0), spacing=2048 / 8, power=3,
+                    material="nature/blend_grass_grass_01", source="hill")
+        (brush, _disp), = build_patches(t)
+        self.assertLessEqual(2048 / brush.faces[0].lightmap_scale, 125)
+
+
 class TestBuild(unittest.TestCase):
     def test_box_room_builds(self):
         text, rep = build_vmf(box_room_ir())

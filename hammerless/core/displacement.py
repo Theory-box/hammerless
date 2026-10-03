@@ -24,6 +24,9 @@ TERRAIN_BASE_THICKNESS = 16.0
 TERRAIN_HOLE_DEPTH = 512.0
 
 
+MAX_DISP_LUXELS = 125     # MAX_DISP_LIGHTMAP_DIM_WITHOUT_BORDER
+
+
 def verts_per_side(power: int) -> int:
     if power not in (2, 3, 4):
         raise ValueError("displacement power must be 2, 3 or 4")
@@ -61,6 +64,9 @@ def build_patches(t: Terrain) -> list[tuple[Brush, Block]]:
             brush = g.box_brush((x0, y0, zb - TERRAIN_BASE_THICKNESS), (x1, y1, zb),
                                 "tools/toolsnodraw", t.source)
             brush.faces[0].material = t.material  # top face
+            # vbsp allows at most 125 luxels per side of a displacement: 2048-unit patches need scale 17+
+            brush.faces[0].lightmap_scale = max(brush.faces[0].lightmap_scale,
+                                                math.ceil(step * t.spacing / MAX_DISP_LUXELS))
             patches.append((brush, _dispinfo(t, pr, pc, n, (x0, y0, zb), zb)))
     return patches
 

@@ -149,8 +149,9 @@ def check_brush(brush: Brush, tolerance: float = 0.1) -> list[BrushProblem]:
     if gap is not None:
         problems.append(BrushProblem(
             brush.source,
-            f"is open: its {_direction_name(gap)} side has no face (a hole in the mesh). In Edit Mode select "
-            "the hole's edges and press F to fill it",
+            f"is open: its {_direction_name(gap)} side has no face (a hole in the mesh), or that face points "
+            "inward. In Edit Mode: fill a hole by selecting its edges and pressing F; fix a flipped face with "
+            "select all, Mesh > Normals > Recalculate Outside",
         ))
         return problems
     if all(pl.distance(v) >= -tolerance for pl in planes for v in verts):
@@ -246,11 +247,13 @@ def near_misses(brushes: list[Brush], tolerance: float = WELD_TOLERANCE,
     found: dict = {}
     for axis in range(3):
         entries = sorted({(v[axis], bi, v) for bi, b in enumerate(brushes) if boxes[bi] for f in b.faces for v in f.verts})
-        start = 0
+        start = stop = 0
         for j, (val, bj, vj) in enumerate(entries):
             while entries[start][0] < val - tolerance:
                 start += 1
-            for k in range(start, j):
+            while stop < j and entries[stop][0] <= val - smallest:
+                stop += 1           # entries[stop:j] are too close (equal) to count: never look at them
+            for k in range(start, stop):
                 vk_val, bk, vk = entries[k]
                 gap = val - vk_val
                 if gap < smallest or bk == bj or not neighbours(bk, bj):

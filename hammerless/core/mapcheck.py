@@ -129,10 +129,23 @@ def check_placement(ir: MapIR) -> list[Problem]:
                                     e.source, e.origin))
             continue
         gap = z - max(tops)
+        if gap > 24 and _on_a_prop(ir, x, y, z):
+            continue                   # standing on a table, crate... (props aren't in the floor check)
         if gap > 24 and not (e.classname in SPAWNS and gap <= 48):
             problems.append(Problem("WARNING", f"'{name}' floats {gap:.0f} units above the floor",
                                     e.source, e.origin))
     return problems
+
+
+def _on_a_prop(ir: MapIR, x: float, y: float, z: float, reach: float = 64.0) -> bool:
+    """Whether a prop (or door) stands close below this point: the item probably sits on it."""
+    for p in ir.entities:
+        if p.origin is None or not p.classname.startswith("prop_"):
+            continue
+        px, py, pz = p.origin
+        if abs(px - x) <= reach and abs(py - y) <= reach and pz <= z + 1 and z - pz <= 96:
+            return True
+    return False
 
 
 def check_map(ir: MapIR) -> list[Problem]:
