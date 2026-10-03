@@ -109,6 +109,10 @@ class HL_PT_logic(_SubPanel, bpy.types.Panel):
         col = self.layout.column(align=True)
         trees = logic_trees()
         col.label(text=f"{len(trees)} logic graph(s)" if trees else "No logic graph yet", icon="NODETREE")
+        for t in trees:          # which map each graph belongs to
+            row = col.row(align=True)
+            row.label(text=t.name, icon="NODETREE")
+            row.prop(t, "scene", text="")
         col.operator("hammerless.logic_new", icon="ADD")
         col.operator("hammerless.logic_from_outputs", icon="NODE")
         sub = self.layout.column(align=True)

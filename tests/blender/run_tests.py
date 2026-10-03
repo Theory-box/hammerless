@@ -663,6 +663,52 @@ def test_logic_graph_exports():
                    for so in world_solids(blocks) for sd in so.blocks("side"))
 
 
+def test_logic_graph_editor_audit():
+    # reroutes and muted nodes pass wires through; a graph of another scene stays out of this map
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    tree = bpy.data.node_groups.new("Map Logic", "HL_LogicTree")
+    tree.scene = bpy.context.scene
+    start, delay, horde = (tree.nodes.new(t) for t in ("HL_NodeMapStart", "HL_NodeDelay", "HL_NodeHorde"))
+    reroute = tree.nodes.new("NodeReroute")
+    tree.links.new(start.outputs["On Map Start"], reroute.inputs[0])
+    tree.links.new(reroute.outputs[0], delay.inputs["In"])
+    tree.links.new(delay.outputs["Out"], horde.inputs["Start"])
+    delay.mute = True                                           # skip the wait, like Blender draws it
+    other = bpy.data.scenes.new("Other map")
+    elsewhere = bpy.data.node_groups.new("Other Logic", "HL_LogicTree")
+    elsewhere.scene = other
+    s2, h2 = elsewhere.nodes.new("HL_NodeMapStart"), elsewhere.nodes.new("HL_NodeCrescendo")
+    elsewhere.links.new(s2.outputs["On Map Start"], h2.inputs[0])
+    blocks, log = export()
+    assert blocks, log
+    autos = [c.get("OnMapSpawn") for e in entities(blocks, "logic_auto") for c in e.blocks("connections")
+             if c.get("OnMapSpawn")]
+    assert any(a.startswith("director,ForcePanicEvent,,0") for a in autos), (autos, log)
+    assert not any("crescendo" in a.lower() or "ScriptedPanicEvent" in a for a in autos), autos
+
+
+def test_graph_from_outputs_keeps_delay_and_once():
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    bpy.ops.hammerless.add_entity(classname="logic_relay")
+    relay = bpy.context.object
+    o = relay.hammerless.outputs.add()
+    o.output, o.target, o.input, o.delay, o.only_once = "OnTrigger", "director", "ForcePanicEvent", 3.0, True
+    before, _log = export()
+    assert before
+    bpy.ops.hammerless.logic_from_outputs()
+    tree = next(t for t in bpy.data.node_groups if t.bl_idname == "HL_LogicTree")
+    assert tree.use_fake_user and tree.scene == bpy.context.scene
+    kinds = sorted(n.bl_idname for n in tree.nodes)
+    if relay.hammerless.outputs:                               # no game definitions here: kept, not lost
+        assert len(relay.hammerless.outputs) == 1
+        return
+    assert "HL_NodeDelay" in kinds and "HL_NodeOnce" in kinds, kinds
+    delay = next(n for n in tree.nodes if n.bl_idname == "HL_NodeDelay")
+    assert abs(delay.seconds - 3.0) < 1e-6
+
+
 def test_logic_nodes_convert_plain_meshes():
     # Button and Move Over Time turn ordinary meshes into a button and a mover (with a nav blocker)
     reset_scene()

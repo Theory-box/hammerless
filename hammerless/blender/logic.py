@@ -30,6 +30,9 @@ class HL_LogicTree(bpy.types.NodeTree):
     bl_label = "L4D2 Logic"
     bl_icon = "NODETREE"
 
+    scene: PointerProperty(type=bpy.types.Scene, name="Scene",
+                           description="The scene (map) this graph belongs to: only that map gets its logic")
+
 
 class HL_EventSocket(bpy.types.NodeSocket):
     """An event: an output fires it, an input does something when it arrives"""
@@ -168,8 +171,8 @@ class _Node:
         if sock is None:
             return None
         if sock.is_linked:
-            src = sock.links[0].from_node
-            return getattr(src, "target", None)
+            found = _sources(sock)
+            return getattr(found[0][0], "target", None) if found else None
         return sock.value
 
     def settings(self) -> dict:
@@ -427,6 +430,8 @@ class HL_NodeObject(_Node, bpy.types.Node):
             row = layout.row()
             row.label(text=self.classname)
             row.prop(self, "show_all", text="", icon="PLUS")
+            if not self.inputs and not self.outputs:
+                layout.operator("hammerless.logic_refresh_node", icon="FILE_REFRESH").node = self.name
 
     def settings(self):
         return {"outputs": [s.identifier for s in self.outputs], "inputs": [s.identifier for s in self.inputs]}
@@ -774,6 +779,8 @@ class HL_NodeDirector(_Node, bpy.types.Node):
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "show_all", text="All Events", icon="PLUS")
+        if not self.inputs and not self.outputs:
+            layout.operator("hammerless.logic_refresh_node", icon="FILE_REFRESH").node = self.name
 
     def settings(self):
         return {"outputs": [s.identifier for s in self.outputs], "inputs": [s.identifier for s in self.inputs]}
@@ -1046,13 +1053,105 @@ def _add_menu(self, context):
 
 # ---------------------------------------------------------------- export
 
-def logic_trees():
-    return [t for t in bpy.data.node_groups if t.bl_idname == TREE]
+def logic_trees(scene=None):
+    """The L4D2 Logic graphs (of one scene: its own, plus unassigned ones when the file has one scene)."""
+    trees = [t for t in bpy.data.node_groups if t.bl_idname == TREE]
+    if scene is None:
+        return trees
+    return [t for t in trees if t.scene == scene or (t.scene is None and len(bpy.data.scenes) == 1)]
+
+
+def _sources(sock, seen=None):
+    """The real (node, output socket) pairs feeding an input socket, through reroutes and muted nodes
+    (a muted node passes its input straight through, as Blender draws it)."""
+    seen = seen if seen is not None else set()
+    out = []
+    for link in sock.links:
+        if link.is_muted or not link.is_valid:
+            continue
+        node, from_sock = link.from_node, link.from_socket
+        key = (node.name, from_sock.identifier)
+        if key in seen:
+            continue
+        seen.add(key)
+        if node.type == "REROUTE":
+            out += _sources(node.inputs[0], seen)
+        elif node.mute:
+            for il in node.internal_links:
+                if il.to_socket == from_sock:
+                    out += _sources(il.from_socket, seen)
+        else:
+            out.append((node, from_sock))
+    return out
+
+
+def _compiled_links(tree, report):
+    """Wires between real (unmuted) nodes, with reroutes and muted nodes resolved. A wire joining
+    sockets of different kinds (an event into a number...) does nothing: reported."""
+    links = []
+    for node in tree.nodes:
+        if not isinstance(node, _Node) or node.mute:
+            continue
+        for inp in node.inputs:
+            for src, out in _sources(inp):
+                if not isinstance(src, _Node):
+                    continue
+                if out.bl_idname != inp.bl_idname:
+                    report.warnings.append(f"{tree.name}: the wire from '{src.label or src.name}' to "
+                                           f"'{node.label or node.name}' joins a {out.bl_label} with a "
+                                           f"{inp.bl_label}, so it does nothing")
+                    continue
+                if out.bl_idname not in ("HL_EventSocket",) + DATA_SOCKETS:
+                    continue
+                links.append(LLink(src.name, out.identifier, node.name, inp.identifier,
+                                   data=out.bl_idname in DATA_SOCKETS))
+    return links
+
+
+def _check_nodes(context, tree, report) -> None:
+    """Problems Blender can't show: objects deleted from the scene that nodes still point at, entity
+    nodes made for another class, and event nodes whose sockets need the game's definitions."""
+    scene_objects = context.scene.objects
+    for node in tree.nodes:
+        if not isinstance(node, _Node) or node.mute:
+            continue
+        objs = [getattr(node, "target", None)] + [getattr(s, "value", None) for s in node.inputs
+                                                    if s.bl_idname == "HL_ObjectSocket"]
+        for obj in objs:
+            if isinstance(obj, bpy.types.Object) and obj.name not in scene_objects:
+                report.warnings.append(f"{tree.name}: node '{node.label or node.name}' points at '{obj.name}', "
+                                       f"which isn't in this scene (deleted?): pick another object")
+        target = getattr(node, "target", None)
+        cls = getattr(node, "classname", "")
+        if target is not None and cls and target.hammerless.classname and target.hammerless.classname != cls:
+            report.warnings.append(f"{tree.name}: node '{node.label or node.name}' shows the events of a {cls}, "
+                                   f"but '{target.name}' is now a {target.hammerless.classname}: pick it again")
+        if node.bl_idname in ("HL_NodeDirector", "HL_NodeObject") and not node.inputs and not node.outputs:
+            refresh_entity_node(node)
+
+
+def refresh_entity_node(node) -> None:
+    """Fill an event node's sockets from the game's definitions (when they were missing before)."""
+    if node.bl_idname == "HL_NodeDirector":
+        _rebuild_entity_sockets(node, "info_director")
+    elif getattr(node, "target", None) is not None and getattr(node, "classname", ""):
+        _rebuild_entity_sockets(node, node.classname)
 
 
 def compile_logic(context, ir, report) -> None:
-    """Add every L4D2 Logic graph's entities, connections and script to the map."""
-    for tree in logic_trees():
+    """Add the scene's L4D2 Logic graphs' entities, connections and script to the map."""
+    for t in logic_trees():
+        if t.scene is None and len(bpy.data.scenes) == 1:
+            t.scene = context.scene               # graphs from before graphs had a scene
+        if not t.use_fake_user:
+            t.use_fake_user = True                # never dropped on save for having no user
+    unassigned = [t.name for t in logic_trees() if t.scene is None]
+    if unassigned:
+        report.warnings.append(f"Logic graph(s) without a scene are left out: {', '.join(unassigned)} "
+                               "(open one in the node editor and set its Scene in the sidebar)")
+    trees = logic_trees(context.scene)
+    for tree in trees:
+        _check_nodes(context, tree, report)
         nodes = [n.to_lnode(context) for n in tree.nodes if isinstance(n, _Node) and n.kind != "OBJECT_INFO"
                  and not n.mute]
         volumes = {n.obj for n in nodes if n.kind == "VOLUME" and n.obj}
@@ -1060,11 +1159,8 @@ def compile_logic(context, ir, report) -> None:
             ir.brushes = [b for b in ir.brushes if b.source.split(" (part ")[0] not in volumes]
             ir.entities = [e for e in ir.entities if not (e.source.split(" (part ")[0] in volumes
                                                           and e.classname == "func_detail")]
-        links = [LLink(l.from_node.name, l.from_socket.identifier, l.to_node.name, l.to_socket.identifier,
-                       data=l.from_socket.bl_idname in DATA_SOCKETS)
-                 for l in tree.links if l.is_valid and not l.is_muted
-                 and l.from_socket.bl_idname in ("HL_EventSocket",) + DATA_SOCKETS]
-        for p in compile_graph(nodes, links, ir, tree.name if len(logic_trees()) > 1 else "",
+        links = _compiled_links(tree, report)
+        for p in compile_graph(nodes, links, ir, tree.name if len(trees) > 1 else "",
                                log=context.scene.hammerless.debug_log):
             report.warnings.append(f"{tree.name}: {p}")
 
@@ -1077,9 +1173,16 @@ class HL_OT_logic_new(bpy.types.Operator):
     bl_description = "Create a logic graph and open it in a node editor"
 
     def execute(self, context):
-        tree = bpy.data.node_groups.new("Map Logic", TREE)
+        tree = new_tree(context)
         _show_tree(context, tree)
         return {"FINISHED"}
+
+
+def new_tree(context):
+    tree = bpy.data.node_groups.new("Map Logic", TREE)
+    tree.use_fake_user = True          # kept when saved, even if no editor shows it
+    tree.scene = context.scene
+    return tree
 
 
 class HL_OT_logic_from_outputs(bpy.types.Operator):
@@ -1089,7 +1192,7 @@ class HL_OT_logic_from_outputs(bpy.types.Operator):
                       "wires, so all your map logic is in one place")
 
     def execute(self, context):
-        tree = next(iter(logic_trees()), None) or bpy.data.node_groups.new("Map Logic", TREE)
+        tree = next(iter(logic_trees(context.scene)), None) or new_tree(context)
         by_name = {}
         for o in context.scene.objects:
             for kv in o.hammerless.keyvalues:
@@ -1105,42 +1208,73 @@ class HL_OT_logic_from_outputs(bpy.types.Operator):
                 n.location = (0.0, -220.0 * (len(nodes) % 6))
                 nodes[obj.name] = n
             return nodes[obj.name]
-        moved = 0
+        from ..core import fgd as _fgd
+
+        def has_socket(obj, ident, outputs):
+            ins, outs = _entity_sockets(obj.hammerless.classname, True) if obj.hammerless.classname else ([], [])
+            return any(io.name == ident for io in (outs if outputs else ins))
+        moved = kept = 0
+        params: dict = {}          # (node, input) -> the parameter its socket holds
         for o in list(context.scene.objects):
             if not o.hammerless.outputs:
                 continue
-            src = node_for(o)
             keep = []
             for i, out in enumerate(o.hammerless.outputs):
+                if not has_socket(o, out.output, True):
+                    keep.append(i)
+                    continue
                 if out.target == "director":
                     if director is None:
                         director = tree.nodes.new("HL_NodeDirector")
                         director.location = (500.0, 200.0)
                     dst = director
-                elif out.target in by_name:
+                elif out.target in by_name and has_socket(by_name[out.target], out.input, False):
                     dst = node_for(by_name[out.target])
-                    dst.location.x = max(dst.location.x, src.location.x + 350)
                 else:
                     keep.append(i)
                     continue
+                src = node_for(o)
+                if dst is not director:
+                    dst.location.x = max(dst.location.x, src.location.x + 350)
                 a = next((s for s in src.outputs if s.identifier == out.output), None)
                 b = next((s for s in dst.inputs if s.identifier == out.input), None)
-                if not (a and b):
+                # one input socket holds one parameter: a second output with a different one stays put
+                if not (a and b) or params.get((dst.name, out.input), out.parameter) != out.parameter:
                     keep.append(i)
                     continue
-                tree.links.new(a, b)
+                params[(dst.name, out.input)] = out.parameter
+                # the output's delay and "only once" become Delay / Once nodes on the wire
+                chain = a
+                x = src.location.x + 175
+                if out.only_once:
+                    once = tree.nodes.new("HL_NodeOnce")
+                    once.location = (x, src.location.y - 120)
+                    tree.links.new(chain, once.inputs["In"])
+                    chain = once.outputs["Out"]
+                if out.delay > 0:
+                    delay = tree.nodes.new("HL_NodeDelay")
+                    delay.seconds = out.delay
+                    delay.location = (x + 90, src.location.y - 160)
+                    tree.links.new(chain, delay.inputs["In"])
+                    chain = delay.outputs["Out"]
+                tree.links.new(chain, b)
                 if out.parameter:
                     b.value = out.parameter
                 moved += 1
+            kept += len(keep)
             for i in reversed(range(len(o.hammerless.outputs))):
                 if i not in keep:
                     o.hammerless.outputs.remove(i)
         _show_tree(context, tree)
-        self.report({"INFO"}, f"Moved {moved} output(s) into '{tree.name}'")
+        self.report({"INFO"}, f"Moved {moved} output(s) into '{tree.name}'"
+                    + (f"; {kept} stayed on their objects (no matching node socket, or a second "
+                       f"parameter on the same input)" if kept else ""))
         return {"FINISHED"}
 
 
 def _show_tree(context, tree):
+    if tree.scene is None:
+        tree.scene = context.scene
     area = context.area if context.area and context.area.type == "NODE_EDITOR" else None
     if area is None and context.screen:
         area = next((a for a in context.screen.areas if a.type == "NODE_EDITOR"), None)
@@ -1149,8 +1283,29 @@ def _show_tree(context, tree):
         area.spaces.active.node_tree = tree
 
 
+class HL_OT_logic_refresh_node(bpy.types.Operator):
+    bl_idname = "hammerless.logic_refresh_node"
+    bl_label = "Load Events"
+    bl_description = "Load this node's events from the game's entity definitions (needs the L4D2 folder)"
+    bl_options = {"UNDO", "INTERNAL"}
+
+    node: bpy.props.StringProperty()
+
+    def execute(self, context):
+        tree = getattr(context.space_data, "edit_tree", None)
+        node = tree.nodes.get(self.node) if tree else None
+        if node is None:
+            return {"CANCELLED"}
+        refresh_entity_node(node)
+        if not node.inputs and not node.outputs:
+            self.report({"WARNING"}, "The game's entity definitions weren't found: set the L4D2 Folder "
+                                     "(Advanced) and make sure the Authoring Tools are installed")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_BoolSocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + (
-    HL_OT_logic_new, HL_OT_logic_from_outputs)
+    HL_OT_logic_new, HL_OT_logic_from_outputs, HL_OT_logic_refresh_node)
 
 
 def register():

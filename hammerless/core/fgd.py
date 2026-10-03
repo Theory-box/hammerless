@@ -118,7 +118,8 @@ def load(game_root: str | None) -> dict[str, EntityClass]:
                 parse(fh.read(), classes)
         except OSError:
             pass
-    _cache[game_root] = classes
+    if classes:                  # (don't remember "not found": the Authoring Tools may be installed later)
+        _cache[game_root] = classes
     return classes
 
 
