@@ -66,9 +66,18 @@ class HL_Output(bpy.types.PropertyGroup):
 
 
 def _on_classname_change(self, context):
-    """Reset keyvalues to the catalog defaults when the classname changes."""
+    """The new class's keyvalues: its defaults, keeping values the old entity already had for the
+    same keys (and always its name, which outputs and logic refer to)."""
+    old = {kv.key: kv.value for kv in self.keyvalues if kv.key}
+    new = dict(default_keyvalues(self.classname))
+    for k in new:
+        if k in old and old[k] != "":
+            new[k] = old[k]
+    for k in ("targetname", "parentname"):
+        if old.get(k):
+            new[k] = old[k]
     self.keyvalues.clear()
-    for k, v in default_keyvalues(self.classname).items():
+    for k, v in new.items():
         kv = self.keyvalues.add()
         kv.key, kv.value = k, v
 
@@ -143,12 +152,21 @@ def _surface_items(self, context):
 _MONITOR_ITEMS: list[tuple[str, str, str]] = []
 
 
+def monitor_key(m) -> str:
+    return f"{m.x},{m.y},{m.width}x{m.height}"
+
+
 def _monitor_items(self, context):
+    # Blender stores the choice as each item's number: a number made from the screen's place and
+    # size keeps meaning the same screen when others are plugged in or out
+    import zlib
     from ..core.window import monitors
-    _MONITOR_ITEMS.clear()  # module-level list keeps the strings alive for Blender
-    _MONITOR_ITEMS.append(("-1", "Game decides", "Let the game place its window"))
+    items = [("-1", "Game decides", "Let the game place its window", 0)]
     for m in monitors():
-        _MONITOR_ITEMS.append((str(m.index), m.label, f"Open the game on monitor {m.label}"))
+        key = monitor_key(m)
+        items.append((key, m.label, f"Open the game on monitor {m.label}", zlib.crc32(key.encode()) & 0x3FFFFFFF or 1))
+    if items != _MONITOR_ITEMS:
+        _MONITOR_ITEMS[:] = items        # (kept in a module list: Blender only borrows the strings)
     return _MONITOR_ITEMS
 
 
@@ -356,7 +374,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     window_borderless: BoolProperty(name="Borderless", default=False)
     launch_extra: StringProperty(name="Launch Options", description="Extra game options, e.g. -high")
     difficulty: EnumProperty(name="Difficulty", default="Normal", items=[
-        ("", "Keep Current", "Don't change the game's difficulty"),
+        ("KEEP", "Keep Current", "Don't change the game's difficulty"),
         ("Easy", "Easy", ""), ("Normal", "Normal", ""), ("Hard", "Advanced", ""),
         ("Impossible", "Expert", "")])
 

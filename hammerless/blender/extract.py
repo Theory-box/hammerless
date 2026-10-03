@@ -422,7 +422,15 @@ def _rgb(color) -> tuple[int, int, int]:
     return tuple(int(round(max(0.0, min(1.0, c)) * 255)) for c in color)
 
 
+def _ordered(a, b):
+    """A min / max pair, the right way round (a panel lets them cross)."""
+    return (a, b) if a <= b else (b, a)
+
+
 def scene_settings_to_ir(s) -> MapSettings:
+    mob_min, mob_max = _ordered(s.dir_mob_min, s.dir_mob_max)
+    every_min, every_max = _ordered(s.dir_mob_interval_min, s.dir_mob_interval_max)
+    fog_start, fog_end = _ordered(s.fog_start, s.fog_end)
     return MapSettings(
         name=s.map_name, skyname=s.skyname, auto_seal=s.auto_seal, auto_detail=s.auto_detail,
         auto_light_environment=s.auto_sun,
@@ -430,11 +438,11 @@ def scene_settings_to_ir(s) -> MapSettings:
         sun_pitch=s.sun_pitch, sun_yaw=s.sun_yaw,
         ambient_color=_rgb(s.ambient_color), ambient_brightness=s.ambient_brightness,
         lightmap_scale=s.lightmap_scale, wall_climbs=s.wall_climbs,
-        fog_enabled=s.fog_enabled, fog_color=_rgb(s.fog_color), fog_start=s.fog_start,
-        fog_end=s.fog_end, fog_max_density=s.fog_max_density,
+        fog_enabled=s.fog_enabled, fog_color=_rgb(s.fog_color), fog_start=fog_start,
+        fog_end=fog_end, fog_max_density=s.fog_max_density,
         director_enabled=s.director_enabled, dir_common_limit=s.dir_common_limit,
-        dir_mob_min=s.dir_mob_min, dir_mob_max=s.dir_mob_max,
-        dir_mob_interval_min=s.dir_mob_interval_min, dir_mob_interval_max=s.dir_mob_interval_max,
+        dir_mob_min=mob_min, dir_mob_max=mob_max,
+        dir_mob_interval_min=every_min, dir_mob_interval_max=every_max,
         dir_max_specials=s.dir_max_specials, dir_special_interval=s.dir_special_interval,
         dir_tank_limit=s.dir_tank_limit, dir_witch_limit=s.dir_witch_limit,
         dir_no_mobs=s.dir_no_mobs, dir_no_wanderers=s.dir_no_wanderers,

@@ -48,13 +48,13 @@ def compile_options(s) -> "cc.CompileOptions | str":
 
 
 def launch_options(s) -> cc.LaunchOptions:
-    try:
-        monitor = int(s.window_monitor)
-    except (TypeError, ValueError):
-        monitor = -1
+    from ..core.window import monitors
+    from .props import monitor_key
+    choice = s.window_monitor
+    monitor = next((m.index for m in monitors() if monitor_key(m) == choice), -1)   # unplugged: game decides
     return cc.LaunchOptions(width=s.window_width, height=s.window_height,
                             borderless=s.window_borderless, monitor_index=monitor, extra=s.launch_extra,
-                            difficulty=s.difficulty)
+                            difficulty="" if s.difficulty == "KEEP" else s.difficulty)
 
 
 def _quoted_object(message: str) -> str:
@@ -632,12 +632,14 @@ class HL_OT_validate(bpy.types.Operator):
     bl_idname = "hammerless.validate"
     bl_label = "Check for Problems"
     bl_description = "Check brushes, terrain and entities without compiling"
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         s = context.scene.hammerless
         rep = Report()
         root = game_root(context)
-        ir, _ = extract_scene(context, rep, None)
+        game_content(root)              # (the game's surface list, as Build loads it)
+        ir, _ = extract_scene(context, rep, os.path.join(root, "left4dead2") if root else None)
         from .logic import compile_logic
         compile_logic(context, ir, rep)
         rep2 = validate(ir, game_content(root) if s.check_game_content else None)
@@ -765,7 +767,7 @@ class HL_OT_build(bpy.types.Operator):
         if not path:
             return {"CANCELLED"}
         if not root:
-            self.report({"ERROR"}, "Left 4 Dead 2 not found. Set the L4D2 Folder in the Hammerless panel")
+            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Advanced > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
             return {"CANCELLED"}
         tools = cc.Tools(root)
         if tools.missing():
@@ -900,12 +902,21 @@ class HL_OT_launch(bpy.types.Operator):
     bl_description = "Launch Left 4 Dead 2 on the last compiled map"
 
     def execute(self, context):
+        import time
         root = game_root(context)
         if not root:
-            self.report({"ERROR"}, "Left 4 Dead 2 not found")
+            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Advanced > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
             return {"CANCELLED"}
         s = context.scene.hammerless
+        if not os.path.exists(os.path.join(cc.Tools(root).maps_dir, f"{s.map_name}.bsp")):
+            self.report({"ERROR"}, f"'{s.map_name}' hasn't been compiled yet: press Build & Play (or Compile Only)")
+            return {"CANCELLED"}
+        if cc.compile_running(os.path.join(work_dir(context), f"{s.map_name}.vmf")):
+            self.report({"ERROR"}, "The map is still compiling: launch when it has finished")
+            return {"CANCELLED"}
+        nav = needs_nav(context, root, by_game=True)
         launch(context, root)
+        _watch_load(0.0, "Launch Game", nav)
         return {"FINISHED"}
 
 
@@ -913,6 +924,7 @@ class HL_OT_load_leak(bpy.types.Operator):
     bl_idname = "hammerless.load_leak"
     bl_label = "Load Leak"
     bl_description = "Show the leak path from the last compile as a red line"
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         s = context.scene.hammerless
@@ -921,6 +933,11 @@ class HL_OT_load_leak(bpy.types.Operator):
             self.report({"INFO"}, "No leak file. The last compile didn't leak")
             return {"CANCELLED"}
         pts = cc.read_pointfile(lin)
+        if len(pts) < 2:
+            self.report({"INFO"}, "The leak file has no path in it (the last compile probably didn't leak)")
+            return {"CANCELLED"}
+        for c in [c for c in bpy.data.curves if c.name.startswith("HL_leak") and c.users == 0]:
+            bpy.data.curves.remove(c)        # earlier leak lines
         curve = bpy.data.curves.new("HL_leak", "CURVE")
         curve.dimensions = "3D"
         curve.bevel_depth = 2 / s.units_per_meter
@@ -930,7 +947,10 @@ class HL_OT_load_leak(bpy.types.Operator):
             p.co = (x / s.units_per_meter, y / s.units_per_meter, z / s.units_per_meter, 1)
         old = bpy.data.objects.get("HL_leak")
         if old:
+            old_curve = old.data
             bpy.data.objects.remove(old)
+            if old_curve.users == 0:
+                bpy.data.curves.remove(old_curve)
         obj = bpy.data.objects.new("HL_leak", curve)
         obj.hammerless.role = "IGNORE"
         obj.color = (1, 0, 0, 1)
@@ -962,6 +982,7 @@ class HL_OT_pick_sky(bpy.types.Operator):
     bl_idname = "hammerless.pick_sky"
     bl_label = "Pick Sky"
     bl_description = "Choose from every sky in Left 4 Dead 2"
+    bl_options = {"REGISTER", "UNDO"}
     bl_property = "sky"
 
     sky: EnumProperty(name="Sky", items=_sky_items)
@@ -1056,8 +1077,8 @@ class HL_OT_pick_material(bpy.types.Operator):
             return {"CANCELLED"}
         mat = game_material(self.material)
         for obj in context.selected_objects or [context.object]:
-            if obj.type != "MESH":
-                continue
+            if obj.type != "MESH" or obj.hammerless.role == "ENTITY" or obj.data.name.startswith("HL_"):
+                continue                  # entity previews share their mesh: not walls
             if not obj.material_slots:
                 obj.data.materials.append(mat)
             else:
@@ -1071,6 +1092,7 @@ class HL_OT_refresh_previews(bpy.types.Operator):
     bl_label = "Refresh Previews"
     bl_description = ("Show real game textures on game materials (Material Preview view) and real "
                       "3D models on props and items")
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         done = failed = 0
@@ -1114,7 +1136,7 @@ class HL_OT_load_game_data(bpy.types.Operator):
     def execute(self, context):
         root = game_root(context)
         if not game_content(root):
-            self.report({"ERROR"}, "Left 4 Dead 2 not found")
+            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Advanced > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
             return {"CANCELLED"}
         from .props import SURFACE_ITEMS
         self.report({"INFO"}, f"Loaded {len(SURFACE_ITEMS) - 1} surfaces")

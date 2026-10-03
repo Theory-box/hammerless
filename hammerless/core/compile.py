@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import queue
 import re
 import shutil
@@ -54,15 +55,42 @@ PRESETS = {
 }
 
 
+def _steam_roots() -> list[str]:
+    """Where Steam is installed: its own registry entry, then the usual folder."""
+    roots = []
+    if sys.platform == "win32":
+        try:
+            import winreg
+            for hive, key in ((winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam"),
+                              (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam")):
+                try:
+                    with winreg.OpenKey(hive, key) as k:
+                        for name in ("SteamPath", "InstallPath"):
+                            try:
+                                roots.append(os.path.normpath(winreg.QueryValueEx(k, name)[0]))
+                            except OSError:
+                                pass
+                except OSError:
+                    pass
+        except ImportError:
+            pass
+    roots.append(r"C:\Program Files (x86)\Steam")
+    return list({os.path.normcase(r): r for r in roots}.values())
+
+
 def find_game_root(extra: list[str] | None = None) -> str | None:
-    candidates = list(extra or []) + DEFAULT_GAME_ROOTS
-    # Also read Steam library folders
-    vdf = r"C:\Program Files (x86)\Steam\steamapps\libraryfolders.vdf"
-    if os.path.exists(vdf):
-        with open(vdf, encoding="utf-8", errors="replace") as f:
-            for m in re.finditer(r'"path"\s+"([^"]+)"', f.read()):
-                candidates.append(os.path.join(m.group(1).replace("\\\\", "\\"),
-                                               "steamapps", "common", "Left 4 Dead 2"))
+    candidates = []
+    for c in extra or []:          # a folder the user set: also its parent (they picked 'left4dead2' inside)
+        candidates += [c, os.path.dirname(c.rstrip("\\/"))]
+    candidates += DEFAULT_GAME_ROOTS
+    for steam in _steam_roots():    # every Steam library (games can be on any drive)
+        candidates.append(os.path.join(steam, "steamapps", "common", "Left 4 Dead 2"))
+        vdf = os.path.join(steam, "steamapps", "libraryfolders.vdf")
+        if os.path.exists(vdf):
+            with open(vdf, encoding="utf-8", errors="replace") as f:
+                for m in re.finditer(r'"path"\s+"([^"]+)"', f.read()):
+                    candidates.append(os.path.join(m.group(1).replace("\\\\", "\\"),
+                                                   "steamapps", "common", "Left 4 Dead 2"))
     for c in candidates:
         if c and os.path.exists(os.path.join(c, "left4dead2.exe")):
             return c
