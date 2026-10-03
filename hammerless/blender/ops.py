@@ -696,13 +696,14 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
     def check():
         if cc.LOAD_STATUS["launch_id"] != launch_id or state["waited"] > 660:
             return None
+        state["waited"] += 1.0
+        if cc.LOAD_STATUS.get("error") and not state.get("error"):
+            state["error"] = True
+            write_log([cc.LOAD_STATUS["error"]], append=True)
+            print("Hammerless:", cc.LOAD_STATUS["error"])
+            _popup(cc.LOAD_STATUS["error"])
         if (bpy.context.scene.name, bpy.context.scene.hammerless.map_name) != owner:
             return 1.0          # another scene / map is active: its problem list isn't this map's
-        state["waited"] += 1.0
-        if cc.LOAD_STATUS.get("nav_error") and not state.get("nav_error"):
-            state["nav_error"] = True
-            write_log([cc.LOAD_STATUS["nav_error"]], append=True)
-            print("Hammerless:", cc.LOAD_STATUS["nav_error"])
         secs = cc.LOAD_STATUS["seconds"]
         if secs is not None and not state["logged"]:
             state["logged"] = True
@@ -733,6 +734,16 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
 
 
 _TIMERS: list = []           # load watchers, removed when the add-on is turned off
+
+
+def _popup(message: str) -> None:
+    """Show a message from a background step (timers have no operator to report through)."""
+    try:
+        wm = bpy.context.window_manager
+        with bpy.context.temp_override(window=wm.windows[0]):
+            wm.popup_menu(lambda self, _ctx: self.layout.label(text=message), title="Hammerless", icon="ERROR")
+    except (IndexError, RuntimeError, AttributeError, TypeError):
+        pass
 
 
 def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False) -> dict:

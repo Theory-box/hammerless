@@ -36,6 +36,10 @@ Older versions of **Analyze Navmesh** showed this and stopped. Current versions 
 
 Hammerless sends the load command to an already-running L4D2. If the game didn't change map, quit L4D2 and press **Build & Play** again (it won't recompile an unchanged map).
 
+## The game doesn't start
+
+If Steam isn't running, Build & Play starts it and waits up to two minutes for it to sign in. If Steam asks you to log in, do that, then press **Launch Game**. If L4D2 isn't found at all, set its folder in the add-on's Preferences (or on the scene, under Advanced > L4D2 Folder): the folder that contains `left4dead2.exe`.
+
 ## The map leaks
 
 With *Advanced > Auto Seal* on (the default) a map can't leak. If you turned it off, **Load Leak** draws a red line to the hole.

@@ -78,6 +78,49 @@ def _steam_roots() -> list[str]:
     return list({os.path.normcase(r): r for r in roots}.values())
 
 
+def _steam_process() -> tuple[int, int]:
+    """(Steam's process id, signed-in user) from Steam's own registry entry; (0, 0) when unknown."""
+    if sys.platform != "win32":
+        return 0, 0
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam\ActiveProcess") as k:
+            values = []
+            for name in ("pid", "ActiveUser"):
+                try:
+                    values.append(int(winreg.QueryValueEx(k, name)[0]))
+                except (OSError, ValueError):
+                    values.append(0)
+            return values[0], values[1]
+    except (ImportError, OSError):
+        return 0, 0
+
+
+def _process_running(name: str) -> bool:
+    try:
+        out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/NH"], capture_output=True, text=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        return name.lower() in out.lower()
+    except OSError:
+        return False
+
+
+def steam_ready() -> bool:
+    """Steam is running with someone signed in. Started before that, the game stops with
+    'Steam is not running'. (Steam clears ActiveUser when it quits; the process check covers a
+    crash, which leaves the old value behind.)"""
+    _pid, user = _steam_process()
+    return user != 0 and _process_running("steam.exe")
+
+
+def steam_exe() -> str | None:
+    for root in _steam_roots():
+        exe = os.path.join(root, "steam.exe")
+        if os.path.exists(exe):
+            return exe
+    return None
+
+
 def find_game_root(extra: list[str] | None = None) -> str | None:
     candidates = []
     for c in extra or []:          # a folder the user set: also its parent (they picked 'left4dead2' inside)
@@ -476,13 +519,7 @@ atexit.register(_stop_compilers)
 
 
 def game_running() -> bool:
-    try:
-        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq left4dead2.exe", "/NH"],
-                             capture_output=True, text=True,
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
-        return "left4dead2.exe" in out.lower()
-    except OSError:
-        return False
+    return _process_running("left4dead2.exe")
 
 
 def send_commands(tools: Tools, commands: list[str]):
@@ -494,10 +531,15 @@ def send_commands(tools: Tools, commands: list[str]):
     """
     cfg_dir = os.path.join(tools.gamedir, "cfg")
     os.makedirs(cfg_dir, exist_ok=True)
-    with open(os.path.join(cfg_dir, "hammerless_cmd.cfg"), "w", encoding="utf-8") as f:
+    _SENT[0] = (_SENT[0] + 1) % 4
+    name = f"hammerless_cmd{_SENT[0]}"
+    with open(os.path.join(cfg_dir, name + ".cfg"), "w", encoding="utf-8") as f:
         f.write("\n".join(commands) + "\n")
     return subprocess.Popen([os.path.join(tools.root, "left4dead2.exe"), "-game", "left4dead2", "-hijack",
-                             "+exec", "hammerless_cmd"], cwd=tools.root)
+                             "+exec", name], cwd=tools.root)
+
+
+_SENT = [0]
 
 
 def _run_console_script(tools: Tools, steps: list[tuple[str, list[str]]], log_start: int,
@@ -511,16 +553,25 @@ def _run_console_script(tools: Tools, steps: list[tuple[str, list[str]]], log_st
     pos = log_start
     deadline = time.time() + timeout
     cheats = False
+    seen, checked = False, 0.0          # the game process (it may still be starting when this begins)
     for marker, commands in steps:
         needle = marker.lower().encode("utf-8")
         while True:
             if launch_id is not None and LOAD_STATUS["launch_id"] != launch_id:
                 return                          # a newer Build & Play took over
+            if time.time() - checked > 5.0:
+                checked = time.time()
+                if game_running():
+                    seen = True
+                elif seen:                      # closed: sending more would start the game again
+                    LOAD_STATUS["error"] = ("The game was closed before its nav mesh step finished. Launch "
+                                            "again to finish it")
+                    return
             if time.time() > deadline:
-                if cheats:
+                if cheats and game_running():
                     send_commands(tools, ["nav_edit 0", "sv_cheats 0"])
-                LOAD_STATUS["nav_error"] = ("The game didn't finish its nav mesh step in time; the nav may be "
-                                            "missing its marks. Build & Play again (tick Rebuild Nav Mesh)")
+                LOAD_STATUS["error"] = ("The game didn't finish its nav mesh step in time; the nav may be "
+                                        "missing its marks. Build & Play again (tick Rebuild Nav Mesh)")
                 return
             time.sleep(1.0)
             try:
@@ -685,7 +736,7 @@ class LaunchOptions:
 
 # How long the last launch took until survivors were in the map, and the latest in-game
 # flow report from the map's ready script (both set by a watcher thread).
-LOAD_STATUS: dict = {"launch_id": 0, "seconds": None, "flow": None, "flow_seq": 0, "nav_error": None}
+LOAD_STATUS: dict = {"launch_id": 0, "seconds": None, "flow": None, "flow_seq": 0, "error": None}
 FLOW = "hammerless_flow "
 
 
@@ -703,7 +754,7 @@ def parse_flow(line: str) -> dict | None:
     return {"state": state}
 
 
-def _watch_ready(log: str, start: int, launch_id: int, timeout: float = 300.0):
+def _watch_ready(log: str, start: int, launch_id: int, timeout: float = 660.0):
     """Record the load time (first HAMMERLESS_READY), then keep collecting flow reports
     (the map reloads after nav generation, each load prints one)."""
     import time
@@ -743,6 +794,34 @@ def bsp_has_lighting(path: str) -> bool:
     return any(struct.unpack_from("<iiii", head, 8 + 16 * lump)[1] > 0 for lump in (8, 53))
 
 
+STEAM_WAIT = 120.0       # seconds to wait for Steam to start and sign in
+
+
+def _start_with_steam(cmd: list[str], cwd: str, launch_id: int, then) -> None:
+    """Steam isn't running (or is still signing in): start it, wait until it's ready, then start
+    the game. Started before that, the game quits with 'Steam is not running'."""
+    import time
+    if not _process_running("steam.exe"):
+        exe = steam_exe()
+        if exe is None:
+            LOAD_STATUS["error"] = "Steam isn't running and wasn't found: start Steam, then press Launch Game"
+            return
+        subprocess.Popen([exe, "-silent"], cwd=os.path.dirname(exe))
+    deadline = time.time() + STEAM_WAIT
+    while not steam_ready():
+        if time.time() > deadline:
+            LOAD_STATUS["error"] = ("Steam didn't finish starting (is it waiting for you to sign in?). "
+                                    "When it's ready, press Launch Game")
+            return
+        if LOAD_STATUS["launch_id"] != launch_id:
+            return                          # another launch took over
+        time.sleep(1.0)
+    time.sleep(2.0)                         # signed in a moment ago: let Steam settle
+    if LOAD_STATUS["launch_id"] == launch_id:
+        subprocess.Popen(cmd, cwd=cwd)
+        then()
+
+
 def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: list[str] | None = None,
                 window: LaunchOptions | None = None, analyze_nav: bool = False):
     """Load the map. Reuses a running game if there is one.
@@ -773,18 +852,29 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
         if window.difficulty:
             cmd += ["+z_difficulty", window.difficulty]
         cmd += ["+map", map_name]
-        proc = subprocess.Popen(cmd, cwd=tools.root)
-    if window.monitor_index >= 0:
-        from .window import monitors, move_game_window
-        mons = monitors()
-        if window.monitor_index < len(mons):
-            move_game_window(mons[window.monitor_index])
+        proc = None
     LOAD_STATUS["launch_id"] += 1
     LOAD_STATUS["seconds"] = None
     LOAD_STATUS["flow"] = None
-    threading.Thread(target=_watch_ready, args=(log, log_start, LOAD_STATUS["launch_id"]), daemon=True).start()
-    LOAD_STATUS["nav_error"] = None
+    LOAD_STATUS["error"] = None
     launch_id = LOAD_STATUS["launch_id"]
+
+    def move_window():
+        if window.monitor_index >= 0:
+            from .window import monitors, move_game_window
+            mons = monitors()
+            if window.monitor_index < len(mons):
+                move_game_window(mons[window.monitor_index])
+    if proc is None:
+        if steam_ready():
+            proc = subprocess.Popen(cmd, cwd=tools.root)
+            move_window()
+        else:
+            threading.Thread(target=_start_with_steam, args=(cmd, tools.root, launch_id, move_window),
+                             daemon=True).start()
+    else:
+        move_window()
+    threading.Thread(target=_watch_ready, args=(log, log_start, launch_id), daemon=True).start()
     if analyze_nav and not generate_nav:
         threading.Thread(target=_run_console_script, args=(tools, analyze_steps(), log_start),
                          kwargs={"launch_id": launch_id}, daemon=True).start()

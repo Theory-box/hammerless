@@ -52,6 +52,11 @@
   - Logic graphs refer to their scene by name, so appending a graph from another file doesn't bring that file's scene along. Undo works for New Logic Graph and Graph from Outputs.
   - Changing an entity's Class keeps its name and shared settings; Difficulty *Keep Current* can be chosen; the monitor choice survives unplugging another screen; min/max pairs entered the wrong way round are swapped.
   - A warning when the .blend isn't saved (builds go to a folder Blender deletes on quit); a Work Folder or game folder that can't be written gives a clear error instead of a traceback; timers are removed when the add-on is turned off; the add-on is marked Windows-only.
+- **Pre-release audit, round 6 (launching the game):**
+  - Build & Play with Steam closed (or still signing in) failed with "Steam is not running". Hammerless now starts Steam and waits until it's ready (up to two minutes), then starts the game.
+  - Closing the game while it was making its nav mesh made Hammerless start the game again later. It now stops and says so.
+  - Two commands sent to the game in quick succession could lose the first.
+  - Messages from the game steps (nav step failed, Steam not ready) now pop up in Blender instead of only going to the log; the in-game path report is collected for the whole nav generation, not only the first 5 minutes.
 - **Rooms behind a gate got no wandering zombies**: Mover gates no longer block the nav by default (L4D2 blocks from map load, before the Director places zombies).
 - A lit map loaded into a running game after an unlit one looked unlit (`mat_fullbright` stayed on).
 - Build Navmesh and Analyze Navmesh now export the map exactly as Build does.
