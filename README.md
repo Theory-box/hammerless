@@ -4,7 +4,8 @@
 
 No Hammer, no VMF editing, no console commands.
 
-> **Status: early (v0.1).** Used to build and play full maps end to end in L4D2. Expect rough edges; please [report bugs](../../issues).
+> [!WARNING]
+> **Work in progress (v0.1, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene (converting objects, moving outputs into a logic graph), and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
 
 ## Features
 

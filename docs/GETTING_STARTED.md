@@ -4,6 +4,9 @@ This walks through a first playable map, then explains the panels.
 
 ## 1. Set up
 
+> [!WARNING]
+> Hammerless is a work in progress. Work on a **copy** of your .blend and keep backups.
+
 1. Install Hammerless and the L4D2 Authoring Tools (see the [README](../README.md#install)).
 2. **Save your .blend first.** Builds go into `hammerless_build/` next to it (change it under *Advanced > Work Folder*).
 3. Open the sidebar (**N**) > **Hammerless**. If L4D2 isn't found, set its folder once in the add-on's Preferences.
