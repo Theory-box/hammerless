@@ -851,6 +851,7 @@ class HL_OT_build(bpy.types.Operator):
             pass                     # lighting only: the nav is made by the next Build / Build & Play
         elif s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root) or unanalyzed):
             self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs)
+        self._job.snapshot_vis = self._nav is not None and s.nav_analysis == "BLENDER"
         try:
             self._job.start()
         except RuntimeError as ex:
@@ -994,6 +995,13 @@ class HL_OT_build(bpy.types.Operator):
         return self._finish(context, {"FINISHED"})
 
     def _finish(self, context, result):
+        snap = self._job.base + ".analysis.bsp" if self._job is not None else None
+        if snap and os.path.exists(snap) and not (self._nav and self._nav.get("analysis")
+                                                  and self._nav["analysis"]["thread"].is_alive()):
+            try:
+                os.remove(snap)              # the analysis copy is only needed while the build runs
+            except OSError:
+                pass
         context.window_manager.event_timer_remove(self._timer)
         context.workspace.status_text_set(None)
         return result

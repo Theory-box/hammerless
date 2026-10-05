@@ -354,6 +354,7 @@ class CompileJob:
         self._built_rad = opts.rad            # and its lighting (SKIP: none, or out of date)
         self.vis_bsp: str | None = None        # a copy of the BSP once geometry and visibility are final:
                                                # the nav analysis can start on it while vrad still runs
+        self.snapshot_vis = False              # make that copy (only when an analysis will use it)
 
     def start(self) -> "CompileJob":
         other = _ACTIVE_JOBS.get(self.base)
@@ -441,7 +442,7 @@ class CompileJob:
                 if name == "vbsp" and os.path.exists(prt):
                     shutil.copy2(prt, kept_prt)          # the portals, for adding the full vis to a bake later
                 rest = [n for n, _c in steps[k + 1:]]
-                if self.vis_bsp is None and rest and "vvis" not in rest and not any(n.startswith("vbsp") for n in rest):
+                if self.snapshot_vis and self.vis_bsp is None and rest and "vvis" not in rest and not any(n.startswith("vbsp") for n in rest):
                     snap = self.base + ".analysis.bsp"   # geometry and visibility won't change any more
                     shutil.copy2(self.base + ".bsp", snap)
                     self.vis_bsp = snap
