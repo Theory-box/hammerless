@@ -399,9 +399,9 @@ class HL_OT_nav_analyze(bpy.types.Operator):
     bl_idname = "hammerless.nav_analyze"
     bl_label = "Analyze Navmesh"
     bl_description = ("Build the navmesh and run the game's nav analysis on it here (visibility between areas, "
-                      "hiding spots). Compiles the map first when walls or floors changed since the last compile "
-                      "(the analysis looks through the compiled map). Then colour the nav by what the area under "
-                      "the 3D cursor can see")
+                      "hiding spots). When the walls changed since the last build, it first compiles what the "
+                      "analysis looks through (walls and visibility, not the lighting). Then colour the nav by "
+                      "what the area under the 3D cursor can see. Build puts the result in the game")
 
     _timer = None
     _thread = None
@@ -415,47 +415,41 @@ class HL_OT_nav_analyze(bpy.types.Operator):
     def execute(self, context):
         import threading
         from ..core import compile as cc
-        from ..core.buildplan import plan
-        from ..core.nav import collect_climbs, collect_regions
-        from ..core.navpredict import predict
-        from .ops import build_map_text, compile_options, export_vmf, game_root, surface_report, work_dir
+        from ..core.navpredict import cached, predict
+        from .ops import compile_options, export_vmf, game_root, surface_report, work_dir
         root = game_root(context)
         if not root:
             self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Folders & Game Data > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
             return {"CANCELLED"}
-        ir, text, rep2 = build_map_text(context, root)       # exactly what Build exports
-        if text is None:
-            self.report({"ERROR"}, rep2.errors[0] if rep2.errors else "The map doesn't build")
-            return {"CANCELLED"}
         base = os.path.join(work_dir(context), context.scene.hammerless.map_name)
-        try:
-            with open(base + ".built.vmf", encoding="utf-8") as f:
-                built = f.read()
-        except OSError:
-            built = None
+        tools = cc.Tools(root)
+        if tools.missing():
+            self.report({"ERROR"}, "L4D2 Authoring Tools not installed (Steam > Library > Tools > "
+                                   "Left 4 Dead 2 Authoring Tools): the analysis needs the compiled map")
+            return {"CANCELLED"}
+        if cc.compile_running(base + ".vmf"):
+            self.report({"ERROR"}, "This map is still compiling: wait for it to finish, then Analyze again")
+            return {"CANCELLED"}
+        path, _root, rep = export_vmf(self, context)         # exactly what Build exports
+        surface_report(self, rep)
+        if not path:
+            return {"CANCELLED"}
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        # the analysis looks through the compiled walls and visibility (never the lighting): compile
+        # what's missing of those, without baking lighting or touching the game's copy of the map
+        import dataclasses
+        opts = compile_options(context.scene.hammerless)
+        opts = dataclasses.replace(cc.PRESETS[opts] if isinstance(opts, str) else opts, rad="SKIP")
+        job = cc.CompileJob(tools, path, opts, copy_to_game=False, skip_if_unchanged=True)
         self._job = None
-        if built is None or not os.path.exists(base + ".bsp") or plan(built, text)[0] == "full":
-            # the walls the analysis looks through are the compiled map's: compile this version first
-            tools = cc.Tools(root)
-            if tools.missing():
-                self.report({"ERROR"}, "L4D2 Authoring Tools not installed (Steam > Library > Tools > "
-                                       "Left 4 Dead 2 Authoring Tools): the analysis needs the compiled map")
-                return {"CANCELLED"}
-            if cc.compile_running(base + ".vmf"):
-                self.report({"ERROR"}, "This map is still compiling: wait for it to finish, then Analyze again")
-                return {"CANCELLED"}
-            path, _root, rep = export_vmf(self, context)
-            surface_report(self, rep)
-            if not path:
-                return {"CANCELLED"}
+        if not job.up_to_date():
             try:
-                self._job = cc.CompileJob(tools, path, compile_options(context.scene.hammerless),
-                                          skip_if_unchanged=True).start()
+                self._job = job.start()
             except RuntimeError as ex:          # already compiling
                 self.report({"ERROR"}, str(ex))
                 return {"CANCELLED"}
-        regions, _ = collect_regions(ir)
-        climbs, _ = collect_climbs(ir)
+        regions, climbs = rep.nav_regions, rep.nav_climbs
         compiled = threading.Event()
         if self._job is None:
             compiled.set()
@@ -467,7 +461,9 @@ class HL_OT_nav_analyze(bpy.types.Operator):
             try:
                 from ..core.navanalyze import analyze
                 from ..core.vpk import GameContent
-                mesh = predict(text, regions, None, climbs, wall_climbs)     # needs no compiled map
+                mesh = cached(text, regions, climbs, wall_climbs)      # Build Navmesh made this one already
+                if mesh is None:
+                    mesh = predict(text, regions, None, climbs, wall_climbs)     # needs no compiled map
                 box["stage"] = "Compiling the map"
                 compiled.wait()
                 if box["error"]:
@@ -527,16 +523,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
             return {"CANCELLED"}
         mesh = box["mesh"]
         s = context.scene.hammerless
-        map_name, nav_source = self._settings          # the map this analysis was made for
-        if job is not None and not job.skipped:
-            # the game's map changed: give it a nav mesh that fits (this one, analyzed) or have it make one
-            from .ops import game_root
-            from ..core import compile as cc
-            if nav_source == "BLENDER":
-                import copy
-                cc.write_generated_nav(cc.Tools(game_root(context)), map_name, copy.deepcopy(mesh), analyzed=True)
-            elif _owner(context) == self._owner:
-                s.generate_nav = True
+        map_name, _nav_source = self._settings          # the map this analysis was made for
         if _owner(context) != self._owner:
             self.report({"WARNING"}, f"Analyzed '{map_name}' (the scene or Map Name changed meanwhile, so it isn't "
                                      "shown here)")
@@ -544,7 +531,8 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         finish_prediction(context, mesh)
         s.nav_color_mode = "VIS"
         spots = sum(len(a.hiding_spots) for a in mesh.areas)
-        done = "Compiled the map and analyzed" if job is not None and not job.skipped else "Analyzed"
+        done = ("Compiled the walls and visibility and analyzed" if job is not None and not job.skipped
+                else "Analyzed")
         self.report({"INFO"}, f"{done} {len(mesh.areas)} areas: {spots} hiding spots. Put the 3D cursor "
                               "on an area (Shift + right-click) to see what it can see")
         return {"FINISHED"}

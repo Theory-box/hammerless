@@ -51,13 +51,27 @@ VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
 
 
 def _opts_rest(text: str) -> str:
-    """Compile options without the visibility level (a more complete vis serves a lesser one)."""
-    return re.sub(r"vis='\w+'", "vis='*'", text)
+    """Compile options without the visibility and lighting levels: those are tracked apart (a more
+    complete vis serves a lesser one; lighting can be added to a map compiled without it)."""
+    return re.sub(r"(vis|rad)='\w+'", r"\1='*'", text)
 
 
 def _opts_vis(text: str) -> str | None:
     m = re.search(r"vis='(\w+)'", text)
     return m.group(1) if m else None
+
+
+def _opts_rad(text: str) -> str | None:
+    m = re.search(r"rad='(\w+)'", text)
+    return m.group(1) if m else None
+
+
+def _serves(built: str, opts: "CompileOptions") -> bool:
+    """A map built with `built` options does for `opts`: visibility at least as complete, and the
+    same lighting (rad SKIP asks for none: a compile for the nav analysis doesn't need it)."""
+    vis, rad = _opts_vis(built), _opts_rad(built)
+    return (vis in VIS_RANK and VIS_RANK[vis] >= VIS_RANK[opts.vis]
+            and (opts.rad == "SKIP" or rad == opts.rad))
 
 
 PRESETS = {
@@ -337,6 +351,7 @@ class CompileJob:
         self._proc = None
         self._vmf_bytes = b""
         self._built_vis = opts.vis            # the visibility the BSP ends up with
+        self._built_rad = opts.rad            # and its lighting (SKIP: none, or out of date)
         self.vis_bsp: str | None = None        # a copy of the BSP once geometry and visibility are final:
                                                # the nav analysis can start on it while vrad still runs
 
@@ -373,8 +388,9 @@ class CompileJob:
         try:
             with open(self.base + ".stamp", encoding="utf-8") as f:
                 same = f.read() == self._stamp()
-            built_vis = _opts_vis(self._built_opts())
-            enough = built_vis is not None and VIS_RANK[built_vis] >= VIS_RANK[self._opts.vis]
+            enough = _serves(self._built_opts(), self._opts)
+            if not self.copy_to_game:
+                return same and enough and os.path.exists(self.base + ".bsp")
             game_bsp = os.path.join(self.tools.maps_dir, self.name + ".bsp")
             return same and enough and bsp_signature(game_bsp) == bsp_signature(self.base + ".bsp")
         except (OSError, ValueError, KeyError):
@@ -449,7 +465,7 @@ class CompileJob:
             with open(self.base + ".built.vmf", "wb") as f:       # what this BSP was made from (the VMF
                 f.write(self._vmf_bytes)                         # as it was when the job started)
             with open(self.base + ".built.opts", "w", encoding="utf-8") as f:
-                f.write(repr(replace(self._opts, vis=self._built_vis)))
+                f.write(repr(replace(self._opts, vis=self._built_vis, rad=self._built_rad)))
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
             self._q.put(("OK",))
         except Exception as ex:  # surfaced to the user in the log
@@ -460,11 +476,12 @@ class CompileJob:
         """Smart build: the least work that gives the same map as a full compile, judged against
         the VMF the current BSP was compiled from (buildplan.plan). A doubt means a full compile."""
         from .buildplan import plan
-        old, built_vis = None, None
+        old, built_vis, built_rad = None, None, None
         try:
             built = self._built_opts()
-            built_vis = _opts_vis(built)
-            same_opts = _opts_rest(built) == _opts_rest(repr(self._opts)) and built_vis in VIS_RANK
+            built_vis, built_rad = _opts_vis(built), _opts_rad(built)
+            same_opts = (_opts_rest(built) == _opts_rest(repr(self._opts)) and built_vis in VIS_RANK
+                         and built_rad is not None)
             if same_opts and os.path.exists(self.base + ".bsp"):
                 with open(self.base + ".built.vmf", encoding="utf-8") as f:
                     old = f.read()
@@ -474,22 +491,26 @@ class CompileJob:
         if kind == "full":
             self.plan = "full"
             return self.steps
-        self.plan = "entities" if kind == "same" else kind
-        game = ["-game", self.tools.gamedir]
-        steps = [("vbsp (entities only)", [self.tools.exe("vbsp"), "-onlyents"] + game + [self.base])]
         add_vis = VIS_RANK[built_vis] < VIS_RANK[self._opts.vis]
         if add_vis and not os.path.exists(self.base + ".built.prt"):
             self.plan = "full"                   # no portal file kept (an older build): compile it all
             return self.steps
+        lights_changed = kind == "lighting"      # lights or static props moved: the bake is out of date
+        want = self._opts.rad != "SKIP"
+        add_rad = want and (lights_changed or built_rad != self._opts.rad)
         self._built_vis = self._opts.vis if add_vis else built_vis
-        if self.plan == "lighting":
-            steps += [st for st in self.steps if st[0] == "vrad"]
-            self._q.put(f"Smart build: {why}: updating entities and relighting, keeping geometry")
-        else:
-            self._q.put(f"Smart build: {why}: keeping geometry and the baked lighting")
-        if add_vis:          # after a lighting bake (fast vis): add the full vis; it leaves the lighting alone
+        self._built_rad = self._opts.rad if add_rad else ("SKIP" if lights_changed else built_rad)
+        self.plan = "lighting" if add_rad else "entities"
+        game = ["-game", self.tools.gamedir]
+        steps = [("vbsp (entities only)", [self.tools.exe("vbsp"), "-onlyents"] + game + [self.base])]
+        keep = "keeping geometry" + ("" if add_rad or lights_changed else " and the baked lighting")
+        self._q.put(f"Smart build: {why}: {keep}")
+        if add_vis:          # e.g. after a lighting bake (fast vis): the full vis leaves the lighting alone
             steps += [st for st in self.steps if st[0] == "vvis"]
-            self._q.put("Smart build: adding the full visibility to the lighting bake")
+            self._q.put("Smart build: adding the full visibility")
+        if add_rad:          # last, so it uses the final visibility
+            steps += [st for st in self.steps if st[0] == "vrad"]
+            self._q.put("Smart build: baking the lighting" + (" again (lights changed)" if lights_changed else ""))
         return steps
 
     def _copy_bsp(self, dest: str):

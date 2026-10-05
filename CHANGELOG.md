@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Analyze Navmesh no longer bakes lighting.** When the walls changed it compiled the whole map, lighting included, which the analysis never uses; it now compiles only the walls and visibility (about 7 s less on a medium map), and doesn't put that unlit map into the game. The next Build bakes just the lighting. After a Bake Lighting, Analyze adds only the full visibility, and analyzes on it (before, it analyzed the bake's fast visibility, which can differ from the game's result). Analyze reuses a nav mesh Build Navmesh already made.
+- When lights change and the full visibility is still to be added, the lighting is now baked after the visibility, so it uses the final one.
 - The nav analysis starts as soon as the map's visibility is compiled, alongside the lighting step, instead of after it (it doesn't use the lighting). Same nav file; about 0.5 to 2 s faster per build (both steps share the CPU).
 - **Clear buttons that really clear**: *Clear Navmesh* deletes the map's nav mesh, *Clear Analysis* removes its visibility data and hiding spots (keeping the areas), and *Clear Bake* deletes the baked lighting (with the compiled map that holds it), so the next build makes each again. Before, the nav buttons only cleared the viewport. *Settings > Folders & Game Data > Start Fresh* clears all of them at once.
 

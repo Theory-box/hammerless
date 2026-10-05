@@ -1245,6 +1245,43 @@ class TestCompileSkip(unittest.TestCase):
         open(os.path.join(work, "m.built.opts"), "w").write(repr(full))     # after a full build...
         self.assertTrue(cc.CompileJob(tools, vmf, bake, skip_if_unchanged=True).up_to_date())   # ...a bake is free
 
+    def test_lighting_tracked_apart(self):
+        """A compile for the nav analysis (no lighting) is finished by Build with vrad alone; when lights
+        change while the vis is being completed, vvis runs before vrad."""
+        import tempfile
+        from dataclasses import replace
+        from hammerless.core import compile as cc
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "left4dead2", "maps"))
+        work = tempfile.mkdtemp()
+        vmf = os.path.join(work, "m.vmf")
+        open(vmf, "w").write("world { }")
+        tools = cc.Tools(root)
+        full = cc.PRESETS["NORMAL"]
+        for name in ("m.bsp", os.path.join(tools.maps_dir, "m.bsp")):
+            open(os.path.join(work, name), "wb").write(b"VBSP" + bytes(1100))
+        open(os.path.join(work, "m.built.vmf"), "w").write("world { }")
+        open(os.path.join(work, "m.built.prt"), "w").write("PRT1")
+        open(os.path.join(work, "m.built.opts"), "w").write(repr(replace(full, rad="SKIP")))   # Analyze compiled it
+        analysis = cc.CompileJob(tools, vmf, replace(full, rad="SKIP"), copy_to_game=False, skip_if_unchanged=True)
+        open(os.path.join(work, "m.stamp"), "w").write(analysis._stamp())
+        self.assertTrue(analysis.up_to_date())                               # Analyze again: nothing to compile
+        build = cc.CompileJob(tools, vmf, full, skip_if_unchanged=True)
+        self.assertFalse(build.up_to_date())                                 # no lighting yet
+        build._vmf_bytes = b"world { }"
+        self.assertEqual([n for n, _c in build._choose_steps()], ["vbsp (entities only)", "vrad"])
+        self.assertEqual((build._built_vis, build._built_rad), ("FULL", "NORMAL"))
+        open(os.path.join(work, "m.built.opts"), "w").write(repr(full))
+        self.assertTrue(cc.CompileJob(tools, vmf, replace(full, rad="SKIP"), copy_to_game=False,
+                                      skip_if_unchanged=True).up_to_date())    # a lit build serves the analysis
+        # a fast-vis bake, then the lights change: full vis first, then the lighting
+        open(os.path.join(work, "m.built.opts"), "w").write(repr(replace(full, vis="FAST")))
+        open(os.path.join(work, "m.built.vmf"), "w").write('world { } entity { "classname" "light" }')
+        build = cc.CompileJob(tools, vmf, full, skip_if_unchanged=True)
+        build._vmf_bytes = b'world { } entity { "classname" "light" "_light" "255 0 0 200" }'
+        steps = [n for n, _c in build._choose_steps()]
+        self.assertEqual(steps[1:], ["vvis", "vrad"], steps)
+
     def test_fast_is_one_lighting_pass(self):
         from hammerless.core.compile import PRESETS
         self.assertIn("-hdr", PRESETS["FAST"].vrad_args())
