@@ -680,7 +680,8 @@ class HL_OT_validate(bpy.types.Operator):
 class HL_OT_export_vmf(bpy.types.Operator):
     bl_idname = "hammerless.export_vmf"
     bl_label = "Export VMF"
-    bl_description = "Write the Hammer .vmf file (open it in Hammer to inspect or edit)"
+    bl_description = ("Write the map as a Hammer .vmf file without compiling it (to open in Valve's Hammer "
+                      "editor). Build does this for you")
 
     def execute(self, context):
         path, _root, rep = export_vmf(self, context)
@@ -785,6 +786,14 @@ class HL_OT_build(bpy.types.Operator):
     bl_label = "Build"
     bl_description = "Export, compile and (optionally) launch Left 4 Dead 2 on the map"
 
+    @classmethod
+    def description(cls, context, properties):
+        if properties.play:
+            return ("Build the map (walls, visibility, lighting, nav mesh), then start Left 4 Dead 2 on it. "
+                    "Only what changed is redone")
+        return ("Build the map without starting the game: walls, visibility, baked lighting and the nav mesh. "
+                "Only what changed is redone. Then Play starts it, and the Baked Lighting Viewer can show it")
+
     play: BoolProperty(name="Play", default=True)
 
     _timer = None
@@ -823,7 +832,8 @@ class HL_OT_build(bpy.types.Operator):
                                   skip_if_unchanged=True)
         self._nav = None
         s = context.scene.hammerless
-        if self.play and s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root)):
+        unanalyzed = s.nav_analysis == "BLENDER" and cc.nav_analyzed(tools, s.map_name) is False
+        if s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root) or unanalyzed):
             self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs)
         try:
             self._job.start()
@@ -882,7 +892,7 @@ class HL_OT_build(bpy.types.Operator):
                 "lighting failed" in m for m, _l, _o in self._job.lighting)
             add_rows(context, [("ERROR" if failed else "WARNING", m, o, loc) for m, loc, o in self._job.lighting])
             self.report({"WARNING"}, self._job.lighting[0][0][:200])
-        if self.play and self._nav is not None:
+        if self._nav is not None:
             if self._nav["thread"].is_alive():
                 context.workspace.status_text_set(f"Hammerless: building the nav mesh: {self._nav['stage']}...")
                 return {"PASS_THROUGH"}
@@ -922,7 +932,7 @@ class HL_OT_build(bpy.types.Operator):
         write_log([timing], append=True)       # (once: the waits above return before this)
         if self.play and (context.scene.name, s.map_name) != self._owner:
             self.report({"WARNING"}, f"{compiled} '{self._owner[1]}', but the scene or Map Name changed meanwhile: "
-                                     "not launching (press Launch Game)")
+                                     "not launching (press Play)")
             return self._finish(context, {"FINISHED"})
         if self.play:
             written = self._nav is not None
@@ -934,7 +944,9 @@ class HL_OT_build(bpy.types.Operator):
             _watch_load(time.time() - self._t0, timing, nav)
             self.report({"INFO"}, f"{compiled}. Launching L4D2 on {s.map_name}{nav_note}  [{timing}]")
         else:
-            self.report({"INFO"}, f"{compiled}  [{timing}]")
+            made = self._nav is not None and self._nav.get("mesh") is not None
+            note = (" Nav mesh made" + (" and analyzed" if self._nav.get("analyzed") else "") if made else "")
+            self.report({"INFO"}, f"{compiled}.{note}  [{timing}]")
         return self._finish(context, {"FINISHED"})
 
     def _finish(self, context, result):
@@ -945,8 +957,8 @@ class HL_OT_build(bpy.types.Operator):
 
 class HL_OT_launch(bpy.types.Operator):
     bl_idname = "hammerless.launch"
-    bl_label = "Launch Game"
-    bl_description = "Launch Left 4 Dead 2 on the last compiled map"
+    bl_label = "Play"
+    bl_description = "Start Left 4 Dead 2 on the last build (without building again)"
 
     def execute(self, context):
         import time
@@ -956,21 +968,22 @@ class HL_OT_launch(bpy.types.Operator):
             return {"CANCELLED"}
         s = context.scene.hammerless
         if not os.path.exists(os.path.join(cc.Tools(root).maps_dir, f"{s.map_name}.bsp")):
-            self.report({"ERROR"}, f"'{s.map_name}' hasn't been compiled yet: press Build & Play (or Compile Only)")
+            self.report({"ERROR"}, f"'{s.map_name}' hasn't been built yet: press Build & Play (or Build)")
             return {"CANCELLED"}
         if cc.compile_running(os.path.join(work_dir(context), f"{s.map_name}.vmf")):
             self.report({"ERROR"}, "The map is still compiling: launch when it has finished")
             return {"CANCELLED"}
         nav = needs_nav(context, root, by_game=True)
         launch(context, root)
-        _watch_load(0.0, "Launch Game", nav)
+        _watch_load(0.0, "Play", nav)
         return {"FINISHED"}
 
 
 class HL_OT_load_leak(bpy.types.Operator):
     bl_idname = "hammerless.load_leak"
     bl_label = "Load Leak"
-    bl_description = "Show the leak path from the last compile as a red line"
+    bl_description = ("The map has a hole to the outside (only possible with Auto Seal off). Draws a red line "
+                      "from inside the map to the hole")
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):

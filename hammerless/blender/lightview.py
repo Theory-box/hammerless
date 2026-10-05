@@ -15,7 +15,8 @@ from gpu_extras.batch import batch_for_shader
 from ..core.lightmap import read_lightmaps
 
 _state = {"path": None, "mtime": None, "data": None, "batch": None, "texture": None, "scale": None,
-          "error": None, "loaded_at": None, "checked": 0.0}
+          "error": None, "loaded_at": None, "checked": 0.0, "edited": False}
+_status = {"key": None, "time": 0.0, "value": ("NONE", "")}
 _handlers = []
 _SHADER = None
 
@@ -67,16 +68,16 @@ def load(context) -> str | None:
     """Read the last compile's lighting. Returns an error message, or None."""
     path = bsp_path(context)
     if not os.path.exists(path):
-        return "No compiled map yet: press Compile Only (or Build & Play) first"
+        return "This map hasn't been built yet: press Build first (it bakes the lighting)"
     try:
         with open(path, "rb") as f:
             data = read_lightmaps(f.read())
     except (OSError, ValueError) as ex:
         return f"Couldn't read the compiled map: {ex}"
     if data.faces == 0:
-        return "The compiled map has no baked lighting (Quality: Quick skips lighting)"
+        return "The last build has no baked lighting (Quality: Quick skips it): choose Fast or higher and Build"
     _state.update(path=path, mtime=os.path.getmtime(path), data=data, batch=None, texture=None, scale=None,
-                  error=None, loaded_at=time.time())
+                  error=None, loaded_at=time.time(), edited=False)
     _redraw()
     return None
 
@@ -152,8 +153,8 @@ def on_display_change(self, context):
 class HL_OT_lightmap_show(bpy.types.Operator):
     bl_idname = "hammerless.lightmap_show"
     bl_label = "Show Baked Lighting"
-    bl_description = ("Show the lighting from the last compile in the viewport (Compile Only bakes it without "
-                      "launching the game). Nothing is added to the scene")
+    bl_description = ("Show the baked lighting from the last build in the viewport (Build bakes it without "
+                      "starting the game). Nothing is added to the scene")
 
     def execute(self, context):
         err = load(context)
@@ -177,33 +178,83 @@ class HL_OT_lightmap_clear(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def bake_status(context) -> tuple[str, str]:
+    """("BUSY" | "NONE" | "UNLIT" | "READY", message) for this map's last build. Checked at most
+    twice a second: the panel redraws on every mouse move and this reads files."""
+    from ..core import compile as cc
+    from .ops import work_dir
+    s = context.scene.hammerless
+    key = (s.map_name, s.output_dir, bpy.data.filepath)
+    now = time.monotonic()
+    if _status["key"] == key and now - _status["time"] < 0.5:
+        return _status["value"]
+    base = os.path.join(work_dir(context), s.map_name)
+    if cc.compile_running(base + ".vmf"):
+        value = ("BUSY", "Building... the lighting can be shown when it's done")
+    elif not os.path.exists(base + ".bsp"):
+        value = ("NONE", "No build of this map yet")
+    elif not cc.bsp_has_lighting(base + ".bsp"):
+        value = ("UNLIT", "The last build has no baked lighting")
+    else:
+        value = ("READY", "")
+    _status.update(key=key, time=now, value=value)
+    return value
+
+
+def _build_button(layout, text="Build"):
+    row = layout.row()
+    row.scale_y = 1.2
+    op = row.operator("hammerless.build", text=text, icon="FILE_REFRESH")
+    op.play = False
+
+
+def _note(layout, lines, icon="INFO"):
+    col = layout.column(align=True)
+    col.scale_y = 0.8
+    for i, line in enumerate(lines):
+        col.label(text=line, icon=icon if i == 0 else "BLANK1")
+
+
 def draw_panel(layout, context):
     s = context.scene.hammerless
+    kind, message = bake_status(context)
+    quick = s.compile_preset == "QUICK"
+    if not shown():
+        _note(layout, ["See your map's baked light and shadows,", "as the game lights it (from the last build)"])
+        if kind == "READY":
+            big = layout.row()
+            big.scale_y = 1.3
+            big.operator("hammerless.lightmap_show", text="Show Baked Lighting", icon="LIGHT_SUN")
+        elif kind == "BUSY":
+            _note(layout, [message], icon="SORTTIME")
+        else:
+            _note(layout, [message + ".", "Build bakes it (without starting the game):"], icon="ERROR")
+            if quick:
+                _note(layout, ["Quality is Quick, which skips lighting:", "choose Fast or higher first"], icon="ERROR")
+            _build_button(layout)
+        return
     big = layout.row()
     big.scale_y = 1.3
-    if shown():
-        big.operator("hammerless.lightmap_clear", text="Hide Baked Lighting", icon="X")
-    else:
-        big.operator("hammerless.lightmap_show", text="Show Baked Lighting", icon="LIGHT_SUN")
-        col = layout.column(align=True)
-        col.scale_y = 0.8
-        col.label(text="Shows the last compile's lighting.", icon="INFO")
-        col.label(text="Compile Only bakes it without playing.", icon="BLANK1")
-        return
+    big.operator("hammerless.lightmap_clear", text="Hide Baked Lighting", icon="X")
     row = layout.row(align=True)
     row.prop(s, "lightmap_mode", expand=True)
     layout.prop(s, "lightmap_exposure", slider=True)
     layout.prop(s, "lightmap_xray")
     if s.lightmap_mode == "LIT":
-        layout.label(text="Tip: Solid view, Flat lighting, Texture colour", icon="INFO")
+        _note(layout, ["Best in Solid view: Lighting Flat,", "Color Texture"])
     d = _state["data"]
-    mins = int((time.time() - os.path.getmtime(_state["path"])) // 60) if os.path.exists(_state["path"] or "") else 0
-    col = layout.column(align=True)
-    col.scale_y = 0.8
-    col.label(text=f"Compiled {mins} min ago" if mins else "Compiled just now", icon="TIME")
-    col.label(text=f"{d.faces:,} faces, {d.luxels:,} light samples", icon="BLANK1")
+    mins = int((time.time() - _state["mtime"]) // 60) if _state["mtime"] else 0
+    _note(layout, [f"Built {mins} min ago" if mins else "Built just now",
+                   f"{d.faces:,} faces, {d.luxels:,} light samples"], icon="TIME")
+    if kind == "BUSY":
+        _note(layout, ["Building... the view updates when it's done"], icon="SORTTIME")
+    elif _state["edited"]:
+        box = layout.box()
+        _note(box, ["You've changed the scene since this", "build: Build again to update the lighting"],
+              icon="ERROR")
+        _build_button(box)
     if _state["error"]:
-        col.label(text=_state["error"], icon="ERROR")
+        _note(layout, [_state["error"]], icon="ERROR")
 
 
 CLASSES = (HL_OT_lightmap_show, HL_OT_lightmap_clear)
@@ -213,16 +264,34 @@ def _forget_on_load(*_args):
     clear()
 
 
+_WATCHED = (bpy.types.Mesh, bpy.types.Light, bpy.types.Material, bpy.types.World)
+
+
+def _on_depsgraph(scene, depsgraph):
+    """Remember that the scene changed after the shown build (walls, lights, materials)."""
+    if _state["data"] is None or _state["edited"]:
+        return
+    for u in depsgraph.updates:
+        i = u.id
+        if isinstance(i, _WATCHED) or (isinstance(i, bpy.types.Object) and i.type in ("MESH", "LIGHT")
+                                       and (u.is_updated_geometry or u.is_updated_transform)):
+            _state["edited"] = True
+            return
+
+
 def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
     bpy.app.handlers.load_post.append(_forget_on_load)
+    bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
     _handlers.append(bpy.types.SpaceView3D.draw_handler_add(_draw, (), "WINDOW", "POST_VIEW"))
 
 
 def unregister():
     if _forget_on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_forget_on_load)
+    if _on_depsgraph in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph)
     for h in _handlers:
         bpy.types.SpaceView3D.draw_handler_remove(h, "WINDOW")
     _handlers.clear()

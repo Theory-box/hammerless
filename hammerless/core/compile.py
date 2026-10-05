@@ -692,7 +692,7 @@ def set_nav_maker(tools: Tools, map_name: str, maker: str) -> None:
 
 
 def nav_outdated(tools: Tools, map_name: str) -> bool:
-    """The map was compiled again since the nav mesh was made (e.g. Compile Only, or a Build stopped
+    """The map was compiled again since the nav mesh was made (e.g. a build with another nav setting, or one stopped
     with Esc): the nav no longer fits its walls. False when it isn't known (older markers)."""
     try:
         with open(_nav_maker_path(tools, map_name), encoding="utf-8") as f:
@@ -825,14 +825,14 @@ def _start_with_steam(cmd: list[str], cwd: str, launch_id: int, then) -> None:
     if not _process_running("steam.exe"):
         exe = steam_exe()
         if exe is None:
-            LOAD_STATUS["error"] = "Steam isn't running and wasn't found: start Steam, then press Launch Game"
+            LOAD_STATUS["error"] = "Steam isn't running and wasn't found: start Steam, then press Play"
             return
         subprocess.Popen([exe, "-silent"], cwd=os.path.dirname(exe))
     deadline = time.time() + STEAM_WAIT
     while not steam_ready():
         if time.time() > deadline:
             LOAD_STATUS["error"] = ("Steam didn't finish starting (is it waiting for you to sign in?). "
-                                    "When it's ready, press Launch Game")
+                                    "When it's ready, press Play")
             return
         if LOAD_STATUS["launch_id"] != launch_id:
             return                          # another launch took over

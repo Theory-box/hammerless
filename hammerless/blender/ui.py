@@ -1,4 +1,6 @@
 """Sidebar panels (N panel > Hammerless), Add menu, collection panel."""
+import os
+
 import bpy
 
 from ..core.entities import CATALOG, CATEGORIES, PRESETS
@@ -47,15 +49,26 @@ class HL_PT_map(bpy.types.Panel):
         big.scale_y = 1.6
         op = big.operator("hammerless.build", text="Build & Play", icon="PLAY")
         op.play = True
+        row = col.row(align=True)
+        op = row.operator("hammerless.build", text="Build", icon="FILE_REFRESH")
+        op.play = False
+        row.operator("hammerless.launch", text="Play", icon="URL")
+        if _leaked(context):
+            row = col.row()
+            row.alert = True
+            row.operator("hammerless.load_leak", text="Map leaks: Load Leak (show where)", icon="ERROR")
         from .problems import draw_panel
         draw_panel(col, context)
-        row = col.row(align=True)
-        row.operator("hammerless.export_vmf", icon="EXPORT")
-        row = col.row(align=True)
-        op = row.operator("hammerless.build", text="Compile Only", icon="FILE_REFRESH")
-        op.play = False
-        row.operator("hammerless.launch", icon="URL")
-        row.operator("hammerless.load_leak", icon="ERROR")
+
+
+def _leaked(context) -> bool:
+    """The last build leaked: its leak file is newer than the map file it compiled."""
+    from .ops import work_dir
+    base = os.path.join(work_dir(context), context.scene.hammerless.map_name)
+    try:
+        return os.path.getmtime(base + ".lin") >= os.path.getmtime(base + ".vmf") - 1.0
+    except OSError:
+        return False
 
 
 _status_cache = {"key": None, "time": 0.0, "text": ""}
@@ -286,6 +299,7 @@ class HL_PT_advanced(_SubPanel, bpy.types.Panel):
         col.prop(s, "output_dir")
         col.operator("hammerless.load_game_data", icon="FILE_REFRESH")
         col.operator("hammerless.refresh_previews", icon="SHADING_TEXTURE")
+        col.operator("hammerless.export_vmf", icon="EXPORT")
 
 
 class HL_PT_object(bpy.types.Panel):
