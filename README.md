@@ -28,7 +28,7 @@ No Hammer, no VMF editing, no console commands.
 
 1. Download `hammerless-<version>.zip` from [Releases](../../releases) (or build it yourself, see [Development](docs/DEVELOPMENT.md)).
 2. In Blender: *Edit > Preferences > Get Extensions*, then **⌄** (top right) **> Install from Disk…** and pick the zip.
-3. In the 3D view press **N** and open the **Hammerless** tab. If L4D2 isn't found automatically, set its folder in the add-on's Preferences (*Edit > Preferences > Add-ons > Hammerless*), or per file under *Advanced > L4D2 Folder*.
+3. In the 3D view press **N** and open the **Hammerless** tab. If L4D2 isn't found automatically, set its folder in the add-on's Preferences (*Edit > Preferences > Add-ons > Hammerless*), or per file under *Settings > Folders & Game Data*.
 
 ## Quick start
 

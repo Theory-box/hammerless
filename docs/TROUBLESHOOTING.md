@@ -2,7 +2,7 @@
 
 ## "N warning(s). See the 'hammerless_log' text block"
 
-Warnings don't stop the build. Open the problem list in the *L4D2 Map* panel (or the `hammerless_log` text in Blender's Text Editor) to see them; click a row to select the object.
+Warnings don't stop the build. Open *Build & Play > Problems* (or the `hammerless_log` text in Blender's Text Editor) to see them; click a row to select the object.
 
 - **"… almost line up (0.080 units apart in X)"** (*near misses*): two faces nearly line up. Hammerless snaps them together when it exports; nothing to do. Snapping them in Blender removes the warning.
 - **"… floats N units above the floor"**: a spawn, weapon or item hangs in the air and will drop (or hover) in game. Move it down to the floor.
@@ -38,11 +38,11 @@ Hammerless sends the load command to an already-running L4D2. If the game didn't
 
 ## The game doesn't start
 
-If Steam isn't running, Build & Play starts it and waits up to two minutes for it to sign in. If Steam asks you to log in, do that, then press **Play**. If L4D2 isn't found at all, set its folder in the add-on's Preferences (or on the scene, under Advanced > L4D2 Folder): the folder that contains `left4dead2.exe`.
+If Steam isn't running, Build & Play starts it and waits up to two minutes for it to sign in. If Steam asks you to log in, do that, then press **Play**. If L4D2 isn't found at all, set its folder in the add-on's Preferences (or per file, under Settings > Folders & Game Data > L4D2 Folder): the folder that contains `left4dead2.exe`.
 
 ## The map leaks
 
-With *Advanced > Auto Seal (skybox shell)* on (the default) a map can't leak. If you turned it off, **Load Leak** draws a red line to the hole.
+With *Settings > Scene > Auto Seal (skybox shell)* on (the default) a map can't leak. If you turned it off, **Load Leak** draws a red line to the hole.
 
 ## Compiler errors
 

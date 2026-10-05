@@ -244,20 +244,15 @@ def draw_panel(layout, context):
     """Problem list section for the main panel."""
     from .spawn import _text
     s = context.scene.hammerless
-    box = layout.box()
+    box = layout
     head = box.row(align=True)
-    errors = sum(p.severity == "ERROR" for p in s.problems)
     flow = s.get("ingame_flow", "")
-    if not s.problems_checked:
-        head.label(text="Map not checked yet", icon="QUESTION")
-    elif not s.problems:
-        head.label(text="No problems found", icon="CHECKMARK")
-    else:
-        count = head.row()
-        count.alert = errors > 0
-        count.label(text=f"{len(s.problems)} problem{'s' if len(s.problems) != 1 else ''}", icon="ERROR")
+    head.operator("hammerless.validate", text="Check the Map", icon="VIEWZOOM")
     head.prop(s, "show_problem_markers", text="", icon="HIDE_OFF" if s.show_problem_markers else "HIDE_ON")
-    head.operator("hammerless.validate", text="Check", icon="VIEWZOOM")
+    if not s.problems_checked:
+        box.label(text="Not checked yet: Check, or Build, lists them here")
+    elif not s.problems:
+        box.label(text="No problems found", icon="CHECKMARK")
     if flow:
         box.label(text=flow, icon="CHECKMARK" if flow.startswith("In game: path") else "ERROR")
     if s.problems:

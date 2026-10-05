@@ -201,6 +201,16 @@ def bake_status(context) -> tuple[str, str]:
     return value
 
 
+def header_status(context) -> tuple[str, bool]:
+    """(text, alert) for the panel header, readable with the panel collapsed."""
+    kind, _message = bake_status(context)
+    if kind == "BUSY":
+        return "Building...", False
+    if shown():
+        return ("Out of date", True) if _state["edited"] else ("Showing", False)
+    return ("Baked", False) if kind == "READY" else ("Not baked", False)
+
+
 def _bake_button(layout, text="Bake Lighting"):
     row = layout.row()
     row.scale_y = 1.3

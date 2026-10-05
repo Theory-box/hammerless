@@ -421,7 +421,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         from .ops import build_map_text, compile_options, export_vmf, game_root, surface_report, work_dir
         root = game_root(context)
         if not root:
-            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Advanced > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
+            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Folders & Game Data > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
             return {"CANCELLED"}
         ir, text, rep2 = build_map_text(context, root)       # exactly what Build exports
         if text is None:

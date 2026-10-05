@@ -4,7 +4,7 @@ Map logic (events, timers, buttons, gates, spawns, Director changes) is built as
 
 ## Getting started
 
-1. *Logic (nodes) > **New Logic Graph*** (or **Graph from Outputs** to turn existing entity outputs into a graph).
+1. *World > Logic Graphs > **New Logic Graph*** (or **Graph from Outputs** to turn existing entity outputs into a graph).
 2. Switch any editor to **L4D2 Logic**.
 3. **Shift+A** adds nodes. Connect outputs to inputs.
 
@@ -48,8 +48,8 @@ Settings: direction, distance (*auto* = the object's own size in that direction)
 
 ## Director control
 
-*AI Director > Director Spawns* (with **Custom Director Settings** ticked) switches a type (Tank, Witch, each special) off for the Director, so only your graph spawns it.
+*World > AI Director > Director Spawns* (with the AI Director box ticked) switches a type (Tank, Witch, each special) off for the Director, so only your graph spawns it.
 
 ## Debugging
 
-*Debug > Debug Log* prints every wire as it fires (`HAMMERLESS_EVENT`) and each random roll to `left4dead2/console.log`.
+*Settings > Debug > Debug Log* prints every wire as it fires (`HAMMERLESS_EVENT`) and each random roll to `left4dead2/console.log`.

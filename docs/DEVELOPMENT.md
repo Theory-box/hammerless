@@ -40,7 +40,7 @@ Real compile of a .blend (prints the full compiler log):
 "C:\Program Files\Blender Foundation\Blender 4.4\blender.exe" --background demo/demo_level.blend --python tests/compile/build_blend.py -- FAST
 ```
 
-The demo .blend contains no game content: open it with the add-on and press *Advanced > Refresh Previews* to see the game's textures and models (read from your own L4D2 install).
+The demo .blend contains no game content: open it with the add-on and press *Settings > Folders & Game Data > Refresh Previews* to see the game's textures and models (read from your own L4D2 install).
 
 ## Native code
 

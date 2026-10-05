@@ -53,7 +53,7 @@ Hammer's event system is **"when X happens, tell Y to do Z"**:
    (entity X)      (output)      (target Y)      (input Z)
 ```
 
-In Blender: select an entity, and the **Outputs** list is in the Hammerless panel under the keyvalues. Each output has:
+In Blender: select an entity, and the **Outputs** list is in *Selected Object > Outputs*. Each output has:
 
 | Field | Meaning | Example |
 |---|---|---|
@@ -64,7 +64,7 @@ In Blender: select an entity, and the **Outputs** list is in the Hammerless pane
 | Delay | Seconds to wait | `2.5` |
 | Only Once | Fire just the first time | ✔ |
 
-The Director is always named **`director`** (Hammerless adds it automatically). If you target a name that doesn't exist, the **Check** button (problem list, *L4D2 Map* panel) warns you.
+The Director is always named **`director`** (Hammerless adds it automatically). If you target a name that doesn't exist, **Check the Map** (*Build & Play > Problems*) warns you.
 
 ## 3. Recipes (all verified in-game unless marked)
 
@@ -108,7 +108,7 @@ A **Relay** (*Logic > Relay*) passes a signal on. Point several things at it, an
 | **Gauntlet** | Endless horde while survivors run a stretch |
 | **Finale** | `trigger_finale` plus a rescue vehicle; waves of hordes and Tanks |
 
-Already available: **crescendos** (recipe above) and **map-wide Director settings** (*L4D2 Map > AI Director* panel, after ticking **Custom Director Settings** in its header: common limit, horde size and frequency, specials, Tanks, Witches). A crescendo keeps the map's Director limits while it runs.
+Already available: **crescendos** (recipe above) and **map-wide Director settings** (*World > AI Director*, after ticking the box in its header: common limit, horde size and frequency, specials, Tanks, Witches). A crescendo keeps the map's Director limits while it runs.
 
 ## 5. Testing tips
 

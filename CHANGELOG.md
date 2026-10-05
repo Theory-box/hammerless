@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Reorganised sidebar.** Collapsible panels by category: Build & Play (with Problems), Add, Selected Object (only the sub-panels that apply: Material, Model, Terrain, Settings, Outputs), World (Sky & Sun, Fog, AI Director, Logic Graphs), Nav Mesh (Settings, Viewer), Baked Lighting (Bake Settings) and Settings (Compile, Game Window, Folders & Game Data, Scene, Debug). Collapsed panels show their status in the header. Labels line up, groups are spaced, and Settings > Compile summarises what the chosen Quality does.
+
 ## 0.3.0 (test release, 2026-10-05)
 
 - **Bake Lighting** (Baked Lighting Viewer panel): bakes just the lighting, with the visibility step in its fast mode, and shows it: about 8 s instead of ~29 s on a medium map. Build and Build & Play reuse the bake and only add the full visibility (the lighting stays byte-identical).

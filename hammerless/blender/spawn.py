@@ -170,9 +170,6 @@ class HL_PT_add(bpy.types.Panel):
     bl_label = "Add"
     bl_order = 1
 
-    def draw_header(self, context):
-        self.layout.label(icon="ADD")
-
     def draw(self, context):
         s = context.scene.hammerless
         layout = self.layout
