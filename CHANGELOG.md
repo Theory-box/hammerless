@@ -2,8 +2,11 @@
 
 ## Unreleased
 
+## 0.3.0 (test release, 2026-10-05)
+
 - **Bake Lighting** (Baked Lighting Viewer panel): bakes just the lighting, with the visibility step in its fast mode, and shows it: about 8 s instead of ~29 s on a medium map. Build and Build & Play reuse the bake and only add the full visibility (the lighting stays byte-identical).
 - **Lighting is baked in HDR only**, which is what L4D2 uses (Valve's own maps have no LDR lighting): the lighting step takes half the time, with the same result in game. The Fast preset bakes HDR too (it baked the unused LDR copy).
+
 ## 0.2.0 (test release, 2026-10-05)
 
 - **Baked Lighting Viewer**: shows the last build's lightmaps in the viewport (Lighting Only / Lit, exposure, X-ray), read straight from the compiled map. It tells you when there's nothing to show or the scene changed since the build, with a Build button right there.
