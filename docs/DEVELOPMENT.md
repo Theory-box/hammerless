@@ -59,7 +59,7 @@ python native/build.py
 Any Blender 4.2 or newer can build it (the commands here use the versions installed on the dev machine). Install it with Blender closed:
 
 ```bash
-"C:\Program Files\Blender Foundation\Blender 4.4\blender.exe" --command extension install-file --repo user_default --enable dist/hammerless-0.1.0.zip
+"C:\Program Files\Blender Foundation\Blender 4.4\blender.exe" --command extension install-file --repo user_default --enable dist/hammerless-<version>.zip
 ```
 
 ## Matching the game

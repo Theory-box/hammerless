@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 (test release, 2026-10-05)
+
 - **Baked Lighting Viewer**: shows the last build's lightmaps in the viewport (Lighting Only / Lit, exposure, X-ray), read straight from the compiled map. It tells you when there's nothing to show or the scene changed since the build, with a Build button right there.
 - **Build** (was Compile Only) sits under Build & Play next to **Play** (was Launch Game), and now also makes and analyzes the nav mesh when needed. Export VMF moved to Advanced; Load Leak only appears when the last build leaked.
 - The demo .blend no longer carries game textures and model previews (23 MB to 0.2 MB); *Refresh Previews* rebuilds them from your install.
