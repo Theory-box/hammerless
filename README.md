@@ -50,4 +50,6 @@ The full walkthrough is in **[Getting Started](docs/GETTING_STARTED.md)**.
 
 ## License
 
-[GPL-3.0-or-later](LICENSE), like Blender itself. Left 4 Dead 2 and its content belong to Valve; Hammerless doesn't include any of it and reads it from your own installation.
+[GPL-3.0-or-later](LICENSE), like Blender itself.
+
+Hammerless is a fan-made tool, not affiliated with or endorsed by Valve. Left 4 Dead 2, Source and their content are Valve's; Hammerless doesn't include any game files and reads them from your own installation. The nav mesh generator and nav analysis follow the algorithms in Valve's published Source SDK 2013 nav code, reimplemented and checked against the game's output.

@@ -239,7 +239,7 @@ def cache_name(prefix: str, key: str, scale: float | None = None) -> str:
     """A cached data-block's name: Blender cuts names at 63 characters, so long keys get a hash
     (otherwise the cache is never found and a new copy is made every time); per scale for meshes."""
     import hashlib
-    if scale is not None and abs(scale - 52.49) > 1e-6:
+    if scale is not None and abs(scale - 52.49) > 1e-4:     # (a float property: 52.4900016...)
         key = f"{key}@{scale:g}"
     name = prefix + key
     if len(name) <= 60:

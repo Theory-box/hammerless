@@ -39,6 +39,8 @@ Real compile of a .blend (prints the full compiler log):
 "C:\Program Files\Blender Foundation\Blender 4.4\blender.exe" --background demo/demo_level.blend --python tests/compile/build_blend.py -- FAST
 ```
 
+The demo .blend contains no game content: open it with the add-on and press *Advanced > Refresh Previews* to see the game's textures and models (read from your own L4D2 install).
+
 ## Native code
 
 The nav generator's hot paths and the nav analysis (visibility, hiding spots) run in `core/_hlnav.dll`, built with zig (`pip install ziglang`; the build script runs `python -m ziglang`). The DLL must stay **bit-identical** in output to the Python code it replaces; every native stage has a Python twin used as the reference (and as the fallback when the DLL is missing).
