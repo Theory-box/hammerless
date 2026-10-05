@@ -78,14 +78,6 @@ def mesh():
     return _state["mesh"]
 
 
-def area_location(area_id: int, scale: float) -> Vector | None:
-    m = _state["mesh"]
-    if m is None:
-        return None
-    a = m.by_id().get(area_id)
-    return Vector(a.centre) / scale + Vector((0, 0, 0.3)) if a else None
-
-
 def visibility_lists():
     """{area id: {visible area id: attributes}} for the shown nav, if it has been analyzed."""
     m = _state["mesh"]

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 DIST_EPSILON = 0.03125          # coordsize.h
 NORMAL_EPSILON = 0.00001        # vbsp plane snapping

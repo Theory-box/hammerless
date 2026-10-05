@@ -14,7 +14,8 @@ tests/unit/            core tests (plain Python, no Blender)
 tests/blender/         headless Blender tests
 tests/fixtures/        scripts that build test scenes
 tests/compile/         real-compile helpers (need the Authoring Tools)
-tests/ingame/          in-game probe scripts
+tests/ingame/          in-game probe scripts (see its README)
+demo/                  demo maps: demo_level.blend (a full small level), demo_level2.blend (the next map, for testing the safe room transition); made by the scripts in tests/fixtures/ (demo_level.blend was hand-edited since)
 docs/                  user guides
 docs/dev/              design notes, Hammer feature audit, playtest checklist
 ```
@@ -64,3 +65,11 @@ Any Blender 4.2 or newer can build it (the commands here use the versions instal
 ## Matching the game
 
 Hammerless reproduces several things the game normally does itself (nav generation, nav analysis, compile decisions). Each is checked against the game's own output, and the measured results are noted in the code (for example: nav analysis visibility matches 99.92% of area pairs, hiding spots match exactly). When changing them, compare against the game again; don't trust the Source SDK alone, since L4D2 differs from it in places.
+
+## Contributing
+
+- Run the core and Blender tests before committing; add a test for each fix where you can (`tests/unit/test_core.py` for `core/`, `tests/blender/run_tests.py` for anything using `bpy`).
+- `core/` must not import `bpy`, so it stays testable without Blender.
+- Anything that copies the game's own behaviour gets checked in the game (see *Matching the game* above), and the measurement goes in a comment.
+- Test builds use their own map names (`hl_test_…`): a build replaces the map of the same name in the game folder.
+- Note user-visible changes in [CHANGELOG.md](../CHANGELOG.md) under *Unreleased*. Things that need a person to check by hand go in [docs/dev/PLAYTEST_CHECKLIST.md](dev/PLAYTEST_CHECKLIST.md).

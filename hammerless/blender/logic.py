@@ -9,7 +9,7 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty
 
 from ..core import fgd
-from ..core.logic import DIRECTOR_FIELDS, GAME_EVENTS, SPAWN_TYPES, ZOMBIE_TYPES, LLink, LNode, compile_graph
+from ..core.logic import DIRECTOR_FIELDS, GAME_EVENTS, ZOMBIE_TYPES, LLink, LNode, compile_graph
 
 SPAWN_KINDS = ("tank", "witch", "smoker", "boomer", "hunter", "charger", "jockey", "spitter")
 
@@ -1211,8 +1211,6 @@ class HL_OT_logic_from_outputs(bpy.types.Operator):
                 n.location = (0.0, -220.0 * (len(nodes) % 6))
                 nodes[obj.name] = n
             return nodes[obj.name]
-        from ..core import fgd as _fgd
-
         def has_socket(obj, ident, outputs):
             ins, outs = _entity_sockets(obj.hammerless.classname, True) if obj.hammerless.classname else ([], [])
             return any(io.name == ident for io in (outs if outputs else ins))

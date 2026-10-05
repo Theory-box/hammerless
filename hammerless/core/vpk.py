@@ -71,10 +71,6 @@ class VPK:
             return preload + f.read(size)
 
 
-def list_vpk_files(dir_vpk_path: str) -> list[str]:
-    return list(VPK(dir_vpk_path).entries)
-
-
 def find_game_vpks(game_root: str) -> list[str]:
     """All *_dir.vpk files one level under the L4D2 install. Later content
     (update, dlc) is listed first so it overrides the base game."""

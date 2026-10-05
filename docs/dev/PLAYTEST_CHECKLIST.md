@@ -2,7 +2,7 @@
 
 Things I (Claude) can't verify myself because they need a person at the keyboard, or a judgement call about how something looks or feels. Tick them off whenever you get to them. None of them blocks further work.
 
-To playtest: open `demo/demo_level.blend`, turn **off** *Debug > Bot Walkthrough Test*, set *Game Window > Difficulty* to Easy if you like, and press **Build & Play**. Tick *Nav* the first time after changing geometry.
+To playtest: open `demo/demo_level.blend`, turn **off** *Debug > Bot Walkthrough Test*, set *Game Window > Difficulty* to Easy if you like, and press **Build & Play**.
 
 ## Current playtest: the demo map, start to finish
 (Items 1, 2, 4 and 8 confirmed by the debug log of your run on 2026-09-23. Door Use-closing also works.)

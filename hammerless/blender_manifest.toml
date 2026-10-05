@@ -6,6 +6,7 @@ name = "Hammerless"
 tagline = "Build and play Left 4 Dead 2 maps straight from Blender"
 maintainer = "Hammerless contributors"
 type = "add-on"
+tags = ["Game Engine", "Import-Export"]
 
 blender_version_min = "4.2.0"
 platforms = ["windows-x64"]          # L4D2's map compilers and the native nav library are Windows programs

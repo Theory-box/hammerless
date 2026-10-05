@@ -8,7 +8,7 @@ stored on the parts; editing the first target copies the value to the others.
 import re
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Vector
 
 from ..core.entities import PRESET_FIELDS, PRESETS
 

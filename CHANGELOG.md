@@ -5,6 +5,7 @@
 - The demo .blend no longer carries game textures and model previews (23 MB to 0.2 MB); *Refresh Previews* rebuilds them from your install.
 - Preview meshes at the default scale got a stray `@52.49` in their names (a rounding check was too strict).
 - README: not affiliated with Valve; credits for the Source SDK 2013 nav algorithms.
+- Cleanup: unused functions and imports removed from the add-on; the zip holds only the add-on. Developer docs: a Contributing section, the demo maps and a guide to the in-game probes (`tests/ingame/README.md`).
 
 ## 0.1.0 (test release, 2026-10-03)
 

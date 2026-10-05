@@ -9,8 +9,6 @@ players but not sight, and a nodraw wall blocks it.
 """
 from __future__ import annotations
 
-from .collision import (CollisionBrush, CollisionWorld, brush_from_vmf_sides, displacement_brushes)
-
 CONTENTS_SOLID = 0x1
 CONTENTS_WINDOW = 0x2
 CONTENTS_GRATE = 0x8
@@ -163,46 +161,3 @@ def blocks_sight(solid_block, materials: MaterialContents, mask: int = MASK_BLOC
     return bool(brush_contents(sides) & mask)
 
 
-def vision_world(vmf_text: str, materials: MaterialContents, split: bool = False):
-    """The brushes that block the nav analysis' sight lines (world, detail, and solid brush
-    entities at their start position). Displacements block sight like the floor they replace."""
-    from .vmf import parse
-    top = parse(vmf_text)
-    brushes: list[CollisionBrush] = []
-
-    def add_solids(block, owner):
-        for solid in block.blocks("solid"):
-            vmf_sides = solid.blocks("side")
-            disps = [(s, s.blocks("dispinfo")[0]) for s in vmf_sides if s.blocks("dispinfo")]
-            if disps:
-                for side, disp in disps:
-                    brushes.extend(displacement_brushes(side.get("plane"), disp))
-                continue
-            if not blocks_sight(solid, materials):
-                continue
-            b = brush_from_vmf_sides([(s.get("plane"), s.get("material", "")) for s in vmf_sides], owner)
-            if b:
-                brushes.append(b)
-
-    for world in (b for b in top if b.name == "world"):
-        add_solids(world, "world")
-    physics: list[CollisionBrush] = []
-    for ent in (b for b in top if b.name == "entity"):
-        cls = (ent.get("classname") or "").lower()
-        if cls in WORLD_CLASSES:
-            add_solids(ent, cls)
-        elif cls in SOLID_BRUSH_CLASSES:
-            if cls == "func_brush" and (ent.get("Solidity") or "0").strip() == "1":
-                continue                    # Solidity: Never Solid
-            if split and cls in PHYSICS_BRUSH_CLASSES:
-                n = len(brushes)
-                add_solids(ent, cls)
-                physics.extend(brushes[n:])
-                del brushes[n:]
-            else:
-                add_solids(ent, cls)
-    if split:
-        world = [b for b in brushes if b.source in ("world", "func_detail")]
-        bsp_ents = [b for b in brushes if b.source not in ("world", "func_detail")]
-        return CollisionWorld(world), CollisionWorld(physics), CollisionWorld(bsp_ents)
-    return CollisionWorld(brushes)

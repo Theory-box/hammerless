@@ -7,7 +7,6 @@ everything runs in Python.
 from __future__ import annotations
 
 import ctypes
-import math
 import os
 
 _DLL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_hlnav.dll")

@@ -22,11 +22,6 @@ def _ivp_to_hl(x: float, y: float, z: float) -> tuple[float, float, float]:
     return (x * f, z * f, -y * f)
 
 
-def read_phy(data: bytes) -> list[list[tuple[float, float, float]]]:
-    """Convex pieces of every solid in a .phy file, as point lists (Hammer units)."""
-    return [pts for pts, _tris in read_phy_pieces(data)]
-
-
 def read_phy_pieces(data: bytes):
     """[(points, triangles as index triples into points)] for every convex piece. A damaged file
     raises ValueError (instead of reading past the end or looping)."""
@@ -164,8 +159,3 @@ def place(points, origin, angles):
              origin[2] + m[2][0] * p[0] + m[2][1] * p[1] + m[2][2] * p[2]) for p in points]
 
 
-def convex_brush(points, source: str = ""):
-    """A collision brush (with vbsp-style bevels, for box traces) from a convex point set."""
-    from .collision import Side, make_brush
-    sides = [Side(n, d) for n, d in convex_planes(points)]
-    return make_brush(sides, source) if len(sides) >= 4 else None

@@ -463,9 +463,3 @@ class Sampler:
         return self.add_node(to, to_normal, d, current, obstacle_height, result.displacement)
 
 
-def sample_map(vmf_text: str, seed_positions) -> Sampler:
-    s = Sampler(CollisionWorld.from_vmf(vmf_text))
-    for p in seed_positions:
-        s.add_seed(p)
-    s.sample()
-    return s
