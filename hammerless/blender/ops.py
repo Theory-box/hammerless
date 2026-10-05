@@ -796,7 +796,7 @@ class HL_OT_build(bpy.types.Operator):
             return ("Build the map (walls, visibility, lighting, nav mesh), then start Left 4 Dead 2 on it. "
                     "Only what changed is redone")
         return ("Build the map without starting the game: walls, visibility, baked lighting and the nav mesh. "
-                "Only what changed is redone. Then Play starts it, and the Baked Lighting Viewer can show it")
+                "Only what changed is redone. Then Play starts it, and the Baked Lighting panel can show it")
 
     play: BoolProperty(name="Play", default=True)
     bake: BoolProperty(name="Bake Lighting", default=False, options={"HIDDEN", "SKIP_SAVE"},
