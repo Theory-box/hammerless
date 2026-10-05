@@ -788,6 +788,10 @@ class HL_OT_build(bpy.types.Operator):
 
     @classmethod
     def description(cls, context, properties):
+        if properties.bake:
+            return ("Bake the map's lighting quickly and show it (about a third of a full build: the visibility "
+                    "step runs in its fast mode). Build & Play then reuses this lighting and only adds the full "
+                    "visibility")
         if properties.play:
             return ("Build the map (walls, visibility, lighting, nav mesh), then start Left 4 Dead 2 on it. "
                     "Only what changed is redone")
@@ -795,6 +799,8 @@ class HL_OT_build(bpy.types.Operator):
                 "Only what changed is redone. Then Play starts it, and the Baked Lighting Viewer can show it")
 
     play: BoolProperty(name="Play", default=True)
+    bake: BoolProperty(name="Bake Lighting", default=False, options={"HIDDEN", "SKIP_SAVE"},
+                       description="Lighting only: fast visibility, no nav mesh, then show the lighting")
 
     _timer = None
     _job: cc.CompileJob | None = None
@@ -828,12 +834,22 @@ class HL_OT_build(bpy.types.Operator):
         write_log(report_lines(rep) + ["", "Compiling..."])
         self._root = root
         self._owner = (context.scene.name, context.scene.hammerless.map_name)   # what's being built
-        self._job = cc.CompileJob(tools, path, compile_options(context.scene.hammerless),
-                                  skip_if_unchanged=True)
+        opts = compile_options(context.scene.hammerless)
+        if self.bake:
+            import dataclasses
+            opts = cc.PRESETS[opts] if isinstance(opts, str) else opts
+            if opts.rad == "SKIP":
+                self.report({"ERROR"}, "Quality is Quick, which doesn't bake lighting: choose Fast or higher")
+                return {"CANCELLED"}
+            opts = dataclasses.replace(opts, vis="FAST" if opts.vis != "SKIP" else "SKIP")
+            self.play = False
+        self._job = cc.CompileJob(tools, path, opts, skip_if_unchanged=True)
         self._nav = None
         s = context.scene.hammerless
         unanalyzed = s.nav_analysis == "BLENDER" and cc.nav_analyzed(tools, s.map_name) is False
-        if s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root) or unanalyzed):
+        if self.bake:
+            pass                     # lighting only: the nav is made by the next Build / Build & Play
+        elif s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root) or unanalyzed):
             self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs)
         try:
             self._job.start()
@@ -943,6 +959,14 @@ class HL_OT_build(bpy.types.Operator):
             launch(context, self._root, nav_written=written, analyzed=analyzed)
             _watch_load(time.time() - self._t0, timing, nav)
             self.report({"INFO"}, f"{compiled}. Launching L4D2 on {s.map_name}{nav_note}  [{timing}]")
+        elif self.bake:
+            from . import lightview
+            err = lightview.load(context)
+            if err:
+                self.report({"WARNING"}, err)
+            else:
+                s.show_lightmap = True
+                self.report({"INFO"}, f"{compiled}: lighting baked and shown. Build & Play reuses it  [{timing}]")
         else:
             made = self._nav is not None and self._nav.get("mesh") is not None
             note = (" Nav mesh made" + (" and analyzed" if self._nav.get("analyzed") else "") if made else "")

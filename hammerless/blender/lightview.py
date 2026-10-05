@@ -201,11 +201,11 @@ def bake_status(context) -> tuple[str, str]:
     return value
 
 
-def _build_button(layout, text="Build"):
+def _bake_button(layout, text="Bake Lighting"):
     row = layout.row()
-    row.scale_y = 1.2
-    op = row.operator("hammerless.build", text=text, icon="FILE_REFRESH")
-    op.play = False
+    row.scale_y = 1.3
+    op = row.operator("hammerless.build", text=text, icon="LIGHT_SUN")
+    op.play, op.bake = False, True
 
 
 def _note(layout, lines, icon="INFO"):
@@ -221,17 +221,17 @@ def draw_panel(layout, context):
     quick = s.compile_preset == "QUICK"
     if not shown():
         _note(layout, ["See your map's baked light and shadows,", "as the game lights it (from the last build)"])
-        if kind == "READY":
-            big = layout.row()
-            big.scale_y = 1.3
-            big.operator("hammerless.lightmap_show", text="Show Baked Lighting", icon="LIGHT_SUN")
-        elif kind == "BUSY":
+        if kind == "BUSY":
             _note(layout, [message], icon="SORTTIME")
+            return
+        if quick:
+            _note(layout, ["Quality is Quick, which skips lighting:", "choose Fast or higher first"], icon="ERROR")
+        _bake_button(layout)
+        if kind == "READY":
+            layout.operator("hammerless.lightmap_show", text="Show the Last Build's Lighting", icon="HIDE_OFF")
         else:
-            _note(layout, [message + ".", "Build bakes it (without starting the game):"], icon="ERROR")
-            if quick:
-                _note(layout, ["Quality is Quick, which skips lighting:", "choose Fast or higher first"], icon="ERROR")
-            _build_button(layout)
+            _note(layout, [message + "."])
+        _note(layout, ["Bake Lighting is quicker than a Build,", "and Build & Play reuses it"])
         return
     big = layout.row()
     big.scale_y = 1.3
@@ -250,9 +250,9 @@ def draw_panel(layout, context):
         _note(layout, ["Building... the view updates when it's done"], icon="SORTTIME")
     elif _state["edited"]:
         box = layout.box()
-        _note(box, ["You've changed the scene since this", "build: Build again to update the lighting"],
+        _note(box, ["You've changed the scene since this", "bake: bake again to update the lighting"],
               icon="ERROR")
-        _build_button(box)
+        _bake_button(box, "Bake Again")
     if _state["error"]:
         _note(layout, [_state["error"]], icon="ERROR")
 

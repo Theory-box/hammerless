@@ -1165,6 +1165,7 @@ class TestCompileSkip(unittest.TestCase):
         job = cc.CompileJob(tools, vmf, "FAST", skip_if_unchanged=True)
         self.assertFalse(job.up_to_date())                       # never compiled
         open(os.path.join(work, "m.stamp"), "w").write(job._stamp())
+        open(os.path.join(work, "m.built.opts"), "w").write(repr(job._opts))
         self.assertFalse(job.up_to_date())                       # game has no BSP yet
         open(os.path.join(tools.maps_dir, "m.bsp"), "wb").write(bsp(b"pak"))
         self.assertTrue(job.up_to_date())
@@ -1178,9 +1179,41 @@ class TestCompileSkip(unittest.TestCase):
         open(vmf, "w").write("world { changed }")
         self.assertFalse(job.up_to_date())
 
+    def test_lighting_bake_reused(self):
+        """A lighting bake (fast vis) serves a later bake as is; a full build only adds the full vis."""
+        import tempfile
+        from dataclasses import replace
+        from hammerless.core import compile as cc
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "left4dead2", "maps"))
+        work = tempfile.mkdtemp()
+        vmf = os.path.join(work, "m.vmf")
+        open(vmf, "w").write("world { }")
+        tools = cc.Tools(root)
+        full = cc.PRESETS["NORMAL"]
+        bake = replace(full, vis="FAST")
+        for name in ("m.bsp", os.path.join(tools.maps_dir, "m.bsp")):
+            open(os.path.join(work, name), "wb").write(b"VBSP" + bytes(1100))
+        open(os.path.join(work, "m.built.vmf"), "w").write("world { }")
+        open(os.path.join(work, "m.built.opts"), "w").write(repr(bake))
+        job = cc.CompileJob(tools, vmf, bake, skip_if_unchanged=True)
+        open(os.path.join(work, "m.stamp"), "w").write(job._stamp())
+        self.assertTrue(job.up_to_date())                                    # bake again: nothing to do
+        later = cc.CompileJob(tools, vmf, full, skip_if_unchanged=True)
+        self.assertFalse(later.up_to_date())                                 # needs the full vis
+        later._vmf_bytes = b"world { }"
+        self.assertEqual(len(later._choose_steps()), 3)                     # no portal file kept: full compile
+        open(os.path.join(work, "m.built.prt"), "w").write("PRT1")
+        steps = [n for n, _cmd in later._choose_steps()]
+        self.assertEqual(steps, ["vbsp (entities only)", "vvis"])           # lighting kept, vis added
+        self.assertEqual(later._built_vis, "FULL")
+        open(os.path.join(work, "m.built.opts"), "w").write(repr(full))     # after a full build...
+        self.assertTrue(cc.CompileJob(tools, vmf, bake, skip_if_unchanged=True).up_to_date())   # ...a bake is free
+
     def test_fast_is_one_lighting_pass(self):
         from hammerless.core.compile import PRESETS
-        self.assertIn("-ldr", PRESETS["FAST"].vrad_args())
+        self.assertIn("-hdr", PRESETS["FAST"].vrad_args())
+        self.assertIn("-hdr", PRESETS["NORMAL"].vrad_args())
 
 
 class TestPresetFields(unittest.TestCase):

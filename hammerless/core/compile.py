@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 DEFAULT_GAME_ROOTS = [
     r"C:\Program Files (x86)\Steam\steamapps\common\Left 4 Dead 2",
@@ -20,7 +20,7 @@ DEFAULT_GAME_ROOTS = [
 class CompileOptions:
     vis: str = "FULL"           # SKIP / FAST / FULL
     rad: str = "NORMAL"         # SKIP / FAST / NORMAL / FINAL
-    hdr: str = "BOTH"           # LDR / HDR / BOTH
+    hdr: str = "HDR"            # LDR / HDR / BOTH (L4D2 only uses HDR: Valve's maps have no LDR lighting)
     static_prop_lighting: bool = False
     extra_vbsp: str = ""
     extra_vvis: str = ""
@@ -47,9 +47,22 @@ class CompileOptions:
         return args + self.extra_vrad.split()
 
 
+VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
+
+
+def _opts_rest(text: str) -> str:
+    """Compile options without the visibility level (a more complete vis serves a lesser one)."""
+    return re.sub(r"vis='\w+'", "vis='*'", text)
+
+
+def _opts_vis(text: str) -> str | None:
+    m = re.search(r"vis='(\w+)'", text)
+    return m.group(1) if m else None
+
+
 PRESETS = {
     "QUICK": CompileOptions(vis="SKIP", rad="SKIP"),   # geometry only; map is fullbright
-    "FAST": CompileOptions(vis="FAST", rad="FAST", hdr="LDR"),   # one lighting pass instead of two
+    "FAST": CompileOptions(vis="FAST", rad="FAST"),
     "NORMAL": CompileOptions(vis="FULL", rad="NORMAL"),
     "FINAL": CompileOptions(vis="FULL", rad="FINAL"),
 }
@@ -323,6 +336,7 @@ class CompileJob:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._proc = None
         self._vmf_bytes = b""
+        self._built_vis = opts.vis            # the visibility the BSP ends up with
 
     def start(self) -> "CompileJob":
         other = _ACTIVE_JOBS.get(self.base)
@@ -344,17 +358,24 @@ class CompileJob:
         if vmf_bytes is None:
             with open(self.vmf, "rb") as f:
                 vmf_bytes = f.read()
-        return hashlib.sha1(vmf_bytes + repr(self._opts).encode()).hexdigest()
+        return hashlib.sha1(vmf_bytes + _opts_rest(repr(self._opts)).encode()).hexdigest()
+
+    def _built_opts(self) -> str:
+        with open(self.base + ".built.opts", encoding="utf-8") as f:
+            return f.read()
 
     def up_to_date(self) -> bool:
-        """The last successful compile used the same VMF and options, and the game has its BSP
-        (compared without the pakfile, which the game rewrites on every load)."""
+        """The last successful compile used the same VMF and options, with visibility at least as
+        complete, and the game has its BSP (compared without the pakfile, which the game rewrites
+        on every load)."""
         try:
             with open(self.base + ".stamp", encoding="utf-8") as f:
                 same = f.read() == self._stamp()
+            built_vis = _opts_vis(self._built_opts())
+            enough = built_vis is not None and VIS_RANK[built_vis] >= VIS_RANK[self._opts.vis]
             game_bsp = os.path.join(self.tools.maps_dir, self.name + ".bsp")
-            return same and bsp_signature(game_bsp) == bsp_signature(self.base + ".bsp")
-        except (OSError, ValueError):
+            return same and enough and bsp_signature(game_bsp) == bsp_signature(self.base + ".bsp")
+        except (OSError, ValueError, KeyError):
             return False
 
     def _run(self):
@@ -377,8 +398,11 @@ class CompileJob:
             for stale in (self.base + ".stamp", self.base + ".built.vmf"):   # a failed compile mustn't look
                 if os.path.exists(stale):                                     # up to date or be built on
                     os.remove(stale)
+            prt, kept_prt = self.base + ".prt", self.base + ".built.prt"
             for name, cmd in steps:
                 self._q.put(f"==== {name} ====")
+                if name == "vvis" and not os.path.exists(prt) and os.path.exists(kept_prt):
+                    shutil.copy2(kept_prt, prt)      # vbsp -onlyents deletes the portal file; geometry is the same
                 t0 = time.time()
                 proc = self._proc = subprocess.Popen(
                     cmd, cwd=os.path.dirname(self.vmf), stdout=subprocess.PIPE,
@@ -396,6 +420,8 @@ class CompileJob:
                     self._q.put(f"!! {name} failed (exit code {code})")
                     self._q.put(("FAILED",))
                     return
+                if name == "vbsp" and os.path.exists(prt):
+                    shutil.copy2(prt, kept_prt)          # the portals, for adding the full vis to a bake later
                 if name == "vrad":
                     try:
                         from .bspcheck import lighting_problems
@@ -416,7 +442,7 @@ class CompileJob:
             with open(self.base + ".built.vmf", "wb") as f:       # what this BSP was made from (the VMF
                 f.write(self._vmf_bytes)                         # as it was when the job started)
             with open(self.base + ".built.opts", "w", encoding="utf-8") as f:
-                f.write(repr(self._opts))
+                f.write(repr(replace(self._opts, vis=self._built_vis)))
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
             self._q.put(("OK",))
         except Exception as ex:  # surfaced to the user in the log
@@ -427,10 +453,11 @@ class CompileJob:
         """Smart build: the least work that gives the same map as a full compile, judged against
         the VMF the current BSP was compiled from (buildplan.plan). A doubt means a full compile."""
         from .buildplan import plan
-        old = None
+        old, built_vis = None, None
         try:
-            with open(self.base + ".built.opts", encoding="utf-8") as f:
-                same_opts = f.read() == repr(self._opts)
+            built = self._built_opts()
+            built_vis = _opts_vis(built)
+            same_opts = _opts_rest(built) == _opts_rest(repr(self._opts)) and built_vis in VIS_RANK
             if same_opts and os.path.exists(self.base + ".bsp"):
                 with open(self.base + ".built.vmf", encoding="utf-8") as f:
                     old = f.read()
@@ -443,11 +470,19 @@ class CompileJob:
         self.plan = "entities" if kind == "same" else kind
         game = ["-game", self.tools.gamedir]
         steps = [("vbsp (entities only)", [self.tools.exe("vbsp"), "-onlyents"] + game + [self.base])]
+        add_vis = VIS_RANK[built_vis] < VIS_RANK[self._opts.vis]
+        if add_vis and not os.path.exists(self.base + ".built.prt"):
+            self.plan = "full"                   # no portal file kept (an older build): compile it all
+            return self.steps
+        self._built_vis = self._opts.vis if add_vis else built_vis
         if self.plan == "lighting":
             steps += [st for st in self.steps if st[0] == "vrad"]
-            self._q.put(f"Smart build: {why}: updating entities and relighting, keeping geometry and visibility")
+            self._q.put(f"Smart build: {why}: updating entities and relighting, keeping geometry")
         else:
-            self._q.put(f"Smart build: {why}: updating entities only, keeping geometry, visibility and lighting")
+            self._q.put(f"Smart build: {why}: keeping geometry and the baked lighting")
+        if add_vis:          # after a lighting bake (fast vis): add the full vis; it leaves the lighting alone
+            steps += [st for st in self.steps if st[0] == "vvis"]
+            self._q.put("Smart build: adding the full visibility to the lighting bake")
         return steps
 
     def _copy_bsp(self, dest: str):

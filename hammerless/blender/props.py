@@ -338,10 +338,10 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("FAST", "Fast", "Quick lighting; terrain may show seams"),
         ("NORMAL", "Normal", "Normal lighting"),
         ("FINAL", "Final", "Highest quality lighting; slow")])
-    hdr_mode: EnumProperty(name="HDR", default="BOTH", items=[
-        ("BOTH", "LDR + HDR", "Works with either game video setting"),
-        ("LDR", "LDR only", "Faster; HDR players see flat lighting"),
-        ("HDR", "HDR only", "Faster; LDR players see flat lighting")])
+    hdr_mode: EnumProperty(name="HDR", default="HDR", items=[
+        ("HDR", "HDR only", "What L4D2 uses (Valve's own maps only have HDR lighting)"),
+        ("BOTH", "LDR + HDR", "Also bakes an LDR copy, which L4D2 doesn't use: twice the lighting time"),
+        ("LDR", "LDR only", "Not used by L4D2: the game shows flat lighting")])
     static_prop_lighting: BoolProperty(name="Per-vertex Prop Lighting",
                                        description="Light static props per vertex (-StaticPropLighting)")
     extra_vbsp: StringProperty(name="vbsp", description="Extra command-line options for vbsp")

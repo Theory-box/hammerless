@@ -43,6 +43,7 @@ Use the **Add** panel (category tiles + search, ★ to favourite) or **Shift+A >
 Press **Build & Play**. Hammerless exports the map, compiles it, builds the nav mesh at the same time, and launches L4D2 (or reuses the running game).
 
 - **Build** does everything Build & Play does (compile, baked lighting, nav mesh) without starting the game. **Play** starts the game on the last build.
+- **Bake Lighting** (in the *Baked Lighting Viewer* panel) bakes only the lighting, quickly, and shows it in the viewport. Build & Play reuses that bake.
 - Builds are **smart**: if only entities changed, geometry and lighting are kept; if nothing changed, the compile is skipped.
 - Warnings appear as "N warning(s). See the hammerless_log text block". The problem list in the *L4D2 Map* panel ("N problems", with a **Check** button to re-check without building) shows them, as does the `hammerless_log` text; click a row to select the object. Most are informational, e.g. *near misses* (faces that almost line up), which Hammerless fixes when it exports.
 
