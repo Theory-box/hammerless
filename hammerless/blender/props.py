@@ -202,6 +202,11 @@ def _on_spawn_index(self, context):
         self.spawn_selected = self.spawn_items[self.spawn_index].name
 
 
+def _light_display(self, context):
+    from .lightview import on_display_change
+    on_display_change(self, context)
+
+
 def _nav_display(self, context):
     from .navview import _on_display_change
     _on_display_change(self, context)
@@ -302,6 +307,19 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     ])
     nav_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _nav_display(self, c),
                            description="Draw the nav mesh through walls")
+    show_lightmap: BoolProperty(name="Show Baked Lighting", default=True, update=lambda self, c: _light_display(self, c),
+                                description="Draw the last compile's baked lighting in the viewport")
+    lightmap_mode: EnumProperty(name="Mode", default="LIGHT", update=lambda self, c: _light_display(self, c), items=[
+        ("LIGHT", "Lighting Only", "The baked light on its own: easiest for spotting leaks, harsh shadows and "
+                  "dark corners"),
+        ("LIT", "Lit", "The baked light multiplied over what the viewport shows (best in Solid view with Flat "
+                "lighting and Texture colour): shadows darken your textures, coloured light tints them"),
+    ])
+    lightmap_exposure: FloatProperty(name="Exposure", default=0.0, soft_min=-4.0, soft_max=4.0, step=10,
+                                     update=lambda self, c: _light_display(self, c),
+                                     description="Brighten or darken the view, in stops (+1 = twice as bright)")
+    lightmap_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _light_display(self, c),
+                                description="Draw the baked lighting through walls")
     show_problem_markers: BoolProperty(name="Show Markers", default=True,
                                        description="Draw numbered markers in the viewport where problems are")
     spawn_index: IntProperty(default=-1, update=_on_spawn_index)

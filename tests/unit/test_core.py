@@ -1581,5 +1581,52 @@ class TestMapOwner(unittest.TestCase):
             self.assertIsNone(cc.map_owner(tools, "hl_y"))
 
 
+class TestLightmap(unittest.TestCase):
+    def test_decode_luxels(self):
+        import numpy as np
+        from hammerless.core.lightmap import decode_luxels
+        raw = bytes([255, 128, 0, 0]) + bytes([128, 128, 128, 256 - 7])       # exp 0, then exp -7
+        got = decode_luxels(raw)
+        np.testing.assert_allclose(got[0], [1.0, 128 / 255, 0.0], rtol=1e-6)
+        np.testing.assert_allclose(got[1], [128 * 2 ** -7 / 255] * 3, rtol=1e-6)
+
+    def test_pack_no_overlap(self):
+        import random
+        from hammerless.core.lightmap import _pack
+        rnd = random.Random(1)
+        sizes = [(rnd.randint(1, 33), rnd.randint(1, 33)) for _ in range(500)]
+        at, w, h = _pack(sizes)
+        taken = set()
+        for (x, y), (bw, bh) in zip(at, sizes):
+            self.assertLessEqual(x + bw, w)
+            self.assertLessEqual(y + bh, h)
+            cells = {(x + i, y + j) for i in range(bw) for j in range(bh)}
+            self.assertFalse(cells & taken)
+            taken |= cells
+
+    def test_real_map_luxels_on_grid(self):
+        """Every face's lightmap corners land inside its own luxel block (needs a compiled, lit map)."""
+        import glob
+        from hammerless.core.lightmap import read_lightmaps
+        maps = [p for p in glob.glob(os.path.join(os.path.dirname(__file__), "..", "..", "demo", "hammerless_build",
+                                                  "*.bsp"))]
+        data = None
+        for p in maps:
+            with open(p, "rb") as f:
+                d = f.read()
+            try:
+                lm = read_lightmaps(d)
+            except ValueError:
+                continue
+            if lm.faces:
+                data = lm
+                break
+        if data is None:
+            self.skipTest("no compiled map with lighting in demo/hammerless_build")
+        h, w = data.atlas.shape[:2]
+        self.assertTrue((data.uvs[:, 0] >= 0.5 / w - 1e-6).all() and (data.uvs[:, 0] <= 1 - 0.5 / w + 1e-6).all())
+        self.assertTrue((data.uvs[:, 1] >= 0.5 / h - 1e-6).all() and (data.uvs[:, 1] <= 1 - 0.5 / h + 1e-6).all())
+
+
 if __name__ == "__main__":
     unittest.main()
