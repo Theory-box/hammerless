@@ -168,6 +168,32 @@ class HL_OT_lightmap_show(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class HL_OT_lightmap_delete(bpy.types.Operator):
+    bl_idname = "hammerless.lightmap_delete"
+    bl_label = "Clear Bake"
+    bl_description = ("Delete this map's baked lighting. It's stored in the compiled map, so this deletes the "
+                      "compiled map too: the next Build or Bake Lighting compiles and bakes from scratch")
+
+    def execute(self, context):
+        from ..core import compile as cc
+        from .ops import game_root, work_dir
+        s = context.scene.hammerless
+        base = os.path.join(work_dir(context), s.map_name)
+        if cc.compile_running(base + ".vmf"):
+            self.report({"ERROR"}, "The map is building: wait for it to finish")
+            return {"CANCELLED"}
+        clear()
+        root = game_root(context)
+        locked = cc.clear_build(cc.Tools(root) if root else None, base, s.map_name)
+        _status["key"] = None
+        if locked:
+            self.report({"WARNING"}, f"Couldn't delete {', '.join(locked)}: the game has the map loaded. Load "
+                                     "another map (or close the game) and clear again")
+        else:
+            self.report({"INFO"}, "Bake cleared: the next Build or Bake Lighting compiles and bakes from scratch")
+        return {"FINISHED"}
+
+
 class HL_OT_lightmap_clear(bpy.types.Operator):
     bl_idname = "hammerless.lightmap_clear"
     bl_label = "Hide Baked Lighting"
@@ -238,14 +264,17 @@ def draw_panel(layout, context):
             _note(layout, ["Quality is Quick, which skips lighting:", "choose Fast or higher first"], icon="ERROR")
         _bake_button(layout)
         if kind == "READY":
-            layout.operator("hammerless.lightmap_show", text="Show the Last Build's Lighting", icon="HIDE_OFF")
+            row = layout.row(align=True)
+            row.operator("hammerless.lightmap_show", text="Show the Last Build's Lighting", icon="HIDE_OFF")
+            row.operator("hammerless.lightmap_delete", text="Clear Bake", icon="X")
         else:
             _note(layout, [message + "."])
         _note(layout, ["Bake Lighting is quicker than a Build,", "and Build & Play reuses it"])
         return
-    big = layout.row()
+    big = layout.row(align=True)
     big.scale_y = 1.3
-    big.operator("hammerless.lightmap_clear", text="Hide Baked Lighting", icon="X")
+    big.operator("hammerless.lightmap_clear", text="Hide Baked Lighting", icon="HIDE_ON")
+    big.operator("hammerless.lightmap_delete", text="Clear Bake", icon="X")
     row = layout.row(align=True)
     row.prop(s, "lightmap_mode", expand=True)
     layout.prop(s, "lightmap_exposure", slider=True)
@@ -267,7 +296,7 @@ def draw_panel(layout, context):
         _note(layout, [_state["error"]], icon="ERROR")
 
 
-CLASSES = (HL_OT_lightmap_show, HL_OT_lightmap_clear)
+CLASSES = (HL_OT_lightmap_show, HL_OT_lightmap_clear, HL_OT_lightmap_delete)
 
 
 def _forget_on_load(*_args):

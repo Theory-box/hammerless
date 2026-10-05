@@ -979,6 +979,44 @@ class HL_OT_build(bpy.types.Operator):
         return result
 
 
+class HL_OT_start_fresh(bpy.types.Operator):
+    bl_idname = "hammerless.start_fresh"
+    bl_label = "Start Fresh"
+    bl_description = ("Delete this map's whole build at once: the compiled map with its baked lighting, and the nav "
+                      "mesh with its analysis, and forget them, so the next Build & Play does everything from "
+                      "scratch. Your .blend isn't touched")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(
+            self, event, title="Start Fresh?",
+            message=f"Delete the build of '{context.scene.hammerless.map_name}' (compiled map, lighting, nav mesh)? "
+                    "The next Build & Play rebuilds everything", confirm_text="Delete Build")
+
+    def execute(self, context):
+        s = context.scene.hammerless
+        base = os.path.join(work_dir(context), s.map_name)
+        if cc.compile_running(base + ".vmf"):
+            self.report({"ERROR"}, "The map is building: wait for it to finish")
+            return {"CANCELLED"}
+        root = game_root(context)
+        tools = cc.Tools(root) if root else None
+        locked = cc.clear_build(tools, base, s.map_name) + (cc.clear_nav(tools, s.map_name) if tools else [])
+        from ..core import navanalyze, navpredict
+        from . import lightview, navview
+        navpredict._last.update(key=None, mesh=None)       # no reusing a nav mesh made earlier this session
+        navanalyze._HULL_CACHE.clear()
+        lightview.clear()
+        navview._state.update(path=None, mtime=None, mesh=None, report=None, batches=None, key=None, source=None,
+                              vis=None)
+        navview._redraw()
+        if locked:
+            self.report({"WARNING"}, f"Couldn't delete {', '.join(locked)}: the game has the map loaded. Load "
+                                     "another map (or close the game) and press Start Fresh again")
+        else:
+            self.report({"INFO"}, "Build deleted: the next Build & Play does everything from scratch")
+        return {"FINISHED"}
+
+
 class HL_OT_launch(bpy.types.Operator):
     bl_idname = "hammerless.launch"
     bl_label = "Play"
@@ -1309,7 +1347,7 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
 
 
 CLASSES = (HL_OT_pick_sky, HL_OT_pick_model, HL_OT_pick_material, HL_OT_refresh_previews, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_entity_class, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
-           HL_OT_export_vmf, HL_OT_build, HL_OT_launch, HL_OT_load_leak,
+           HL_OT_export_vmf, HL_OT_build, HL_OT_start_fresh, HL_OT_launch, HL_OT_load_leak,
            HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues)
 
 

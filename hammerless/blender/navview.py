@@ -570,6 +570,27 @@ def finish_prediction(context, mesh) -> None:
     store_nav(context, mesh, _state["report"], predicted=True)
 
 
+_disk = {"key": None, "time": 0.0, "value": None}
+
+
+def _nav_on_disk(context) -> str | None:
+    """None / "nav" / "analyzed": this map's nav mesh in the game folder (checked at most once a second)."""
+    import time
+    from ..core import compile as cc
+    from .ops import game_root
+    key = context.scene.hammerless.map_name
+    now = time.monotonic()
+    if _disk["key"] == key and now - _disk["time"] < 1.0:
+        return _disk["value"]
+    root = game_root(context)
+    value = None
+    if root:
+        analyzed = cc.nav_analyzed(cc.Tools(root), key)
+        value = None if analyzed is None else ("analyzed" if analyzed else "nav")
+    _disk.update(key=key, time=now, value=value)
+    return value
+
+
 def built_shown() -> bool:
     """A navmesh built from the scene (Build Navmesh / Analyze) is on screen."""
     return _state["mesh"] is not None and _state["source"] == "predicted"
@@ -583,28 +604,37 @@ def analysis_shown() -> bool:
 class HL_OT_nav_clear(bpy.types.Operator):
     bl_idname = "hammerless.nav_clear"
     bl_label = "Clear Navmesh"
-    bl_description = ("Remove the navmesh built from the scene (and its analysis) from the viewport, and forget it, "
-                      "so the next Build Navmesh or Build & Play makes a fresh one")
+    bl_description = ("Delete this map's nav mesh (and its analysis) and remove it from the viewport: the next "
+                      "Build or Build & Play makes a new one")
 
     @classmethod
     def poll(cls, context):
         return not _state["busy"]
 
     def execute(self, context):
+        from ..core import compile as cc
         from ..core import navpredict
+        from .ops import game_root
         navpredict._last.update(key=None, mesh=None)
         _state.update(path=None, mtime=None, mesh=None, report=None, batches=None, key=None, source=None, vis=None)
         if context.scene.hammerless.nav_color_mode == "VIS":
             context.scene.hammerless.nav_color_mode = "REACH"
         _redraw()
-        self.report({"INFO"}, "Navmesh cleared")
+        root = game_root(context)
+        locked = cc.clear_nav(cc.Tools(root), context.scene.hammerless.map_name) if root else []
+        if locked:
+            self.report({"WARNING"}, f"Couldn't delete {', '.join(locked)}: the game has the map loaded. Load "
+                                     "another map (or close the game) and clear again")
+        else:
+            self.report({"INFO"}, "Navmesh cleared: the next Build makes a new one")
         return {"FINISHED"}
 
 
 class HL_OT_nav_clear_analysis(bpy.types.Operator):
     bl_idname = "hammerless.nav_clear_analysis"
     bl_label = "Clear Analysis"
-    bl_description = "Remove the visibility data and hiding spots from the shown navmesh (the navmesh itself stays)"
+    bl_description = ("Remove the visibility data and hiding spots from this map's nav mesh (the nav mesh itself "
+                      "stays): the next Build or Build & Play analyzes it again")
 
     @classmethod
     def poll(cls, context):
@@ -620,7 +650,17 @@ class HL_OT_nav_clear_analysis(bpy.types.Operator):
         if context.scene.hammerless.nav_color_mode == "VIS":
             context.scene.hammerless.nav_color_mode = "REACH"
         _redraw()
-        self.report({"INFO"}, "Analysis cleared")
+        from ..core import compile as cc
+        from .ops import game_root
+        root = game_root(context)
+        try:
+            done = bool(root) and cc.clear_nav_analysis(cc.Tools(root), context.scene.hammerless.map_name)
+        except OSError:
+            self.report({"WARNING"}, "Couldn't change the nav mesh: the game has the map loaded. Load another map "
+                                     "(or close the game) and clear again")
+            return {"FINISHED"}
+        self.report({"INFO"}, "Analysis cleared: the next Build analyzes the nav mesh again" if done
+                    else "Analysis cleared from the view")
         return {"FINISHED"}
 
 
@@ -639,6 +679,12 @@ def draw_panel(layout, context):
         layout.operator("hammerless.nav_clear_analysis", text="Clear Analysis", icon="X")
     else:
         layout.operator("hammerless.nav_analyze", text="Analyze Navmesh (visibility, hiding spots)", icon="HIDE_OFF")
+    on_disk = _nav_on_disk(context)
+    if on_disk and not built_shown():
+        sub = layout.row(align=True)
+        sub.operator("hammerless.nav_clear", text="Clear Navmesh", icon="X")
+        if on_disk == "analyzed" and not analysis_shown():
+            sub.operator("hammerless.nav_clear_analysis", text="Clear Analysis", icon="X")
     if rep is None:
         col = layout.column(align=True)
         col.scale_y = 0.8

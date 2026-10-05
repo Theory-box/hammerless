@@ -726,6 +726,50 @@ def set_nav_maker(tools: Tools, map_name: str, maker: str) -> None:
         f.write(maker + ("\n" + sig if sig else ""))
 
 
+def clear_nav(tools: Tools, map_name: str) -> list[str]:
+    """Delete the map's nav mesh (and what records how it was made): the next build makes a new
+    one. Returns the files that couldn't be deleted (the game has the map loaded)."""
+    script, used = _navmark_paths(tools, map_name)
+    return _remove([os.path.join(tools.maps_dir, map_name + ".nav"), _nav_maker_path(tools, map_name), used])
+
+
+def clear_nav_analysis(tools: Tools, map_name: str) -> bool:
+    """Remove the visibility data and hiding spots from the map's nav mesh (the areas stay): the
+    next build analyzes it again. False when there's no readable nav."""
+    from .navfile import load_nav, write_nav
+    path = os.path.join(tools.maps_dir, map_name + ".nav")
+    try:
+        mesh = load_nav(path)
+    except (OSError, ValueError):
+        return False
+    for a in mesh.areas:
+        a.visible, a.inherit_visibility, a.hiding_spots = [], 0, []
+    mesh.analyzed = False
+    with open(path, "wb") as f:
+        f.write(write_nav(mesh))
+    return True
+
+
+def clear_build(tools: Tools | None, work_base: str, map_name: str) -> list[str]:
+    """Delete the compiled map (which holds the baked lighting) and what records how it was built:
+    the next build compiles and bakes from scratch. Returns files that couldn't be deleted."""
+    paths = [work_base + ext for ext in (".bsp", ".stamp", ".built.vmf", ".built.opts", ".built.prt", ".prt", ".lin")]
+    if tools is not None:
+        paths.append(os.path.join(tools.maps_dir, map_name + ".bsp"))
+    return _remove(paths)
+
+
+def _remove(paths: list[str]) -> list[str]:
+    locked = []
+    for p in paths:
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError:
+            locked.append(os.path.basename(p))
+    return locked
+
+
 def nav_outdated(tools: Tools, map_name: str) -> bool:
     """The map was compiled again since the nav mesh was made (e.g. a build with another nav setting, or one stopped
     with Esc): the nav no longer fits its walls. False when it isn't known (older markers)."""

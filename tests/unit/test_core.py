@@ -457,6 +457,41 @@ class TestNavFile(unittest.TestCase):
         self.assertEqual(again.areas[0].spawn_attributes, 0x880)
         self.assertEqual(again.areas[2].visible, [(1, 2), (2, 3)])
 
+    def test_clears(self):
+        """Clear Analysis keeps the areas and drops only visibility / hiding spots; Clear Navmesh and
+        Clear Bake delete their files (and what records how they were made)."""
+        import tempfile
+        from hammerless.core import compile as cc
+        from hammerless.core.navfile import load_nav, write_nav
+        root = tempfile.mkdtemp()
+        maps = os.path.join(root, "left4dead2", "maps")
+        hl = os.path.join(root, "left4dead2", "scripts", "vscripts", "hammerless")
+        os.makedirs(maps)
+        os.makedirs(hl)
+        tools = cc.Tools(root)
+        open(os.path.join(maps, "m.nav"), "wb").write(write_nav(self.mesh()))
+        self.assertTrue(cc.nav_analyzed(tools, "m"))
+        self.assertTrue(cc.clear_nav_analysis(tools, "m"))
+        self.assertFalse(cc.nav_analyzed(tools, "m"))
+        again = load_nav(os.path.join(maps, "m.nav"))
+        self.assertEqual([a.id for a in again.areas], [1, 2, 3, 4, 5])
+        self.assertEqual(again.areas[0].spawn_attributes, 0x880)
+        self.assertEqual(again.areas[2].visible, [])
+        self.assertFalse(cc.clear_nav_analysis(tools, "missing"))
+        for f in ("navmaker_m.txt", "navmark_m.used", "navmark_m.nut"):
+            open(os.path.join(hl, f), "w").write("x")
+        self.assertEqual(cc.clear_nav(tools, "m"), [])
+        self.assertFalse(os.path.exists(os.path.join(maps, "m.nav")))
+        self.assertFalse(os.path.exists(os.path.join(hl, "navmaker_m.txt")))
+        self.assertTrue(os.path.exists(os.path.join(hl, "navmark_m.nut")))      # the marks themselves stay
+        work = tempfile.mkdtemp()
+        for ext in (".bsp", ".stamp", ".built.vmf", ".built.opts", ".built.prt", ".vmf"):
+            open(os.path.join(work, "m" + ext), "w").write("x")
+        open(os.path.join(maps, "m.bsp"), "w").write("x")
+        self.assertEqual(cc.clear_build(tools, os.path.join(work, "m"), "m"), [])
+        self.assertEqual(sorted(os.listdir(work)), ["m.vmf"])                     # the export itself stays
+        self.assertFalse(os.path.exists(os.path.join(maps, "m.bsp")))
+
     def test_game_files_round_trip(self):
         import glob
         from hammerless.core.navfile import read_nav, write_nav

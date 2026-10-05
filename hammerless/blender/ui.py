@@ -580,6 +580,8 @@ class HL_PT_folders(_Sub, bpy.types.Panel):
         col.operator("hammerless.load_game_data", icon="FILE_REFRESH")
         col.operator("hammerless.refresh_previews", icon="SHADING_TEXTURE")
         col.operator("hammerless.export_vmf", icon="EXPORT")
+        layout.separator()
+        layout.operator("hammerless.start_fresh", text="Start Fresh (delete this map's build)", icon="TRASH")
 
 
 class HL_PT_scene(_Sub, bpy.types.Panel):
