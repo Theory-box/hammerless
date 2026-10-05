@@ -876,11 +876,25 @@ class HL_OT_build(bpy.types.Operator):
             self.report({"ERROR"}, f"Build & Play stopped: {ex}")
             return self._finish(context, {"CANCELLED"})
 
+    def _start_analysis_early(self, context):
+        """The nav analysis needs the compiled walls and visibility, not the lighting: start it as soon
+        as the nav mesh is made and the compile is past its last visibility step (vrad may still run)."""
+        nav = self._nav
+        if nav is None or nav.get("analysis") is not None or context.scene.hammerless.nav_analysis != "BLENDER":
+            return
+        if nav["thread"].is_alive() or nav["mesh"] is None:
+            return
+        bsp = self._job.vis_bsp or (self._job.base + ".bsp" if self._job.done and not self._job.failed else None)
+        if bsp:
+            nav["analysis"] = _start_nav_analysis(nav["mesh"], self._job.vmf, bsp, self._root)
+            nav["analysis_early"] = not self._job.done
+
     def _step(self, context):
         new = self._job.poll()
         if new:
             write_log(new, append=True)
             context.workspace.status_text_set(f"Hammerless: {new[-1][:120]}")
+        self._start_analysis_early(context)
         if not self._job.done:
             return {"PASS_THROUGH"}
         summ = self._job.summary
@@ -925,6 +939,11 @@ class HL_OT_build(bpy.types.Operator):
                     context.workspace.status_text_set(f"Hammerless: analyzing the nav mesh: {an['stage']}...")
                     return {"PASS_THROUGH"}
                 self._nav["analysis_finished"] = True
+                if self._job.vis_bsp and os.path.exists(self._job.vis_bsp):
+                    try:
+                        os.remove(self._job.vis_bsp)
+                    except OSError:
+                        pass
                 if not an["done"]:
                     self.report({"WARNING"}, f"Nav analysis in Blender failed ({an['error']}); the game will "
                                              "analyze the nav mesh")
@@ -934,7 +953,8 @@ class HL_OT_build(bpy.types.Operator):
                 self._nav["analyzed"] = analyzed
                 cc.write_generated_nav(cc.Tools(self._root), self._owner[1], self._nav["mesh"], analyzed=analyzed)
                 if analyzed:
-                    timing += f", nav analysis {self._nav['analysis']['seconds']:.1f}s"
+                    timing += f", nav analysis {self._nav['analysis']['seconds']:.1f}s" + (
+                        " (alongside the lighting)" if self._nav.get("analysis_early") else "")
                 for problem in self._nav["mesh"].problems:
                     self.report({"WARNING"}, problem)
                 if self._nav["mesh"].problems:

@@ -337,6 +337,8 @@ class CompileJob:
         self._proc = None
         self._vmf_bytes = b""
         self._built_vis = opts.vis            # the visibility the BSP ends up with
+        self.vis_bsp: str | None = None        # a copy of the BSP once geometry and visibility are final:
+                                               # the nav analysis can start on it while vrad still runs
 
     def start(self) -> "CompileJob":
         other = _ACTIVE_JOBS.get(self.base)
@@ -399,7 +401,7 @@ class CompileJob:
                 if os.path.exists(stale):                                     # up to date or be built on
                     os.remove(stale)
             prt, kept_prt = self.base + ".prt", self.base + ".built.prt"
-            for name, cmd in steps:
+            for k, (name, cmd) in enumerate(steps):
                 self._q.put(f"==== {name} ====")
                 if name == "vvis" and not os.path.exists(prt) and os.path.exists(kept_prt):
                     shutil.copy2(kept_prt, prt)      # vbsp -onlyents deletes the portal file; geometry is the same
@@ -422,6 +424,11 @@ class CompileJob:
                     return
                 if name == "vbsp" and os.path.exists(prt):
                     shutil.copy2(prt, kept_prt)          # the portals, for adding the full vis to a bake later
+                rest = [n for n, _c in steps[k + 1:]]
+                if self.vis_bsp is None and rest and "vvis" not in rest and not any(n.startswith("vbsp") for n in rest):
+                    snap = self.base + ".analysis.bsp"   # geometry and visibility won't change any more
+                    shutil.copy2(self.base + ".bsp", snap)
+                    self.vis_bsp = snap
                 if name == "vrad":
                     try:
                         from .bspcheck import lighting_problems
@@ -753,7 +760,8 @@ def clear_nav_analysis(tools: Tools, map_name: str) -> bool:
 def clear_build(tools: Tools | None, work_base: str, map_name: str) -> list[str]:
     """Delete the compiled map (which holds the baked lighting) and what records how it was built:
     the next build compiles and bakes from scratch. Returns files that couldn't be deleted."""
-    paths = [work_base + ext for ext in (".bsp", ".stamp", ".built.vmf", ".built.opts", ".built.prt", ".prt", ".lin")]
+    paths = [work_base + ext for ext in (".bsp", ".stamp", ".built.vmf", ".built.opts", ".built.prt", ".prt", ".lin",
+                                         ".analysis.bsp")]
     if tools is not None:
         paths.append(os.path.join(tools.maps_dir, map_name + ".bsp"))
     return _remove(paths)

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The nav analysis starts as soon as the map's visibility is compiled, alongside the lighting step, instead of after it (it doesn't use the lighting). Same nav file; about 0.5 to 2 s faster per build (both steps share the CPU).
 - **Clear buttons that really clear**: *Clear Navmesh* deletes the map's nav mesh, *Clear Analysis* removes its visibility data and hiding spots (keeping the areas), and *Clear Bake* deletes the baked lighting (with the compiled map that holds it), so the next build makes each again. Before, the nav buttons only cleared the viewport. *Settings > Folders & Game Data > Start Fresh* clears all of them at once.
 
 ## 0.4.0 (test release, 2026-10-05)
