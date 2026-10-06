@@ -159,7 +159,8 @@ def check_brush(brush: Brush, tolerance: float = 0.1) -> list[BrushProblem]:
     if len(faces) > MAX_BRUSH_SIDES:
         return [BrushProblem(brush.source, f"has {len(faces)} differently angled faces: a game brush can have at most "
                              f"{MAX_BRUSH_SIDES}. Is it high-poly or rounded (a Subdivision modifier, a sphere)? "
-                             "Simplify it, set its role to Terrain if it's ground, or Ignore it")]
+                             "Simplify it, tick Use Convex Hull for a simpler outer shape, set its role to Terrain "
+                             "if it's ground, or Ignore it")]
 
     for f in brush.faces:
         pl = Plane.from_polygon(f.verts)
