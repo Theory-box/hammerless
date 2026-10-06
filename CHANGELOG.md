@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.3 (test release, 2026-10-05)
+
 - **Setup warning:** Build & Play now says up front when Left 4 Dead 2 wasn't found (it's found in any Steam library on its own, so this is rare), with the folder setting right there, or when the L4D2 Authoring Tools aren't installed, with where to get them. Before, you only found out when a build failed.
 ## 0.5.2 (test release, 2026-10-05)
 
