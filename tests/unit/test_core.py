@@ -1673,6 +1673,28 @@ class TestGameContent(unittest.TestCase):
         self.assertTrue(self.content.has_material("skybox/sky_day01_09_hdrbk"))
 
 
+class TestDenseBrush(unittest.TestCase):
+    def test_high_poly_brush_is_quick(self):
+        """A dense rounded mesh used as a brush (thousands of faces) gets a clear error in seconds:
+        Check used to freeze Blender comparing every face with every other."""
+        import math
+        import time
+        from hammerless.core import geometry as g
+        from hammerless.core.ir import Brush, Polygon
+        seg, rings, r = 96, 48, 100.0
+
+        def p(i, j):
+            th, ph = 2 * math.pi * i / seg, math.pi * j / rings
+            return (r * math.sin(ph) * math.cos(th), r * math.sin(ph) * math.sin(th), r * math.cos(ph))
+        faces = [Polygon([p(i, j), p(i, j + 1), p(i + 1, j + 1), p(i + 1, j)][::-1], "m")
+                 for i in range(seg) for j in range(1, rings - 1)]
+        t = time.time()
+        problems = g.check_brush(Brush(faces, source="sphere"))
+        self.assertLess(time.time() - t, 10.0)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("at most 128", problems[0].message)
+
+
 class TestMapOwner(unittest.TestCase):
     def test_owner_round_trip(self):
         import tempfile

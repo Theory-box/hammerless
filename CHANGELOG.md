@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Check (and Build) froze Blender on a high-poly object used as a brush** (a subdivided or rounded mesh with thousands of faces): checking it compared every face with every other. It now says in a few seconds that a game brush can have at most 128 differently angled faces, and what to do (simplify it, make it Terrain, or Ignore it).
+
 ## 0.5.0 (test release, 2026-10-05)
 
 - **Analyze Navmesh no longer bakes lighting.** When the walls changed it compiled the whole map, lighting included, which the analysis never uses; it now compiles only the walls and visibility (about 7 s less on a medium map), and doesn't put that unlit map into the game. The next Build bakes just the lighting. After a Bake Lighting, Analyze adds only the full visibility, and analyzes on it (before, it analyzed the bake's fast visibility, which can differ from the game's result). Analyze reuses a nav mesh Build Navmesh already made.

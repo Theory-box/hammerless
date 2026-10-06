@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from .ir import Brush, Polygon, Vec3
 
 EPS = 0.01  # Hammer units
+MAX_BRUSH_SIDES = 128   # vbsp's limit for one brush (SDK 2013 bspfile.h MAX_BRUSH_SIDES)
 
 
 def sub(a: Vec3, b: Vec3) -> Vec3:
@@ -82,7 +83,13 @@ def merge_coplanar(faces: list[Polygon]) -> list[Polygon]:
     per plane (e.g. a triangulated quad becomes one face). We keep the polygon
     with the most area as representative, and its material.
     """
+    # Same result as comparing each face with every group in order (the first group that matches
+    # wins), but groups are found through a grid of plane values, so a dense mesh with thousands of
+    # faces doesn't take minutes. dot > 0.9999 means the normals differ by < 0.0142 per component
+    # and the distances by < EPS * 10: one grid cell either way covers every possible match.
     groups: list[tuple[Plane, Polygon, float]] = []
+    grid: dict[tuple, list[int]] = {}
+    nstep, dstep = 0.02, EPS * 10
     for f in faces:
         if len(f.verts) < 3:
             continue
@@ -90,13 +97,24 @@ def merge_coplanar(faces: list[Polygon]) -> list[Polygon]:
         if length(pl.normal) == 0:
             continue
         area = polygon_area(f.verts)
-        for i, (gp, gf, ga) in enumerate(groups):
-            if dot(gp.normal, pl.normal) > 0.9999 and abs(gp.dist - pl.dist) < EPS * 10:
-                if area > ga:
-                    groups[i] = (gp, f, area)
-                break
-        else:
+        key = (math.floor(pl.normal[0] / nstep), math.floor(pl.normal[1] / nstep), math.floor(pl.normal[2] / nstep),
+               math.floor(pl.dist / dstep))
+        best = None
+        for a in (-1, 0, 1):
+            for b in (-1, 0, 1):
+                for c in (-1, 0, 1):
+                    for d in (-1, 0, 1):
+                        for i in grid.get((key[0] + a, key[1] + b, key[2] + c, key[3] + d), ()):
+                            if best is not None and i >= best:
+                                continue
+                            gp = groups[i][0]
+                            if dot(gp.normal, pl.normal) > 0.9999 and abs(gp.dist - pl.dist) < EPS * 10:
+                                best = i
+        if best is None:
+            grid.setdefault(key, []).append(len(groups))
             groups.append((pl, f, area))
+        elif area > groups[best][2]:
+            groups[best] = (groups[best][0], f, area)
     return [g[1] for g in groups]
 
 
@@ -111,17 +129,19 @@ def open_direction(normals: list[Vec3], eps: float = 1e-6) -> Vec3 | None:
     """A direction no face blocks (the solid would go on forever that way), or None if the
     faces close it in. Such directions include one of the cross products of two face normals,
     or a reversed normal."""
-    cands = [scale(n, -1.0) for n in normals]
-    for i in range(len(normals)):
-        for j in range(i + 1, len(normals)):
-            c = cross(normals[i], normals[j])
-            if length(c) > 1e-9:
-                c = normalize(c)
-                cands += [c, scale(c, -1.0)]
-    for d in cands:
-        if all(dot(d, n) <= eps for n in normals):
-            return d
-    return None
+    import numpy as np
+    if not normals:
+        return None
+    n = np.asarray(normals, dtype=np.float64)
+    i, j = np.triu_indices(len(n), k=1)
+    c = np.cross(n[i], n[j])
+    lens = np.linalg.norm(c, axis=1)
+    c = c[lens > 1e-9] / lens[lens > 1e-9, None]
+    pairs = np.empty((2 * len(c), 3))
+    pairs[0::2], pairs[1::2] = c, -c                 # the same order as trying c, then -c, per pair
+    cands = np.concatenate([-n, pairs])
+    ok = np.nonzero((cands @ n.T <= eps).all(axis=1))[0]
+    return tuple(float(v) for v in cands[ok[0]]) if len(ok) else None
 
 
 def _direction_name(d: Vec3) -> str:
@@ -136,6 +156,10 @@ def check_brush(brush: Brush, tolerance: float = 0.1) -> list[BrushProblem]:
     faces = merge_coplanar(brush.faces)
     if len(faces) < 4:
         return [BrushProblem(brush.source, "has fewer than 4 distinct faces (not a closed solid)")]
+    if len(faces) > MAX_BRUSH_SIDES:
+        return [BrushProblem(brush.source, f"has {len(faces)} differently angled faces: a game brush can have at most "
+                             f"{MAX_BRUSH_SIDES}. Is it high-poly or rounded (a Subdivision modifier, a sphere)? "
+                             "Simplify it, set its role to Terrain if it's ground, or Ignore it")]
 
     for f in brush.faces:
         pl = Plane.from_polygon(f.verts)
