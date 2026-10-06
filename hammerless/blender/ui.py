@@ -72,6 +72,16 @@ class HL_PT_build(_Panel, bpy.types.Panel):
     def draw(self, context):
         s = context.scene.hammerless
         layout = self.layout
+        problem = setup_problem(context)
+        if problem:
+            box = layout.box()
+            row = box.row()
+            row.alert = True
+            row.label(text=problem[0], icon="ERROR")
+            _hint(box, *problem[1:])
+            if problem[0].startswith("Left 4 Dead 2"):
+                box.prop(s, "game_root", text="L4D2 Folder")
+            layout.separator()
         col = _settings(layout)
         col.prop(s, "map_name")
         col.prop(s, "compile_preset", text="Quality")
@@ -105,6 +115,41 @@ class HL_PT_problems(_Panel, bpy.types.Panel):
     def draw(self, context):
         from .problems import draw_panel
         draw_panel(self.layout, context)
+
+
+_setup_cache = {"key": None, "time": 0.0, "value": None}
+
+
+def setup_problem(context):
+    """(headline, hint lines...) when Hammerless can't build yet: L4D2 not found (Steam's libraries are
+    searched automatically, so this is rare) or the Authoring Tools missing. None when all is set.
+    Checked at most every 2 seconds: the panel redraws on every mouse move."""
+    import time
+    from .props import preferences
+    s = context.scene.hammerless
+    prefs = preferences()
+    key = (s.game_root, prefs.game_root if prefs else "")
+    now = time.monotonic()
+    if _setup_cache["key"] == key and now - _setup_cache["time"] < 2.0:
+        return _setup_cache["value"]
+    from ..core import compile as cc
+    from .ops import game_root
+    root = game_root(context)
+    if not root:
+        value = ("Left 4 Dead 2 wasn't found",
+                 "It's found in any Steam library on its own.",
+                 "If yours isn't, set its folder below (the one",
+                 "with left4dead2.exe), or once for every file",
+                 "in the add-on's Preferences")
+    elif cc.Tools(root).missing():
+        value = ("The L4D2 Authoring Tools aren't installed",
+                 "They're the map compilers Hammerless runs.",
+                 "Steam > Library > Tools > Left 4 Dead 2",
+                 "Authoring Tools > Install")
+    else:
+        value = None
+    _setup_cache.update(key=key, time=now, value=value)
+    return value
 
 
 def _leaked(context) -> bool:

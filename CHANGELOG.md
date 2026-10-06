@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Setup warning:** Build & Play now says up front when Left 4 Dead 2 wasn't found (it's found in any Steam library on its own, so this is rare), with the folder setting right there, or when the L4D2 Authoring Tools aren't installed, with where to get them. Before, you only found out when a build failed.
 ## 0.5.2 (test release, 2026-10-05)
 
 - **Works in Blender 4.0 to 4.5 from one zip** (checked in 4.0.2: all tests, every panel and the viewport views; the zip installs, enables and draws its panels in 4.0, 4.2, 4.3, 4.4 and 4.5). Blender 4.0 / 4.1 predate extensions: install from *Preferences > Add-ons > Install*; 4.2+ from *Get Extensions > Install from Disk* as before. Two calls only Blender 4.1+ has (the Add panel's search hint, Start Fresh's confirm text) fall back on 4.0. Before, the zip installed in 4.0 but never showed in the add-ons list.

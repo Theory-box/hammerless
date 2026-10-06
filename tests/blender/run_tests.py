@@ -170,6 +170,29 @@ def test_terrain_edge_not_sunk():
     assert abs(y0 - min(ys)) < 1e-3 and abs(far_y - max(ys)) < 1e-3, (y0, far_y, min(ys), max(ys))
 
 
+def test_setup_warning():
+    """Build & Play warns when L4D2 isn't found or the Authoring Tools are missing (and only then)."""
+    reset_scene()
+    from hammerless.blender import ops, ui
+    from hammerless.core import compile as cc
+    ui._setup_cache["key"] = None
+    found = ops.game_root(bpy.context)
+    real_root, real_missing = ops.game_root, cc.Tools.missing
+    try:
+        if found:
+            assert ui.setup_problem(bpy.context) is None or "Authoring" in ui.setup_problem(bpy.context)[0]
+        ops.game_root = lambda context: None
+        ui._setup_cache["key"] = None
+        assert ui.setup_problem(bpy.context)[0] == "Left 4 Dead 2 wasn't found"
+        ops.game_root = lambda context: found or "C:/nowhere"
+        cc.Tools.missing = lambda self: ["vbsp"]
+        ui._setup_cache["key"] = None
+        assert "Authoring Tools" in ui.setup_problem(bpy.context)[0]
+    finally:
+        ops.game_root, cc.Tools.missing = real_root, real_missing
+        ui._setup_cache["key"] = None
+
+
 def test_collection_role_terrain():
     reset_scene()
     coll = bpy.data.collections.new("Ground")
