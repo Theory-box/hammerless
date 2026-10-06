@@ -921,7 +921,8 @@ def bsp_has_lighting(path: str) -> bool:
         return False
     if len(head) < 8 + 16 * 64 or head[:4] != b"VBSP":
         return False
-    return any(struct.unpack_from("<iiii", head, 8 + 16 * lump)[1] > 0 for lump in (8, 53))
+    # L4D2's lump_t is (version, offset, length, fourCC): the length says whether there's lighting
+    return any(struct.unpack_from("<iiii", head, 8 + 16 * lump)[2] > 0 for lump in (8, 53))
 
 
 STEAM_WAIT = 120.0       # seconds to wait for Steam to start and sign in

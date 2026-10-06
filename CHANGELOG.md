@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Every compiled map counted as having baked lighting (the check read a lump's position instead of its size), so after an Analyze or a Quick build the Baked Lighting panel said "Baked" and offered to show lighting that wasn't there, and the game launch decided about fullbright from the same wrong answer.
 - **Freeze recorder:** if Blender stops responding for 20 seconds, Hammerless writes where it was stuck to `hammerless_freeze.log` in the temp folder (see Troubleshooting), so freezes can be traced to the exact line.
 - **Nav mesh memory cap:** the nav builder's step memory was capped by the biggest map built in the session, so after one huge or leaky build it could grow to about 1 GB and stall the next build after a scene switch. It now follows the current map, with a ceiling.
 - **Native code hardening:** an out-of-memory in the nav builder or analysis now stops it with an error instead of crashing Blender; a damaged or half-written compiled map is reported instead of read past its end; positions that aren't valid numbers can't send a trace into an endless loop. The nav meshes and analysis it produces are unchanged (checked byte for byte, and 99.922% visibility match with the game as before).

@@ -1167,10 +1167,14 @@ class TestCompileSkip(unittest.TestCase):
         import tempfile
         from hammerless.core.compile import bsp_has_lighting
         with tempfile.TemporaryDirectory() as d:
-            for lump, lit in ((None, False), (8, True), (53, True)):
+            # lump_t in L4D2: version, offset, length, fourCC. A map compiled without lighting still has
+            # every lump's offset set, with length 0 (that read as lit before: Analyze and Quick maps)
+            for lump, length, lit in ((None, 0, False), (8, 4, True), (53, 4, True), (53, 0, False)):
                 head = bytearray(b"VBSP" + struct.pack("<i", 21) + bytes(16 * 64))
+                for k in range(64):
+                    struct.pack_into("<iiii", head, 8 + 16 * k, 0, len(head), 0, 0)
                 if lump is not None:
-                    struct.pack_into("<iiii", head, 8 + 16 * lump, len(head), 4, 0, 0)
+                    struct.pack_into("<iiii", head, 8 + 16 * lump, 0, len(head), length, 0)
                 path = os.path.join(d, "m.bsp")
                 with open(path, "wb") as f:
                     f.write(head + bytes(4))
