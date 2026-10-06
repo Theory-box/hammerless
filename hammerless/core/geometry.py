@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from .ir import Brush, Polygon, Vec3
 
 EPS = 0.01  # Hammer units
-MAX_BRUSH_SIDES = 128   # vbsp's limit for one brush (SDK 2013 bspfile.h MAX_BRUSH_SIDES)
+MAX_FACE_CORNERS = 64   # vbsp crashes on a brush face with more corners (MAX_POINTS_ON_WINDING; measured:
+                        # 64 compiles, 65 crashes; a brush itself compiled with 4000 sides)
+EXACT_OPEN_PLANES = 512  # up to this many planes the open-side test tries every direction (exact, fast)
 
 
 def sub(a: Vec3, b: Vec3) -> Vec3:
@@ -87,7 +89,12 @@ def merge_coplanar(faces: list[Polygon]) -> list[Polygon]:
     # wins), but groups are found through a grid of plane values, so a dense mesh with thousands of
     # faces doesn't take minutes. dot > 0.9999 means the normals differ by < 0.0142 per component
     # and the distances by < EPS * 10: one grid cell either way covers every possible match.
-    groups: list[tuple[Plane, Polygon, float]] = []
+    return [g[1] for g in coplanar_groups(faces)]
+
+
+def coplanar_groups(faces: list[Polygon]) -> list[tuple[Plane, Polygon, float, list[Polygon]]]:
+    """merge_coplanar's groups: (plane, representative face, its area, every face on that plane)."""
+    groups: list[tuple[Plane, Polygon, float, list[Polygon]]] = []
     grid: dict[tuple, list[int]] = {}
     nstep, dstep = 0.02, EPS * 10
     for f in faces:
@@ -112,10 +119,12 @@ def merge_coplanar(faces: list[Polygon]) -> list[Polygon]:
                                 best = i
         if best is None:
             grid.setdefault(key, []).append(len(groups))
-            groups.append((pl, f, area))
-        elif area > groups[best][2]:
-            groups[best] = (groups[best][0], f, area)
-    return [g[1] for g in groups]
+            groups.append((pl, f, area, [f]))
+        else:
+            groups[best][3].append(f)
+            if area > groups[best][2]:
+                groups[best] = (groups[best][0], f, area, groups[best][3])
+    return groups
 
 
 def polygon_area(verts: list[Vec3]) -> float:
@@ -149,18 +158,53 @@ def _direction_name(d: Vec3) -> str:
     return ("+" if d[axis] > 0 else "-") + "XYZ"[axis]
 
 
+def _corners(points: "np.ndarray", normal) -> int:
+    """Corners of the convex outline of points lying on one plane (points along an edge don't count:
+    vbsp's face outline only has a corner where two neighbouring faces meet)."""
+    import numpy as np
+    n = np.asarray(normal, dtype=np.float64)
+    u = np.cross(n, (1.0, 0.0, 0.0) if abs(n[0]) < 0.9 else (0.0, 1.0, 0.0))
+    u /= np.linalg.norm(u)
+    v = np.cross(n, u)
+    pts = sorted({(round(float(p @ u), 3), round(float(p @ v), 3)) for p in points})
+    if len(pts) < 3:
+        return len(pts)
+
+    def turn(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    hull = []
+    for seq in (pts, pts[::-1]):               # monotone chain; collinear points dropped (turn <= eps)
+        part = []
+        for q in seq:
+            while len(part) >= 2 and turn(part[-2], part[-1], q) <= 1e-6:
+                part.pop()
+            part.append(q)
+        hull += part[:-1]
+    return len(hull)
+
+
+def _mesh_hole(faces: list[Polygon]) -> bool:
+    """True if the faces don't close up: some edge isn't shared by exactly one other face running
+    the other way (a hole, or a face pointing the wrong way). Exact, and fast at any size."""
+    from collections import Counter
+    edges = Counter()
+    for f in faces:
+        vs = [tuple(round(c, 4) for c in v) for v in f.verts]
+        for a, b in zip(vs, vs[1:] + vs[:1]):
+            if a != b:
+                edges[(a, b)] += 1
+    return any(c != 1 or edges.get((b, a), 0) != 1 for (a, b), c in edges.items())
+
+
 def check_brush(brush: Brush, tolerance: float = 0.1) -> list[BrushProblem]:
     """Return problems that would make this an invalid Source brush."""
+    import numpy as np
     problems: list[BrushProblem] = []
     verts = [v for f in brush.faces for v in f.verts]
-    faces = merge_coplanar(brush.faces)
+    groups = coplanar_groups(brush.faces)
+    faces = [g[1] for g in groups]
     if len(faces) < 4:
         return [BrushProblem(brush.source, "has fewer than 4 distinct faces (not a closed solid)")]
-    if len(faces) > MAX_BRUSH_SIDES:
-        return [BrushProblem(brush.source, f"has {len(faces)} differently angled faces: a game brush can have at most "
-                             f"{MAX_BRUSH_SIDES}. Is it high-poly or rounded (a Subdivision modifier, a sphere)? "
-                             "Simplify it, tick Use Convex Hull for a simpler outer shape, set its role to Terrain "
-                             "if it's ground, or Ignore it")]
 
     for f in brush.faces:
         pl = Plane.from_polygon(f.verts)
@@ -170,29 +214,51 @@ def check_brush(brush: Brush, tolerance: float = 0.1) -> list[BrushProblem]:
             break
 
     planes = [Plane.from_polygon(f.verts) for f in faces]
-    gap = open_direction([pl.normal for pl in planes])
-    if gap is not None:
+    if len(planes) <= EXACT_OPEN_PLANES:
+        gap = open_direction([pl.normal for pl in planes])
+        side = f"its {_direction_name(gap)} side has no face" if gap is not None else ""
+    else:                                       # a dense mesh: the same question, answered from its edges
+        side = "it has a gap" if _mesh_hole(brush.faces) else ""
+    if side:
         problems.append(BrushProblem(
             brush.source,
-            f"is open: its {_direction_name(gap)} side has no face (a hole in the mesh), or that face points "
+            f"is open: {side} (a hole in the mesh), or that face points "
             "inward. In Edit Mode: fill a hole by selecting its edges and pressing F; fix a flipped face with "
             "select all, Mesh > Normals > Recalculate Outside",
         ))
         return problems
-    if all(pl.distance(v) >= -tolerance for pl in planes for v in verts):
+
+    V = np.unique(np.asarray(verts, dtype=np.float64), axis=0)
+    N = np.asarray([pl.normal for pl in planes], dtype=np.float64)
+    D = np.asarray([pl.dist for pl in planes], dtype=np.float64)
+    lowest, outside = np.inf, None
+    for c in range(0, len(N), 256):             # vertices against planes, a block of planes at a time
+        d = V @ N[c:c + 256].T - D[c:c + 256]
+        lowest = min(lowest, float(d.min()))       # (every plane: "inward" needs all of them)
+        if outside is None and (d > tolerance).any():
+            outside = c
+    if lowest >= -tolerance:
         problems.append(BrushProblem(
             brush.source,
             "has faces pointing inward. In Edit Mode: select all, Mesh > Normals > Recalculate Outside",
         ))
         return problems
-
-    for pl in planes:
-        if any(pl.distance(v) > tolerance for v in verts):
+    if outside is not None:
+        problems.append(BrushProblem(
+            brush.source,
+            "is not convex. Split it into convex pieces, or enable 'Use Convex Hull' on it",
+        ))
+    else:
+        # a side's outline is the faces merged into it (vbsp's winding: one corner per neighbouring side)
+        most = max((_corners(np.asarray([v for f in g[3] for v in f.verts], dtype=np.float64), pl.normal)
+                    for g, pl in zip(groups, planes) if sum(len(f.verts) for f in g[3]) > MAX_FACE_CORNERS),
+                   default=0)
+        if most > MAX_FACE_CORNERS:
             problems.append(BrushProblem(
                 brush.source,
-                "is not convex. Split it into convex pieces, or enable 'Use Convex Hull' on it",
+                f"has a face with {most} corners: the map compiler crashes above {MAX_FACE_CORNERS} (for example "
+                "the cap of a cylinder with many segments). Use fewer segments, or cut that face into pieces",
             ))
-            break
 
     xs = [v[0] for v in verts]; ys = [v[1] for v in verts]; zs = [v[2] for v in verts]
     if min(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)) < 1.0:

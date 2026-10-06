@@ -106,7 +106,7 @@ def test_nonconvex_rejected_then_hull():
     bpy.ops.mesh.primitive_torus_add(location=(0, 0, 2))
     torus = bpy.context.object
     blocks, log = export()
-    assert blocks is None and "at most 128" in log, log      # 576 faces: too many for one brush anyway
+    assert blocks is None and "not convex" in log, log
     torus.hammerless.use_convex_hull = True
     blocks, log = export()
     assert blocks, log

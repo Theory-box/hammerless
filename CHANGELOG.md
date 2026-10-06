@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Check (and Build) froze Blender on a high-poly object used as a brush** (a subdivided or rounded mesh with thousands of faces): checking it compared every face with every other. It now says in a few seconds that a game brush can have at most 128 differently angled faces, and what to do (simplify it, make it Terrain, or Ignore it).
+- **Check (and Build) froze Blender on a high-poly object used as a brush** (a subdivided or rounded mesh with thousands of faces): checking it compared every face with every other. It's now fast at any size (a 32,000-face mesh: about 6 s), with the same verdicts on ordinary brushes. A new check catches what really breaks the map compiler: a brush side with more than 64 corners (for example a cylinder's cap with many segments) crashes it without a message; measured with L4D2's vbsp, which compiled brushes with 4,000 sides fine.
 
 ## 0.5.0 (test release, 2026-10-05)
 

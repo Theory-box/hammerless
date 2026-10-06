@@ -1674,25 +1674,48 @@ class TestGameContent(unittest.TestCase):
 
 
 class TestDenseBrush(unittest.TestCase):
-    def test_high_poly_brush_is_quick(self):
-        """A dense rounded mesh used as a brush (thousands of faces) gets a clear error in seconds:
-        Check used to freeze Blender comparing every face with every other."""
+    """Brush checks on dense meshes: quick (Check used to freeze Blender comparing every face with
+    every other), and only the compiler's real limits (measured with L4D2's vbsp)."""
+
+    def sphere(self, seg=96, rings=48, r=100.0):
         import math
-        import time
-        from hammerless.core import geometry as g
-        from hammerless.core.ir import Brush, Polygon
-        seg, rings, r = 96, 48, 100.0
+        from hammerless.core.ir import Polygon
 
         def p(i, j):
-            th, ph = 2 * math.pi * i / seg, math.pi * j / rings
+            th, ph = 2 * math.pi * (i % seg) / seg, math.pi * j / rings
             return (r * math.sin(ph) * math.cos(th), r * math.sin(ph) * math.sin(th), r * math.cos(ph))
-        faces = [Polygon([p(i, j), p(i, j + 1), p(i + 1, j + 1), p(i + 1, j)][::-1], "m")
+        faces = [Polygon([p(i, j), p(i + 1, j), p(i + 1, j + 1), p(i, j + 1)], "m")
                  for i in range(seg) for j in range(1, rings - 1)]
+        faces += [Polygon([p(i, 0), p(i + 1, 1), p(i, 1)], "m") for i in range(seg)]                 # caps
+        faces += [Polygon([p(i, rings), p(i, rings - 1), p(i + 1, rings - 1)], "m") for i in range(seg)]
+        return [Polygon(f.verts[::-1], "m") for f in faces]          # wound so the normals point outward
+
+    def cylinder(self, k, r=200.0, h=64.0):
+        import math
+        from hammerless.core.ir import Polygon
+        ring = [(r * math.cos(2 * math.pi * i / k), r * math.sin(2 * math.pi * i / k)) for i in range(k)]
+        sides = [Polygon([(*ring[i], 0.0), (*ring[(i + 1) % k], 0.0), (*ring[(i + 1) % k], h), (*ring[i], h)], "m")
+                 for i in range(k)]
+        return sides + [Polygon([(x, y, h) for x, y in ring], "m"), Polygon([(x, y, 0.0) for x, y in ring[::-1]], "m")]
+
+    def test_dense_sphere_is_quick_and_valid(self):
+        import time
+        from hammerless.core import geometry as g
+        from hammerless.core.ir import Brush
+        faces = self.sphere()
         t = time.time()
-        problems = g.check_brush(Brush(faces, source="sphere"))
+        self.assertEqual(g.check_brush(Brush(faces, source="sphere")), [])          # vbsp takes 4000+ sides
         self.assertLess(time.time() - t, 10.0)
+        holed = Brush(faces[:100] + faces[101:], source="holed")                     # the large-mesh open test
+        self.assertIn("is open", g.check_brush(holed)[0].message)
+
+    def test_face_corner_limit(self):
+        from hammerless.core import geometry as g
+        from hammerless.core.ir import Brush
+        self.assertEqual(g.check_brush(Brush(self.cylinder(64), source="c64")), [])
+        problems = g.check_brush(Brush(self.cylinder(65), source="c65"))
         self.assertEqual(len(problems), 1)
-        self.assertIn("at most 128", problems[0].message)
+        self.assertIn("65 corners", problems[0].message)
 
 
 class TestMapOwner(unittest.TestCase):
