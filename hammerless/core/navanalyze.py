@@ -246,10 +246,15 @@ def _load_pvs(bsp_path: str) -> None:
     nodes = [v for n in pv.nodes for v in n]
     rows = b"".join(pv.cluster_row(c) for c in range(pv.numclusters))
     F, I = ctypes.c_float, ctypes.c_int
-    fastnav._lib.hl_pvs_load(I(len(pv.planes)), (F * max(1, len(planes)))(*planes), (I * max(1, len(types)))(*types),
+    fastnav._lib.hl_pvs_load.restype = ctypes.c_int
+    ok = fastnav._lib.hl_pvs_load(I(len(pv.planes)), (F * max(1, len(planes)))(*planes), (I * max(1, len(types)))(*types),
                              I(len(pv.nodes)), (I * max(1, len(nodes)))(*nodes), I(len(pv.leaf_cluster)),
                              (I * max(1, len(pv.leaf_cluster)))(*pv.leaf_cluster), I(pv.headnode),
                              I(pv.numclusters), I(pv.rowbytes), ctypes.create_string_buffer(rows, max(1, len(rows))))
+    fastnav.check_memory()
+    if not ok:
+        raise ValueError("the compiled map's visibility data is damaged or incomplete (was it still being "
+                         "written?): build the map again")
 
 
 def visibility(areas, vmf, bsp_path: str, materials: MaterialContents, content=None,
@@ -260,7 +265,10 @@ def visibility(areas, vmf, bsp_path: str, materials: MaterialContents, content=N
     if not fastnav.available():
         raise RuntimeError("the nav analysis needs the native DLL")
     with fastnav.LOCK:                                    # the DLL's worlds are shared: one user at a time
-        return _visibility(areas, vmf, bsp_path, materials, content, radius)
+        fastnav._lib.hl_oom()
+        out = _visibility(areas, vmf, bsp_path, materials, content, radius)
+        fastnav.check_memory()
+        return out
 
 
 def _visibility(areas, vmf, bsp_path, materials, content, radius):
@@ -310,7 +318,12 @@ def hiding_spots(mesh, vmf, bsp_path: str, materials: MaterialContents) -> list[
             for di in sd.blocks("dispinfo") for b in displacement_brushes(sd.get("plane"), di)]
     world = CollisionWorld(bsp_brushes(bsp_path, model=0, mask=MASK_NPCSOLID_BRUSHONLY) + ents + disp)
     with fastnav.LOCK:
-        return _hiding_spots(mesh, world)
+        if fastnav.available():
+            fastnav._lib.hl_oom()
+        out = _hiding_spots(mesh, world)
+        if fastnav.available():
+            fastnav.check_memory()
+        return out
 
 
 def _hiding_spots(mesh, world):

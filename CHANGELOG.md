@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Freeze recorder:** if Blender stops responding for 20 seconds, Hammerless writes where it was stuck to `hammerless_freeze.log` in the temp folder (see Troubleshooting), so freezes can be traced to the exact line.
+- **Nav mesh memory cap:** the nav builder's step memory was capped by the biggest map built in the session, so after one huge or leaky build it could grow to about 1 GB and stall the next build after a scene switch. It now follows the current map, with a ceiling.
+- **Native code hardening:** an out-of-memory in the nav builder or analysis now stops it with an error instead of crashing Blender; a damaged or half-written compiled map is reported instead of read past its end; positions that aren't valid numbers can't send a trace into an endless loop. The nav meshes and analysis it produces are unchanged (checked byte for byte, and 99.922% visibility match with the game as before).
+
 ## 0.5.1 (test release, 2026-10-05)
 
 - **Terrain edges sank into a cliff, and the terrain's far edges were in the wrong place in game.** The terrain's patch grid started on a whole Hammer unit and used fixed-size cells, so its outer samples fell just off the terrain mesh and were sunk like holes: a sloped, unwalkable strip up to a cell (about 1.2 m) wide along the edges, which cut off safe room doors built against them, and compiled terrain that reached 1.6 m past the mesh. The grid now spans the terrain exactly (patches a little smaller than the Patch Size to fit): measured on a user map, the compiled terrain covers exactly the mesh's area, with heights within 1 mm of it.

@@ -9,6 +9,35 @@
 #include <math.h>
 #include <stdint.h>
 #include <windows.h>
+#include <setjmp.h>
+
+/* Allocation failures. On the thread running an exported call, a failed allocation jumps back to
+ * that call's wrapper (OOM_WRAP), which frees the DLL's state and returns an error; Python then
+ * raises (hl_oom). Code the visibility worker threads run can't jump to another thread's call: it
+ * gets NULL, keeps what it has and stops; the flag still makes Python raise. */
+static volatile LONG g_oom;
+static _Thread_local jmp_buf *t_oom_jmp;
+static void *xrealloc(void *p, size_t n) {
+    void *q = realloc(p, n ? n : 1);
+    if (!q) {
+        InterlockedExchange(&g_oom, 1);
+        if (t_oom_jmp) longjmp(*t_oom_jmp, 1);
+    }
+    return q;
+}
+static void *xmalloc(size_t n) { return xrealloc(NULL, n); }
+static void *xcalloc(size_t count, size_t size) {
+    void *q = xrealloc(NULL, count * size);
+    if (q) memset(q, 0, count * size ? count * size : 1);
+    return q;
+}
+static void oom_cleanup(void);
+#define OOM_WRAP(type, fail, call) do { jmp_buf oom_env; jmp_buf *oom_prev = t_oom_jmp; \
+        if (setjmp(oom_env)) { t_oom_jmp = oom_prev; oom_cleanup(); return fail; } \
+        t_oom_jmp = &oom_env; type oom_r = call; t_oom_jmp = oom_prev; return oom_r; } while (0)
+#define OOM_WRAP_VOID(call) do { jmp_buf oom_env; jmp_buf *oom_prev = t_oom_jmp; \
+        if (setjmp(oom_env)) { t_oom_jmp = oom_prev; oom_cleanup(); return; } \
+        t_oom_jmp = &oom_env; call; t_oom_jmp = oom_prev; } while (0)
 
 #define EXPORT __declspec(dllexport)
 #define DIST_EPSILON 0.03125
@@ -23,12 +52,12 @@ static double g_cell; static int g_cx0, g_cy0, g_w, g_h;
 static int *g_cell_start, *g_cell_count, *g_cell_ids;   /* dense grid of cell lists (ascending brush ids) */
 static int *g_scratch; static int g_scratch_cap; static int *g_mark; static int g_mark_gen, g_mark_cap, g_world_gen;
 
-EXPORT void hl_world(int nbrushes, const double *bounds, const int *side_first, const int *side_count,
+static void world_impl(int nbrushes, const double *bounds, const int *side_first, const int *side_count,
                      int nsides, const double *sides7, const int *side_bevel, const int *side_flags,
                      double cell, int cx0, int cy0, int w, int h, const int *cell_start, const int *cell_count,
                      int nids, const int *cell_ids) {
     free(g_sides); free(g_brushes); free(g_cell_start); free(g_cell_count); free(g_cell_ids);
-    g_sides = malloc(sizeof(Side) * (nsides ? nsides : 1));
+    g_sides = xmalloc(sizeof(Side) * (nsides ? nsides : 1));
     for (int i = 0; i < nsides; i++) {
         const double *s = sides7 + 7 * i;
         g_sides[i].nx = s[0]; g_sides[i].ny = s[1]; g_sides[i].nz = s[2]; g_sides[i].dist = s[3];
@@ -36,15 +65,15 @@ EXPORT void hl_world(int nbrushes, const double *bounds, const int *side_first, 
         g_sides[i].bevel = side_bevel[i]; g_sides[i].flags = side_flags[i];
     }
     g_nbrushes = nbrushes;
-    g_brushes = malloc(sizeof(Brush) * (nbrushes ? nbrushes : 1));
+    g_brushes = xmalloc(sizeof(Brush) * (nbrushes ? nbrushes : 1));
     for (int i = 0; i < nbrushes; i++) {
         memcpy(g_brushes[i].b, bounds + 6 * i, sizeof(double) * 6);
         g_brushes[i].first = side_first[i]; g_brushes[i].count = side_count[i];
     }
     g_cell = cell; g_cx0 = cx0; g_cy0 = cy0; g_w = w; g_h = h;
-    g_cell_start = malloc(sizeof(int) * (w * h ? w * h : 1)); memcpy(g_cell_start, cell_start, sizeof(int) * w * h);
-    g_cell_count = malloc(sizeof(int) * (w * h ? w * h : 1)); memcpy(g_cell_count, cell_count, sizeof(int) * w * h);
-    g_cell_ids = malloc(sizeof(int) * (nids ? nids : 1)); memcpy(g_cell_ids, cell_ids, sizeof(int) * nids);
+    g_cell_start = xmalloc(sizeof(int) * (w * h ? w * h : 1)); memcpy(g_cell_start, cell_start, sizeof(int) * w * h);
+    g_cell_count = xmalloc(sizeof(int) * (w * h ? w * h : 1)); memcpy(g_cell_count, cell_count, sizeof(int) * w * h);
+    g_cell_ids = xmalloc(sizeof(int) * (nids ? nids : 1)); memcpy(g_cell_ids, cell_ids, sizeof(int) * nids);
     g_world_gen++;
 }
 
@@ -96,6 +125,10 @@ typedef struct { int *ids; int cap; int *mark; int markcap; int markgen; float *
  * can't be hit, so the brushes tested, and their order after the sort, are the same). */
 static int gather(const World *W, Scratch *S, double p1x, double p1y, double p2x, double p2y, double ex, double ey,
                   const double *box) {
+    /* a box with an infinite / NaN / absurd coordinate (or an empty world) touches no brush; turned
+     * into cell numbers it would overflow int and the loops below would run for ever */
+    for (int k = 0; k < 6; k++) if (!(fabs(box[k]) < 1e7)) return 0;
+    if (W->nb <= 0 || !(W->cell > 0.0)) return 0;
     int cx0 = (int)floor(box[0] / W->cell), cx1 = (int)floor(box[3] / W->cell);
     int cy0 = (int)floor(box[1] / W->cell), cy1 = (int)floor(box[4] / W->cell);
     int n = 0;
@@ -105,7 +138,11 @@ static int gather(const World *W, Scratch *S, double p1x, double p1y, double p2x
         int gx = cx0 - W->cx0, gy = cy0 - W->cy0;
         if (gx >= 0 && gy >= 0 && gx < W->w && gy < W->h) {
             int c = gx * W->h + gy;
-            if (W->cc[c] > S->cap) { S->cap = W->cc[c] * 2 + 64; S->ids = realloc(S->ids, sizeof(int) * S->cap); }
+            if (W->cc[c] > S->cap) {
+                int *q = xrealloc(S->ids, sizeof(int) * (W->cc[c] * 2 + 64));
+                if (!q) return 0;
+                S->ids = q; S->cap = W->cc[c] * 2 + 64;
+            }
             for (int k = 0; k < W->cc[c]; k++) {
                 int id = W->ci[W->cs[c] + k];
                 if (GATHER_OVERLAPS(&W->brushes[id])) S->ids[n++] = id;
@@ -113,7 +150,11 @@ static int gather(const World *W, Scratch *S, double p1x, double p1y, double p2x
         }
         return n;
     }
-    if (S->markcap < W->nb) { free(S->mark); S->markcap = W->nb; S->mark = calloc(S->markcap ? S->markcap : 1, sizeof(int)); S->markgen = 0; }
+    if (S->markcap < W->nb) {
+        int *m = xcalloc(W->nb ? W->nb : 1, sizeof(int));
+        if (!m) return 0;
+        free(S->mark); S->mark = m; S->markcap = W->nb; S->markgen = 0;
+    }
     S->markgen++;
     int pieces = 1;
     if ((cx1 - cx0) + (cy1 - cy0) > 4) {
@@ -130,6 +171,8 @@ static int gather(const World *W, Scratch *S, double p1x, double p1y, double p2x
             qy0 = (int)floor(((ay < by ? ay : by) - ey - 2) / W->cell); qy1 = (int)floor(((ay > by ? ay : by) + ey + 2) / W->cell);
             if (qx0 < cx0) qx0 = cx0; if (qx1 > cx1) qx1 = cx1; if (qy0 < cy0) qy0 = cy0; if (qy1 > cy1) qy1 = cy1;
         }
+        if (qx0 < W->cx0) qx0 = W->cx0; if (qx1 > W->cx0 + W->w - 1) qx1 = W->cx0 + W->w - 1;
+        if (qy0 < W->cy0) qy0 = W->cy0; if (qy1 > W->cy0 + W->h - 1) qy1 = W->cy0 + W->h - 1;
         for (int cx = qx0; cx <= qx1; cx++) for (int cy = qy0; cy <= qy1; cy++) {
             int gx = cx - W->cx0, gy = cy - W->cy0;
             if (gx < 0 || gy < 0 || gx >= W->w || gy >= W->h) continue;
@@ -139,7 +182,11 @@ static int gather(const World *W, Scratch *S, double p1x, double p1y, double p2x
                 if (S->mark[id] == S->markgen) continue;
                 S->mark[id] = S->markgen;
                 if (!GATHER_OVERLAPS(&W->brushes[id])) continue;
-                if (n >= S->cap) { S->cap = n * 2 + 64; S->ids = realloc(S->ids, sizeof(int) * S->cap); }
+                if (n >= S->cap) {
+                    int *q = xrealloc(S->ids, sizeof(int) * (n * 2 + 64));
+                    if (!q) { qsort(S->ids, n, sizeof(int), cmp_int); return n; }
+                    S->ids = q; S->cap = n * 2 + 64;
+                }
                 S->ids[n++] = id;
             }
         }
@@ -217,7 +264,7 @@ static Tr trace(const double *start, const double *end, const double *mins, cons
     return trace_w(&W, &g_scr, g_acc ? g_acc_box : NULL, start, end, mins, maxs);
 }
 
-EXPORT void hl_trace(const double *start, const double *end, const double *mins, const double *maxs, double *out10) {
+static void trace_impl(const double *start, const double *end, const double *mins, const double *maxs, double *out10) {
     Tr t = trace(start, end, mins, maxs);
     out10[0] = t.fraction; out10[1] = t.ex; out10[2] = t.ey; out10[3] = t.ez; out10[4] = t.nx; out10[5] = t.ny; out10[6] = t.nz;
     out10[7] = t.startsolid; out10[8] = t.allsolid; out10[9] = t.flags;
@@ -269,7 +316,7 @@ static int hslot(double x, double y) {
 }
 static void hrehash(void) {
     int old = HCAP; int *oh = H; HCAP = HCAP ? HCAP * 2 : 1 << 16;
-    H = malloc(sizeof(int) * HCAP); for (int i = 0; i < HCAP; i++) H[i] = -1;
+    H = xmalloc(sizeof(int) * HCAP); for (int i = 0; i < HCAP; i++) H[i] = -1;
     if (oh) { for (int i = 0; i < old; i++) if (oh[i] >= 0) { Node *n = &N[oh[i]]; H[hslot(n->pos[0], n->pos[1])] = oh[i]; } free(oh); }
 }
 static int hcount;
@@ -280,7 +327,7 @@ static int get_node(const double *p) {
     return -1;
 }
 static int new_node(const double *p, const double *nrm, int parent, int on_disp) {
-    if (NN == NCAP) { NCAP = NCAP ? NCAP * 2 : 4096; N = realloc(N, sizeof(Node) * NCAP); }
+    if (NN == NCAP) { NCAP = NCAP ? NCAP * 2 : 4096; N = xrealloc(N, sizeof(Node) * NCAP); }
     if ((hcount + 1) * 2 > HCAP) hrehash();
     Node *n = &N[NN]; memset(n, 0, sizeof *n);
     memcpy(n->pos, p, 24); memcpy(n->normal, nrm, 24);
@@ -406,13 +453,13 @@ static int mslot(double x, double y) {
 }
 static void mrehash(void) {
     int old = MHCAP; int *oh = MH; MHCAP = MHCAP ? MHCAP * 2 : 1 << 16;
-    MH = malloc(sizeof(int) * MHCAP); for (int i = 0; i < MHCAP; i++) MH[i] = -1;
+    MH = xmalloc(sizeof(int) * MHCAP); for (int i = 0; i < MHCAP; i++) MH[i] = -1;
     if (oh) { for (int i = 0; i < old; i++) if (oh[i] >= 0) { Memo *e = &M[oh[i]]; MH[mslot(e->pos[0], e->pos[1])] = oh[i]; } free(oh); }
 }
 static Memo *memo_at(const double *p) {        /* the memo for this exact position, made if missing */
     if (!MH) mrehash();
     for (int i = MH[mslot(p[0], p[1])]; i >= 0; i = M[i].next_xy) if (M[i].pos[2] == p[2]) return &M[i];
-    if (NM == MCAP) { MCAP = MCAP ? MCAP * 2 : 4096; M = realloc(M, sizeof(Memo) * MCAP); }
+    if (NM == MCAP) { MCAP = MCAP ? MCAP * 2 : 4096; M = xrealloc(M, sizeof(Memo) * MCAP); }
     if ((mhcount + 1) * 2 > MHCAP) mrehash();
     int sl = mslot(p[0], p[1]);
     if (MH[sl] < 0) mhcount++;
@@ -543,12 +590,12 @@ EXPORT void hl_reset(void) {
     free(N); N = NULL; NN = NCAP = 0; free(H); H = NULL; HCAP = 0; hcount = 0; free(SEEDS); SEEDS = NULL; NSEEDS = 0; g_traces = 0; g_memo_hits = g_memo_misses = 0;
 }
 
-EXPORT int hl_add_seed(double x, double y, double z) {
+static int add_seed_impl(double x, double y, double z) {
     double p[3] = {round_to_units(x, GENERATION_STEP), round_to_units(y, GENERATION_STEP), z};
     double s[3] = {p[0], p[1], p[2] + DUCK_HULL_TOP - 0.1}, e[3] = {p[0], p[1], p[2] - DEATH_DROP};
     Tr tr = hull(s, e);
     if (tr.allsolid) return 0;
-    SEEDS = realloc(SEEDS, sizeof(double) * 6 * (NSEEDS + 1));
+    SEEDS = xrealloc(SEEDS, sizeof(double) * 6 * (NSEEDS + 1));
     double *o = SEEDS + 6 * NSEEDS++;
     o[0] = round_to_units(tr.ex, GENERATION_STEP); o[1] = round_to_units(tr.ey, GENERATION_STEP); o[2] = tr.ez;
     o[3] = tr.nx; o[4] = tr.ny; o[5] = tr.nz;
@@ -567,7 +614,7 @@ static void run(int cur, int max_nodes) {
     }
 }
 
-EXPORT int hl_sample(int max_nodes) {
+static int sample_impl(int max_nodes) {
     if (!H) hrehash();
     for (int seed_i = 0; seed_i < NSEEDS && NN < max_nodes; seed_i++) {
         double *sd = SEEDS + 6 * seed_i;
@@ -578,14 +625,14 @@ EXPORT int hl_sample(int max_nodes) {
 }
 
 /* carry on sampling from a new node (a ladder end, found by the caller) */
-EXPORT int hl_sample_from(double x, double y, double z, double nx, double ny, double nz, int max_nodes) {
+static int sample_from_impl(double x, double y, double z, double nx, double ny, double nz, int max_nodes) {
     if (!H) hrehash();
     double p[3] = {x, y, z}, n[3] = {nx, ny, nz};
     run(new_node(p, n, -1, 0), max_nodes);
     return NN;
 }
 
-EXPORT int hl_has_node(double x, double y, double z) {
+static int has_node_impl(double x, double y, double z) {
     if (!H) hrehash();
     double p[3] = {x, y, z};
     return get_node(p) >= 0;
@@ -735,7 +782,7 @@ static int covered_count(int node, int width, int height) {
 /* longest closed-cell run from each node in direction d (a speed-up bound only) */
 static void runs(int d, int *run) {
     for (int i = 0; i < NN; i++) run[i] = -1;
-    int *chain = malloc(sizeof(int) * (NN + 1));
+    int *chain = xmalloc(sizeof(int) * (NN + 1));
     for (int s = 0; s < NN; s++) {
         if (run[s] >= 0) continue;
         int len = 0, n = s;
@@ -748,13 +795,13 @@ static void runs(int d, int *run) {
 }
 
 /* CreateNavAreasFromNodes: writes (node index, width, height) per area in build order; returns the count */
-EXPORT int hl_create_areas(int *out, int cap) {
+static int create_areas_impl(int *out, int cap) {
     free(COVERED); free(CLOSED);
-    COVERED = calloc(NN + 1, 1); CLOSED = calloc(NN + 1, 1);
+    COVERED = xcalloc(NN + 1, 1); CLOSED = xcalloc(NN + 1, 1);
     for (int i = 0; i < NN; i++) CLOSED[i] = (unsigned char)closed_cell(i);
-    int *east = malloc(sizeof(int) * (NN + 1)), *south = malloc(sizeof(int) * (NN + 1));
+    int *east = xmalloc(sizeof(int) * (NN + 1)), *south = xmalloc(sizeof(int) * (NN + 1));
     runs(GEN_EAST, east); runs(GEN_SOUTH, south);
-    Fail *memo = calloc(NN + 1, sizeof(Fail));
+    Fail *memo = xcalloc(NN + 1, sizeof(Fail));
     int width = AREA_MAX_SIZE, height = AREA_MAX_SIZE, uncovered = NN, count = 0;
     while (uncovered > 0) {
         for (int node = NN - 1; node >= 0; node--) {          /* CNavNode::m_list: newest first */

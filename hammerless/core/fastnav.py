@@ -45,6 +45,16 @@ def available() -> bool:
     return bool(_lib)
 
 
+def check_memory() -> None:
+    """After native work: raise if one of its allocations failed (the DLL has already freed its
+    state and stopped; its sweep memory is gone too)."""
+    global _memo_keys
+    if _lib and _lib.hl_oom():
+        _memo_keys = None
+        raise MemoryError("not enough memory for the nav mesh (close other programs, or check the map for "
+                          "something huge: a leak to the void, a giant terrain)")
+
+
 def _arr(ctype, values):
     return (ctype * max(1, len(values)))(*values)
 
@@ -52,6 +62,9 @@ def _arr(ctype, values):
 _current = None          # the CollisionWorld the DLL holds
 _memo_keys = None        # brushes the DLL's sweep memory was made with
 MEMO_MAX_CHANGED = 2000  # more changed brushes than this: start the memory afresh
+MEMO_CEILING = 600000    # entries (about 660 bytes each): above this the memory starts afresh
+MEMO_MAX_TESTS = 5e7     # entries x changed brushes: dropping entries one by one would take longer than
+                         # starting afresh (it runs on one thread, holding the lock)
 last_memo = {}           # what the last load did to the memory (for tests and the status line)
 
 
@@ -91,8 +104,11 @@ def _update_memo(world, bounds, sides7, bevel, flags, first, count) -> None:
         _lib.hl_memo_clear()
         last_memo.update(mode="fresh", changed=len(changed), dropped=0)
         return
-    if _lib.hl_memo_size() > max(200000, 3 * _last_nodes[0]):
-        _lib.hl_memo_clear()                # (old positions pile up across edits: about 660 bytes each)
+    size = _lib.hl_memo_size()
+    # (old positions pile up across edits; the cap follows the current map, not the biggest one this
+    # session: one huge build used to let it grow to a gigabyte, and switching scenes then stalled)
+    if size > min(MEMO_CEILING, max(200000, 3 * _last_nodes[0])) or size * len(changed) > MEMO_MAX_TESTS:
+        _lib.hl_memo_clear()
         last_memo.update(mode="fresh", changed=len(changed), dropped=0)
         return
     boxes = [v for k in changed for v in k[0]]
@@ -218,7 +234,7 @@ _last_nodes = [0]          # nodes the last sampling made (the memo's useful siz
 
 def node_count() -> int:
     n = _lib.hl_node_count()
-    _last_nodes[0] = max(_last_nodes[0], n) if n else _last_nodes[0]
+    _last_nodes[0] = n if n else _last_nodes[0]
     return n
 
 

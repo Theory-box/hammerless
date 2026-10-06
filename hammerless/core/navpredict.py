@@ -138,7 +138,12 @@ def check_native(vmf_text: str, regions=(), climbs=(), wall_climbs=False) -> str
 def _predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False, native_areas=None) -> NavMesh:
     from . import fastnav
     with fastnav.LOCK:                 # the DLL's world is shared with the nav analysis (other threads)
-        return _predict_locked(vmf_text, regions, progress, climbs, wall_climbs, native_areas)
+        if fastnav.available():
+            fastnav._lib.hl_oom()          # (a stale flag from an earlier failure)
+        mesh = _predict_locked(vmf_text, regions, progress, climbs, wall_climbs, native_areas)
+        if fastnav.available():
+            fastnav.check_memory()
+        return mesh
 
 
 def _predict_locked(vmf_text: str, regions, progress, climbs, wall_climbs, native_areas) -> NavMesh:

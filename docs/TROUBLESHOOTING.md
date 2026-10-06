@@ -48,6 +48,10 @@ With *Settings > Scene > Auto Seal (skybox shell)* on (the default) a map can't 
 
 The full compiler output is in `<Work Folder>/<map>.log`. The newest compile is at the **end** of the file; earlier runs are kept above it.
 
+## Blender froze
+
+Hammerless records freezes: if Blender stops responding for 20 seconds, it writes where it was stuck to `hammerless_freeze.log` in your temp folder (type `%TEMP%` in the Explorer address bar). Attach that file when you report the freeze. If Blender crashed instead, Blender writes its own `blender.crash.txt` in the same folder.
+
 ## Reporting a bug
 
 [Open an issue](../../../issues/new/choose) with your Blender version, what you did, what happened, and the end of `hammerless_log` (and of `left4dead2/console.log` for in-game problems).

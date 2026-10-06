@@ -87,21 +87,35 @@ static float *PL; static int *PLT, *PLS, NPL;          /* planes: nx ny nz dist;
 static int *ND, NND, *LC, NLF, HEAD;                   /* nodes: plane front back; leaf clusters */
 static unsigned char *ROWS; static int ROWB, NCL;
 
-EXPORT void hl_pvs_load(int nplanes, const float *planes4, const int *types, int nnodes, const int *nodes3,
+static int pvs_load_impl(int nplanes, const float *planes4, const int *types, int nnodes, const int *nodes3,
                         int nleafs, const int *clusters, int head, int nclusters, int rowbytes, const unsigned char *rows) {
     free(PL); free(PLT); free(PLS); free(ND); free(LC); free(ROWS);
-    NPL = nplanes; PL = malloc(sizeof(float) * 4 * (nplanes + 1)); PLT = malloc(sizeof(int) * (nplanes + 1)); PLS = malloc(sizeof(int) * (nplanes + 1));
+    NPL = nplanes; PL = xmalloc(sizeof(float) * 4 * (nplanes + 1)); PLT = xmalloc(sizeof(int) * (nplanes + 1)); PLS = xmalloc(sizeof(int) * (nplanes + 1));
     memcpy(PL, planes4, sizeof(float) * 4 * nplanes); memcpy(PLT, types, sizeof(int) * nplanes);
     for (int i = 0; i < nplanes; i++)
         PLS[i] = (PL[4 * i] < 0 ? 1 : 0) | (PL[4 * i + 1] < 0 ? 2 : 0) | (PL[4 * i + 2] < 0 ? 4 : 0);
-    NND = nnodes; ND = malloc(sizeof(int) * 3 * (nnodes + 1)); memcpy(ND, nodes3, sizeof(int) * 3 * nnodes);
-    NLF = nleafs; LC = malloc(sizeof(int) * (nleafs + 1)); memcpy(LC, clusters, sizeof(int) * nleafs);
+    NND = nnodes; ND = xmalloc(sizeof(int) * 3 * (nnodes + 1)); memcpy(ND, nodes3, sizeof(int) * 3 * nnodes);
+    NLF = nleafs; LC = xmalloc(sizeof(int) * (nleafs + 1)); memcpy(LC, clusters, sizeof(int) * nleafs);
     HEAD = head; NCL = nclusters; ROWB = rowbytes;
-    ROWS = malloc((size_t)rowbytes * (nclusters + 1)); memcpy(ROWS, rows, (size_t)rowbytes * nclusters);
+    ROWS = xmalloc((size_t)rowbytes * (nclusters + 1)); memcpy(ROWS, rows, (size_t)rowbytes * nclusters);
+    /* a damaged or half-written map: every index the walks follow must be in range */
+    int ok = nplanes > 0 && nnodes > 0 && head >= 0 && head < nnodes;
+    for (int i = 0; ok && i < nplanes; i++) if (PLT[i] < 0 || PLT[i] > 5) ok = 0;
+    for (int i = 0; ok && i < nnodes; i++) {
+        if (ND[3 * i] < 0 || ND[3 * i] >= nplanes) ok = 0;
+        for (int k = 1; k < 3; k++) {
+            int c = ND[3 * i + k];
+            if (c >= nnodes || (c < 0 && -1 - c >= nleafs)) ok = 0;
+        }
+    }
+    if (!ok) NND = 0;           /* the walks then find nothing */
+    return ok;
 }
 static int pvs_point_leaf(const float *p) {              /* CM_PointLeafnum */
-    int num = HEAD;
+    if (NND <= 0) return 0;
+    int num = HEAD, guard = NND + 1;                       /* (a valid tree is at most NND deep) */
     while (num >= 0) {
+        if (--guard < 0) return 0;
         int pl = ND[3 * num]; const float *n = PL + 4 * pl; float d;
         if (PLT[pl] < 3) d = p[PLT[pl]] - n[3];
         else d = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - n[3];
@@ -126,10 +140,13 @@ static int pvs_box_side(const float *lo, const float *hi, int pl) {   /* BOX_ON_
     return sides;
 }
 static int pvs_box_in(const float *lo, const float *hi, const unsigned char *pvs) {   /* CheckBoxInPVS */
+    if (NND <= 0) return 0;
     int stack[1024], sp = 0; stack[sp++] = HEAD;
+    long long guard = 4LL * NND + 1024;                    /* a valid tree visits each node at most once */
     while (sp) {
         int num = stack[--sp];
         for (;;) {
+            if (--guard < 0) return 1;
             if (num < 0) {
                 int c = LC[-1 - num];
                 if (c >= 0 && c < NCL && (pvs[c >> 3] & (1 << (c & 7)))) return 1;
@@ -160,8 +177,8 @@ static VArea *VA; static int NVA;
 #define VIS_POTENTIAL 1
 #define VIS_COMPLETE 2
 
-EXPORT void hl_vis_areas(int n, const float *d8) {
-    free(VA); NVA = n; VA = calloc(n + 1, sizeof(VArea));
+static void vis_areas_impl(int n, const float *d8) {
+    free(VA); NVA = n; VA = xcalloc(n + 1, sizeof(VArea));
     for (int i = 0; i < n; i++) {
         VArea *a = &VA[i]; const float *d = d8 + 8 * i;
         memcpy(a->nw, d, 12); memcpy(a->se, d + 3, 12); a->nez = d[6]; a->swz = d[7];
@@ -268,9 +285,14 @@ static int compute_vis(Scratch *S, int ti, int ai) {                            
                 float e2k[3] = {tp[0] - tc[0], tp[1] - tc[1], tp[2] - tc[2]}; vnormalize(e2k);
                 if (e2k[0] * e2c[0] + e2k[1] * e2c[1] + e2k[2] * e2c[2] >= VIS_DOT_TOLERANCE) continue;
             }
-            if (ns == S->samplecap) { S->samplecap = S->samplecap ? S->samplecap * 2 : 1024; S->samples = realloc(S->samples, sizeof(float) * 3 * S->samplecap); }
+            if (ns == S->samplecap) {                /* (a worker: on a failed allocation, stop taking samples) */
+                int cap = S->samplecap ? S->samplecap * 2 : 1024; float *q = xrealloc(S->samples, sizeof(float) * 3 * cap);
+                if (!q) goto samples_done;
+                S->samples = q; S->samplecap = cap;
+            }
             memcpy(S->samples + 3 * ns, tp, sizeof tp); ns++;
         }
+samples_done:;
     int bits = 0; while ((1 << bits) < ns) bits++;
     for (int k = 0; k < (1 << bits); k++) {
         int idx = 0; for (int b = 0; b < bits; b++) if (k & (1 << b)) idx |= 1 << (bits - 1 - b);
@@ -324,7 +346,8 @@ static void vis_area(Scratch *S, unsigned char *pvs, int i) {
 static DWORD WINAPI vis_worker(LPVOID arg) {
     (void)arg;
     Scratch S; memset(&S, 0, sizeof S);
-    unsigned char *pvs = malloc(ROWB + 1);
+    unsigned char *pvs = xmalloc(ROWB + 1);
+    if (!pvs) return 0;
     for (;;) {
         int i = (int)InterlockedIncrement(&g_vis_next) - 1;
         if (i >= NVA) break;
@@ -341,9 +364,9 @@ EXPORT void hl_vis_stats_on(int on) { g_stats = on; }
  * Each area's pairs (with the areas after it) are independent, so they run on every core; the
  * lists are then assembled in exactly the order the one-thread loop builds them. */
 static int NVL;                   /* how many lists VL holds (NVA may have changed since) */
-EXPORT int hl_vis_run(float radius) {
+static int vis_run_impl(float radius) {
     if (VL) { for (int i = 0; i < NVL; i++) il_free(&VL[i]); free(VL); }
-    VL = calloc(NVA + 1, sizeof(IL)); VR = calloc(NVA + 1, sizeof(IL));
+    VL = xcalloc(NVA + 1, sizeof(IL)); VR = xcalloc(NVA + 1, sizeof(IL));
     NVL = NVA;
     if (radius <= 0.0f) radius = 1500.0f;
     g_vis_r2 = radius * radius;
@@ -351,6 +374,9 @@ EXPORT int hl_vis_run(float radius) {
     if (threads <= 0) { SYSTEM_INFO si; GetSystemInfo(&si); threads = (int)si.dwNumberOfProcessors; }
     if (threads > 64) threads = 64;
     g_vis_next = 0;
+    /* while the workers run, this thread works too, but must not jump out on a failed allocation
+     * (the others still use VA and VR): it stops like a worker, and the flag reports it after */
+    jmp_buf *armed = t_oom_jmp; t_oom_jmp = NULL;
     if (threads <= 1) vis_worker(NULL);
     else {
         HANDLE h[64];
@@ -363,6 +389,7 @@ EXPORT int hl_vis_run(float radius) {
         if (made) WaitForMultipleObjects(made, h, TRUE, INFINITE);
         for (int t = 0; t < made; t++) CloseHandle(h[t]);
     }
+    t_oom_jmp = armed;
     for (int i = 0; i < NVA; i++) {
         il_push(&VL[i], (i << 2) | VIS_COMPLETE);
         for (int k = 0; k < VR[i].n; k += 2) {
@@ -385,4 +412,47 @@ EXPORT int hl_vis_get(int *counts, int *entries, int cap) {
     }
     return k;
 }
-EXPORT int hl_vis_compute(int ti, int ai) { return compute_vis(&g_scr, ti, ai); }   /* one direction (tests) */
+static int vis_compute_impl(int ti, int ai) { return compute_vis(&g_scr, ti, ai); }   /* one direction (tests) */
+
+/* ---------------------------------------------------------------- allocation failures */
+static void oom_cleanup(void) {               /* back to an empty, consistent state */
+    hl_reset(); hl_memo_clear(); areas_reset();
+    free(COVERED); free(CLOSED); COVERED = CLOSED = NULL;
+    free(g_sides); free(g_brushes); free(g_cell_start); free(g_cell_count); free(g_cell_ids);
+    g_sides = NULL; g_brushes = NULL; g_nbrushes = 0; g_cell_start = g_cell_count = g_cell_ids = NULL; g_w = g_h = 0;
+    g_world_gen++;
+    if (VL) { for (int i = 0; i < NVL; i++) il_free(&VL[i]); free(VL); VL = NULL; }
+    if (VR) { for (int i = 0; i < NVA; i++) il_free(&VR[i]); free(VR); VR = NULL; }
+    NVL = 0;
+}
+EXPORT int hl_oom(void) { return (int)InterlockedExchange(&g_oom, 0); }   /* and clear it */
+
+EXPORT void hl_world(int nbrushes, const double *bounds, const int *side_first, const int *side_count,
+                     int nsides, const double *sides7, const int *side_bevel, const int *side_flags,
+                     double cell, int cx0, int cy0, int w, int h, const int *cell_start, const int *cell_count,
+                     int nids, const int *cell_ids) {
+    OOM_WRAP_VOID(world_impl(nbrushes, bounds, side_first, side_count, nsides, sides7, side_bevel, side_flags,
+                             cell, cx0, cy0, w, h, cell_start, cell_count, nids, cell_ids));
+}
+EXPORT void hl_trace(const double *start, const double *end, const double *mins, const double *maxs, double *out10) {
+    OOM_WRAP_VOID(trace_impl(start, end, mins, maxs, out10));
+}
+EXPORT int hl_add_seed(double x, double y, double z) { OOM_WRAP(int, 0, add_seed_impl(x, y, z)); }
+EXPORT int hl_sample(int max_nodes) { OOM_WRAP(int, -1, sample_impl(max_nodes)); }
+EXPORT int hl_sample_from(double x, double y, double z, double nx, double ny, double nz, int max_nodes) {
+    OOM_WRAP(int, -1, sample_from_impl(x, y, z, nx, ny, nz, max_nodes));
+}
+EXPORT int hl_has_node(double x, double y, double z) { OOM_WRAP(int, 0, has_node_impl(x, y, z)); }
+EXPORT int hl_create_areas(int *out, int cap) { OOM_WRAP(int, 0, create_areas_impl(out, cap)); }
+EXPORT int hl_areas_run(int upto) { OOM_WRAP(int, 0, areas_run_impl(upto)); }
+EXPORT int hl_areas_get(double *d8, int *i6, int *cn8, int *links, int cap) {
+    OOM_WRAP(int, 0, areas_get_impl(d8, i6, cn8, links, cap));
+}
+EXPORT int hl_pvs_load(int nplanes, const float *planes4, const int *types, int nnodes, const int *nodes3,
+                       int nleafs, const int *clusters, int head, int nclusters, int rowbytes, const unsigned char *rows) {
+    OOM_WRAP(int, 0, pvs_load_impl(nplanes, planes4, types, nnodes, nodes3, nleafs, clusters, head, nclusters,
+                                   rowbytes, rows));
+}
+EXPORT void hl_vis_areas(int n, const float *d8) { OOM_WRAP_VOID(vis_areas_impl(n, d8)); }
+EXPORT int hl_vis_run(float radius) { OOM_WRAP(int, 0, vis_run_impl(radius)); }
+EXPORT int hl_vis_compute(int ti, int ai) { OOM_WRAP(int, 0, vis_compute_impl(ti, ai)); }

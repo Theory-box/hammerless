@@ -18,14 +18,17 @@
 
 /* ---------------------------------------------------------------- int lists (Python lists) */
 typedef struct { int *v; int n, cap; } IL;
-static void il_push(IL *l, int x) { if (l->n == l->cap) { l->cap = l->cap ? l->cap * 2 : 4; l->v = realloc(l->v, sizeof(int) * l->cap); } l->v[l->n++] = x; }
+static void il_push(IL *l, int x) {      /* (also run by the visibility workers: a failed allocation drops x) */
+    if (l->n == l->cap) { int cap = l->cap ? l->cap * 2 : 4; int *q = xrealloc(l->v, sizeof(int) * cap); if (!q) return; l->v = q; l->cap = cap; }
+    l->v[l->n++] = x;
+}
 static int il_has(const IL *l, int x) { for (int i = 0; i < l->n; i++) if (l->v[i] == x) return 1; return 0; }
 static int il_remove(IL *l, int x) {                 /* list.remove: the first one */
     for (int i = 0; i < l->n; i++) if (l->v[i] == x) { memmove(l->v + i, l->v + i + 1, sizeof(int) * (l->n - i - 1)); l->n--; return 1; }
     return 0;
 }
 static void il_free(IL *l) { free(l->v); l->v = NULL; l->n = l->cap = 0; }
-static IL il_copy(const IL *l) { IL c = {0}; if (l->n) { c.cap = l->n; c.v = malloc(sizeof(int) * c.cap); memcpy(c.v, l->v, sizeof(int) * l->n); c.n = l->n; } return c; }
+static IL il_copy(const IL *l) { IL c = {0}; if (l->n) { c.cap = l->n; c.v = xmalloc(sizeof(int) * c.cap); memcpy(c.v, l->v, sizeof(int) * l->n); c.n = l->n; } return c; }
 
 /* ---------------------------------------------------------------- areas */
 typedef struct {
@@ -38,7 +41,7 @@ static int *NODE_AREA;                    /* Node.area */
 static int g_seq;
 
 static int new_area_rec(const double *nw, const double *se, int attributes) {   /* _new_area */
-    if (NA_ == ACAP) { ACAP = ACAP ? ACAP * 2 : 1024; A = realloc(A, sizeof(Area) * ACAP); }
+    if (NA_ == ACAP) { ACAP = ACAP ? ACAP * 2 : 1024; A = xrealloc(A, sizeof(Area) * ACAP); }
     Area *a = &A[NA_]; memset(a, 0, sizeof *a);
     a->seq = ++g_seq; memcpy(a->nw, nw, 24); memcpy(a->se, se, 24);
     for (int k = 0; k < 4; k++) a->nodes[k] = -1;
@@ -48,7 +51,7 @@ static int new_area_rec(const double *nw, const double *se, int attributes) {   
 static void areas_reset(void) {
     for (int i = 0; i < NA_; i++) for (int d = 0; d < 4; d++) { il_free(&A[i].connect[d]); il_free(&A[i].incoming[d]); }
     NA_ = 0; il_free(&AL); g_seq = 0;
-    free(NODE_AREA); NODE_AREA = malloc(sizeof(int) * (NN + 1));
+    free(NODE_AREA); NODE_AREA = xmalloc(sizeof(int) * (NN + 1));
     for (int i = 0; i < NN; i++) NODE_AREA[i] = -1;
 }
 
@@ -187,7 +190,7 @@ static void index_areas(void) {
         if (!k || ax1 > x1) x1 = ax1; if (!k || ay1 > y1) y1 = ay1;
     }
     G_X0 = x0; G_Y0 = y0; G_W = x1 - x0 + 1; G_H = y1 - y0 + 1; G_N = G_W * G_H;
-    GL = calloc(G_N, sizeof(IL));
+    GL = xcalloc(G_N, sizeof(IL));
     for (int k = 0; k < AL.n; k++) {
         const Area *a = &A[AL.v[k]];
         int ax0 = (int)py_floordiv(a->nw[0], GRID), ax1 = (int)py_floordiv(a->se[0], GRID);
@@ -257,8 +260,8 @@ static void build_area(int node, int width, int height) {
     il_push(&AL, a);
 }
 static void stage_create(void) {
-    int *out = malloc(sizeof(int) * 3 * (NN + 1));
-    int n = hl_create_areas(out, NN + 1);
+    int *out = xmalloc(sizeof(int) * 3 * (NN + 1));
+    int n = create_areas_impl(out, NN + 1);
     for (int i = 0; i < n && i <= NN; i++) build_area(out[3 * i], out[3 * i + 1], out[3 * i + 2]);
     free(out);
     index_areas();
@@ -398,7 +401,7 @@ static const int MT_DIR[4] = {GEN_NORTH, GEN_SOUTH, GEN_WEST, GEN_EAST}, MT_AXIS
 static const int MT_MINE[4][2] = {{0, 1}, {3, 2}, {0, 3}, {1, 2}};
 static void stage_merge(void) {
     double limit = GENERATION_STEP * AREA_MAX_SIZE;
-    unsigned char *clean = calloc(NA_ + 1, 1);       /* no areas are made while merging */
+    unsigned char *clean = xcalloc(NA_ + 1, 1);       /* no areas are made while merging */
     for (;;) {
         int merged = 0;
         for (int k = 0; k < AL.n && !merged; k++) {
@@ -848,7 +851,7 @@ static void stage_fix_connections(void) {
 /* Runs the stages after sampling, up to and including 'upto' (1 build, 2 connect, 3 mark jump,
  * 4 merge, 5 overhangs, 6 square up, 7 stairs, 8 remove jump areas, 9 corners, 10 connections).
  * Returns the number of areas. */
-EXPORT int hl_areas_run(int upto) {
+static int areas_run_impl(int upto) {
     areas_reset();
     void (*stages[10])(void) = {stage_create, stage_connect, stage_mark_jump, stage_merge, stage_overhangs,
                                 stage_square_up, stage_stairs, stage_stitch, stage_fix_corners, stage_fix_connections};
@@ -859,8 +862,8 @@ EXPORT int hl_areas_seq(void) { return g_seq; }
 /* per area, in list order: d8 = nw3 se3 ne_z sw_z; i6 = seq attributes nodes4; cn8 = how many
  * connect[0..3] then incoming[0..3]; then all those links as list positions (-1: an area no
  * longer listed) in that order into links. Returns the number of links written (or needed). */
-EXPORT int hl_areas_get(double *d8, int *i6, int *cn8, int *links, int cap) {
-    int *pos = malloc(sizeof(int) * (NA_ + 1));
+static int areas_get_impl(double *d8, int *i6, int *cn8, int *links, int cap) {
+    int *pos = xmalloc(sizeof(int) * (NA_ + 1));
     for (int i = 0; i < NA_; i++) pos[i] = -1;
     for (int k = 0; k < AL.n; k++) pos[AL.v[k]] = k;
     int nl = 0;
