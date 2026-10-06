@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Terrain edges sank into a cliff.** The terrain's patch grid starts on a whole Hammer unit, up to 1 unit outside the terrain mesh, so the first row and column of heights missed the mesh and were sunk like holes (512 units). That made a 1.2 m strip along those edges unwalkable, and a safe room built against the terrain's edge got no path to its door. Those samples now take the terrain's edge height.
+- **Terrain edges sank into a cliff, and the terrain's far edges were in the wrong place in game.** The terrain's patch grid started on a whole Hammer unit and used fixed-size cells, so its outer samples fell just off the terrain mesh and were sunk like holes: a sloped, unwalkable strip up to a cell (about 1.2 m) wide along the edges, which cut off safe room doors built against them, and compiled terrain that reached 1.6 m past the mesh. The grid now spans the terrain exactly (patches a little smaller than the Patch Size to fit): measured on a user map, the compiled terrain covers exactly the mesh's area, with heights within 1 mm of it.
 - **Check (and Build) froze Blender on a high-poly object used as a brush** (a subdivided or rounded mesh with thousands of faces): checking it compared every face with every other. It's now fast at any size (a 32,000-face mesh: about 6 s), with the same verdicts on ordinary brushes. A new check catches what really breaks the map compiler: a brush side with more than 64 corners (for example a cylinder's cap with many segments) crashes it without a message; measured with L4D2's vbsp, which compiled brushes with 4,000 sides fine.
 
 ## 0.5.0 (test release, 2026-10-05)

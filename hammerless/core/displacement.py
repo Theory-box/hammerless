@@ -58,15 +58,15 @@ def build_patches(t: Terrain) -> list[tuple[Brush, Block]]:
             if all(h is None for h in window):
                 continue
             x0 = t.origin[0] + pc * t.spacing
-            y0 = t.origin[1] + pr * t.spacing
+            y0 = t.origin[1] + pr * t.sy
             x1 = x0 + step * t.spacing
-            y1 = y0 + step * t.spacing
+            y1 = y0 + step * t.sy
             brush = g.box_brush((x0, y0, zb - TERRAIN_BASE_THICKNESS), (x1, y1, zb),
                                 "tools/toolsnodraw", t.source)
             brush.faces[0].material = t.material  # top face
             # vbsp allows at most 125 luxels per side of a displacement: 2048-unit patches need scale 17+
             brush.faces[0].lightmap_scale = max(brush.faces[0].lightmap_scale,
-                                                math.ceil(step * t.spacing / MAX_DISP_LUXELS))
+                                                math.ceil(step * max(t.spacing, t.sy) / MAX_DISP_LUXELS))
             patches.append((brush, _dispinfo(t, pr, pc, n, (x0, y0, zb), zb)))
     return patches
 

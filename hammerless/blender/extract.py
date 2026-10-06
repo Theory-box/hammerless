@@ -343,9 +343,15 @@ def mesh_to_terrain(obj, depsgraph, scale: float, materials: MaterialResolver) -
     if not verts:
         raise ValueError(f"terrain '{obj.name}' has no geometry")
     xs = [v.x for v in verts]; ys = [v.y for v in verts]; zs = [v.z for v in verts]
-    x0, y0 = math.floor(min(xs)), math.floor(min(ys))
-    px = max(1, math.ceil((max(xs) - x0) / patch))
-    py = max(1, math.ceil((max(ys) - y0) / patch))
+    # the grid spans the terrain exactly: as many patches as the Patch Size needs, each a little
+    # smaller to fit, so the outer samples lie on the terrain's edges. (A grid of fixed cells left a
+    # part cell past the far edges whose outer corners missed the terrain and sank: a sloping, unwalkable
+    # strip up to a cell wide along those edges.)
+    x0, y0 = min(xs), min(ys)
+    ext_x, ext_y = max(max(xs) - x0, 1.0), max(max(ys) - y0, 1.0)
+    px = max(1, math.ceil(ext_x / patch - 1e-6))
+    py = max(1, math.ceil(ext_y / patch - 1e-6))
+    spacing, spacing_y = ext_x / (px * step), ext_y / (py * step)
     cols, rows = px * step + 1, py * step + 1
 
     bvh = BVHTree.FromPolygons(verts, polys)
@@ -357,16 +363,16 @@ def mesh_to_terrain(obj, depsgraph, scale: float, materials: MaterialResolver) -
         kd.balance()
     top = max(zs) + 64
     lo_x, hi_x, lo_y, hi_y = min(xs), max(xs), min(ys), max(ys)
-    snap = 1.0 + 1e-6               # the grid starts on whole units (floor), up to 1 unit outside the mesh
+    snap = 1.0 + 1e-6               # a sample this close outside the mesh's bounds is on its edge (float error)
     heights, alphas = [], []
     for r in range(rows):
         hrow, arow = [], []
         for c in range(cols):
-            x, y = x0 + c * spacing, y0 + r * spacing
+            x, y = x0 + c * spacing, y0 + r * spacing_y
             hit, _normal, _idx, _dist = bvh.ray_cast(Vector((x, y, top)), Vector((0, 0, -1)))
             if hit is None:
-                # a sample outside the terrain only by that rounding (or by float error at its far
-                # edge) is the terrain's edge, not a hole: take the height just inside the mesh
+                # a sample outside the terrain only by float error at its edge is on the edge, not
+                # in a hole: take the height just inside the mesh
                 cx, cy = min(max(x, lo_x + 1e-3), hi_x - 1e-3), min(max(y, lo_y + 1e-3), hi_y - 1e-3)
                 if (cx, cy) != (x, y) and abs(cx - x) <= snap and abs(cy - y) <= snap:
                     hit, _normal, _idx, _dist = bvh.ray_cast(Vector((cx, cy, top)), Vector((0, 0, -1)))
@@ -378,7 +384,7 @@ def mesh_to_terrain(obj, depsgraph, scale: float, materials: MaterialResolver) -
                 arow.append(0.0)
         heights.append(hrow)
         alphas.append(arow)
-    return Terrain((x0, y0), spacing, heights, power, material, alphas if kd else None, obj.name)
+    return Terrain((x0, y0), spacing, heights, power, material, alphas if kd else None, obj.name, spacing_y)
 
 
 # ---------------------------------------------------------------- entities

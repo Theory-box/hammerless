@@ -253,7 +253,7 @@ def _all_points(ir: MapIR) -> list[Vec3]:
         if hs:
             rows, cols = len(t.heights), len(t.heights[0])
             x1 = t.origin[0] + (cols - 1) * t.spacing
-            y1 = t.origin[1] + (rows - 1) * t.spacing
+            y1 = t.origin[1] + (rows - 1) * t.sy
             pts += [(t.origin[0], t.origin[1], min(hs) - 17), (x1, y1, max(hs))]
     return pts
 
@@ -281,7 +281,7 @@ def floor_below(ir: MapIR, x: float, y: float, z: float) -> float | None:
     for t in ir.terrains:
         rows, cols = len(t.heights), len(t.heights[0]) if t.heights else 0
         c = (x - t.origin[0]) / t.spacing
-        r = (y - t.origin[1]) / t.spacing
+        r = (y - t.origin[1]) / t.sy
         if 0 <= r <= rows - 1 and 0 <= c <= cols - 1:
             r0, c0 = min(int(r), rows - 2), min(int(c), cols - 2)
             fr, fc = r - r0, c - c0

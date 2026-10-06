@@ -145,27 +145,29 @@ def test_terrain_displacements():
 
 
 def test_terrain_edge_not_sunk():
-    """The patch grid starts on a whole unit up to 1 unit outside the terrain: those edge samples
-    are the terrain's edge (they sank 512 units as 'holes', making a cliff along the edge that broke
-    the path into a safe room built against it)."""
+    """The terrain grid spans the terrain exactly, so every edge sample is on the terrain. (Its corner
+    was rounded to whole units and its cells were fixed: edge samples off the mesh sank 512 units as
+    'holes', making a sloped, unwalkable strip along the edges that cut off safe room doors.)"""
     reset_scene()
     from hammerless.blender.extract import MaterialResolver, mesh_to_terrain
     from hammerless.blender.logic import _Quiet
     bpy.ops.mesh.primitive_grid_add(x_subdivisions=60, y_subdivisions=60, size=24, location=(1.217, -0.683, 0))
     t = bpy.context.object
+    t.scale = (1.0, 1.37, 1.0)                     # not a whole number of cells either way
     t.hammerless.role = "TERRAIN"
     t.hammerless.terrain_power = "3"
     s = bpy.context.scene.hammerless
     ter = mesh_to_terrain(t, bpy.context.evaluated_depsgraph_get(), s.units_per_meter, MaterialResolver(s, None, _Quiet()))
+    sunk = [(r, c) for r, row in enumerate(ter.heights) for c, h in enumerate(row) if h is None]
+    assert not sunk, sunk[:10]
     upm = s.units_per_meter
     xs = [(t.matrix_world @ v.co).x * upm for v in t.data.vertices]
     ys = [(t.matrix_world @ v.co).y * upm for v in t.data.vertices]
     x0, y0 = ter.origin
-    over = lambda r, c: (x0 + c * ter.spacing <= max(xs) + 1e-3 and y0 + r * ter.spacing <= max(ys) + 1e-3)
-    edge = [(0, c) for c in range(len(ter.heights[0]))] + [(r, 0) for r in range(len(ter.heights))]
-    sunk = [(r, c) for r, c in edge if over(r, c) and ter.heights[r][c] is None]
-    assert not sunk, sunk                                        # the near edge row and column
-    assert ter.heights[0][-1] is None or not over(0, len(ter.heights[0]) - 1)     # past the far side: a hole
+    far_x = x0 + (len(ter.heights[0]) - 1) * ter.spacing
+    far_y = y0 + (len(ter.heights) - 1) * ter.sy
+    assert abs(x0 - min(xs)) < 1e-3 and abs(far_x - max(xs)) < 1e-3, (x0, far_x, min(xs), max(xs))
+    assert abs(y0 - min(ys)) < 1e-3 and abs(far_y - max(ys)) < 1e-3, (y0, far_y, min(ys), max(ys))
 
 
 def test_collection_role_terrain():

@@ -81,7 +81,7 @@ def solids_of(ir: MapIR) -> list[_Solid]:
 def _terrain_height(t, x: float, y: float) -> float | None:
     rows, cols = len(t.heights), len(t.heights[0]) if t.heights else 0
     c = (x - t.origin[0]) / t.spacing
-    r = (y - t.origin[1]) / t.spacing
+    r = (y - t.origin[1]) / t.sy
     if rows < 2 or cols < 2 or not (0 <= r <= rows - 1 and 0 <= c <= cols - 1):
         return None
     r0, c0 = min(int(r), rows - 2), min(int(c), cols - 2)
@@ -167,7 +167,7 @@ def _fingerprint(ir: MapIR) -> str:
         h.update(repr((e.classname, e.origin, e.source, e.keyvalues.get("targetname"),
                        [[f.verts for f in b.faces] for b in e.brushes])).encode())
     for t in ir.terrains:
-        h.update(repr((t.origin, t.spacing, t.heights)).encode())
+        h.update(repr((t.origin, t.spacing, t.sy, t.heights)).encode())
     return h.hexdigest()
 
 

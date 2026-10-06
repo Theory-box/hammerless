@@ -32,7 +32,7 @@ class Terrain:
     """A heightfield sampled on a regular grid, turned into displacement patches.
 
     heights[row][col] is the terrain height at (origin_x + col*spacing,
-    origin_y + row*spacing). `None` means no terrain there (ray missed).
+    origin_y + row*spacing_y). `None` means no terrain there (ray missed).
     """
     origin: tuple[float, float]
     spacing: float
@@ -41,6 +41,11 @@ class Terrain:
     material: str = "nature/blend_grass_grass_01"
     alphas: list[list[float]] | None = None  # 0..255 blend per sample (optional)
     source: str = ""
+    spacing_y: float = 0.0         # rows apart along y (0: the same as spacing)
+
+    @property
+    def sy(self) -> float:
+        return self.spacing_y or self.spacing
 
 
 @dataclass
