@@ -25,6 +25,7 @@ class Polygon:
 class Brush:
     faces: list[Polygon]
     source: str = ""  # Blender object name, for error messages
+    detail: str = "AUTO"  # AUTO: the map's Auto Detail rule decides; DETAIL: always func_detail; WORLD: never
 
 
 @dataclass

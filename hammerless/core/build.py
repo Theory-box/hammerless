@@ -78,6 +78,16 @@ def is_auto_detail(brush: Brush, mode: str) -> bool:
             or max(b - a for a, b in zip(lo, hi)) < DETAIL_MAX_SIZE)
 
 
+def is_detail(brush: Brush, mode: str) -> bool:
+    """func_detail or a world brush: the object's own Detail choice, else the map's Auto Detail rule."""
+    if brush.detail == "WORLD":
+        return False
+    if brush.detail == "DETAIL":
+        return not all(f.material.lower() in SEAL_MATERIALS or f.material.lower().startswith("tools/")
+                       for f in brush.faces)
+    return is_auto_detail(brush, mode)
+
+
 def _map_exists(content, name: str) -> bool:
     """A map the game can load: in its VPKs (Valve's maps) or in left4dead2/maps (custom maps)."""
     if f"maps/{name}.bsp" in getattr(content, "files", ()):
@@ -448,13 +458,26 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     mode = s.auto_detail if s.auto_seal else "OFF"
     portals = [g.bounds([v for f in b.faces for v in f.verts]) for e in ir.entities
                if e.classname in ("func_areaportal", "func_areaportalwindow") for b in e.brushes]
-    detail = [b for b in ir.brushes if is_auto_detail(b, mode) and not _touches_any(b, portals)]
+    detail = [b for b in ir.brushes if is_detail(b, mode) and not _touches_any(b, portals)]
     detail_ids = {id(b) for b in detail}
     for b in ir.brushes:
         if id(b) not in detail_ids:
             world.add(w.solid(b))
-    if detail:
-        report.info.append(f"Made {len(detail)} round/small brush(es) func_detail so they don't slow down vvis.")
+    chosen = [b for b in detail if b.detail == "DETAIL"]
+    if len(detail) > len(chosen):
+        report.info.append(f"Made {len(detail) - len(chosen)} round/small brush(es) func_detail so they don't "
+                           f"slow down vvis.")
+    if chosen:
+        names = sorted({b.source for b in chosen if b.source})
+        report.info.append(f"{len(chosen)} brush(es) set to Detail are func_detail.")
+        if not s.auto_seal:
+            report.info.append("Detail brushes don't seal the map: if it leaks, check that none of these is an "
+                               "outer wall: " + ", ".join(names[:5]) + (", ..." if len(names) > 5 else ""))
+    portal_kept = sorted({b.source for b in ir.brushes if b.detail == "DETAIL" and id(b) not in detail_ids
+                          and _touches_any(b, portals) and b.source})
+    if portal_kept:
+        report.info.append("Kept as world brushes (they touch an area portal, which only world brushes can "
+                           "seal): " + ", ".join(portal_kept[:5]))
     n_patches = 0
     for t in ir.terrains:
         try:

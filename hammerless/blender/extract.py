@@ -38,6 +38,31 @@ def collection_role(obj) -> str:
     return "NONE"
 
 
+def detail_choice(obj) -> str:
+    """AUTO, DETAIL or WORLD: the object's own Detail choice, else its nearest collection's."""
+    if obj.hammerless.brush_detail != "AUTO":
+        return obj.hammerless.brush_detail
+    parents = {}
+    for coll in bpy.data.collections:
+        for child in coll.children:
+            parents[child] = coll
+    for coll in obj.users_collection:
+        c = coll
+        while c is not None:
+            if hasattr(c, "hammerless") and c.hammerless.brush_detail != "NONE":
+                return c.hammerless.brush_detail
+            c = parents.get(c)
+    return "AUTO"
+
+
+def _world_brushes(obj, *args) -> list:
+    brushes = mesh_to_brushes(obj, *args)
+    choice = detail_choice(obj)
+    for b in brushes:
+        b.detail = choice
+    return brushes
+
+
 def effective_role(obj) -> str:
     role = obj.hammerless.role
     if role != "AUTO":
@@ -490,7 +515,7 @@ def extract_scene(context, report, game_dir: str | None = None) -> tuple[MapIR, 
             continue
         try:
             if role == "BRUSH" and obj.type == "MESH":
-                ir.brushes.extend(mesh_to_brushes(obj, depsgraph, scale, materials))
+                ir.brushes.extend(_world_brushes(obj, depsgraph, scale, materials))
             elif role == "BRUSH_ENTITY" and obj.type == "MESH":
                 cls = obj.hammerless.classname or "func_detail"
                 ir.entities.append(Entity(cls, None, (0, 0, 0), object_keyvalues(obj),
@@ -532,7 +557,7 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report) -> None
         matrix = inst.matrix_world.copy()
         try:
             if role == "BRUSH" and src.type == "MESH":
-                ir.brushes.extend(mesh_to_brushes(src, depsgraph, scale, materials, matrix, label))
+                ir.brushes.extend(_world_brushes(src, depsgraph, scale, materials, matrix, label))
             elif role == "BRUSH_ENTITY" and src.type == "MESH":
                 cls = src.hammerless.classname or "func_detail"
                 ir.entities.append(Entity(cls, None, (0, 0, 0), object_keyvalues(src),

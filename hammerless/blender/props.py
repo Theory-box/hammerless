@@ -23,6 +23,14 @@ COLLECTION_ROLES = [
     ("IGNORE", "Ignore", "Nothing inside is exported"),
 ]
 
+DETAIL_CHOICES = [
+    ("AUTO", "Auto", "Follow the map's Auto Detail setting (Settings > Compile)"),
+    ("DETAIL", "Detail", "Always func_detail: doesn't slow down vvis, but doesn't block visibility or "
+                         "seal the map. For furniture, trim, overlapping boxes"),
+    ("WORLD", "World", "Never func_detail: blocks visibility, so the game skips drawing what's behind it. "
+                       "For walls between areas"),
+]
+
 COMPILE_PRESETS = [
     ("QUICK", "Quick", "Geometry only (no vis, no lighting). Fastest; the map is fullbright"),
     ("FAST", "Fast", "Fast vis + fast lighting. Terrain shows lighting seams between patches"),
@@ -92,6 +100,8 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
     outputs_index: IntProperty()
     preset: StringProperty(description="On a preset's parent Empty: which preset it is")
     preset_part: StringProperty(description="On a preset part: which part it is")
+    brush_detail: EnumProperty(name="Detail", items=DETAIL_CHOICES, default="AUTO",
+                               description="Whether this brush is func_detail")
     use_convex_hull: BoolProperty(
         name="Use Convex Hull",
         description="Wrap each loose part in its convex hull instead of requiring it to be convex")
@@ -107,6 +117,11 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
 
 class HL_CollectionSettings(bpy.types.PropertyGroup):
     role: EnumProperty(name="Role", items=COLLECTION_ROLES, default="NONE")
+    brush_detail: EnumProperty(
+        name="Detail", default="NONE",
+        items=[("NONE", "Inherit", "Use the parent collection's choice (or the map's Auto Detail setting)")]
+        + DETAIL_CHOICES[1:],
+        description="Whether the brushes inside are func_detail (objects set to Detail or World override it)")
 
 
 # Surface list for the material panel. Starts with the built-in list and is replaced

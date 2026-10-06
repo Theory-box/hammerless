@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Detail per object or collection:** a brush's new **Detail** setting (*Selected Object* panel, under Role) makes it func_detail (*Detail*), keeps it a world brush (*World*), or follows the map's Auto Detail rule (*Auto*, as before). Collections have the same setting in their Properties tab. Use *Detail* on big furniture and piles of overlapping boxes, which the automatic rule (round or under 256 units) left as world brushes: in a test room, 36 overlapping boxes as detail cut the map's visibility pieces from 190 to 48. It works with Auto Seal off too, with a note listing those brushes (detail can't seal a map). Tool brushes and brushes touching an area portal stay world.
+
 ## 0.5.3 (test release, 2026-10-05)
 
 - **Setup warning:** Build & Play now says up front when Left 4 Dead 2 wasn't found (it's found in any Steam library on its own, so this is rare), with the folder setting right there, or when the L4D2 Authoring Tools aren't installed, with where to get them. Before, you only found out when a build failed.

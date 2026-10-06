@@ -21,6 +21,7 @@ This walks through a first playable map, then explains the panels.
 |---|---|
 | Walls, floors, buildings | Any **convex** mesh (boxes, wedges, cylinders). One object can hold several separate convex pieces. |
 | Something that isn't convex | Split it into convex pieces, or tick **Use Convex Hull** on it (*Selected Object* panel). |
+| Faster vvis (furniture, trim, piles of overlapping boxes) | Set **Detail** to *Detail* (*Selected Object* panel, or on a whole collection in its Properties tab). Detail brushes still block players and cast shadows but don't cut up visibility. Small and round brushes become detail on their own (*Settings > Compile > Auto Detail*); set *World* on a small wall that should block visibility. |
 | Terrain | Set the object's (or its collection's) role to **Terrain**. Sculpt freely; it's sampled from above like a heightmap (no overhangs). Paint vertex colour red to blend a blend material's two textures. |
 | Game textures | 🔍 next to **Game Material** searches every L4D2 material. Switch the viewport to *Material Preview* to see them. |
 | Your own textures | A material with an Image Texture in Base Color is converted automatically. |

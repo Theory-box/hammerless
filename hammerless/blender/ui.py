@@ -235,8 +235,24 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                 box.scale_y = 0.85
                 for line in _wrap(d.description, 44):
                     box.label(text=line)
+        if eff == "BRUSH":
+            col.prop(hs, "brush_detail")
+            if hs.brush_detail == "AUTO":
+                col.label(text=_detail_note(context, obj))
         if eff in ("BRUSH", "BRUSH_ENTITY"):
             col.prop(hs, "use_convex_hull")
+
+
+def _detail_note(context, obj) -> str:
+    """What Auto means for this brush right now."""
+    from .extract import detail_choice
+    choice = detail_choice(obj)
+    if choice != "AUTO":
+        return f"From its collection: {choice.title()}"
+    s = context.scene.hammerless
+    if not s.auto_seal or s.auto_detail == "OFF":
+        return "Map setting: World (Auto Detail is off)"
+    return "Map setting: " + ("Detail" if s.auto_detail == "ALL" else "Detail if round or small")
 
 
 def _obj_role(context) -> str:
@@ -671,7 +687,9 @@ class HL_PT_collection(bpy.types.Panel):
         return context.collection is not None and context.collection != context.scene.collection
 
     def draw(self, context):
-        self.layout.prop(context.collection.hammerless, "role")
+        col = _settings(self.layout)
+        col.prop(context.collection.hammerless, "role")
+        col.prop(context.collection.hammerless, "brush_detail")
 
 
 def _wrap(text, width):

@@ -362,6 +362,40 @@ def test_auto_detail_default():
     assert len(world_solids(blocks)) == 1 + 6                              # floor + seal
 
 
+def test_detail_choice():
+    from hammerless.blender.ui import _detail_note
+    s = reset_scene()
+    s.auto_detail = "SMART"
+    add_box("floor", (20, 20, 1), (0, 0, -0.5))
+    big = add_box("big_box", (8, 8, 8), (0, 0, 4))                 # 420 units: the map rule keeps it world
+    crate = add_box("crate", (1, 1, 1), (6, 6, 0.5))               # small: the map rule makes it detail
+    assert _detail_note(bpy.context, big) == "Map setting: Detail if round or small"
+    big.hammerless.brush_detail = "DETAIL"
+    crate.hammerless.brush_detail = "WORLD"
+    blocks, log = export()
+    assert blocks, log
+    detail = entities(blocks, "func_detail")
+    assert len(detail) == 1 and len(detail[0].blocks("solid")) == 1, log    # just the big box
+    assert len(world_solids(blocks)) == 2 + 6, log                          # floor + crate + seal
+    # a collection's choice applies to the brushes inside unless they choose for themselves
+    big.hammerless.brush_detail = crate.hammerless.brush_detail = "AUTO"
+    coll = bpy.data.collections.new("Detail Stuff")
+    bpy.context.scene.collection.children.link(coll)
+    inner = bpy.data.collections.new("Inner")
+    coll.children.link(inner)
+    for o in (big, crate):
+        for c in list(o.users_collection):
+            c.objects.unlink(o)
+        inner.objects.link(o)
+    coll.hammerless.brush_detail = "DETAIL"
+    crate.hammerless.brush_detail = "WORLD"
+    assert _detail_note(bpy.context, big) == "From its collection: Detail"
+    blocks, log = export()
+    detail = entities(blocks, "func_detail")
+    assert len(detail) == 1 and len(detail[0].blocks("solid")) == 1, log
+    assert len(world_solids(blocks)) == 2 + 6, log
+
+
 def test_game_nav_view():
     from hammerless.core.navfile import NavArea, NavMesh, write_nav
     from hammerless.blender import navview

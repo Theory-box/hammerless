@@ -1149,6 +1149,40 @@ class TestAutoDetail(unittest.TestCase):
         self.assertFalse(is_auto_detail(crate, "OFF"))
         self.assertGreaterEqual(len(g.merge_coplanar(cyl.faces)), 9)
 
+    def test_object_choice(self):
+        from hammerless.core.build import is_detail
+        wall = g.box_brush((0, 0, 0), (512, 16, 256), "concrete/wall")
+        crate = g.box_brush((0, 0, 0), (64, 64, 64), "wood/crate")
+        clip = g.box_brush((0, 0, 0), (512, 16, 256), "tools/toolsplayerclip")
+        self.assertFalse(is_detail(wall, "SMART"))
+        wall.detail = "DETAIL"
+        self.assertTrue(is_detail(wall, "SMART"))
+        self.assertTrue(is_detail(wall, "OFF"))                   # the object's choice beats the map's rule
+        crate.detail = "WORLD"
+        self.assertFalse(is_detail(crate, "ALL"))
+        clip.detail = "DETAIL"
+        self.assertFalse(is_detail(clip, "ALL"))                  # tool brushes stay world
+
+    def test_vmf_object_choice(self):
+        ir = box_room_ir()
+        big = g.box_brush((0, 0, 0), (512, 512, 300), "wood/crate", "big_box")
+        big.detail = "DETAIL"
+        small = g.box_brush((600, 0, 0), (632, 32, 32), "wood/crate", "thin_wall")
+        small.detail = "WORLD"
+        ir.brushes += [big, small]
+        text, rep = build_vmf(ir)
+        self.assertEqual(text.count('"func_detail"'), 1)
+        sid = {src: i for i, src in rep.solid_sources.items()}
+        at = text.index('"func_detail"')                         # (the world's solids come before it)
+        self.assertGreater(text.index(f'"id" "{sid["big_box"]}"'), at)
+        self.assertLess(text.index(f'"id" "{sid["thin_wall"]}"'), at)
+        self.assertTrue(any("1 brush(es) set to Detail" in i for i in rep.info), rep.info)
+        # with the auto shell off, the chosen detail still happens, with a note about sealing
+        ir.settings.auto_seal = False
+        text, rep = build_vmf(ir)
+        self.assertEqual(text.count('"func_detail"'), 1)
+        self.assertTrue(any("don't seal" in i and "big_box" in i for i in rep.info), rep.info)
+
     def test_vmf(self):
         ir = box_room_ir()
         ir.brushes.append(g.box_brush((0, 0, 0), (32, 32, 32), "wood/crate", "crate"))
