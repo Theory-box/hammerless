@@ -356,12 +356,20 @@ def mesh_to_terrain(obj, depsgraph, scale: float, materials: MaterialResolver) -
             kd.insert(v, i)
         kd.balance()
     top = max(zs) + 64
+    lo_x, hi_x, lo_y, hi_y = min(xs), max(xs), min(ys), max(ys)
+    snap = 1.0 + 1e-6               # the grid starts on whole units (floor), up to 1 unit outside the mesh
     heights, alphas = [], []
     for r in range(rows):
         hrow, arow = [], []
         for c in range(cols):
             x, y = x0 + c * spacing, y0 + r * spacing
             hit, _normal, _idx, _dist = bvh.ray_cast(Vector((x, y, top)), Vector((0, 0, -1)))
+            if hit is None:
+                # a sample outside the terrain only by that rounding (or by float error at its far
+                # edge) is the terrain's edge, not a hole: take the height just inside the mesh
+                cx, cy = min(max(x, lo_x + 1e-3), hi_x - 1e-3), min(max(y, lo_y + 1e-3), hi_y - 1e-3)
+                if (cx, cy) != (x, y) and abs(cx - x) <= snap and abs(cy - y) <= snap:
+                    hit, _normal, _idx, _dist = bvh.ray_cast(Vector((cx, cy, top)), Vector((0, 0, -1)))
             hrow.append(None if hit is None else hit.z)
             if kd is not None:
                 _co, vi, _d = kd.find(Vector((x, y, hit.z if hit else 0)))
