@@ -1722,6 +1722,21 @@ class TestDenseBrush(unittest.TestCase):
         self.assertIn("65 corners", problems[0].message)
 
 
+class TestPackaging(unittest.TestCase):
+    def test_bl_info_matches_manifest(self):
+        """Blender 4.0 / 4.1 read bl_info (old-style add-on); 4.2+ read the manifest: same version."""
+        import ast
+        import re
+        root = os.path.join(os.path.dirname(__file__), "..", "..", "hammerless")
+        tree = ast.parse(open(os.path.join(root, "__init__.py"), encoding="utf-8").read())
+        info = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                    and getattr(n.targets[0], "id", "") == "bl_info")
+        manifest = open(os.path.join(root, "blender_manifest.toml"), encoding="utf-8").read()
+        version = re.search(r'^version = "([^"]+)"', manifest, re.M).group(1)
+        self.assertEqual(".".join(map(str, info["version"])), version)
+        self.assertEqual(info["blender"], (4, 0, 0))
+
+
 class TestMapOwner(unittest.TestCase):
     def test_owner_round_trip(self):
         import tempfile

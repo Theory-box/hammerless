@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Works in Blender 4.0 and 4.1** (checked in 4.0.2: all tests, every panel and the viewport views, install). Those versions predate extensions, so each release has a second zip, `hammerless-<version>-blender4.0.zip`, installed from *Preferences > Add-ons > Install*. Two calls only Blender 4.1+ has (the Add panel's search hint, Start Fresh's confirm text) fall back on 4.0.
 - Every compiled map counted as having baked lighting (the check read a lump's position instead of its size), so after an Analyze or a Quick build the Baked Lighting panel said "Baked" and offered to show lighting that wasn't there, and the game launch decided about fullbright from the same wrong answer.
 - **Freeze recorder:** if Blender stops responding for 20 seconds, Hammerless writes where it was stuck to `hammerless_freeze.log` in the temp folder (see Troubleshooting), so freezes can be traced to the exact line.
 - **Nav mesh memory cap:** the nav builder's step memory was capped by the biggest map built in the session, so after one huge or leaky build it could grow to about 1 GB and stall the next build after a scene switch. It now follows the current map, with a ceiling.

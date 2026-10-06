@@ -1015,6 +1015,8 @@ class HL_OT_start_fresh(bpy.types.Operator):
                       "scratch. Your .blend isn't touched")
 
     def invoke(self, context, event):
+        if bpy.app.version < (4, 1, 0):         # (4.0's confirm popup takes no title or message)
+            return context.window_manager.invoke_confirm(self, event)
         return context.window_manager.invoke_confirm(
             self, event, title="Start Fresh?",
             message=f"Delete the build of '{context.scene.hammerless.map_name}' (compiled map, lighting, nav mesh)? "

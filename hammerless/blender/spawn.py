@@ -182,7 +182,8 @@ class HL_PT_add(bpy.types.Panel):
         for key, label, icon in CATEGORIES:
             grid.prop_enum(s, "spawn_category", key, text=label, icon=icon)
 
-        layout.prop(s, "spawn_search", text="", icon="VIEWZOOM", placeholder="Search everything")
+        hint = {"placeholder": "Search everything"} if bpy.app.version >= (4, 1, 0) else {}   # (4.1+)
+        layout.prop(s, "spawn_search", text="", icon="VIEWZOOM", **hint)
         if not s.spawn_items:
             layout.operator("hammerless.spawn_refresh", icon="FILE_REFRESH")
             return
