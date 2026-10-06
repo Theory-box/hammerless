@@ -1,8 +1,10 @@
-"""Build the zip for Blender 4.0 / 4.1, which predate extensions: an old-style add-on (bl_info in
-__init__.py) inside a top-level 'hammerless' folder, installed with Edit > Preferences > Add-ons >
-Install. Blender 4.2+ uses the extension zip from `blender --command extension build` instead.
+"""Build the release zip: one zip for Blender 4.0 to 4.5. The add-on sits in a top-level
+'hammerless' folder with both bl_info (old-style add-ons, Blender 4.0 / 4.1: Preferences > Add-ons >
+Install) and blender_manifest.toml (extensions, 4.2+: Get Extensions > Install from Disk; the old
+Add-ons route works there too). Checked: installs, enables and draws its panels in 4.0, 4.2, 4.3,
+4.4 and 4.5 through both routes.
 
-Run:  python scripts/build_legacy_zip.py      -> dist/hammerless-<version>-blender4.0.zip
+Run:  python scripts/build_release_zip.py      -> dist/hammerless-<version>.zip
 """
 import os
 import re
@@ -12,7 +14,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SRC = os.path.join(ROOT, "hammerless")
 manifest = open(os.path.join(SRC, "blender_manifest.toml"), encoding="utf-8").read()
 version = re.search(r'^version = "([^"]+)"', manifest, re.M).group(1)
-out = os.path.join(ROOT, "dist", f"hammerless-{version}-blender4.0.zip")
+out = os.path.join(ROOT, "dist", f"hammerless-{version}.zip")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 count = 0
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:

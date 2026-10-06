@@ -26,9 +26,7 @@ No Hammer, no VMF editing, no console commands.
 
 ## Install
 
-1. Download from [Releases](../../releases) (or build it yourself, see [Development](docs/DEVELOPMENT.md)):
-   - **Blender 4.2 or newer:** `hammerless-<version>.zip`
-   - **Blender 4.0 or 4.1:** `hammerless-<version>-blender4.0.zip`
+1. Download `hammerless-<version>.zip` from [Releases](../../releases) (one zip for Blender 4.0 to 4.5; or build it yourself, see [Development](docs/DEVELOPMENT.md)).
 2. Install it, without unzipping:
    - **Blender 4.2 or newer:** *Edit > Preferences > Get Extensions*, then **⌄** (top right) **> Install from Disk…** and pick the zip.
    - **Blender 4.0 or 4.1:** *Edit > Preferences > Add-ons > Install…*, pick the zip, then tick **Hammerless** in the list.

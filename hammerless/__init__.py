@@ -3,12 +3,13 @@
 The `core` package is pure Python (no bpy) so it can be tested outside Blender;
 the `blender` package is only loaded when running inside Blender.
 """
-# For Blender 4.0 / 4.1 (old-style add-ons; 4.2+ reads blender_manifest.toml instead and ignores this).
-# Keep "version" in step with the manifest (tests/unit checks).
+# Old-style add-on info: Blender 4.0 / 4.1 need it, and lets 4.2+ install the same zip from the Add-ons
+# list too (as an extension, 4.2+ reads blender_manifest.toml instead). Keep "version" in step with the
+# manifest (tests/unit checks).
 bl_info = {
     "name": "Hammerless",
     "author": "Hammerless contributors",
-    "version": (0, 5, 1),
+    "version": (0, 5, 2),
     "blender": (4, 0, 0),
     "location": "3D View > Sidebar (N) > Hammerless",
     "description": "Build and play Left 4 Dead 2 maps straight from Blender",

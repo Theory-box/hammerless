@@ -15,7 +15,7 @@ tests/blender/         headless Blender tests
 tests/fixtures/        scripts that build test scenes
 tests/compile/         real-compile helpers (need the Authoring Tools)
 tests/ingame/          in-game probe scripts (see its README)
-scripts/               release helpers (the Blender 4.0 / 4.1 zip)
+scripts/               release helpers (the release zip)
 demo/                  demo maps: demo_level.blend (a full small level), demo_level2.blend (the next map, for testing the safe room transition); made by the scripts in tests/fixtures/ (demo_level.blend was hand-edited since)
 docs/                  user guides
 docs/dev/              design notes, Hammer feature audit, playtest checklist
@@ -57,7 +57,7 @@ python native/build.py
 "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe" --command extension build --source-dir hammerless --output-dir dist
 ```
 
-The zip for Blender 4.0 / 4.1 (an old-style add-on, before extensions) is built with `python scripts/build_legacy_zip.py`. Both zips go in each release. Any Blender 4.2 or newer can build the extension zip (the commands here use the versions installed on the dev machine). Install it with Blender closed:
+The release zip is built with `python scripts/build_release_zip.py`: one zip for Blender 4.0 to 4.5 (the add-on in a `hammerless/` folder with both `bl_info` and the extension manifest). For installing while developing, any Blender 4.2 or newer can also build the extension zip (the commands here use the versions installed on the dev machine). Install it with Blender closed:
 
 ```bash
 "C:\Program Files\Blender Foundation\Blender 4.4\blender.exe" --command extension install-file --repo user_default --enable dist/hammerless-<version>.zip
