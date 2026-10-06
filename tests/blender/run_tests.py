@@ -144,6 +144,30 @@ def test_terrain_displacements():
     assert len(d.blocks("distances")[0].get("row0").split()) == 9
 
 
+def test_terrain_edge_not_sunk():
+    """The patch grid starts on a whole unit up to 1 unit outside the terrain: those edge samples
+    are the terrain's edge (they sank 512 units as 'holes', making a cliff along the edge that broke
+    the path into a safe room built against it)."""
+    reset_scene()
+    from hammerless.blender.extract import MaterialResolver, mesh_to_terrain
+    from hammerless.blender.logic import _Quiet
+    bpy.ops.mesh.primitive_grid_add(x_subdivisions=60, y_subdivisions=60, size=24, location=(1.217, -0.683, 0))
+    t = bpy.context.object
+    t.hammerless.role = "TERRAIN"
+    t.hammerless.terrain_power = "3"
+    s = bpy.context.scene.hammerless
+    ter = mesh_to_terrain(t, bpy.context.evaluated_depsgraph_get(), s.units_per_meter, MaterialResolver(s, None, _Quiet()))
+    upm = s.units_per_meter
+    xs = [(t.matrix_world @ v.co).x * upm for v in t.data.vertices]
+    ys = [(t.matrix_world @ v.co).y * upm for v in t.data.vertices]
+    x0, y0 = ter.origin
+    over = lambda r, c: (x0 + c * ter.spacing <= max(xs) + 1e-3 and y0 + r * ter.spacing <= max(ys) + 1e-3)
+    edge = [(0, c) for c in range(len(ter.heights[0]))] + [(r, 0) for r in range(len(ter.heights))]
+    sunk = [(r, c) for r, c in edge if over(r, c) and ter.heights[r][c] is None]
+    assert not sunk, sunk                                        # the near edge row and column
+    assert ter.heights[0][-1] is None or not over(0, len(ter.heights[0]) - 1)     # past the far side: a hole
+
+
 def test_collection_role_terrain():
     reset_scene()
     coll = bpy.data.collections.new("Ground")

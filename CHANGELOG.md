@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Terrain edges sank into a cliff.** The terrain's patch grid starts on a whole Hammer unit, up to 1 unit outside the terrain mesh, so the first row and column of heights missed the mesh and were sunk like holes (512 units). That made a 1.2 m strip along those edges unwalkable, and a safe room built against the terrain's edge got no path to its door. Those samples now take the terrain's edge height.
 - **Check (and Build) froze Blender on a high-poly object used as a brush** (a subdivided or rounded mesh with thousands of faces): checking it compared every face with every other. It now says in a few seconds that a game brush can have at most 128 differently angled faces, and what to do (simplify it, make it Terrain, or Ignore it).
 
 ## 0.5.0 (test release, 2026-10-05)
