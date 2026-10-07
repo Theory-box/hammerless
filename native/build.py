@@ -1,21 +1,34 @@
-"""Build hammerless/core/_hlnav.dll from native/hlnav.c with zig (pip install ziglang).
+"""Build the native parts with zig (pip install ziglang):
 
-Floating point must behave exactly like Python's doubles: no fused multiply-add
-(-ffp-contract=off), no fast-math, and a baseline CPU so the DLL runs anywhere.
+- hammerless/core/_hlnav.dll from native/hlnav.c (nav sampling, flood fill, nav visibility)
+- hammerless/core/hlvvis.exe from native/hlvvis.c (the visibility compiler, a drop-in for vvis)
+
+Floating point must behave exactly like the reference: no fused multiply-add (-ffp-contract=off), no
+fast-math, and a baseline CPU (SSE2) so the binaries run anywhere.
+
+    python native/build.py            (both)
+    python native/build.py hlvvis     (just one)
 """
 import os
 import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "..", "hammerless", "core", "_hlnav.dll")
+CORE = os.path.join(HERE, "..", "hammerless", "core")
+FLAGS = ["-O2", "-ffp-contract=off", "-fno-fast-math", "-target", "x86_64-windows-gnu", "-mcpu=baseline"]
+TARGETS = {
+    "hlnav": (["-shared"], "_hlnav.dll", "hlnav.c"),
+    "hlvvis": ([], "hlvvis.exe", "hlvvis.c"),
+}
 
-cmd = [sys.executable, "-m", "ziglang", "cc", "-shared", "-O2", "-ffp-contract=off", "-fno-fast-math",
-       "-target", "x86_64-windows-gnu", "-mcpu=baseline", "-o", os.path.abspath(OUT),
-       os.path.join(HERE, "hlnav.c")]
-print(" ".join(cmd))
-subprocess.run(cmd, check=True)
-for extra in (OUT[:-4] + ".lib", OUT[:-4] + ".pdb", os.path.join(os.path.dirname(OUT), "hlnav.lib")):
-    if os.path.exists(extra):
-        os.remove(extra)
-print("built", os.path.abspath(OUT), os.path.getsize(OUT), "bytes")
+for name in sys.argv[1:] or list(TARGETS):
+    extra, out_name, src = TARGETS[name]
+    out = os.path.abspath(os.path.join(CORE, out_name))
+    cmd = [sys.executable, "-m", "ziglang", "cc", *extra, *FLAGS, "-o", out, os.path.join(HERE, src)]
+    print(" ".join(cmd))
+    subprocess.run(cmd, check=True)
+    stem = out[:-4]
+    for leftover in (stem + ".lib", stem + ".pdb", os.path.join(CORE, name + ".lib"), os.path.join(CORE, name + ".pdb")):
+        if os.path.exists(leftover):
+            os.remove(leftover)
+    print("built", out, os.path.getsize(out), "bytes")

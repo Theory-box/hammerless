@@ -1193,6 +1193,83 @@ class TestAutoDetail(unittest.TestCase):
         self.assertNotIn("func_detail", text)
 
 
+class TestVisCompiler(unittest.TestCase):
+    """Settings > Compile > Vis Compiler: our hlvvis.exe in place of vvis.exe, falling back to vvis."""
+
+    def _job(self, opts):
+        import tempfile
+        from hammerless.core import compile as cc
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "left4dead2", "maps"))
+        work = tempfile.mkdtemp()
+        vmf = os.path.join(work, "m.vmf")
+        open(vmf, "w").write("world {}")
+        return cc.CompileJob(cc.Tools(root), vmf, opts, copy_to_game=False)
+
+    def test_steps(self):
+        from hammerless.core import compile as cc
+        vvis = lambda job: dict(job.steps)["vvis"]
+        self.assertTrue(vvis(self._job(cc.CompileOptions()))[0].endswith("vvis.exe"))
+        if os.path.exists(cc.HLVVIS):
+            job = self._job(cc.CompileOptions(vis_tool="HAMMERLESS", vis="FAST"))
+            self.assertEqual(vvis(job)[0], cc.HLVVIS)
+            self.assertIn("-fast", vvis(job))
+            self.assertTrue(job._valve_vvis[0].endswith("vvis.exe"))
+        # vvis options ours doesn't know: Valve's vvis
+        job = self._job(cc.CompileOptions(vis_tool="HAMMERLESS", extra_vvis="-radius_override 2000"))
+        self.assertTrue(vvis(job)[0].endswith("vvis.exe"))
+
+    def test_choice_isnt_part_of_the_build_stamp(self):
+        from hammerless.core import compile as cc
+        a = self._job(cc.CompileOptions())
+        b = self._job(cc.CompileOptions(vis_tool="HAMMERLESS"))
+        b.vmf, b._vmf_bytes = a.vmf, getattr(a, "_vmf_bytes", None)
+        self.assertEqual(cc._opts_rest(repr(a._opts)), cc._opts_rest(repr(b._opts)))
+
+    def test_hlvvis_matches_vvis(self):
+        """hlvvis on a small compiled map (three rooms, an area portal) writes the same file as L4D2's vvis,
+        in full and -fast mode. The fixture's pakfile is empty (no game files in the repo)."""
+        import subprocess
+        import tempfile
+        import zipfile
+        from hammerless.core import compile as cc
+        if not os.path.exists(cc.HLVVIS):
+            self.skipTest("hlvvis.exe not built")
+        z = zipfile.ZipFile(os.path.join(os.path.dirname(__file__), "..", "fixtures", "vis", "rooms_portal.zip"))
+        for mode in ("full", "fast"):
+            with tempfile.TemporaryDirectory() as d:
+                base = os.path.join(d, "rooms_portal")
+                for ext in (".bsp", ".prt"):
+                    with open(base + ext, "wb") as f:
+                        f.write(z.read("rooms_portal" + ext))
+                r = subprocess.run([cc.HLVVIS] + (["-fast"] if mode == "fast" else []) + [base],
+                                   capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, r.stdout)
+                with open(base + ".bsp", "rb") as f:
+                    self.assertEqual(f.read(), z.read(f"rooms_portal.vvis_{mode}.bsp"), mode)
+                self.assertFalse(os.path.exists(base + ".hlvvis.tmp"))
+
+    def test_falls_back_to_valve(self):
+        import sys
+        from hammerless.core import compile as cc
+        job = self._job(cc.CompileOptions(vis_tool="HAMMERLESS"))
+        old = cc.HLVVIS
+        try:
+            cc.HLVVIS = sys.executable                    # a stand-in "ours" that exits with 3 (radial vis)
+            job.steps = [("vvis", [sys.executable, "-c", "import sys; sys.exit(3)"])]
+            job._valve_vvis = [sys.executable, "-c", "print('VALVE VVIS RAN')"]
+            job._run_steps()
+        finally:
+            cc.HLVVIS = old
+        lines = []
+        while not job._q.empty():
+            lines.append(job._q.get())
+        text = " | ".join(str(x) for x in lines)
+        self.assertIn("radial", text)
+        self.assertIn("VALVE VVIS RAN", text)
+        self.assertIn(("OK",), lines)
+
+
 class TestCompileSkip(unittest.TestCase):
     def test_bsp_has_lighting(self):
         # a lit map loaded into a running game switches mat_fullbright back off (the engine leaves it

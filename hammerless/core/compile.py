@@ -25,6 +25,7 @@ class CompileOptions:
     extra_vbsp: str = ""
     extra_vvis: str = ""
     extra_vrad: str = ""
+    vis_tool: str = "VALVE"     # VALVE: L4D2's vvis.exe / HAMMERLESS: hlvvis.exe (same results, faster)
 
     def vbsp_args(self) -> list[str]:
         return self.extra_vbsp.split()
@@ -52,8 +53,18 @@ VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
 
 def _opts_rest(text: str) -> str:
     """Compile options without the visibility and lighting levels: those are tracked apart (a more
-    complete vis serves a lesser one; lighting can be added to a map compiled without it)."""
+    complete vis serves a lesser one; lighting can be added to a map compiled without it). Which vis
+    compiler ran doesn't count: both give the same map."""
+    text = re.sub(r", vis_tool='\w+'", "", text)
     return re.sub(r"(vis|rad)='\w+'", r"\1='*'", text)
+
+
+HLVVIS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvvis.exe")
+
+
+def use_hlvvis(opts: "CompileOptions") -> bool:
+    """Our vis compiler runs when chosen, present, and not given vvis options it doesn't know."""
+    return opts.vis_tool == "HAMMERLESS" and os.path.exists(HLVVIS) and not opts.extra_vvis.split()
 
 
 def _opts_vis(text: str) -> str | None:
@@ -336,8 +347,15 @@ class CompileJob:
         game = ["-game", tools.gamedir]
         self.steps: list[tuple[str, list[str]]] = [
             ("vbsp", [tools.exe("vbsp")] + opts.vbsp_args() + game + [self.base])]
+        self._valve_vvis = None             # Valve's vvis, run instead if ours fails
+        self._stopping = False
         if vvis is not None:
-            self.steps.append(("vvis", [tools.exe("vvis")] + vvis + game + [self.base]))
+            valve = [tools.exe("vvis")] + vvis + game + [self.base]
+            if use_hlvvis(opts):
+                self.steps.append(("vvis", [HLVVIS] + vvis + game + [self.base]))
+                self._valve_vvis = valve
+            else:
+                self.steps.append(("vvis", valve))
         if vrad is not None:
             self.steps.append(("vrad", [tools.exe("vrad")] + vrad + game + [self.base]))
         self.plan = "full"            # what a smart build decided (buildplan.plan); see _choose_steps
@@ -405,6 +423,19 @@ class CompileJob:
             if _ACTIVE_JOBS.get(self.base) is self:
                 del _ACTIVE_JOBS[self.base]
 
+    def _exec(self, cmd: list[str]) -> tuple[int, list[str]]:
+        proc = self._proc = subprocess.Popen(
+            cmd, cwd=os.path.dirname(self.vmf), stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, errors="replace",
+            # below-normal priority: the PC stays responsive while vvis/vrad use every core
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
+        out = []
+        for line in proc.stdout:
+            self._q.put(line.rstrip("\n"))
+            out.append(line)
+        return proc.wait(), out
+
     def _run_steps(self):
         import time
         try:
@@ -423,17 +454,12 @@ class CompileJob:
                 if name == "vvis" and not os.path.exists(prt) and os.path.exists(kept_prt):
                     shutil.copy2(kept_prt, prt)      # vbsp -onlyents deletes the portal file; geometry is the same
                 t0 = time.time()
-                proc = self._proc = subprocess.Popen(
-                    cmd, cwd=os.path.dirname(self.vmf), stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, text=True, errors="replace",
-                    # below-normal priority: the PC stays responsive while vvis/vrad use every core
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                    | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
-                out = []
-                for line in proc.stdout:
-                    self._q.put(line.rstrip("\n"))
-                    out.append(line)
-                code = proc.wait()
+                code, out = self._exec(cmd)
+                if code != 0 and name == "vvis" and cmd[0] == HLVVIS and self._valve_vvis and not self._stopping:
+                    # ours only replaces the map at the very end, so the map and portals are untouched
+                    self._q.put("Hammerless vis doesn't do fog-distance (radial) visibility yet: running Valve's vvis"
+                                if code == 3 else f"!! Hammerless vis failed (exit code {code}): running Valve's vvis instead")
+                    code, out = self._exec(self._valve_vvis)
                 self.timings.append((name, time.time() - t0))
                 if code != 0 or (name == "vbsp" and os.path.exists(self.base + ".lin")):
                     self._q.put(f"!! {name} failed (exit code {code})")
@@ -570,6 +596,7 @@ def compile_running(vmf_path: str) -> bool:
 def _stop_compilers() -> None:
     """Blender is closing: don't leave vbsp / vvis / vrad running hidden."""
     for job in list(_ACTIVE_JOBS.values()):
+        job._stopping = True                              # (no fallback compiler after this)
         proc = getattr(job, "_proc", None)
         if proc is not None and proc.poll() is None:
             try:

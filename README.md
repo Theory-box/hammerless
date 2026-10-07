@@ -9,7 +9,7 @@ No Hammer, no VMF editing, no console commands.
 
 ## Features
 
-- **One-click Build & Play**: export, compile (vbsp / vvis / vrad), copy to the game and launch, reusing a running game. **Smart builds** only redo what changed: entity edits skip geometry, unchanged maps skip the compile.
+- **One-click Build & Play**: export, compile (vbsp / vvis / vrad), copy to the game and launch, reusing a running game. **Smart builds** only redo what changed: entity edits skip geometry, unchanged maps skip the compile. Optional **Hammerless vis compiler**: the same visibility data as vvis, about 3 times faster.
 - **Meshes become brushes.** Any convex mesh is a wall or floor; non-convex meshes can use a convex hull. **Terrain** objects become displacements (sculpt them however you like).
 - **Game content in Blender**: all 8,000+ L4D2 materials and 5,500 models, with real textured previews in the viewport. Your own image textures are converted automatically.
 - **Ready-made presets**: Start / End Safe Room (fully wired), Horde Trigger, Horde Button, Crescendo Button, Tank Ambush, Gate + Button, Ladder, Zombie Ladder, Zombie Climb, Zombie Spawn Area.

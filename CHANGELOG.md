@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Faster visibility compile (optional):** *Settings > Compile > Vis Compiler: Hammerless (faster)* runs Hammerless's own visibility compiler (`hlvvis.exe`) instead of L4D2's vvis, with the same results. Tested against vvis on 8 maps (a real level, the two demo maps, the level with water, with Auto Detail off and with Everything, rooms with an area portal, outdoor terrain), 3 runs each: every map file was byte-identical to vvis's, full and fast, except the heaviest map (Auto Detail off), where a borderline pair or two differed, as vvis's own runs differ from each other. About 3 times faster: 14.1 s to 5.2 s on the real level, 118 s to 38 s with Auto Detail off. If it ever fails, Valve's vvis runs instead; maps with fog-distance (radial) visibility, which Hammerless never writes itself, also use Valve's vvis for now. Valve's vvis stays the default.
+
 ## 0.5.4 (test release, 2026-10-06)
 
 - **Detail per object or collection:** a brush's new **Detail** setting (*Selected Object* panel, under Role) makes it func_detail (*Detail*), keeps it a world brush (*World*), or follows the map's Auto Detail rule (*Auto*, as before). Collections have the same setting in their Properties tab. Use *Detail* on big furniture and piles of overlapping boxes, which the automatic rule (round or under 256 units) left as world brushes: in a test room, 36 overlapping boxes as detail cut the map's visibility pieces from 190 to 48. It works with Auto Seal off too, with a note listing those brushes (detail can't seal a map). Tool brushes and brushes touching an area portal stay world.

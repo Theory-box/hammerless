@@ -587,6 +587,7 @@ class HL_PT_compile(_Sub, bpy.types.Panel):
         col = _settings(layout)
         col.prop(s, "compile_preset", text="Quality")
         col.prop(s, "auto_detail")
+        col.prop(s, "vis_tool")
         layout.separator()
         if s.compile_preset != "CUSTOM":
             from ..core.compile import PRESETS

@@ -344,6 +344,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                              description="File name of the map: lowercase letters, digits and _ (spaces "
                                          "become _)")
     compile_preset: EnumProperty(name="Quality", items=COMPILE_PRESETS, default="NORMAL")
+    vis_tool: EnumProperty(name="Vis Compiler", default="VALVE", items=[
+        ("VALVE", "Valve vvis", "L4D2's own visibility compiler (vvis.exe)"),
+        ("HAMMERLESS", "Hammerless (faster)",
+         "Hammerless's visibility compiler: the same results as vvis, about 3 times faster. If it ever fails, "
+         "Valve's vvis runs instead")])
     vis_mode: EnumProperty(name="Visibility (vvis)", default="FULL", items=[
         ("SKIP", "Skip", "No visibility pass: everything always renders (slow in-game on big maps)"),
         ("FAST", "Fast", "Quick visibility pass"),

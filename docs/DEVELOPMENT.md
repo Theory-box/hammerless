@@ -8,11 +8,12 @@ hammerless/            the Blender extension (this folder is what gets zipped)
   core/                pure Python, no bpy: geometry, VMF writer, compile pipeline, nav generator,
                        nav analysis, terrain, entities, textures, logic graph compiler
   core/_hlnav.dll      native nav / visibility code (built from native/)
+  core/hlvvis.exe      Hammerless's vis compiler, a drop-in for vvis.exe (built from native/hlvvis.c)
   blender/             UI panels, operators, scene extraction, node editor, viewport drawing
-native/                C source for _hlnav.dll (hlnav.c, hlareas.c, hlvis.c) and build.py
+native/                C source for _hlnav.dll (hlnav.c, hlareas.c, hlvis.c), hlvvis.exe (hlvvis.c) and build.py
 tests/unit/            core tests (plain Python, no Blender)
 tests/blender/         headless Blender tests
-tests/fixtures/        scripts that build test scenes
+tests/fixtures/        scripts that build test scenes; vis/: a small compiled map and vvis's output, for hlvvis
 tests/compile/         real-compile helpers (need the Authoring Tools)
 tests/ingame/          in-game probe scripts (see its README)
 scripts/               release helpers (the release zip)
@@ -48,7 +49,13 @@ The demo .blend contains no game content: open it with the add-on and press *Set
 The nav generator's hot paths and the nav analysis (visibility, hiding spots) run in `core/_hlnav.dll`, built with zig (`pip install ziglang`; the build script runs `python -m ziglang`). The DLL must stay **bit-identical** in output to the Python code it replaces; every native stage has a Python twin used as the reference (and as the fallback when the DLL is missing).
 
 ```bash
-python native/build.py
+python native/build.py            # both; or: python native/build.py hlvvis
+```
+
+`core/hlvvis.exe` is Hammerless's visibility compiler (*Settings > Compile > Vis Compiler*), a drop-in for L4D2's `vvis.exe`: same arguments, same log lines, and the same output. It implements the portal-flow method id Software published with Quake's vis (GPL), with every detail that changes the result matched to L4D2's vvis, plus speed-ups that don't change it (see the comment at the top of `native/hlvvis.c`). With several threads, vvis itself can flip a borderline pair or two between runs; ours does the same, and on the test maps most runs are byte-identical to a vvis run. If it fails, or for a map with fog-distance (radial) visibility, which it doesn't do yet, Hammerless runs Valve's vvis instead. After changing it, compare with vvis on real maps (needs the Authoring Tools):
+
+```bash
+python tests/compile/compare_vis.py path/to/map.vmf
 ```
 
 ## Build the extension zip

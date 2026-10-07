@@ -43,10 +43,14 @@ def game_content(root: str | None) -> GameContent | None:
 
 def compile_options(s) -> "cc.CompileOptions | str":
     if s.compile_preset != "CUSTOM":
-        return s.compile_preset
+        if s.vis_tool == "VALVE":
+            return s.compile_preset
+        import dataclasses
+        return dataclasses.replace(cc.PRESETS[s.compile_preset], vis_tool=s.vis_tool)
     return cc.CompileOptions(vis=s.vis_mode, rad=s.rad_mode, hdr=s.hdr_mode,
                              static_prop_lighting=s.static_prop_lighting,
-                             extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad)
+                             extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad,
+                             vis_tool=s.vis_tool)
 
 
 def launch_options(s) -> cc.LaunchOptions:
