@@ -70,8 +70,8 @@ A preset's parent empty shows the preset's settings and **Select All Parts**. Co
 
 **World**: *Sky & Sun* (sky picker, sun and sky light, Add Sun if Missing; a Blender Sun lamp overrides these), *Fog* (tick the box in its header), *AI Director* (tick the box in its header to customise it: common limit, horde size and timing, No Random Hordes, No Wandering Zombies, specials, Tanks, Witches; *Director Spawns* hands a type to your logic graph), *Logic Graphs* (see [Logic Nodes](LOGIC_NODES.md)).
 
-**Nav Mesh**: *Settings* (made in Blender or by the game, analysis, Zombies Climb Walls) and the *Viewer*. See [Nav Mesh & Zombie Spawns](NAV_AND_ZOMBIES.md).
+**Nav Mesh**: *Settings* (Rebuild Next Time) and the *Viewer*. The nav choices themselves (made in Blender or by the game, analysis, Zombies Climb Walls) sit in the *Build & Play* panel under the buttons, with *Vis Compiler*. See [Nav Mesh & Zombie Spawns](NAV_AND_ZOMBIES.md).
 
 **Baked Lighting**: **Bake Lighting** and the lighting view (Lighting Only / Lit, exposure, X-ray), plus *Bake Settings* (quality, lightmap scale).
 
-**Settings**: *Compile* (Auto Detail; *Vis Compiler*: Valve's vvis or Hammerless's own, about 3 times faster with the same results; with Quality *Custom*, each step and extra compiler options), *Game Window* (monitor, size, borderless, difficulty, launch options), *Folders & Game Data* (L4D2 folder, work folder, reload game data, refresh previews, **Export VMF** to open the map in Hammer), *Scene* (scale, default material, auto seal, checks), *Debug* (*Debug Log* of Director events, *Bot Walkthrough Test* where bots play the map).
+**Settings**: *Compile* (Auto Detail; with Quality *Custom*, each step and extra compiler options), *Game Window* (monitor, size, borderless, difficulty, launch options), *Folders & Game Data* (L4D2 folder, work folder, reload game data, refresh previews, **Export VMF** to open the map in Hammer), *Scene* (scale, default material, auto seal, checks), *Debug* (*Debug Log* of Director events, *Bot Walkthrough Test* where bots play the map).

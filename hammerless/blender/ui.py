@@ -93,6 +93,14 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         row.scale_y = 1.2
         row.operator("hammerless.build", text="Build", icon="FILE_REFRESH").play = False
         row.operator("hammerless.launch", text="Play", icon="URL")
+        layout.separator()
+        col = _settings(layout)
+        col.prop(s, "nav_source")
+        sub = col.column()
+        sub.enabled = s.nav_source == "BLENDER"
+        sub.prop(s, "nav_analysis")
+        sub.prop(s, "wall_climbs")
+        col.prop(s, "vis_tool")
         if _leaked(context):
             layout.separator()
             row = layout.row()
@@ -519,13 +527,8 @@ class HL_PT_nav_settings(_Sub, bpy.types.Panel):
     def draw(self, context):
         s = context.scene.hammerless
         col = _settings(self.layout)
-        col.prop(s, "nav_source")
-        sub = col.column()
-        sub.enabled = s.nav_source == "BLENDER"
-        sub.prop(s, "nav_analysis")
-        sub.prop(s, "wall_climbs")
-        col.separator()
         col.prop(s, "generate_nav", text="Rebuild Next Time")
+        _hint(self.layout, "The other nav settings are in", "the Build & Play panel")
 
 
 class HL_PT_nav_view(_Panel, bpy.types.Panel):
@@ -587,7 +590,6 @@ class HL_PT_compile(_Sub, bpy.types.Panel):
         col = _settings(layout)
         col.prop(s, "compile_preset", text="Quality")
         col.prop(s, "auto_detail")
-        col.prop(s, "vis_tool")
         layout.separator()
         if s.compile_preset != "CUSTOM":
             from ..core.compile import PRESETS
