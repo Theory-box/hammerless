@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+## 0.5.5 (test release, 2026-10-07)
+
 - **Build settings at the top:** Nav Mesh, Nav Analysis, Zombies Climb Walls and Vis Compiler moved into the Build & Play panel, under the Build and Play buttons (Rebuild Next Time stays in Nav Mesh > Settings).
 
-- **Faster visibility compile (optional):** *Vis Compiler: Hammerless (faster)* (in the Build & Play panel) runs Hammerless's own visibility compiler (`hlvvis.exe`) instead of L4D2's vvis, with the same results. Tested against vvis on 8 maps (a real level, the two demo maps, the level with water, with Auto Detail off and with Everything, rooms with an area portal, outdoor terrain), 3 runs each: every map file was byte-identical to vvis's, full and fast, except the heaviest map (Auto Detail off), where a borderline pair or two differed, as vvis's own runs differ from each other. About 3 times faster: 14.1 s to 5.2 s on the real level, 118 s to 38 s with Auto Detail off. If it ever fails, Valve's vvis runs instead; maps with fog-distance (radial) visibility, which Hammerless never writes itself, also use Valve's vvis for now. Valve's vvis stays the default.
+- **Faster visibility compile (optional):** *Vis Compiler: Hammerless (faster)* (in the Build & Play panel) runs Hammerless's own visibility compiler (`hlvvis.exe`) instead of L4D2's vvis, with the same results. Tested against vvis on 8 maps (a real level, the two demo maps, the level with water, with Auto Detail off and with Everything, rooms with an area portal, outdoor terrain), 3 runs each: every map file was byte-identical to vvis's, full and fast, except the heaviest map (Auto Detail off), where a borderline pair or two differed, as vvis's own runs differ from each other. About 3 times faster: 14.1 s to 5.2 s on the real level, 118 s to 38 s with Auto Detail off. If it ever fails, Valve's vvis runs instead; maps with fog-distance (radial) visibility, which Hammerless never writes itself, also use Valve's vvis for now. Valve's vvis stays the default. Build & Play on a real level, from scratch until playable in game: 45 s with Valve's vvis, 32 s with Hammerless vis; all Valve (nav made and analyzed by the game) 99 s.
 
 ## 0.5.4 (test release, 2026-10-06)
 
