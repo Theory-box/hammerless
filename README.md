@@ -15,6 +15,7 @@ No Hammer, no VMF editing, no console commands.
 - **Ready-made presets**: Start / End Safe Room (fully wired), Horde Trigger, Horde Button, Crescendo Button, Tank Ambush, Gate + Button, Ladder, Zombie Ladder, Zombie Climb, Zombie Spawn Area.
 - **Logic nodes**: wire map events visually (Path Progress → When → Spawn Tank, buttons, timers, movers, Director settings).
 - **Nav mesh made in Blender**: a port of the game's own nav generator builds the mesh while the map compiles (about 0.5 s instead of the game's two extra reloads), plus the game's **nav analysis** (visibility, hiding spots) done in Blender, so the game loads the map once.
+- **See how the map renders**: the vis portals, a heatmap of how much the game draws from each spot, and which objects make the vis compile slow.
 - **See what the Director sees**: colour the nav by reachability, path distance, *what can be seen from here*, no-spawn marks, and **where zombies can spawn**.
 - **AI Director, lighting, sky and fog settings** in panels. Leak-proof by default (auto skybox seal).
 

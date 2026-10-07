@@ -1193,6 +1193,65 @@ class TestAutoDetail(unittest.TestCase):
         self.assertNotIn("func_detail", text)
 
 
+class TestVisData(unittest.TestCase):
+    """The Visibility viewer's data: portals, rendering load, vis cost and who caused it."""
+
+    def _fixture(self, name):
+        import zipfile
+        return zipfile.ZipFile(os.path.join(os.path.dirname(__file__), "..", "fixtures", "vis", "rooms_portal.zip")).read(name)
+
+    def test_portals_and_load(self):
+        import tempfile
+        from hammerless.core import visdata
+        with tempfile.TemporaryDirectory() as d:
+            prt = os.path.join(d, "m.prt")
+            with open(prt, "wb") as f:
+                f.write(self._fixture("rooms_portal.prt"))
+            p = visdata.read_portals(prt)
+        self.assertGreater(len(p.polys), 0)
+        self.assertEqual(len(p.area), len(p.polys))
+        self.assertTrue((p.area > 0).all())
+        rl = visdata.render_load(self._fixture("rooms_portal.vvis_full.bsp"))
+        self.assertEqual(len(rl.positions) % 3, 0)
+        self.assertEqual(len(rl.value), len(rl.positions))
+        self.assertTrue(0 < rl.min_faces <= rl.max_faces)
+        with self.assertRaises(ValueError):                  # no vis yet: say so
+            visdata.render_load(self._fixture("rooms_portal.bsp"))
+
+    def test_cost_and_owners(self):
+        import json
+        import tempfile
+        import numpy as np
+        from hammerless.core import visdata
+        with tempfile.TemporaryDirectory() as d:
+            # one world brush (a box 0..64), and two portals: one on the extended plane of its x=64 side,
+            # one in open space
+            vmf = os.path.join(d, "m.built.vmf")
+            T, N = "\t", "\n"
+            sides = "".join(f'{T * 2}side{N}{T * 2}{{{N}{T * 3}"plane" "{pl}"{N}{T * 2}}}{N}' for pl in (
+                "(64 0 0) (64 64 0) (64 64 64)", "(0 0 0) (0 64 64) (0 64 0)", "(0 0 64) (64 0 64) (64 64 64)",
+                "(0 0 0) (64 64 0) (64 0 0)", "(0 0 0) (64 0 0) (64 0 64)", "(0 64 0) (0 64 64) (64 64 64)"))
+            with open(vmf, "w", encoding="utf-8") as f:
+                f.write(f'world{N}{{{N}{T}solid{N}{T}{{{N}{T * 2}"id" "7"{N}' + sides + f"{T}}}{N}}}{N}")
+            with open(os.path.join(d, "m.brushes.json"), "w", encoding="utf-8") as f:
+                json.dump({"7": "Crate (part 2)"}, f)
+            portals = visdata.Portals(2, np.array([0, 0]), np.array([1, 1]),
+                                      [np.array([[64.0, 100, 0], [64, 200, 0], [64, 200, 64], [64, 100, 64]]),
+                                       np.array([[300.0, 0, 10], [400, 0, 10], [400, 100, 10], [300, 100, 10]])],
+                                      np.array([6400.0, 10000]), np.array([64.0, 100]))
+            owners = visdata.portal_owners(portals, vmf)
+            self.assertEqual(owners, ["Crate", None])
+            cost = os.path.join(d, "m.viscost")
+            with open(cost, "w") as f:
+                f.write(N.join(["hlvvis-cost 1", "portals 2 threads 4 flow_seconds 2.0", "0.3 0.1", "1.2 0.4", ""]))
+            c = visdata.read_costs(cost, 2)
+            self.assertAlmostEqual(float(c.share().sum()), 1.0)
+            self.assertIsNone(visdata.read_costs(cost, 3))        # from another build: ignored
+            ranking = visdata.cost_by_object(c, owners)
+            self.assertEqual(ranking[0][0], None)                 # the open-space portal cost more
+            self.assertAlmostEqual(ranking[1][1], 0.2)
+
+
 class TestVisCompiler(unittest.TestCase):
     """Settings > Compile > Vis Compiler: our hlvvis.exe in place of vvis.exe, falling back to vvis."""
 

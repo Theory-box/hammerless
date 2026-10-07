@@ -40,6 +40,11 @@ COMPILE_PRESETS = [
 ]
 
 
+def _vis_display(self, context):
+    from .visview import on_view_change
+    on_view_change(self, context)
+
+
 def _kv_changed(self, context):
     from .presets import on_kv_value
     on_kv_value(self, context)
@@ -322,6 +327,16 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     ])
     nav_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _nav_display(self, c),
                            description="Draw the nav mesh through walls")
+    vis_view: EnumProperty(name="View", default="OFF", update=lambda self, c: _vis_display(self, c), items=[
+        ("OFF", "Off", "Show nothing"),
+        ("PORTALS", "Portals", "The openings vis works through, from the last build: how the map was split up. "
+                               "Tiny slivers are red"),
+        ("LOAD", "Rendering Load", "The map coloured by how much the game draws from each spot (from the last "
+                                   "build's visibility): red spots are where frame rate suffers first"),
+        ("COST", "Vis Cost", "Where the last vis compile spent its time, and the objects behind it (needs Vis "
+                             "Compiler: Hammerless)")])
+    vis_xray: BoolProperty(name="See Through Walls", default=True, update=lambda self, c: _vis_display(self, c),
+                           description="Draw over the scene instead of hidden behind its walls")
     show_lightmap: BoolProperty(name="Show Baked Lighting", default=True, update=lambda self, c: _light_display(self, c),
                                 description="Draw the last compile's baked lighting in the viewport")
     lightmap_mode: EnumProperty(name="Mode", default="LIGHT", update=lambda self, c: _light_display(self, c), items=[

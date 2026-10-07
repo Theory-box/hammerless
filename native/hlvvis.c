@@ -308,8 +308,13 @@ static void leaf_flow(int leaf, Thread *th, Stack *prev) {
     }
 }
 
+static double *g_pdur;                 /* seconds each portal took (for <map>.viscost) */
+static volatile LONG g_done;
+static LARGE_INTEGER g_freq;
 static void portal_flow(int pi) {
     Portal *p = &P[pi];
+    LARGE_INTEGER t0, t1;
+    QueryPerformanceCounter(&t0);
     Thread th;
     memset(&th, 0, sizeof th);
     p->status = 1;
@@ -321,6 +326,9 @@ static void portal_flow(int pi) {
     leaf_flow(p->leaf, &th, &th.head);
     MemoryBarrier();
     p->status = 2;
+    QueryPerformanceCounter(&t1);
+    g_pdur[pi] = (double)(t1.QuadPart - t0.QuadPart) / g_freq.QuadPart;
+    InterlockedIncrement(&g_done);
 }
 
 static DWORD WINAPI flow_worker(LPVOID arg) {
@@ -621,9 +629,48 @@ int main(int argc, char **argv) {
         for (int i = 0; i < NPD; i++) g_order[i] = i;
         qsort(g_order, NPD, sizeof(int), cmp_might);   /* fewest might-see first: their results tighten the rest */
         g_next = 0;
-        printf("PortalFlow:          ");
-        run_threads(flow_worker, threads);
-        printf("done\n");
+        printf("PortalFlow:          started\n");
+        /* progress: portals done, weighted by an estimate of their cost (might-see squared), and the
+           time left from the rate so far. One line per percent, read by Hammerless's build status. */
+        g_pdur = xcalloc(NPD, sizeof(double));
+        QueryPerformanceFrequency(&g_freq);
+        double total_w = 0;
+        for (int i = 0; i < NPD; i++) total_w += (double)P[i].nmight * P[i].nmight + 1;
+        HANDLE *hs = xmalloc(threads * sizeof(HANDLE));
+        for (int t = 0; t < threads; t++) {
+            hs[t] = CreateThread(NULL, 64 << 20, flow_worker, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+            if (!hs[t]) fail("couldn't start a thread%s", "");
+        }
+        LARGE_INTEGER fs, fn;
+        QueryPerformanceCounter(&fs);
+        int last_pct = -1;
+        while (g_done < NPD) {
+            Sleep(250);
+            double done_w = 0;
+            for (int i = 0; i < NPD; i++) if (P[i].status == 2) done_w += (double)P[i].nmight * P[i].nmight + 1;
+            int pct = (int)(100.0 * done_w / total_w);
+            QueryPerformanceCounter(&fn);
+            double el = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
+            if (pct != last_pct && pct < 100 && done_w > 0 && el > 0.5) {
+                double left = el * (total_w - done_w) / done_w;
+                printf("vis %d%%, about %.0f s left\n", pct, left < 1 ? 1 : left);
+                last_pct = pct;
+            }
+        }
+        for (int t = 0; t < threads; t += 64) WaitForMultipleObjects(threads - t < 64 ? threads - t : 64, hs + t, TRUE, INFINITE);
+        for (int t = 0; t < threads; t++) CloseHandle(hs[t]);
+        free(hs);
+        QueryPerformanceCounter(&fn);
+        double flow_wall = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
+        printf("PortalFlow:          done (%.1f s)\n", flow_wall);
+        /* where the time went, per portal (both directions), for Hammerless's vis cost view */
+        snprintf(path, sizeof path, "%s.viscost", base);
+        FILE *cf = fopen(path, "w");
+        if (cf) {
+            fprintf(cf, "hlvvis-cost 1\nportals %d threads %d flow_seconds %.4f\n", NP_PRT, threads, flow_wall);
+            for (int i = 0; i < NP_PRT; i++) fprintf(cf, "%.6f %.6f\n", g_pdur[2 * i], g_pdur[2 * i + 1]);
+            fclose(cf);
+        }
     }
 
     /* ---- per-cluster visibility (the portals leaving it, and what they see), then the crosscheck */

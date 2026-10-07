@@ -74,4 +74,6 @@ A preset's parent empty shows the preset's settings and **Select All Parts**. Co
 
 **Baked Lighting**: **Bake Lighting** and the lighting view (Lighting Only / Lit, exposure, X-ray), plus *Bake Settings* (quality, lightmap scale).
 
+**Visibility**: views of the last build's visibility: *Portals* (how vis split the map up; tiny slivers in red), *Rendering Load* (the map coloured by how much the game draws from each spot: red is where frame rate suffers first, with a button to put the 3D cursor on the worst spot), and *Vis Cost* (where the vis compile spent its time, and the objects behind it, each with a Select button: making decorative ones Detail speeds vis up; needs *Vis Compiler: Hammerless*).
+
 **Settings**: *Compile* (Auto Detail; with Quality *Custom*, each step and extra compiler options), *Game Window* (monitor, size, borderless, difficulty, launch options), *Folders & Game Data* (L4D2 folder, work folder, reload game data, refresh previews, **Export VMF** to open the map in Hammer), *Scene* (scale, default material, auto seal, checks), *Debug* (*Debug Log* of Director events, *Bot Walkthrough Test* where bots play the map).

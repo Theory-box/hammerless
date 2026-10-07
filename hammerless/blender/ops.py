@@ -41,6 +41,9 @@ def game_content(root: str | None) -> GameContent | None:
     return _content_cache[root]
 
 
+BUILD_PROGRESS = {"vis": ""}      # the running build's latest "vis 42%, about 3 s left" line
+
+
 def compile_options(s) -> "cc.CompileOptions | str":
     if s.compile_preset != "CUSTOM":
         if s.vis_tool == "VALVE":
@@ -897,6 +900,12 @@ class HL_OT_build(bpy.types.Operator):
     def _step(self, context):
         new = self._job.poll()
         if new:
+            for line in new:                    # vis progress from Hammerless's vis compiler, for the panel header
+                if isinstance(line, str):
+                    if line.startswith("vis ") and "%" in line:
+                        BUILD_PROGRESS["vis"] = line
+                    elif line.startswith("===="):
+                        BUILD_PROGRESS["vis"] = ""
             write_log(new, append=True)
             context.workspace.status_text_set(f"Hammerless: {new[-1][:120]}")
         self._start_analysis_early(context)
@@ -1007,6 +1016,7 @@ class HL_OT_build(bpy.types.Operator):
             except OSError:
                 pass
         context.window_manager.event_timer_remove(self._timer)
+        BUILD_PROGRESS["vis"] = ""
         context.workspace.status_text_set(None)
         return result
 

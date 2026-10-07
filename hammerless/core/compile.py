@@ -453,6 +453,8 @@ class CompileJob:
                 self._q.put(f"==== {name} ====")
                 if name == "vvis" and not os.path.exists(prt) and os.path.exists(kept_prt):
                     shutil.copy2(kept_prt, prt)      # vbsp -onlyents deletes the portal file; geometry is the same
+                if name == "vvis" and os.path.exists(self.base + ".viscost"):
+                    os.remove(self.base + ".viscost")    # Hammerless vis writes a new one; Valve's vvis none
                 t0 = time.time()
                 code, out = self._exec(cmd)
                 if code != 0 and name == "vvis" and cmd[0] == HLVVIS and self._valve_vvis and not self._stopping:
@@ -810,7 +812,7 @@ def clear_build(tools: Tools | None, work_base: str, map_name: str) -> list[str]
     """Delete the compiled map (which holds the baked lighting) and what records how it was built:
     the next build compiles and bakes from scratch. Returns files that couldn't be deleted."""
     paths = [work_base + ext for ext in (".bsp", ".stamp", ".built.vmf", ".built.opts", ".built.prt", ".prt", ".lin",
-                                         ".analysis.bsp")]
+                                         ".analysis.bsp", ".viscost")]
     if tools is not None:
         paths.append(os.path.join(tools.maps_dir, map_name + ".bsp"))
     return _remove(paths)

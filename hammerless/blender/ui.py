@@ -66,8 +66,10 @@ class HL_PT_build(_Panel, bpy.types.Panel):
 
     def draw_header_preset(self, context):
         from .lightview import bake_status
+        from .ops import BUILD_PROGRESS
         if bake_status(context)[0] == "BUSY":
-            _status(self.layout, "Building...")
+            vis = BUILD_PROGRESS["vis"]
+            _status(self.layout, "Vis " + vis[4:] if vis else "Building...")
 
     def draw(self, context):
         s = context.scene.hammerless
@@ -569,11 +571,29 @@ class HL_PT_bake_settings(_Sub, bpy.types.Panel):
         _hint(self.layout, "Smaller lightmap scale: sharper shadows,", "slower bake. Materials can override it")
 
 
+# ---------------------------------------------------------------- Visibility
+
+class HL_PT_vis_view(_Panel, bpy.types.Panel):
+    bl_label = "Visibility"
+    bl_order = 6
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw_header_preset(self, context):
+        from .visview import header_status
+        text = header_status(context)
+        if text:
+            _status(self.layout, text)
+
+    def draw(self, context):
+        from .visview import draw_panel
+        draw_panel(self.layout, context)
+
+
 # ---------------------------------------------------------------- Settings
 
 class HL_PT_settings(_Panel, bpy.types.Panel):
     bl_label = "Settings"
-    bl_order = 6
+    bl_order = 7
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -755,7 +775,7 @@ CLASSES = (HL_UL_keyvalues, HL_UL_outputs,
            HL_PT_object, HL_PT_obj_model, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
            HL_PT_world, HL_PT_sky, HL_PT_fog, HL_PT_director, HL_PT_logic,
            HL_PT_navmesh, HL_PT_nav_settings, HL_PT_nav_view,
-           HL_PT_light_view, HL_PT_bake_settings,
+           HL_PT_light_view, HL_PT_bake_settings, HL_PT_vis_view,
            HL_PT_settings, HL_PT_compile, HL_PT_game, HL_PT_folders, HL_PT_scene, HL_PT_debug,
            HL_PT_collection, *CATEGORY_MENUS, HL_MT_add)
 
