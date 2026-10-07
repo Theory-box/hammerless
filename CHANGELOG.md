@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.6 (test release, 2026-10-07)
+
 - **View panel:** everything drawn over the viewport in one place, with three sections: *Nav Mesh* (the nav viewer with Build Navmesh, Analyze and Clear), *Baked Lighting* (Bake Lighting, the lighting view, Bake Settings) and *Visibility*. Rebuild Nav Next Time joins the other nav settings in Build & Play; Problems stays there too.
 - **View > Visibility:** three views of the last build. *Portals*: the openings vis works through, showing how the map was split up, with tiny slivers (usually two brushes that almost line up) in red. *Rendering Load*: the map's faces coloured by how many faces the game draws from there, red where frame rate suffers first, and a button that puts the 3D cursor on the heaviest spot. *Vis Cost* (with Vis Compiler: Hammerless): portals coloured by the time vis spent on them, and the objects whose brushes those portals were split along, with their share of the vis time and a Select button.
 - **Vis progress:** with Vis Compiler: Hammerless, Build shows how far vis has got and the time left ("Vis 42%, about 3 s left") in the Build & Play header and the status bar.
