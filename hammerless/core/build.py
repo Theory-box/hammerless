@@ -24,6 +24,9 @@ SURVIVOR_SPAWNS = {"info_player_start", "info_survivor_position"}
 FALLBACK_NEXT_MAP = "c1m2_streets"
 
 
+ATTENUATION_KEYS = ("_constant_attn", "_linear_attn", "_quadratic_attn", "_fifty_percent_distance")
+
+
 def end_landmark_renames(ir: MapIR) -> dict[str, tuple[Entity, Entity, str]]:
     """Duplicate landmark names that can be fixed automatically: exactly two landmarks
     share a name and one of them sits inside an info_changelevel using that name (the
@@ -509,6 +512,12 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     for e in entities:
         if e.classname in ("trigger_once", "trigger_multiple") and not e.keyvalues.get("spawnflags", "").strip():
             e.keyvalues = {**e.keyvalues, "spawnflags": "1"}      # players (without a flag nothing triggers it)
+    for e in entities:
+        if e.classname in ("light", "light_spot") and not any(
+                e.keyvalues.get(k, "").strip() for k in ATTENUATION_KEYS):
+            # Hammer writes these defaults with every light; without them vrad uses constant attenuation
+            # and the light reaches everything it can see at full strength, however far away
+            e.keyvalues = {**e.keyvalues, "_constant_attn": "0", "_linear_attn": "0", "_quadratic_attn": "1"}
     for e in entities:
         if e.classname == "info_changelevel" and bad_next_map(e, s.name):
             e.keyvalues = {**e.keyvalues, "map": FALLBACK_NEXT_MAP}

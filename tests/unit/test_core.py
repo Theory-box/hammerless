@@ -553,6 +553,18 @@ class TestSmartBuild(unittest.TestCase):
         self.assertEqual(plan(a, self.vmf(prop_x=32))[0], "lighting")      # static props are baked
         self.assertEqual(plan(a, self.vmf(wall=160))[0], "full")
 
+    def test_lights_get_hammers_falloff(self):
+        # without attenuation keys vrad uses constant attenuation: the light never fades with distance
+        ir = box_room_ir()
+        ir.entities.append(Entity("light", (0, 0, 100), (0, 0, 0), {"_light": "255 255 255 200"}))
+        ir.entities.append(Entity("light_spot", (0, 0, 90), (0, 0, 0), {"_light": "255 255 255 200",
+                                                                       "_fifty_percent_distance": "300"}))
+        text = build_vmf(ir)[0]
+        point = text[text.index('"light"'):]
+        spot = text[text.index('"light_spot"'):]
+        self.assertIn('"_quadratic_attn" "1"', point[:point.index("}")])
+        self.assertNotIn("_quadratic_attn", spot[:spot.index("}")])     # the mapper's own falloff stays
+
     def test_light_order_matters(self):
         # vbsp numbers switchable light styles (and static prop lighting files) in entity order:
         # swapping two named lights needs a relight, not 'same'
