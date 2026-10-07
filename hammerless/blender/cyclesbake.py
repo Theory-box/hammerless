@@ -121,7 +121,18 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
     if not faces:
         return ["Cycles: no lit faces to bake"]
     sun, ambient, lights, notes = lb.scene_lights(_lumps(data)(0).decode("latin-1"), hdr=lump_no == 53)
-    width, height = lb.pack(faces)
+    # flat faces: connected coplanar faces baked as one picture (a chart), read back per vrad sample;
+    # displacements: one texel per luxel as before
+    edges = lb.shared_edges(faces)
+    charts = lb.make_charts(faces, edges)
+    chart_of = {f.index: c for c in charts for f in c.faces}
+    disp = [f for f in faces if f.index not in chart_of]
+    corners_at, width, height = lb.pack_blocks([c.size for c in charts] + [(f.w, f.h) for f in disp],
+                                               lb.CHART_PAD)
+    for c, at in zip(charts, corners_at):
+        c.atlas = at
+    for f, at in zip(disp, corners_at[len(charts):]):
+        f.atlas = at
 
     keys, mat_of = [], {}
     corners, uvs, mats, normals, bumps = [], [], [], [], []
@@ -132,11 +143,13 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
         if key not in mat_of:
             mat_of[key] = len(keys)
             keys.append(key)
-        if f.rect is not None:
+        if f.index in chart_of:
             smp[f.index] = lb.samples(f)
-        pos, lux = lb.bake_triangles(f, smp.get(f.index))
-        co = (pos / upm).reshape(-1, 3, 3)
-        uv = lb.uvs(f, width, height, lux).reshape(-1, 3, 2)
+            co = (f.positions / upm).reshape(-1, 3, 3)
+            uv = chart_of[f.index].uv(f.positions, width, height).reshape(-1, 3, 2)
+        else:
+            co = (f.positions / upm).reshape(-1, 3, 3)
+            uv = lb.uvs(f, width, height).reshape(-1, 3, 2)
         flip = np.cross(co[:, 1] - co[:, 0], co[:, 2] - co[:, 0]) @ f.normal < 0
         co[flip], uv[flip] = co[flip][:, [0, 2, 1]], uv[flip][:, [0, 2, 1]]   # Blender's normal = the face's
         corners.append(co.reshape(-1, 3))
@@ -230,7 +243,8 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
             scene.cycles.denoising_use_gpu = gpu
         scene.cycles.diffuse_bounces = 8
         scene.cycles.glossy_bounces = scene.cycles.transmission_bounces = 0
-        scene.render.bake.margin = lb.PAD
+        scene.render.bake.margin = lb.CHART_PAD
+        scene.render.bake.margin_type = "EXTEND"
         layer = scene.view_layers[0]
         attr = target_me.attributes[NORMAL_ATTR]
 
@@ -239,7 +253,7 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
                             selected_objects=[target], selected_editable_objects=[target])
             with bpy.context.temp_override(**override):
                 target.select_set(True, view_layer=layer)
-                bpy.ops.object.bake(type="COMBINED", pass_filter={"DIRECT", "INDIRECT", "DIFFUSE"}, margin=lb.PAD,
+                bpy.ops.object.bake(type="COMBINED", pass_filter={"DIRECT", "INDIRECT", "DIFFUSE"}, margin=lb.CHART_PAD,
                                     use_clear=True)
             return np.array(image.pixels[:], np.float32).reshape(height, width, 4)[:, :, :3] * TO_VRAD
 
@@ -264,12 +278,12 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
     # what joins neighbouring faces' lighting up); displacements: their texels are the luxels
     values = {}
     for f in faces:
-        x, y = f.atlas
         maps = passes if f.bump else passes[:1]
         if f.index in smp:
-            st = smp[f.index].st
-            values[f.index] = [p[y + st[:, 1], x + st[:, 0]].astype(np.float64) for p in maps]
+            values[f.index] = [lb.chart_values(chart_of[f.index], f, smp[f.index], p).astype(np.float64)
+                               for p in maps]
         else:
+            x, y = f.atlas
             values[f.index] = [p[y:y + f.h, x:x + f.w].astype(np.float64) for p in maps]
     near = lb.neighbours(faces)
     samples_of, keep = {}, {}
@@ -286,7 +300,6 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
     seam_note = ""
     if stitch:
         ts = time.time()
-        edges = lb.shared_edges(faces)
         before = lb.seam_error(edges, samples_of)
         samples_of = lb.stitch(edges, samples_of, keep)
         seam_note = (f"Cycles: stitched {len(edges)} shared edges in {time.time() - ts:.1f}s: seams "

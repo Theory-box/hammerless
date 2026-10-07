@@ -682,3 +682,119 @@ def stitch(edges: list, maps: dict, keep: dict | None = None, strength: float = 
         for key, (o, face) in offset.items():
             out[key][m] = all_x0[o:o + face.w * face.h].reshape(face.h, face.w, 3)
     return out
+
+
+# ---------------------------------------------------------------- surfaces (bake charts)
+#
+# The bake isn't laid out like the game's lightmaps: connected faces in one plane (a floor vbsp cut into
+# 20 faces) are baked as one continuous picture, finer than the lightmaps, with wide gaps between
+# pictures. That suits the denoiser (it sees surfaces, not thousands of unrelated tiles) and coplanar
+# faces can't disagree. Each lightmap sample then reads its value from the picture, averaged over the
+# part of the face it stands for.
+
+CHART_DENSITY = 2       # bake texels per luxel, each way
+CHART_PAD = 8           # texels between pictures (filled by extending their edges)
+
+
+@dataclass
+class Chart:
+    faces: list
+    origin: np.ndarray          # world point at texel coordinate (0, 0)
+    u: np.ndarray               # world units per texel along x / y (vectors in the plane)
+    v: np.ndarray
+    size: tuple = (1, 1)
+    atlas: tuple = (0, 0)
+
+    def to_px(self, world: np.ndarray) -> np.ndarray:
+        """Texel coordinates (texel i spans [i, i+1))."""
+        d = world - self.origin
+        return np.stack([d @ self.u / (self.u @ self.u), d @ self.v / (self.v @ self.v)], -1)
+
+    def uv(self, world: np.ndarray, width: int, height: int) -> np.ndarray:
+        p = self.to_px(world)
+        return np.stack([(self.atlas[0] + p[:, 0]) / width, (self.atlas[1] + p[:, 1]) / height], 1)
+
+
+def _coplanar(a: BakeFace, b: BakeFace) -> bool:
+    return float(a.normal @ b.normal) > 0.99999 and abs(float(a.normal @ (b.positions[0] - a.positions[0]))) < 0.01
+
+
+def make_charts(faces: list[BakeFace], edges: list) -> list[Chart]:
+    """Connected coplanar flat faces (sharing a corner or a stretch of edge) -> one chart each."""
+    flat = [f for f in faces if f.rect is not None]
+    parent = {f.index: f.index for f in flat}
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    links = [(a, b) for a, b, _pts in edges]
+    near = neighbours(flat, cos_limit=0.99999)
+    by = {f.index: f for f in flat}
+    links += [(f, g) for f in flat for g in near[f.index]]
+    for a, b in links:
+        if a.index in parent and b.index in parent and _coplanar(a, b):
+            parent[root(a.index)] = root(b.index)
+    groups: dict = {}
+    for f in flat:
+        groups.setdefault(root(f.index), []).append(f)
+    charts = []
+    for members in groups.values():
+        first = members[0]
+        n = first.normal
+        s_dir = first.lvecs[0, :3] - (first.lvecs[0, :3] @ n) * n
+        s_dir /= np.linalg.norm(s_dir)
+        t_dir = np.cross(n, s_dir)
+        if t_dir @ first.lvecs[1, :3] < 0:
+            t_dir = -t_dir
+        luxel = min(1.0 / max(np.linalg.norm(f.lvecs[0, :3]), np.linalg.norm(f.lvecs[1, :3])) for f in members)
+        texel = luxel / CHART_DENSITY
+        pts = np.concatenate([f.positions for f in members])
+        a, b = pts @ s_dir, pts @ t_dir
+        origin = pts[0] + (a.min() - a[0]) * s_dir + (b.min() - b[0]) * t_dir
+        size = (int(np.ceil((a.max() - a.min()) / texel)) + 1, int(np.ceil((b.max() - b.min()) / texel)) + 1)
+        charts.append(Chart(members, origin, s_dir * texel, t_dir * texel, size))
+    return charts
+
+
+def pack_blocks(sizes: list[tuple[int, int]], pad: int) -> tuple[list[tuple[int, int]], int, int]:
+    """Shelf-pack rectangles pad texels apart. Returns their corners and the image size."""
+    padded = [(w + 2 * pad, h + 2 * pad) for w, h in sizes]
+    total = sum(w * h for w, h in padded) or 1
+    width = 256
+    while width * width < total * 1.3:
+        width *= 2
+    width = max(width, max((w for w, _h in padded), default=1))
+    order = sorted(range(len(sizes)), key=lambda i: -padded[i][1])
+    corners = [(0, 0)] * len(sizes)
+    x = y = shelf = 0
+    for i in order:
+        w, h = padded[i]
+        if x + w > width:
+            x, y, shelf = 0, y + shelf, 0
+        corners[i] = (x + pad, y + pad)
+        x += w
+        shelf = max(shelf, h)
+    return corners, width, y + shelf
+
+
+def chart_values(chart: Chart, face: BakeFace, smp: "Samples", image: np.ndarray, k: int = 3) -> np.ndarray:
+    """Each sample's value: the picture averaged over k x k points across the part of the face the
+    sample stands for (bilinear between texel centres)."""
+    g = (np.arange(k) + 0.5) / k
+    gs, gt = np.meshgrid(g, g)
+    off = np.stack([gs.ravel(), gt.ravel()], 1)                       # (k^2, 2)
+    coord = smp.lo[:, None, :] + off[None] * (smp.hi - smp.lo)[:, None, :]
+    px = chart.to_px(face.to_world(coord).reshape(-1, 3))
+    x = chart.atlas[0] + px[:, 0] - 0.5
+    y = chart.atlas[1] + px[:, 1] - 0.5
+    h, w = image.shape[:2]
+    x0 = np.clip(np.floor(x).astype(int), 0, w - 2)
+    y0 = np.clip(np.floor(y).astype(int), 0, h - 2)
+    fx = np.clip(x - x0, 0, 1)[:, None]
+    fy = np.clip(y - y0, 0, 1)[:, None]
+    val = (image[y0, x0] * (1 - fx) * (1 - fy) + image[y0, x0 + 1] * fx * (1 - fy)
+           + image[y0 + 1, x0] * (1 - fx) * fy + image[y0 + 1, x0 + 1] * fx * fy)
+    return val.reshape(len(smp.st), k * k, 3).mean(1)
