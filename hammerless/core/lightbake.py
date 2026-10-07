@@ -51,6 +51,24 @@ class BakeFace:
     reflectivity: tuple      # the material's average colour (what vrad bounces light with)
     rect: np.ndarray | None = None   # (4, 3) flat faces: the lightmap rectangle, half a sample past each edge
     atlas: tuple = (0, 0)    # where its samples go in the bake image
+    lvecs: np.ndarray | None = None  # (2, 4) world -> luxel space (with mins: coord = p . v[:3] + v[3] - mins)
+    mins: tuple = (0, 0)
+    offset: np.ndarray | None = None  # brush entity origin (its faces are stored relative to it)
+    verts: tuple = ()        # vertex numbers of the corners (for finding neighbours)
+    smoothing: int = 0       # smoothing groups
+    poly_lux: np.ndarray | None = None   # (k, 2) flat faces: the polygon in luxel space
+
+    def to_luxel(self, world: np.ndarray) -> np.ndarray:
+        """WorldToLuxelSpace."""
+        p = world - (self.offset if self.offset is not None else 0.0)
+        return p @ self.lvecs[:, :3].T + self.lvecs[:, 3] - np.asarray(self.mins, dtype=np.float64)
+
+    def to_world(self, coord: np.ndarray) -> np.ndarray:
+        """LuxelSpaceToWorld (on the face's plane)."""
+        w, h = self.w, self.h
+        ds, dt = (self.rect[1] - self.rect[0]) / w, (self.rect[3] - self.rect[0]) / h
+        origin = self.rect[0] + 0.5 * ds + 0.5 * dt
+        return origin + coord[..., :1] * ds + coord[..., 1:2] * dt
 
 
 def bump_normals(s_vec, t_vec, normal) -> np.ndarray:
@@ -94,6 +112,7 @@ def read_faces(data: bytes) -> tuple[list[BakeFace], int]:
         first_edge, num_edges, ti, di = struct.unpack_from("<ihhh", faces, b + 4)
         styles = faces[b + 16:b + 20]
         light_ofs = struct.unpack_from("<i", faces, b + 20)[0]
+        smoothing = struct.unpack_from("<I", faces, b + 52)[0]
         mins = struct.unpack_from("<2i", faces, b + 28)
         size = struct.unpack_from("<2i", faces, b + 36)
         if light_ofs < 0 or num_edges < 3 or ti < 0 or 0 not in styles:
@@ -107,7 +126,8 @@ def read_faces(data: bytes) -> tuple[list[BakeFace], int]:
         refl = struct.unpack_from("<3f", texdata, 32 * td) if 0 <= td < len(texdata) // 32 else (0.5, 0.5, 0.5)
         n = np.array(struct.unpack_from("<3f", planes, 20 * planenum), dtype=np.float64)   # already the face's
         se = surfedges[first_edge:first_edge + num_edges]
-        corners = verts[np.where(se >= 0, edges[np.abs(se), 0], edges[np.abs(se), 1])].astype(np.float64)
+        vidx = np.where(se >= 0, edges[np.abs(se), 0], edges[np.abs(se), 1])
+        corners = verts[vidx].astype(np.float64)
         if di >= 0 and num_edges == 4:
             pos, flat, tris = _displacement(corners, dispinfo, dispverts, di)
         else:
@@ -136,7 +156,10 @@ def read_faces(data: bytes) -> tuple[list[BakeFace], int]:
         out.append(BakeFace(k, light_ofs, styles.index(0), nstyles, size[0] + 1, size[1] + 1, bump,
                             pos[tris].reshape(-1, 3), lux[tris].reshape(-1, 2), n,
                             bump_normals(tvecs[0, :3], tvecs[1, :3], n) if bump else np.zeros((3, 3)),
-                            tuple(refl), rect))
+                            tuple(refl), rect, lvecs=lvecs, mins=mins,
+                            offset=None if offset is None else np.array(offset, dtype=np.float64),
+                            verts=tuple(int(v) for v in vidx), smoothing=smoothing,
+                            poly_lux=lux if di < 0 else None))
     return out, lump_no
 
 
@@ -160,50 +183,146 @@ def pack(faces: list[BakeFace]) -> tuple[int, int]:
     return width, y + shelf
 
 
-SUB = 8          # sub-points per sample side when finding the part of an edge sample's square on the face
+SUB = 8          # sub-points per cell side when measuring the part of a sample cell on the face
 
 
-def bake_triangles(face: BakeFace) -> tuple[np.ndarray, np.ndarray]:
+@dataclass
+class Samples:
+    """Where vrad lights a flat face (BuildFacesamplesAndLuxels): the face cut into one-luxel cells
+    [s, s+1) x [t, t+1); each cell with part of the face is one sample, lit at that part's balance point.
+    Arrays are per sample; st is its cell, which is also its texel in the bake image."""
+    st: np.ndarray          # (n, 2) int
+    coord: np.ndarray       # (n, 2) the balance point, luxel space
+    lo: np.ndarray          # (n, 2) the part's bounds, luxel space
+    hi: np.ndarray
+    pos: np.ndarray         # (n, 3) the balance point, world
+
+
+def _edges(poly: np.ndarray):
+    """Half-planes of a convex polygon, inside positive."""
+    nxt = np.roll(poly, -1, 0)
+    n = np.stack([poly[:, 1] - nxt[:, 1], nxt[:, 0] - poly[:, 0]], 1)
+    d = (n * poly).sum(1)
+    if np.mean(poly @ n.T - d) < 0:
+        n, d = -n, -d
+    return n, d
+
+
+def samples(face: BakeFace) -> Samples:
+    w, h = face.w, face.h
+    n, d = _edges(face.poly_lux)
+    j, i = np.mgrid[0:h, 0:w]
+    cell = np.stack([i, j], -1).reshape(-1, 2).astype(np.float64)
+    corners = cell[:, None, :] + np.array([(0, 0), (1, 0), (1, 1), (0, 1)], dtype=np.float64)
+    whole = np.all(corners @ n.T - d >= -1e-6, axis=(1, 2))     # cells entirely on the face
+    coord, lo, hi = cell + 0.5, cell.copy(), cell + 1.0
+    keep = whole.copy()
+    part = np.where(~whole)[0]
+    if len(part):
+        k = (np.arange(SUB) + 0.5) / SUB
+        sub = np.stack(np.meshgrid(k, k), -1).reshape(-1, 2)
+        pts = cell[part][:, None, :] + sub[None]                # (cells, SUB^2, 2)
+        on = np.all(pts @ n.T - d >= -1e-6, axis=-1)
+        has = on.any(1)
+        pts, on, part = pts[has], on[has], part[has]
+        coord[part] = np.where(on[..., None], pts, 0).sum(1) / on.sum(1, keepdims=True)
+        lo[part] = np.where(on[..., None], pts, np.inf).min(1) - 0.5 / SUB
+        hi[part] = np.where(on[..., None], pts, -np.inf).max(1) + 0.5 / SUB
+        keep[part] = True
+    return Samples(cell[keep].astype(np.int64), coord[keep], lo[keep], hi[keep], face.to_world(coord[keep]))
+
+
+def bake_triangles(face: BakeFace, smp: Samples | None = None) -> tuple[np.ndarray, np.ndarray]:
     """(k, 3) world corners and (k, 2) lightmap coordinates to bake.
 
-    Flat faces: one quad per sample, mapped onto that sample's whole texel. Like vrad, a sample is lit
-    where its square lies on the face: an edge sample's square is partly off the face, so its quad
-    covers just the part on the face (found on a SUB x SUB grid). Displacements: the surface itself."""
+    Flat faces: one quad per sample covering its part of the face, mapped onto texel st (Cycles averages
+    over it, like vrad's supersampling of the sample's area). Displacements: the surface itself."""
     if face.rect is None:
         return face.positions, face.lux
-    w, h = face.w, face.h
-    ds, dt = (face.rect[1] - face.rect[0]) / w, (face.rect[3] - face.rect[0]) / h
-    origin = face.rect[0] + 0.5 * ds + 0.5 * dt                 # lightmap (0, 0)
-    tri = face.lux.reshape(-1, 3, 2)
-    poly = np.concatenate([tri[:1, 0], tri[:, 1], tri[-1:, 2]])
-    edge_n = np.stack([poly[:, 1] - np.roll(poly, -1, 0)[:, 1], np.roll(poly, -1, 0)[:, 0] - poly[:, 0]], 1)
-    edge_d = (edge_n * poly).sum(1)
-    if np.mean(poly @ edge_n.T - edge_d) < 0:                   # inside = positive side
-        edge_n, edge_d = -edge_n, -edge_d
-
-    def inside(pts):                                            # (..., 2) -> (...)
-        return np.all(pts @ edge_n.T - edge_d >= -1e-6, axis=-1)
-
-    j, i = np.mgrid[0:h, 0:w]
-    lo = np.stack([i - 0.5, j - 0.5], -1).reshape(-1, 2).astype(np.float64)
-    box = np.concatenate([lo, lo + 1.0], 1)                     # (n, 4): s0 t0 s1 t1
-    corners = np.stack([lo, lo + (1, 0), lo + 1, lo + (0, 1)], 1)
-    partial = ~inside(corners).all(1)
-    if partial.any():
-        k = (np.arange(SUB) + 0.5) / SUB
-        sub = np.stack(np.meshgrid(k, k), -1).reshape(-1, 2)     # (SUB^2, 2)
-        pts = lo[partial][:, None, :] + sub[None]
-        on = inside(pts)
-        hit = on.any(1)
-        big = np.where(on[..., None], pts, np.inf).min(1), np.where(on[..., None], pts, -np.inf).max(1)
-        part = np.concatenate([big[0] - 0.5 / SUB, big[1] + 0.5 / SUB], 1)
-        idx = np.where(partial)[0][hit]                         # no part on the face: vrad has no sample there
-        box[idx] = part[hit]                                    # either, the whole square is baked
-    s0, t0, s1, t1 = box.T
-    st = np.stack([np.stack([s0, t0], 1), np.stack([s1, t0], 1), np.stack([s1, t1], 1), np.stack([s0, t1], 1)], 1)
-    world = origin + st[..., :1] * ds + st[..., 1:] * dt        # (n, 4, 3)
+    smp = smp or samples(face)
+    lo, hi = smp.lo, smp.hi
+    st = np.stack([lo, np.stack([hi[:, 0], lo[:, 1]], 1), hi, np.stack([lo[:, 0], hi[:, 1]], 1)], 1)
+    world = face.to_world(st)
+    c = smp.st[:, None, :].astype(np.float64)
+    tex = np.concatenate([c + (-0.5, -0.5), c + (0.5, -0.5), c + (0.5, 0.5), c + (-0.5, 0.5)], 1)
     order = [0, 1, 2, 0, 2, 3]
-    return world[:, order].reshape(-1, 3), corners[:, order].reshape(-1, 2)
+    return world[:, order].reshape(-1, 3), tex[:, order].reshape(-1, 2)
+
+
+def neighbours(faces: list[BakeFace], cos_limit: float = 0.7071067) -> dict[int, list[BakeFace]]:
+    """PairEdges: faces sharing a corner vertex, normals within 45 degrees (or a shared smoothing group;
+    a hard-edge group never). Displacements aren't neighbours of flat faces."""
+    by_vert: dict[int, list[BakeFace]] = {}
+    for f in faces:
+        for v in set(f.verts):
+            by_vert.setdefault(v, []).append(f)
+    out = {}
+    for f in faces:
+        found = {}
+        for v in f.verts:
+            for g in by_vert[v]:
+                if g is f or g.index in found or (f.rect is not None and g.rect is None):
+                    continue
+                if f.smoothing == 0 and g.smoothing == 0:
+                    if float(f.normal @ g.normal) < cos_limit:
+                        continue
+                else:
+                    group = f.smoothing & g.smoothing
+                    if group == 0 or group & 0x80000000:
+                        continue
+                found[g.index] = g
+        out[f.index] = list(found.values())
+    return out
+
+
+def radial(face: BakeFace, own: tuple, others: list[tuple]) -> list[np.ndarray]:
+    """BuildLuxelRadial + SampleRadial: each luxel is the weighted mean of the samples near it, the face's
+    own and its neighbours' (their sample areas taken into this face's luxel space). own / others:
+    (BakeFace, Samples, [values (n, 3) per bump direction]). Returns (h, w, 3) maps."""
+    w, h = face.w, face.h
+    nmaps = 4 if face.bump else 1
+    acc = np.zeros((nmaps, h * w, 3))
+    weight = np.zeros(h * w)
+    for g, smp, vals in [own] + others:
+        if g is face:
+            coord, lo, hi = smp.coord, smp.lo, smp.hi
+        else:
+            coord = face.to_luxel(smp.pos)
+            lo = face.to_luxel(g.to_world(smp.lo))
+            hi = face.to_luxel(g.to_world(smp.hi))
+        # (as vrad: mins/maxs of the moved box are its moved corners, not re-sorted)
+        s_min, t_min = np.trunc(lo[:, 0]).astype(int), np.trunc(lo[:, 1]).astype(int)
+        s_max = np.trunc(hi[:, 0] + 0.9999).astype(int) + 1
+        t_max = np.trunc(hi[:, 1] + 0.9999).astype(int) + 1
+        s_min, t_min = np.maximum(s_min, 0), np.maximum(t_min, 0)
+        s_max, t_max = np.minimum(s_max, w), np.minimum(t_max, h)
+        span = int(max((s_max - s_min).max(initial=0), (t_max - t_min).max(initial=0)))
+        if span <= 0:
+            continue
+        if face.bump and not g.bump:      # a flat neighbour gives its one value to every bump direction
+            vals = [vals[0]] + [vals[0] * OO_SQRT_3] * 3
+        for a in range(span):
+            for b in range(span):
+                s = s_min + a
+                t = t_min + b
+                ok = (s < s_max) & (t < t_max)
+                s0 = np.maximum(lo[:, 0] - s, -1.0)
+                t0 = np.maximum(lo[:, 1] - t, -1.0)
+                s1 = np.minimum(hi[:, 0] - s, 1.0)
+                t1 = np.minimum(hi[:, 1] - t, 1.0)
+                area = (s1 - s0) * (t1 - t0)
+                ok &= area > 0.001
+                if not ok.any():
+                    continue
+                r = np.maximum(np.abs(coord[:, 0] - s), np.abs(coord[:, 1] - t))
+                wgt = np.where(r < 0.1, area / 0.1, area / np.maximum(r, 1e-9))[ok]
+                idx = (s + t * w)[ok]
+                np.add.at(weight, idx, wgt)
+                for m in range(nmaps):
+                    np.add.at(acc[m], idx, vals[min(m, len(vals) - 1)][ok] * wgt[:, None])
+    empty = weight <= 1e-6
+    out = acc / np.where(empty, 1.0, weight)[None, :, None]
+    return [o.reshape(h, w, 3) for o in out]
 
 
 def uvs(face: BakeFace, width: int, height: int, lux: np.ndarray | None = None) -> np.ndarray:

@@ -125,12 +125,15 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
     keys, mat_of = [], {}
     corners, uvs, mats, normals, bumps = [], [], [], [], []
     occ, occ_mats = [], []
+    smp: dict[int, lb.Samples] = {}           # flat faces: where vrad would light them
     for f in faces:
         key = tuple(round(c, 3) for c in f.reflectivity)
         if key not in mat_of:
             mat_of[key] = len(keys)
             keys.append(key)
-        pos, lux = lb.bake_triangles(f)
+        if f.rect is not None:
+            smp[f.index] = lb.samples(f)
+        pos, lux = lb.bake_triangles(f, smp.get(f.index))
         co = (pos / upm).reshape(-1, 3, 3)
         uv = lb.uvs(f, width, height, lux).reshape(-1, 3, 2)
         flip = np.cross(co[:, 1] - co[:, 0], co[:, 2] - co[:, 0]) @ f.normal < 0
@@ -256,11 +259,25 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
                     pass
         _restore_devices(prefs, saved)
 
-    samples_of = {}
+    # flat faces: the sample values, then vrad's luxel filter over each face and its neighbours (this is
+    # what joins neighbouring faces' lighting up); displacements: their texels are the luxels
+    values = {}
     for f in faces:
         x, y = f.atlas
-        maps = [p[y:y + f.h, x:x + f.w].astype(np.float64) for p in passes]
-        samples_of[f.index] = maps if f.bump else maps[:1]
+        maps = passes if f.bump else passes[:1]
+        if f.index in smp:
+            st = smp[f.index].st
+            values[f.index] = [p[y + st[:, 1], x + st[:, 0]].astype(np.float64) for p in maps]
+        else:
+            values[f.index] = [p[y:y + f.h, x:x + f.w].astype(np.float64) for p in maps]
+    near = lb.neighbours(faces)
+    samples_of = {}
+    for f in faces:
+        if f.index not in smp:
+            samples_of[f.index] = values[f.index]
+            continue
+        others = [(g, smp[g.index], values[g.index]) for g in near[f.index] if g.index in smp]
+        samples_of[f.index] = lb.radial(f, (f, smp[f.index], values[f.index]), others)
     with open(bsp_path, "wb") as out:
         out.write(lb.write(data, lump_no, faces, samples_of))
     lines = [f"Cycles: {len(faces)} faces, {len(passes)} bake{'s' if len(passes) > 1 else ''} on "
