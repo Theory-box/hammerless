@@ -318,9 +318,11 @@ def radial(face: BakeFace, own: tuple, others: list[tuple]) -> tuple[list[np.nda
                 r = np.maximum(np.abs(coord[:, 0] - s), np.abs(coord[:, 1] - t))
                 wgt = np.where(r < 0.1, area / 0.1, area / np.maximum(r, 1e-9))[ok]
                 idx = (s + t * w)[ok]
-                np.add.at(weight, idx, wgt)
+                weight += np.bincount(idx, wgt, minlength=h * w)
                 for m in range(nmaps):
-                    np.add.at(acc[m], idx, vals[min(m, len(vals) - 1)][ok] * wgt[:, None])
+                    v = vals[min(m, len(vals) - 1)][ok]
+                    for c in range(3):
+                        acc[m, :, c] += np.bincount(idx, v[:, c] * wgt, minlength=h * w)
     empty = weight <= 1e-6
     out = acc / np.where(empty, 1.0, weight)[None, :, None]
     return [o.reshape(h, w, 3) for o in out], empty.reshape(h, w)
@@ -512,64 +514,48 @@ def _bilinear(face: BakeFace, coord: np.ndarray):
     return idx, wgt
 
 
-def shared_edges(faces: list[BakeFace], cos_limit: float = 0.7071067, per_luxel: int = 4) -> list:
+def shared_edges(faces: list[BakeFace], cos_limit: float = 0.7071067, per_luxel: int = 2) -> list:
     """Points along every stretch of edge two flat faces share (also where one face's corner lands
-    mid-edge on the other), for faces within 45 degrees of each other.
+    mid-edge on the other), for faces within 45 degrees of each other, per_luxel per luxel along it.
+    Edges are grouped by the line they lie on, then overlapping ones of different faces paired.
     Returns [(face a, face b, (n, 3) points)]."""
     flat = [f for f in faces if f.rect is not None and f.poly_lux is not None]
-    cell = 128.0
-    grid: dict = {}
-    segs = {}
+    lines: dict = {}
     for f in flat:
         p = f.to_world(f.poly_lux)
-        segs[f.index] = (p, np.roll(p, -1, 0))
-        lo = np.floor((p.min(0) - 0.5) / cell).astype(int)
-        hi = np.floor((p.max(0) + 0.5) / cell).astype(int)
-        for x in range(lo[0], hi[0] + 1):
-            for y in range(lo[1], hi[1] + 1):
-                for z in range(lo[2], hi[2] + 1):
-                    grid.setdefault((x, y, z), []).append(f)
-    box = {f.index: (segs[f.index][0].min(0) - 0.05, segs[f.index][0].max(0) + 0.05) for f in flat}
-    pairs = set()
-    for members in grid.values():
-        for i, a in enumerate(members):
-            for b in members[i + 1:]:
-                key = (a.index, b.index) if a.index < b.index else (b.index, a.index)
-                if key in pairs or float(a.normal @ b.normal) < cos_limit:
-                    continue
-                (alo, ahi), (blo, bhi) = box[a.index], box[b.index]
-                if np.all(alo <= bhi) and np.all(blo <= ahi):          # touching
-                    pairs.add(key)
-    by = {f.index: f for f in flat}
-    out = []
-    for ia, ib in sorted(pairs):
-        a, b = by[ia], by[ib]
-        luxel = 1.0 / max(np.linalg.norm(a.lvecs[0, :3]), np.linalg.norm(a.lvecs[1, :3]),
-                          np.linalg.norm(b.lvecs[0, :3]), np.linalg.norm(b.lvecs[1, :3]))
-        pts = []
-        for p0, p1 in zip(*segs[ia]):
-            d = p1 - p0
-            length = float(np.linalg.norm(d))
-            if length < 0.1:
+        q = np.roll(p, -1, 0)
+        d = q - p
+        length = np.linalg.norm(d, axis=1)
+        for a, b, ln, dd in zip(p, q, length, d):
+            if ln < 0.1:
                 continue
-            u = d / length
-            for r0, r1 in zip(*segs[ib]):
-                e = r1 - r0
-                if np.linalg.norm(np.cross(u, e)) > 1e-3 * max(float(np.linalg.norm(e)), 1e-9):
-                    continue                                  # not parallel
-                off = r0 - p0
-                if np.linalg.norm(off - (off @ u) * u) > 0.05:
-                    continue                                  # parallel but apart
-                lo = max(0.0, min(off @ u, (r1 - p0) @ u))
-                hi = min(length, max(off @ u, (r1 - p0) @ u))
+            u = dd / ln
+            k = int(np.argmax(np.abs(u)))
+            if u[k] < 0:                                   # one direction per line
+                u = -u
+            foot = a - (a @ u) * u                          # the line's point nearest the origin
+            key = (tuple(np.round(u * 1000).astype(int)), tuple(np.round(foot / 0.05).astype(int)))
+            lines.setdefault(key, []).append((f, a @ u, b @ u, a, u))
+    pairs: dict = {}
+    for group in lines.values():
+        if len(group) < 2:
+            continue
+        for i, (fa, a0, a1, pa, u) in enumerate(group):
+            for fb, b0, b1, _pb, _u in group[i + 1:]:
+                if fa is fb or float(fa.normal @ fb.normal) < cos_limit:
+                    continue
+                lo = max(min(a0, a1), min(b0, b1))
+                hi = min(max(a0, a1), max(b0, b1))
                 if hi - lo < 0.25:
                     continue
+                luxel = 1.0 / max(np.linalg.norm(fa.lvecs[0, :3]), np.linalg.norm(fa.lvecs[1, :3]),
+                                  np.linalg.norm(fb.lvecs[0, :3]), np.linalg.norm(fb.lvecs[1, :3]))
                 n = max(2, int(np.ceil((hi - lo) / luxel * per_luxel)) + 1)
                 k = lo + (hi - lo) * (np.arange(n) + 0.5) / n
-                pts.append(p0 + k[:, None] * u)
-        if pts:
-            out.append((a, b, np.concatenate(pts)))
-    return out
+                pts = pa + (k - pa @ u)[:, None] * u
+                key = (fa.index, fb.index) if fa.index < fb.index else (fb.index, fa.index)
+                pairs.setdefault(key, (fa, fb, []))[2].append(pts)
+    return [(a, b, np.concatenate(p)) for a, b, p in pairs.values()]
 
 
 def _edge_values(face: BakeFace, lm: np.ndarray, pts: np.ndarray) -> np.ndarray:
@@ -798,3 +784,104 @@ def chart_values(chart: Chart, face: BakeFace, smp: "Samples", image: np.ndarray
     val = (image[y0, x0] * (1 - fx) * (1 - fy) + image[y0, x0 + 1] * fx * (1 - fy)
            + image[y0 + 1, x0] * (1 - fx) * fy + image[y0 + 1, x0 + 1] * fx * fy)
     return val.reshape(len(smp.st), k * k, 3).mean(1)
+
+
+# ---------------------------------------------------------------- faces nobody sees
+#
+# Baking a face nobody can see is wasted time. From where players can be (eye points over the nav mesh),
+# the map's visibility data (PVS) says which parts of the map they can see; a face there counts as seen
+# if one of those eye points is in front of it. Unseen faces keep vrad's lighting (already in the map),
+# and still block and bounce light in the bake.
+
+def eye_points(areas, heights=(64.0, 128.0), inset: float = 4.0) -> np.ndarray:
+    """Points over nav areas (navfile.NavArea): the corners (pulled in a little) and the middle, at
+    standing eye height and jump height."""
+    pts = []
+    for a in areas:
+        (x0, y0, z_nw), (x1, y1, z_se) = a.nw, a.se
+        xs = (min(x0 + inset, (x0 + x1) / 2), max(x1 - inset, (x0 + x1) / 2))
+        ys = (min(y0 + inset, (y0 + y1) / 2), max(y1 - inset, (y0 + y1) / 2))
+        corners = [(xs[0], ys[0], z_nw), (xs[1], ys[0], a.ne_z), (xs[1], ys[1], z_se), (xs[0], ys[1], a.sw_z),
+                   ((x0 + x1) / 2, (y0 + y1) / 2, (z_nw + z_se + a.ne_z + a.sw_z) / 4)]
+        for x, y, z in corners:
+            for h in heights:
+                pts.append((x, y, z + h))
+    return np.array(pts, dtype=np.float64).reshape(-1, 3)
+
+
+def _point_leaves(data: bytes, pts: np.ndarray) -> np.ndarray:
+    """CM_PointLeafnum for many points (d < 0 goes to the back child)."""
+    lump = _lumps(data)
+    planes = np.frombuffer(lump(1), dtype=np.dtype([("n", "<3f4"), ("d", "<f4"), ("t", "<i4")]))
+    nodes = np.frombuffer(lump(5), dtype="<i4").reshape(-1, 8)
+    head = struct.unpack_from("<i", lump(14), 36)[0]
+    num = np.full(len(pts), head, dtype=np.int64)
+    live = num >= 0
+    while live.any():
+        k = num[live]
+        pl = planes[nodes[k, 0]]
+        d = (pts[live] * pl["n"].astype(np.float64)).sum(1) - pl["d"]
+        num[live] = np.where(d < 0, nodes[k, 2], nodes[k, 1])
+        live = num >= 0
+    return -1 - num
+
+
+def seen_faces(data: bytes, faces: list[BakeFace], eyes: np.ndarray, margin: float = 1.0) -> set[int] | None:
+    """The faces some eye point can see (by the PVS, and in front of the face). None: no visibility data
+    or no eye points to judge from (bake everything). Faces outside the world's leaves (brush entities,
+    displacements) always count as seen."""
+    lump = _lumps(data)
+    vis = lump(4)
+    if len(vis) < 4 or not len(eyes):
+        return None
+    nclusters = struct.unpack_from("<i", vis, 0)[0]
+    rowbytes = (nclusters + 7) >> 3
+    leafs = lump(10)
+    nleafs = len(leafs) // 32
+    leaf_cluster = np.frombuffer(leafs, dtype="<i2").reshape(nleafs, 16)[:, 2].astype(np.int64)
+    first = np.frombuffer(leafs, dtype="<u2").reshape(nleafs, 16)[:, 10:12].astype(np.int64)
+    leaffaces = np.frombuffer(lump(16), dtype="<u2")
+
+    eye_cluster = leaf_cluster[_point_leaves(data, eyes)]
+    inside = eye_cluster >= 0
+    eyes, eye_cluster = eyes[inside], eye_cluster[inside]
+    if not len(eyes):
+        return None
+    ec, which = np.unique(eye_cluster, return_inverse=True)
+    sees = np.zeros((len(ec), nclusters), dtype=bool)          # eye cluster -> clusters it can see
+    for i, c in enumerate(ec):
+        ofs = struct.unpack_from("<i", vis, 4 + 8 * int(c))[0]
+        row, j, p = bytearray(rowbytes), 0, ofs
+        while j < rowbytes:
+            if vis[p]:
+                row[j] = vis[p]
+                j += 1
+                p += 1
+            else:
+                j += vis[p + 1]
+                p += 2
+        sees[i] = np.unpackbits(np.frombuffer(bytes(row), np.uint8), bitorder="little")[:nclusters].astype(bool)
+    lo = np.full((len(ec), 3), np.inf)          # each eye cluster's eye points, as a box (its corners:
+    hi = np.full((len(ec), 3), -np.inf)         # in front of a face if any eye could be)
+    np.minimum.at(lo, which, eyes)
+    np.maximum.at(hi, which, eyes)
+    box = np.stack([np.stack([np.where(m & 1, hi[:, 0], lo[:, 0]), np.where(m & 2, hi[:, 1], lo[:, 1]),
+                              np.where(m & 4, hi[:, 2], lo[:, 2])], 1) for m in range(8)], 1)   # (ec, 8, 3)
+
+    face_clusters: dict[int, set] = {}
+    for leaf in range(nleafs):
+        c = leaf_cluster[leaf]
+        if c < 0:
+            continue
+        for f in leaffaces[first[leaf, 0]:first[leaf, 0] + first[leaf, 1]]:
+            face_clusters.setdefault(int(f), set()).add(int(c))
+    out = set()
+    for f in faces:
+        cl = face_clusters.get(f.index)
+        if not cl:
+            out.add(f.index)                                    # not a world leaf face: keep
+            continue
+        who = sees[:, sorted(cl)].any(1)
+        if who.any() and ((box[who] @ f.normal - float(f.normal @ f.positions[0])) > margin).any():
+            out.add(f.index)
+    return out

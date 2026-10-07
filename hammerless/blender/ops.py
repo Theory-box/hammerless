@@ -1028,6 +1028,25 @@ class HL_OT_build(bpy.types.Operator):
             self.report({"INFO"}, f"{compiled}.{note}  [{timing}]")
         return self._finish(context, {"FINISHED"})
 
+    def _eye_points(self, context):
+        """Where players can see from, for skipping faces nobody sees: over this build's nav mesh (waiting
+        for it if it's still being made), else the map's nav file in the game. None: bake every face."""
+        from ..core.lightbake import eye_points
+        mesh = None
+        if self._nav is not None:
+            self._nav["thread"].join()
+            mesh = self._nav.get("mesh")
+        if mesh is None and self._root:
+            from ..core.navfile import load_nav
+            path = os.path.join(cc.Tools(self._root).maps_dir, self._owner[1] + ".nav")
+            try:
+                mesh = load_nav(path) if os.path.exists(path) else None
+            except Exception:            # an unreadable nav: just bake everything
+                mesh = None
+        if mesh is None or not mesh.areas:
+            return None
+        return eye_points(mesh.areas)
+
     def _cycles_bake(self, context):
         """The compile waits after vrad: bake its lighting with Cycles here (Blender's main thread)."""
         bsp = self._job.bake_request
@@ -1035,7 +1054,7 @@ class HL_OT_build(bpy.types.Operator):
             from .cyclesbake import bake_bsp
             opts = self._job._opts
             lines = bake_bsp(bsp, context.scene.hammerless.units_per_meter, opts.cycles_samples,
-                             opts.cycles_denoise, opts.cycles_stitch)
+                             opts.cycles_denoise, opts.cycles_stitch, self._eye_points(context))
         except Exception as ex:          # the map still has vrad's lighting
             import traceback
             traceback.print_exc()

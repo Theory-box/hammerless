@@ -112,14 +112,19 @@ def _aim(obj, direction):
 
 
 def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = False,
-             stitch: bool = True) -> list[str]:
-    """Bake the map's static lighting with Cycles and write it into the BSP. Returns log lines."""
+             stitch: bool = True, eyes: np.ndarray | None = None) -> list[str]:
+    """Bake the map's static lighting with Cycles and write it into the BSP. Returns log lines.
+    eyes: (n, 3) points players can see from (over the nav mesh): faces none of them can see aren't
+    baked (they keep vrad's lighting)."""
     t0 = time.time()
     with open(bsp_path, "rb") as f:
         data = f.read()
-    faces, lump_no = lb.read_faces(data)
-    if not faces:
+    all_faces, lump_no = lb.read_faces(data)
+    if not all_faces:
         return ["Cycles: no lit faces to bake"]
+    seen = lb.seen_faces(data, all_faces, eyes) if eyes is not None else None
+    faces = all_faces if seen is None else [f for f in all_faces if f.index in seen]
+    skipped = len(all_faces) - len(faces)
     sun, ambient, lights, notes = lb.scene_lights(_lumps(data)(0).decode("latin-1"), hdr=lump_no == 53)
     # flat faces: connected coplanar faces baked as one picture (a chart), read back per vrad sample;
     # displacements: one texel per luxel as before
@@ -158,6 +163,11 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
         normals.append(np.broadcast_to(f.normal.astype(np.float32), (len(co), 3)))      # one per triangle
         bumps.append(np.broadcast_to((f.bump_normals if f.bump else np.tile(f.normal, (3, 1))).astype(np.float32),
                                      (len(co), 3, 3)))
+    for f in all_faces:                       # every face blocks and bounces light, baked or not
+        key = tuple(round(c, 3) for c in f.reflectivity)
+        if key not in mat_of:
+            mat_of[key] = len(keys)
+            keys.append(key)
         oc = (f.positions / upm).reshape(-1, 3, 3) - f.normal * (OCCLUDER_SHIFT / upm)
         oflip = np.cross(oc[:, 1] - oc[:, 0], oc[:, 2] - oc[:, 0]) @ f.normal < 0
         oc[oflip] = oc[oflip][:, [0, 2, 1]]
@@ -257,6 +267,7 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
                                     use_clear=True)
             return np.array(image.pixels[:], np.float32).reshape(height, width, 4)[:, :, :3] * TO_VRAD
 
+        prep = time.time() - t0
         tb = time.time()
         passes = [bake()]
         if any_bump:
@@ -276,6 +287,7 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
 
     # flat faces: the sample values, then vrad's luxel filter over each face and its neighbours (this is
     # what joins neighbouring faces' lighting up); displacements: their texels are the luxels
+    tf = time.time()
     values = {}
     for f in faces:
         maps = passes if f.bump else passes[:1]
@@ -297,6 +309,7 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
             maps = [lb.fill_empty(mp, empty) for mp in maps]
         samples_of[f.index] = maps
         keep[f.index] = np.where(empty, 0.01, 1.0)      # those may move freely when stitching
+    filtered = time.time() - tf
     seam_note = ""
     if stitch:
         ts = time.time()
@@ -306,7 +319,11 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
                      f"{before:.2%} -> {lb.seam_error(edges, samples_of):.2%} (mean difference across edges)")
     with open(bsp_path, "wb") as out:
         out.write(lb.write(data, lump_no, faces, samples_of))
-    lines = [f"Cycles: {len(faces)} faces, {len(passes)} bake{'s' if len(passes) > 1 else ''} on "
+    if seen is not None:
+        notes.insert(0, f"skipped {skipped} of {len(all_faces)} faces no player position can see "
+                        f"(they keep vrad's lighting)")
+    lines = [f"Cycles: preparing {prep:.1f}s, baking {seconds:.1f}s, reading and filtering {filtered:.1f}s",
+             f"Cycles: {len(faces)} faces, {len(passes)} bake{'s' if len(passes) > 1 else ''} on "
              f"{'GPU' if gpu else 'CPU'} in {seconds:.1f}s ({time.time() - t0:.1f}s in all), "
              f"{samples} samples{', denoised' if denoise else ''}, "
              f"{len(lights)} light{'s' if len(lights) != 1 else ''}" + (" + sun and sky" if sun else "")]
