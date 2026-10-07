@@ -1193,6 +1193,54 @@ class TestAutoDetail(unittest.TestCase):
         self.assertNotIn("func_detail", text)
 
 
+class TestAcoustics(unittest.TestCase):
+    """Automatic soundscapes: a roofed room (x < 512) beside open ground, all on one floor at z 0."""
+
+    @staticmethod
+    def cast(origin, direction, distance):
+        x, y, z = origin
+        dx, dy, dz = direction
+        if dz < 0:
+            if x < 512 and z > 256:                  # the roof, from above
+                return ((z - 256) / -dz, 1.0) if (z - 256) / -dz <= distance else None
+            return (z / -dz, 1.0) if z / -dz <= distance else None
+        if dz > 0 and x < 512 and z < 256:           # the ceiling, from below
+            return ((256 - z) / dz, -1.0) if (256 - z) / dz <= distance else None
+        return None
+
+    def test_zones_and_files(self):
+        from hammerless.core import acoustics as a
+        spots, spacing = a.sample_spots(((0, 0, 0), (1024, 512, 300)), self.cast)
+        self.assertTrue(any(s.floor_z == 256 for s in spots))            # the roof is a surface...
+        spots = a.reachable(spots, [(100, 100, 0)])
+        self.assertTrue(all(s.floor_z == 0 for s in spots))              # ...nobody can reach
+        a.analyse(spots, self.cast, rays=48)
+        for s in spots:
+            self.assertEqual(s.kind, "INDOOR" if s.pos[0] < 512 else "OUTDOOR", s.pos)
+        zl = a.zones(spots, spacing)
+        self.assertEqual(sorted(z.kind for z in zl), ["INDOOR", "OUTDOOR"])
+        indoor = next(z for z in zl if z.kind == "INDOOR")
+        self.assertTrue(0 < len(indoor.positions) <= a.MAX_POSITIONS)
+        self.assertEqual(len(indoor.volumes), len(indoor.positions))
+        self.assertTrue(all(abs(p[0] - 512) <= spacing for p in indoor.positions))   # at the opening
+        text = a.soundscape_file("m", "URBAN", zl)
+        self.assertIn('"hammerless.m.outdoor"', text)
+        self.assertEqual(text.count('"dsp"\t"1"'), 3)                    # outdoor, sheltered, the indoor zone
+        self.assertIn('"positionoverride"\t"0"', text)
+        ents = a.entities(zl, "m", spacing)
+        triggers = [e for e in ents if e.classname == "trigger_soundscape"]
+        self.assertEqual(len(triggers), 2)
+        self.assertEqual(sum(len(e.brushes) for e in triggers), len(spots))
+        env = [e for e in ents if e.classname == "env_soundscape_triggerable"]
+        self.assertEqual({e.keyvalues["soundscape"] for e in env},
+                         {"hammerless.m.outdoor", a.soundscape_name("m", zl, zl.index(indoor))})
+        self.assertEqual(sum(e.classname == "info_target" for e in ents), len(indoor.positions))
+        reverb_only = a.soundscape_file("m", None, zl)                   # the engine's reverb, no ambience
+        self.assertEqual(reverb_only.count('"dsp"\t"1"'), 3)
+        self.assertNotIn("playsoundscape", reverb_only)
+        self.assertNotIn("playlooping", reverb_only)
+
+
 class TestVisData(unittest.TestCase):
     """The Visibility viewer's data: portals, rendering load, vis cost and who caused it."""
 

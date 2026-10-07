@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Automatic sound (World > Sound):** Build ray traces the map from every floor survivors can reach and adds soundscapes. *Automatic Reverb* (the default) turns on the engine's own room reverb everywhere, which traces the space around you while playing (Valve's maps use it almost everywhere; a map without soundscapes didn't get it). *Reverb + City Ambience* also plays city ambience outdoors, and indoors a room tone with the outside coming in through the doorways and windows ("sound portals", placed where indoor spaces open to the outside, louder through wider openings), so the engine's 3D sound places it correctly as you move. *View > Sound* shows the result: outdoors, sheltered, indoors and the sound portals (**Trace Sound** works without building).
+
 ## 0.5.6 (test release, 2026-10-07)
 
 - **View panel:** everything drawn over the viewport in one place, with three sections: *Nav Mesh* (the nav viewer with Build Navmesh, Analyze and Clear), *Baked Lighting* (Bake Lighting, the lighting view, Bake Settings) and *Visibility*. Rebuild Nav Next Time joins the other nav settings in Build & Play; Problems stays there too.

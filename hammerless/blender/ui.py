@@ -478,6 +478,20 @@ class HL_PT_director(_Sub, bpy.types.Panel):
         _hint(box, "Off: only your logic graph spawns it")
 
 
+class HL_PT_sound(_Sub, bpy.types.Panel):
+    bl_label = "Sound"
+    bl_parent_id = "HL_PT_world"
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = _settings(self.layout)
+        col.prop(s, "sound_mode")
+        if s.sound_mode == "OFF":
+            _hint(self.layout, "No room reverb: the map sounds dry")
+        else:
+            _hint(self.layout, "Build ray traces the map from every floor", "and adds soundscapes: see View > Sound")
+
+
 class HL_PT_logic(_Sub, bpy.types.Panel):
     bl_label = "Logic Graphs"
     bl_parent_id = "HL_PT_world"
@@ -558,6 +572,15 @@ class HL_PT_bake_settings(_Sub, bpy.types.Panel):
         col.prop(s, "compile_preset", text="Quality")
         col.prop(s, "lightmap_scale")
         _hint(self.layout, "Smaller lightmap scale: sharper shadows,", "slower bake. Materials can override it")
+
+
+class HL_PT_view_sound(_Sub, bpy.types.Panel):
+    bl_label = "Sound"
+    bl_parent_id = "HL_PT_view"
+
+    def draw(self, context):
+        from .sound import draw_panel
+        draw_panel(self.layout, context)
 
 
 class HL_PT_view_vis(_Sub, bpy.types.Panel):
@@ -759,8 +782,8 @@ def _add_menu(self, context):
 CLASSES = (HL_UL_keyvalues, HL_UL_outputs,
            HL_PT_build, HL_PT_problems,
            HL_PT_object, HL_PT_obj_model, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
-           HL_PT_world, HL_PT_sky, HL_PT_fog, HL_PT_director, HL_PT_logic,
-           HL_PT_view, HL_PT_view_nav, HL_PT_view_light, HL_PT_bake_settings, HL_PT_view_vis,
+           HL_PT_world, HL_PT_sky, HL_PT_fog, HL_PT_director, HL_PT_sound, HL_PT_logic,
+           HL_PT_view, HL_PT_view_nav, HL_PT_view_light, HL_PT_bake_settings, HL_PT_view_vis, HL_PT_view_sound,
            HL_PT_settings, HL_PT_compile, HL_PT_game, HL_PT_folders, HL_PT_scene, HL_PT_debug,
            HL_PT_collection, *CATEGORY_MENUS, HL_MT_add)
 

@@ -176,6 +176,8 @@ def build_map_text(context, root: str | None):
         return ir, None, rep
     from .logic import compile_logic
     compile_logic(context, ir, rep)
+    from .sound import add_acoustics
+    add_acoustics(context, ir, rep)
     text, rep2 = build_vmf(ir, content if s.check_game_content else None)
     rep2.errors[:0] = rep.errors
     rep2.warnings[:0] = rep.warnings

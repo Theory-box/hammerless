@@ -40,6 +40,11 @@ COMPILE_PRESETS = [
 ]
 
 
+def _sound_display(self, context):
+    from .sound import on_display_change
+    on_display_change(self, context)
+
+
 def _vis_display(self, context):
     from .visview import on_view_change
     on_view_change(self, context)
@@ -327,6 +332,14 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     ])
     nav_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _nav_display(self, c),
                            description="Draw the nav mesh through walls")
+    sound_mode: EnumProperty(name="Sound", default="REVERB", items=[
+        ("OFF", "Off", "No soundscapes: the map plays without the engine's room reverb"),
+        ("REVERB", "Automatic Reverb", "Soundscapes everywhere with the engine's own automatic reverb (it traces the "
+                                       "room around you while playing, as Valve's maps do)"),
+        ("URBAN", "Reverb + City Ambience", "Also city ambience outdoors, and indoors a room tone with the outside "
+                                            "coming in through the doorways and windows (sound portals)")])
+    show_sound: BoolProperty(name="Show Sound", default=True, update=lambda self, c: _sound_display(self, c),
+                             description="Show the last sound trace in the viewport")
     vis_view: EnumProperty(name="View", default="OFF", update=lambda self, c: _vis_display(self, c), items=[
         ("OFF", "Off", "Show nothing"),
         ("PORTALS", "Portals", "The openings vis works through, from the last build: how the map was split up. "
