@@ -49,11 +49,19 @@ def compile_options(s) -> "cc.CompileOptions | str":
         if s.vis_tool == "VALVE" and s.light_tool == "VALVE":
             return s.compile_preset
         import dataclasses
-        return dataclasses.replace(cc.PRESETS[s.compile_preset], vis_tool=s.vis_tool, light_tool=s.light_tool)
+        return dataclasses.replace(cc.PRESETS[s.compile_preset], vis_tool=s.vis_tool, light_tool=s.light_tool,
+                                   **_cycles_options(s))
     return cc.CompileOptions(vis=s.vis_mode, rad=s.rad_mode, hdr=s.hdr_mode,
                              static_prop_lighting=s.static_prop_lighting,
                              extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad,
-                             vis_tool=s.vis_tool, light_tool=s.light_tool)
+                             vis_tool=s.vis_tool, light_tool=s.light_tool, **_cycles_options(s))
+
+
+def _cycles_options(s) -> dict:
+    """Cycles bake settings (only when baking with Cycles, so they don't change vrad builds' fingerprint)."""
+    if s.light_tool != "CYCLES":
+        return {}
+    return {"cycles_samples": s.cycles_samples, "cycles_denoise": s.cycles_denoise}
 
 
 def launch_options(s) -> cc.LaunchOptions:
@@ -1017,7 +1025,9 @@ class HL_OT_build(bpy.types.Operator):
         context.workspace.status_text_set("Hammerless: baking the lighting with Cycles...")
         try:
             from .cyclesbake import bake_bsp
-            lines = bake_bsp(bsp, context.scene.hammerless.units_per_meter)
+            opts = self._job._opts
+            lines = bake_bsp(bsp, context.scene.hammerless.units_per_meter, opts.cycles_samples,
+                             opts.cycles_denoise)
         except Exception as ex:          # the map still has vrad's lighting
             import traceback
             traceback.print_exc()

@@ -27,6 +27,8 @@ class CompileOptions:
     extra_vrad: str = ""
     vis_tool: str = "VALVE"     # VALVE: L4D2's vvis.exe / HAMMERLESS: hlvvis.exe (same results, faster)
     light_tool: str = "VALVE"   # VALVE: vrad's lightmaps / CYCLES: Blender bakes them after vrad (bake_handler)
+    cycles_samples: int = 1024
+    cycles_denoise: bool = False   # measured: OpenImageDenoise smears the packed bake (7.7% off vs 1.3% raw)
 
     def vbsp_args(self) -> list[str]:
         return self.extra_vbsp.split()

@@ -26,7 +26,7 @@ from mathutils import Vector
 from ..core import lightbake as lb
 from ..core.lightmap import _lumps
 
-SAMPLES = 256
+SAMPLES = 1024
 OCCLUDER_SHIFT = 1.0        # units: what blocks and bounces light sits this far behind each baked face
 TO_VRAD = 100 * math.pi
 NORMAL_ATTR = "hl_normal"
@@ -111,7 +111,7 @@ def _aim(obj, direction):
     obj.rotation_quaternion = Vector(tuple(direction)).to_track_quat("-Z", "Y")
 
 
-def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES) -> list[str]:
+def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = False) -> list[str]:
     """Bake the map's static lighting with Cycles and write it into the BSP. Returns log lines."""
     t0 = time.time()
     with open(bsp_path, "rb") as f:
@@ -219,9 +219,11 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES) -> list[str]:
         scene.render.engine = "CYCLES"
         scene.cycles.device = "GPU" if gpu else "CPU"
         scene.cycles.samples = samples
-        scene.cycles.use_denoising = True                 # Combined bakes go through the render denoiser
+        scene.cycles.use_denoising = denoise              # Combined bakes go through the render denoiser
         scene.cycles.denoiser = "OPENIMAGEDENOISE"
         scene.cycles.denoising_input_passes = "RGB_ALBEDO_NORMAL"
+        if hasattr(scene.cycles, "denoising_use_gpu"):
+            scene.cycles.denoising_use_gpu = gpu
         scene.cycles.diffuse_bounces = 8
         scene.cycles.glossy_bounces = scene.cycles.transmission_bounces = 0
         scene.render.bake.margin = lb.PAD
@@ -263,5 +265,6 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES) -> list[str]:
         out.write(lb.write(data, lump_no, faces, samples_of))
     lines = [f"Cycles: {len(faces)} faces, {len(passes)} bake{'s' if len(passes) > 1 else ''} on "
              f"{'GPU' if gpu else 'CPU'} in {seconds:.1f}s ({time.time() - t0:.1f}s in all), "
+             f"{samples} samples{', denoised' if denoise else ''}, "
              f"{len(lights)} light{'s' if len(lights) != 1 else ''}" + (" + sun and sky" if sun else "")]
     return lines + [f"Cycles: {n}" for n in notes]

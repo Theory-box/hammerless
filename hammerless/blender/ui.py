@@ -105,6 +105,10 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         col.prop(s, "generate_nav", text="Rebuild Nav Next Time")
         col.prop(s, "vis_tool")
         col.prop(s, "light_tool")
+        if s.light_tool == "CYCLES":
+            row = col.row(align=True)
+            row.prop(s, "cycles_samples")
+            row.prop(s, "cycles_denoise", toggle=True)
         if _leaked(context):
             layout.separator()
             row = layout.row()
@@ -571,7 +575,11 @@ class HL_PT_bake_settings(_Sub, bpy.types.Panel):
         s = context.scene.hammerless
         col = _settings(self.layout)
         col.prop(s, "compile_preset", text="Quality")
-        col.prop(s, "lightmap_scale")
+        col.prop(s, "light_tool")
+        if s.light_tool == "CYCLES":
+            col.prop(s, "cycles_samples")
+            col.prop(s, "cycles_denoise")
+        col.prop(s, "lightmap_scale", text="Lightmap Scale (resolution)")
         _hint(self.layout, "Smaller lightmap scale: sharper shadows,", "slower bake. Materials can override it")
 
 

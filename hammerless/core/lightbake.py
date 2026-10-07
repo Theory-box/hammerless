@@ -31,7 +31,8 @@ OO_SQRT_2_OVER_3 = 0.81649661064147949
 LOCAL_BUMP_BASIS = np.array([[OO_SQRT_2_OVER_3, 0.0, OO_SQRT_3],
                              [-OO_SQRT_6, OO_SQRT_2, OO_SQRT_3],
                              [-OO_SQRT_6, -OO_SQRT_2, OO_SQRT_3]])
-PAD = 2                     # texels between faces in the bake image (edge samples are filled from inside)
+PAD = 4                     # texels around each face in the bake image, filled from inside (keeps the
+                            # denoiser from mixing neighbouring faces)
 
 
 @dataclass
@@ -89,7 +90,7 @@ def read_faces(data: bytes) -> tuple[list[BakeFace], int]:
     out = []
     for k in range(len(faces) // FACE_SIZE):
         b = FACE_SIZE * k
-        planenum, side = struct.unpack_from("<HB", faces, b)
+        planenum = struct.unpack_from("<H", faces, b)[0]     # (the side byte is already in the plane)
         first_edge, num_edges, ti, di = struct.unpack_from("<ihhh", faces, b + 4)
         styles = faces[b + 16:b + 20]
         light_ofs = struct.unpack_from("<i", faces, b + 20)[0]
@@ -104,9 +105,7 @@ def read_faces(data: bytes) -> tuple[list[BakeFace], int]:
         lvecs = np.array(struct.unpack_from("<8f", texinfo, TEXINFO_SIZE * ti + 32), dtype=np.float64).reshape(2, 4)
         td = struct.unpack_from("<i", texinfo, TEXINFO_SIZE * ti + 68)[0]
         refl = struct.unpack_from("<3f", texdata, 32 * td) if 0 <= td < len(texdata) // 32 else (0.5, 0.5, 0.5)
-        n = np.array(struct.unpack_from("<3f", planes, 20 * planenum), dtype=np.float64)
-        if side:
-            n = -n
+        n = np.array(struct.unpack_from("<3f", planes, 20 * planenum), dtype=np.float64)   # already the face's
         se = surfedges[first_edge:first_edge + num_edges]
         corners = verts[np.where(se >= 0, edges[np.abs(se), 0], edges[np.abs(se), 1])].astype(np.float64)
         if di >= 0 and num_edges == 4:
