@@ -9,13 +9,13 @@ Bots, zombies and the AI Director all run on the **nav mesh**, the game's map of
 | **Nav Mesh** | **Made in Blender** (default): a port of the game's nav generator builds it while the map compiles. **Made by the game**: the game generates it after loading (two extra reloads). |
 | **Nav Analysis** | (Made in Blender only) **In Blender** (default): visibility and hiding spots are computed in Blender, so the game loads the map once. **By the game**: the game analyzes it and reloads once. |
 | **Zombies Climb Walls** | (Made in Blender only) Every wall up to about 160 units becomes climbable for commons, with a way back down. |
-| **Rebuild Next Time** | (In Nav Mesh > Settings.) Forces a fresh nav mesh on the next build. Normally not needed: Hammerless rebuilds it whenever the map changes. |
+| **Rebuild Next Time** | Forces a fresh nav mesh on the next build. Normally not needed: Hammerless rebuilds it whenever the map changes. |
 
 Both "in Blender" options are measured against the game's own output: the nav analysis matches the game's visibility on 99.92% of area pairs, and its hiding spots exactly.
 
-## The viewer (Nav Mesh > Viewer)
+## The viewer (View > Nav Mesh)
 
-The *Nav Mesh* panel's header says whether the nav is up to date. Under the viewer's buttons it reports the path from start to end (OK / BROKEN), how many areas are reachable or islands, and the drop, jump and ladder counts.
+The *View > Nav Mesh* header says whether the nav is up to date. Under the viewer's buttons it reports the path from start to end (OK / BROKEN), how many areas are reachable or islands, and the drop, jump and ladder counts.
 
 | Button | What it does |
 |---|---|

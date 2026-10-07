@@ -102,6 +102,7 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         sub.enabled = s.nav_source == "BLENDER"
         sub.prop(s, "nav_analysis")
         sub.prop(s, "wall_climbs")
+        col.prop(s, "generate_nav", text="Rebuild Nav Next Time")
         col.prop(s, "vis_tool")
         if _leaked(context):
             layout.separator()
@@ -509,45 +510,33 @@ class HL_PT_logic(_Sub, bpy.types.Panel):
 
 # ---------------------------------------------------------------- Nav Mesh
 
-class HL_PT_navmesh(_Panel, bpy.types.Panel):
-    bl_label = "Nav Mesh"
+class HL_PT_view(_Panel, bpy.types.Panel):
+    bl_label = "View"
     bl_order = 4
     bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        _hint(self.layout, "Drawn over the viewport, from your", "builds: nothing is added to the scene")
+
+
+class HL_PT_view_nav(_Sub, bpy.types.Panel):
+    bl_label = "Nav Mesh"
+    bl_parent_id = "HL_PT_view"
 
     def draw_header_preset(self, context):
         short, _long = _nav_status(context)
         _status(self.layout, short, alert=short in ("Out of date", "L4D2 not found"))
 
     def draw(self, context):
-        _hint(self.layout, _nav_status(context)[1])
-
-
-class HL_PT_nav_settings(_Sub, bpy.types.Panel):
-    bl_label = "Settings"
-    bl_parent_id = "HL_PT_navmesh"
-
-    def draw(self, context):
-        s = context.scene.hammerless
-        col = _settings(self.layout)
-        col.prop(s, "generate_nav", text="Rebuild Next Time")
-        _hint(self.layout, "The other nav settings are in", "the Build & Play panel")
-
-
-class HL_PT_nav_view(_Panel, bpy.types.Panel):
-    bl_label = "Viewer"
-    bl_parent_id = "HL_PT_navmesh"
-
-    def draw(self, context):
         from .navview import draw_panel
+        _hint(self.layout, _nav_status(context)[1])
+        self.layout.separator()
         draw_panel(self.layout, context)
 
 
-# ---------------------------------------------------------------- Baked Lighting
-
-class HL_PT_light_view(_Panel, bpy.types.Panel):
+class HL_PT_view_light(_Sub, bpy.types.Panel):
     bl_label = "Baked Lighting"
-    bl_order = 5
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_parent_id = "HL_PT_view"
 
     def draw_header_preset(self, context):
         from .lightview import header_status
@@ -561,7 +550,7 @@ class HL_PT_light_view(_Panel, bpy.types.Panel):
 
 class HL_PT_bake_settings(_Sub, bpy.types.Panel):
     bl_label = "Bake Settings"
-    bl_parent_id = "HL_PT_light_view"
+    bl_parent_id = "HL_PT_view_light"
 
     def draw(self, context):
         s = context.scene.hammerless
@@ -571,12 +560,9 @@ class HL_PT_bake_settings(_Sub, bpy.types.Panel):
         _hint(self.layout, "Smaller lightmap scale: sharper shadows,", "slower bake. Materials can override it")
 
 
-# ---------------------------------------------------------------- Visibility
-
-class HL_PT_vis_view(_Panel, bpy.types.Panel):
+class HL_PT_view_vis(_Sub, bpy.types.Panel):
     bl_label = "Visibility"
-    bl_order = 6
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_parent_id = "HL_PT_view"
 
     def draw_header_preset(self, context):
         from .visview import header_status
@@ -593,7 +579,7 @@ class HL_PT_vis_view(_Panel, bpy.types.Panel):
 
 class HL_PT_settings(_Panel, bpy.types.Panel):
     bl_label = "Settings"
-    bl_order = 7
+    bl_order = 5
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -774,8 +760,7 @@ CLASSES = (HL_UL_keyvalues, HL_UL_outputs,
            HL_PT_build, HL_PT_problems,
            HL_PT_object, HL_PT_obj_model, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
            HL_PT_world, HL_PT_sky, HL_PT_fog, HL_PT_director, HL_PT_logic,
-           HL_PT_navmesh, HL_PT_nav_settings, HL_PT_nav_view,
-           HL_PT_light_view, HL_PT_bake_settings, HL_PT_vis_view,
+           HL_PT_view, HL_PT_view_nav, HL_PT_view_light, HL_PT_bake_settings, HL_PT_view_vis,
            HL_PT_settings, HL_PT_compile, HL_PT_game, HL_PT_folders, HL_PT_scene, HL_PT_debug,
            HL_PT_collection, *CATEGORY_MENUS, HL_MT_add)
 

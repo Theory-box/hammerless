@@ -44,7 +44,7 @@ Use the **Add** panel (category tiles + search, ★ to favourite) or **Shift+A >
 Press **Build & Play**. Hammerless exports the map, compiles it, builds the nav mesh at the same time, and launches L4D2 (or reuses the running game).
 
 - **Build** does everything Build & Play does (compile, baked lighting, nav mesh) without starting the game. **Play** starts the game on the last build.
-- **Bake Lighting** (in the *Baked Lighting* panel) bakes only the lighting, quickly, and shows it in the viewport. Build & Play reuses that bake.
+- **Bake Lighting** (in *View > Baked Lighting*) bakes only the lighting, quickly, and shows it in the viewport. Build & Play reuses that bake.
 - Builds are **smart**: if only entities changed, geometry and lighting are kept; if nothing changed, the compile is skipped.
 - Warnings appear as "N warning(s). See the hammerless_log text block". The *Problems* list (in the *Build & Play* panel, with **Check the Map** to re-check without building) shows them, as does the `hammerless_log` text; click a row to select the object. Most are informational, e.g. *near misses* (faces that almost line up), which Hammerless fixes when it exports.
 
@@ -70,10 +70,9 @@ A preset's parent empty shows the preset's settings and **Select All Parts**. Co
 
 **World**: *Sky & Sun* (sky picker, sun and sky light, Add Sun if Missing; a Blender Sun lamp overrides these), *Fog* (tick the box in its header), *AI Director* (tick the box in its header to customise it: common limit, horde size and timing, No Random Hordes, No Wandering Zombies, specials, Tanks, Witches; *Director Spawns* hands a type to your logic graph), *Logic Graphs* (see [Logic Nodes](LOGIC_NODES.md)).
 
-**Nav Mesh**: *Settings* (Rebuild Next Time) and the *Viewer*. The nav choices themselves (made in Blender or by the game, analysis, Zombies Climb Walls) sit in the *Build & Play* panel under the buttons, with *Vis Compiler*. See [Nav Mesh & Zombie Spawns](NAV_AND_ZOMBIES.md).
+**View**: everything drawn over the viewport. *Nav Mesh* (the nav viewer: Build Navmesh, Analyze, colour modes, the game's nav), *Baked Lighting* (**Bake Lighting**, the lighting view, *Bake Settings*) and *Visibility* (*Portals*, *Rendering Load*, *Vis Cost*). The nav choices themselves (made in Blender or by the game, analysis, Zombies Climb Walls, Rebuild Nav Next Time) sit in the *Build & Play* panel with *Vis Compiler*.
 
-**Baked Lighting**: **Bake Lighting** and the lighting view (Lighting Only / Lit, exposure, X-ray), plus *Bake Settings* (quality, lightmap scale).
 
-**Visibility**: views of the last build's visibility: *Portals* (how vis split the map up; tiny slivers in red), *Rendering Load* (the map coloured by how much the game draws from each spot: red is where frame rate suffers first, with a button to put the 3D cursor on the worst spot), and *Vis Cost* (where the vis compile spent its time, and the objects behind it, each with a Select button: making decorative ones Detail speeds vis up; needs *Vis Compiler: Hammerless*).
+**View > Visibility**: *Portals* (how vis split the map up; tiny slivers in red), *Rendering Load* (the map coloured by how much the game draws from each spot: red is where frame rate suffers first, with a button to put the 3D cursor on the worst spot), and *Vis Cost* (where the vis compile spent its time, and the objects behind it, each with a Select button: making decorative ones Detail speeds vis up; needs *Vis Compiler: Hammerless*).
 
 **Settings**: *Compile* (Auto Detail; with Quality *Custom*, each step and extra compiler options), *Game Window* (monitor, size, borderless, difficulty, launch options), *Folders & Game Data* (L4D2 folder, work folder, reload game data, refresh previews, **Export VMF** to open the map in Hammer), *Scene* (scale, default material, auto seal, checks), *Debug* (*Debug Log* of Director events, *Bot Walkthrough Test* where bots play the map).
