@@ -377,6 +377,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("HAMMERLESS", "Hammerless (faster)",
          "Hammerless's visibility compiler: the same results as vvis, about 3 times faster. If it ever fails, "
          "Valve's vvis runs instead")])
+    light_tool: EnumProperty(name="Light Compiler", default="VALVE", items=[
+        ("VALVE", "Valve vrad", "L4D2's own lighting compiler (vrad.exe)"),
+        ("CYCLES", "Cycles",
+         "vrad lays out the lighting, then Blender's Cycles bakes the lightmaps with the same lights (its GPU "
+         "if it has one). Prop lighting and switchable lights stay vrad's")])
     vis_mode: EnumProperty(name="Visibility (vvis)", default="FULL", items=[
         ("SKIP", "Skip", "No visibility pass: everything always renders (slow in-game on big maps)"),
         ("FAST", "Fast", "Quick visibility pass"),

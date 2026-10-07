@@ -104,6 +104,7 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         sub.prop(s, "wall_climbs")
         col.prop(s, "generate_nav", text="Rebuild Nav Next Time")
         col.prop(s, "vis_tool")
+        col.prop(s, "light_tool")
         if _leaked(context):
             layout.separator()
             row = layout.row()

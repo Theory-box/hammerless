@@ -26,6 +26,7 @@ class CompileOptions:
     extra_vvis: str = ""
     extra_vrad: str = ""
     vis_tool: str = "VALVE"     # VALVE: L4D2's vvis.exe / HAMMERLESS: hlvvis.exe (same results, faster)
+    light_tool: str = "VALVE"   # VALVE: vrad's lightmaps / CYCLES: Blender bakes them after vrad (bake_handler)
 
     def vbsp_args(self) -> list[str]:
         return self.extra_vbsp.split()
@@ -373,6 +374,12 @@ class CompileJob:
         self.vis_bsp: str | None = None        # a copy of the BSP once geometry and visibility are final:
                                                # the nav analysis can start on it while vrad still runs
         self.snapshot_vis = False              # make that copy (only when an analysis will use it)
+        # Light Compiler Cycles: after vrad the job asks for the bake (bake_request = the BSP) and waits;
+        # Blender's main thread bakes, then calls bake_finished. Nobody baking (bake_abandoned): vrad's stays
+        self.bake_request: str | None = None
+        self.bake_abandoned = False
+        self._bake_done = threading.Event()
+        self._bake_lines: list[str] = []
 
     def start(self) -> "CompileJob":
         other = _ACTIVE_JOBS.get(self.base)
@@ -482,6 +489,8 @@ class CompileJob:
                         self._q.put(f"(lighting check skipped: {ex})")
                     for msg, _loc, _obj in self.lighting:
                         self._q.put(f"!! {msg}")
+                    if self._opts.light_tool == "CYCLES":
+                        self._cycles_bake()
             if self.plan != "full":
                 from .buildplan import strip_stale
                 strip_stale(self.base + ".bsp")
@@ -500,6 +509,27 @@ class CompileJob:
         except Exception as ex:  # surfaced to the user in the log
             self._q.put(f"!! {ex}")
             self._q.put(("FAILED",))
+
+    def _cycles_bake(self):
+        import time
+        self._q.put("==== Cycles lighting ====")
+        t0 = time.time()
+        self._bake_done.clear()
+        self.bake_request = self.base + ".bsp"
+        while not self._bake_done.wait(0.25):
+            if self._stopping or self.bake_abandoned:
+                self.bake_request = None
+                self._q.put("Cycles bake skipped (not watching the build): the map keeps vrad's lighting")
+                return
+        for line in self._bake_lines:
+            self._q.put(line)
+        self.timings.append(("cycles", time.time() - t0))
+
+    def bake_finished(self, lines: list[str]):
+        """Main thread: the bake is written (or failed: lines say so, vrad's lighting stays)."""
+        self._bake_lines = lines
+        self.bake_request = None
+        self._bake_done.set()
 
     def _choose_steps(self) -> list[tuple[str, list[str]]]:
         """Smart build: the least work that gives the same map as a full compile, judged against

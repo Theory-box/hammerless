@@ -46,14 +46,14 @@ BUILD_PROGRESS = {"vis": ""}      # the running build's latest "vis 42%, about 3
 
 def compile_options(s) -> "cc.CompileOptions | str":
     if s.compile_preset != "CUSTOM":
-        if s.vis_tool == "VALVE":
+        if s.vis_tool == "VALVE" and s.light_tool == "VALVE":
             return s.compile_preset
         import dataclasses
-        return dataclasses.replace(cc.PRESETS[s.compile_preset], vis_tool=s.vis_tool)
+        return dataclasses.replace(cc.PRESETS[s.compile_preset], vis_tool=s.vis_tool, light_tool=s.light_tool)
     return cc.CompileOptions(vis=s.vis_mode, rad=s.rad_mode, hdr=s.hdr_mode,
                              static_prop_lighting=s.static_prop_lighting,
                              extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad,
-                             vis_tool=s.vis_tool)
+                             vis_tool=s.vis_tool, light_tool=s.light_tool)
 
 
 def launch_options(s) -> cc.LaunchOptions:
@@ -900,6 +900,8 @@ class HL_OT_build(bpy.types.Operator):
             nav["analysis_early"] = not self._job.done
 
     def _step(self, context):
+        if self._job.bake_request:
+            self._cycles_bake(context)
         new = self._job.poll()
         if new:
             for line in new:                    # vis progress from Hammerless's vis compiler, for the panel header
@@ -1009,7 +1011,23 @@ class HL_OT_build(bpy.types.Operator):
             self.report({"INFO"}, f"{compiled}.{note}  [{timing}]")
         return self._finish(context, {"FINISHED"})
 
+    def _cycles_bake(self, context):
+        """The compile waits after vrad: bake its lighting with Cycles here (Blender's main thread)."""
+        bsp = self._job.bake_request
+        context.workspace.status_text_set("Hammerless: baking the lighting with Cycles...")
+        try:
+            from .cyclesbake import bake_bsp
+            lines = bake_bsp(bsp, context.scene.hammerless.units_per_meter)
+        except Exception as ex:          # the map still has vrad's lighting
+            import traceback
+            traceback.print_exc()
+            lines = [f"!! Cycles bake failed ({ex}): the map keeps vrad's lighting"]
+            self.report({"WARNING"}, lines[0][3:])
+        self._job.bake_finished(lines)
+
     def _finish(self, context, result):
+        if self._job is not None:
+            self._job.bake_abandoned = True      # stopped watching: nobody is left to bake
         snap = self._job.base + ".analysis.bsp" if self._job is not None else None
         if snap and os.path.exists(snap) and not (self._nav and self._nav.get("analysis")
                                                   and self._nav["analysis"]["thread"].is_alive()):

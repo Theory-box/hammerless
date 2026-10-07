@@ -14,8 +14,10 @@ vrad, read for behaviour):
 """
 from __future__ import annotations
 
+import math
+import re
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -159,71 +161,50 @@ def pack(faces: list[BakeFace]) -> tuple[int, int]:
     return width, y + shelf
 
 
-def _clip(poly: list, axis: int, value: float, keep_above: bool) -> list:
-    """Sutherland-Hodgman: the part of a convex polygon on one side of s (axis 0) or t (axis 1) = value."""
-    out = []
-    for i, a in enumerate(poly):
-        b = poly[(i + 1) % len(poly)]
-        ina = (a[axis] >= value) if keep_above else (a[axis] <= value)
-        inb = (b[axis] >= value) if keep_above else (b[axis] <= value)
-        if ina:
-            out.append(a)
-        if ina != inb:
-            f = (value - a[axis]) / (b[axis] - a[axis])
-            out.append((a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])))
-    return out
+SUB = 8          # sub-points per sample side when finding the part of an edge sample's square on the face
 
 
 def bake_triangles(face: BakeFace) -> tuple[np.ndarray, np.ndarray]:
     """(k, 3) world corners and (k, 2) lightmap coordinates to bake.
 
-    Flat faces: one small quad per sample, mapped onto that sample's whole texel. Like vrad, a sample is
-    lit at the middle of the part of its square that lies on the face (an edge sample's square is half
-    off the face), so the quad covers that part's bounds. Displacements: the surface itself."""
+    Flat faces: one quad per sample, mapped onto that sample's whole texel. Like vrad, a sample is lit
+    where its square lies on the face: an edge sample's square is partly off the face, so its quad
+    covers just the part on the face (found on a SUB x SUB grid). Displacements: the surface itself."""
     if face.rect is None:
         return face.positions, face.lux
     w, h = face.w, face.h
-    origin = face.rect[0] - (face.rect[1] - face.rect[0]) / w * -0.5 - (face.rect[3] - face.rect[0]) / h * -0.5
     ds, dt = (face.rect[1] - face.rect[0]) / w, (face.rect[3] - face.rect[0]) / h
+    origin = face.rect[0] + 0.5 * ds + 0.5 * dt                 # lightmap (0, 0)
     tri = face.lux.reshape(-1, 3, 2)
-    poly = [tuple(tri[0, 0])] + [tuple(t[1]) for t in tri] + [tuple(tri[-1, 2])]
-    lo, hi = np.min(poly, axis=0), np.max(poly, axis=0)
-    corners, coords = [], []
-    for j in range(h):
-        for i in range(w):
-            box = (i - 0.5, j - 0.5, i + 0.5, j + 0.5)
-            if lo[0] <= box[0] and box[2] <= hi[0] and lo[1] <= box[1] and box[3] <= hi[1] and _inside(poly, box):
-                s0, t0, s1, t1 = box
-            else:
-                part = poly
-                for axis, value, above in ((0, box[0], True), (0, box[2], False), (1, box[1], True), (1, box[3], False)):
-                    part = _clip(part, axis, value, above) if part else part
-                if len(part) >= 3:
-                    (s0, t0), (s1, t1) = np.min(part, axis=0), np.max(part, axis=0)
-                else:
-                    s0, t0, s1, t1 = box        # no part on the face: vrad has no sample there either
-            quad = [(s0, t0), (s1, t0), (s1, t1), (s0, t1)]
-            corners += [origin + a * ds + b * dt for a, b in quad]
-            coords += [(i - 0.5, j - 0.5), (i + 0.5, j - 0.5), (i + 0.5, j + 0.5), (i - 0.5, j + 0.5)]
-    corners, coords = np.array(corners).reshape(-1, 4, 3), np.array(coords).reshape(-1, 4, 2)
-    idx = [0, 1, 2, 0, 2, 3]
-    return corners[:, idx].reshape(-1, 3), coords[:, idx].reshape(-1, 2)
+    poly = np.concatenate([tri[:1, 0], tri[:, 1], tri[-1:, 2]])
+    edge_n = np.stack([poly[:, 1] - np.roll(poly, -1, 0)[:, 1], np.roll(poly, -1, 0)[:, 0] - poly[:, 0]], 1)
+    edge_d = (edge_n * poly).sum(1)
+    if np.mean(poly @ edge_n.T - edge_d) < 0:                   # inside = positive side
+        edge_n, edge_d = -edge_n, -edge_d
 
+    def inside(pts):                                            # (..., 2) -> (...)
+        return np.all(pts @ edge_n.T - edge_d >= -1e-6, axis=-1)
 
-def _inside(poly: list, box: tuple) -> bool:
-    """All four corners of the box inside the convex polygon (either winding)."""
-    sign = 0.0
-    for i, a in enumerate(poly):
-        b = poly[(i + 1) % len(poly)]
-        for x, y in ((box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3])):
-            c = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0])
-            if abs(c) < 1e-9:
-                continue
-            if sign == 0.0:
-                sign = c
-            elif (c > 0) != (sign > 0):
-                return False
-    return True
+    j, i = np.mgrid[0:h, 0:w]
+    lo = np.stack([i - 0.5, j - 0.5], -1).reshape(-1, 2).astype(np.float64)
+    box = np.concatenate([lo, lo + 1.0], 1)                     # (n, 4): s0 t0 s1 t1
+    corners = np.stack([lo, lo + (1, 0), lo + 1, lo + (0, 1)], 1)
+    partial = ~inside(corners).all(1)
+    if partial.any():
+        k = (np.arange(SUB) + 0.5) / SUB
+        sub = np.stack(np.meshgrid(k, k), -1).reshape(-1, 2)     # (SUB^2, 2)
+        pts = lo[partial][:, None, :] + sub[None]
+        on = inside(pts)
+        hit = on.any(1)
+        big = np.where(on[..., None], pts, np.inf).min(1), np.where(on[..., None], pts, -np.inf).max(1)
+        part = np.concatenate([big[0] - 0.5 / SUB, big[1] + 0.5 / SUB], 1)
+        idx = np.where(partial)[0][hit]                         # no part on the face: vrad has no sample there
+        box[idx] = part[hit]                                    # either, the whole square is baked
+    s0, t0, s1, t1 = box.T
+    st = np.stack([np.stack([s0, t0], 1), np.stack([s1, t0], 1), np.stack([s1, t1], 1), np.stack([s0, t1], 1)], 1)
+    world = origin + st[..., :1] * ds + st[..., 1:] * dt        # (n, 4, 3)
+    order = [0, 1, 2, 0, 2, 3]
+    return world[:, order].reshape(-1, 3), corners[:, order].reshape(-1, 2)
 
 
 def uvs(face: BakeFace, width: int, height: int, lux: np.ndarray | None = None) -> np.ndarray:
@@ -275,3 +256,118 @@ def write(data: bytes, lump_no: int, faces: list[BakeFace], samples: dict) -> by
         avg = base + f.light_ofs - 4 * (f.style_slot + 1)        # before lightofs, reverse style order
         buf[avg:avg + 4] = encode(median[None])[0].tobytes()
     return bytes(buf)
+
+
+# ---------------------------------------------------------------- lights, as vrad reads them
+
+@dataclass
+class BakeLight:
+    kind: str                         # SUN / POINT / SPOT
+    intensity: np.ndarray             # linear, vrad units (the sun's per W/m^2, a point light's at 100 units)
+    origin: tuple = (0.0, 0.0, 0.0)
+    direction: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, -1.0]))   # where light travels
+    cone: float = 45.0                # spot: outer and inner half angles, degrees
+    inner_cone: float = 10.0
+    note: str = ""                    # how it differs from what vrad does with it (shown to the user)
+
+
+def light_value(text: str, hdr: bool = True) -> np.ndarray | None:
+    """LightForString: "r g b brightness" (optionally 8 numbers: LDR then HDR) -> linear intensity."""
+    try:
+        v = [float(x) for x in text.split()]
+    except ValueError:
+        return None
+    if len(v) == 8:
+        v = v[4:] if hdr else v[:4]
+    if len(v) == 1:
+        v = v * 3
+    if len(v) not in (3, 4) or min(v) < 0:
+        return None
+    rgb = np.array([(c / 255.0) ** 2.2 * 255 for c in v[:3]])
+    return rgb * (v[3] / 255.0) if len(v) == 4 else rgb
+
+
+def _key_light(e: dict, key: str, hdr: bool) -> np.ndarray | None:
+    """_lightHDR / _ambientHDR win in HDR when valid ("-1 -1 -1 1" means unset)."""
+    if hdr and e.get(key + "HDR"):
+        v = light_value(e[key + "HDR"], hdr)
+        if v is not None:
+            return v
+    return light_value(e.get(key, ""), hdr)
+
+
+def _floats(e: dict, key: str) -> list:
+    try:
+        return [float(x) for x in e.get(key, "").split()]
+    except ValueError:
+        return []
+
+
+def _num(e: dict, key: str, default: float = 0.0) -> float:
+    v = _floats(e, key)
+    return v[0] if v else default
+
+
+def light_normal(e: dict) -> np.ndarray:
+    """SetupLightNormalFromProps: yaw from "angle" or angles, pitch from "pitch" or -angles pitch."""
+    angles = (_floats(e, "angles") + [0.0, 0.0, 0.0])[:3]
+    yaw = _num(e, "angle") or angles[1]
+    pitch = _num(e, "pitch") or -angles[0]
+    if yaw == -1:
+        return np.array([0.0, 0.0, 1.0])
+    if yaw == -2:
+        return np.array([0.0, 0.0, -1.0])
+    p, y = math.radians(pitch), math.radians(yaw)
+    return np.array([math.cos(y) * math.cos(p), math.sin(y) * math.cos(p), math.sin(p)])
+
+
+def scene_lights(entity_text: str, hdr: bool = True) -> tuple[BakeLight | None, np.ndarray, list[BakeLight], list[str]]:
+    """The static lights vrad bakes into style 0: (sun, sky ambient intensity, point/spot lights, notes).
+    Named lights (switchable, their own light style) and lights with a style are left to vrad."""
+    ents = [dict(re.findall(r'"([^"]*)"\s+"([^"]*)"', b)) for b in re.findall(r"\{([^{}]*)\}", entity_text)]
+    sun, ambient, lights, notes = None, np.zeros(3), [], []
+    for e in ents:
+        cls = e.get("classname", "")
+        if cls not in ("light", "light_spot", "light_environment"):
+            continue
+        scale = _num(e, "_lightscaleHDR", 1.0) if hdr else 1.0
+        if cls == "light_environment":
+            if sun is not None:
+                continue                                  # vrad uses the first one
+            i = _key_light(e, "_light", hdr)
+            if i is None:
+                continue
+            sun = BakeLight("SUN", i * scale, direction=light_normal(e))
+            a = _key_light(e, "_ambient", hdr)
+            ambient = i * 0.5 if a is None else a
+            if hdr:
+                ambient = ambient * _num(e, "_AmbientScaleHDR", 1.0)
+            continue
+        if e.get("targetname") or _num(e, "style"):
+            continue                                      # its own light style: vrad's lightmaps keep it
+        i = _key_light(e, "_light", hdr)
+        if i is None or not i.any():
+            continue
+        name = cls
+        origin = tuple((_floats(e, "origin") + [0.0, 0.0, 0.0])[:3])
+        c, l, q = (max(_num(e, k), 0.0) for k in ("_constant_attn", "_linear_attn", "_quadratic_attn"))
+        note = ""
+        if _num(e, "_fifty_percent_distance"):
+            q, note = 1.0, "uses 50%/0% falloff distances; Cycles uses inverse square"
+        elif c < 1e-3 and l < 1e-3 and q < 1e-3:
+            c = 1.0
+        if c > 1e-3 or l > 1e-3:
+            note = "constant/linear falloff; Cycles uses inverse square"
+        if not note:                    # vrad scales the brightness to be its value at 100 units; Cycles
+            i = i * (c + 100 * l + 10000 * q) / 10000           # bakes inverse square with that value there
+        light = BakeLight("POINT", i, origin)
+        if cls == "light_spot":
+            inner = _num(e, "_inner_cone") or 10.0
+            outer = max(_num(e, "_cone") or inner, inner)
+            if not (inner == 180 and outer == 180):
+                light = BakeLight("SPOT", i, origin, light_normal(e), min(outer, 90.0), min(inner, 90.0))
+        if note:
+            light.note = note
+            notes.append(f"{name} at ({origin[0]:.0f} {origin[1]:.0f} {origin[2]:.0f}) {note}")
+        lights.append(light)
+    return sun, ambient, lights, notes
