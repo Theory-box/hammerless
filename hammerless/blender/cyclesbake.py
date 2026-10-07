@@ -5,7 +5,11 @@ lighting, ambient samples, switchable lights). Here a temporary scene is made fr
 lit like vrad lights the map (its light entities, in its units), baked, and the values written over
 vrad's static lightmaps (core.lightbake). The user's scenes are left as they were.
 
-Units: a DIFFUSE bake (light only, no surface colour) times 100 pi is vrad's units: a sun of strength 1
+The bake is Combined (Cycles denoises Combined bakes; it doesn't denoise the light-only Diffuse pass),
+limited to diffuse light, on a white surface: that is exactly the light arriving there. The baked surface
+is invisible to rays, so its white doesn't bounce; the copy behind it has the real colours and does.
+
+Units: the bake (light arriving, white surface) times 100 pi is vrad's units: a sun of strength 1
 gives E = 1 W/m^2 -> bake 1/pi; vrad gives brightness 100 for it. So sun strength = brightness / 100,
 sky radiance = ambient / (100 pi), a point light of P watts gives P / (4 pi d^2) at d metres -> P =
 brightness * 400 pi / upm^2 (vrad: brightness at 100 units, inverse square).
@@ -155,10 +159,10 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES) -> list[str]:
         made["scenes"].append(scene)
         image = bpy.data.images.new("HL_CyclesBake", width, height, alpha=False, float_buffer=True)
         made["images"].append(image)
-        target_mats = [_material("HL_CyclesBake", k, image) for k in keys]
+        target_mats = [_material("HL_CyclesBake", (1.0, 1.0, 1.0), image)]    # white: see the top
         block_mats = [_material("HL_CyclesBlock", k) for k in keys]
         made["materials"] += target_mats + block_mats
-        target_me = _mesh("HL_CyclesBake", corners, uvs, mats, normals)
+        target_me = _mesh("HL_CyclesBake", corners, uvs, None, normals)
         block_me = _mesh("HL_CyclesBlock", np.concatenate(occ), mats=np.concatenate(occ_mats))
         made["meshes"] += [target_me, block_me]
         for m in target_mats:
@@ -215,6 +219,9 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES) -> list[str]:
         scene.render.engine = "CYCLES"
         scene.cycles.device = "GPU" if gpu else "CPU"
         scene.cycles.samples = samples
+        scene.cycles.use_denoising = True                 # Combined bakes go through the render denoiser
+        scene.cycles.denoiser = "OPENIMAGEDENOISE"
+        scene.cycles.denoising_input_passes = "RGB_ALBEDO_NORMAL"
         scene.cycles.diffuse_bounces = 8
         scene.cycles.glossy_bounces = scene.cycles.transmission_bounces = 0
         scene.render.bake.margin = lb.PAD
@@ -226,7 +233,7 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES) -> list[str]:
                             selected_objects=[target], selected_editable_objects=[target])
             with bpy.context.temp_override(**override):
                 target.select_set(True, view_layer=layer)
-                bpy.ops.object.bake(type="DIFFUSE", pass_filter={"DIRECT", "INDIRECT"}, margin=lb.PAD,
+                bpy.ops.object.bake(type="COMBINED", pass_filter={"DIRECT", "INDIRECT", "DIFFUSE"}, margin=lb.PAD,
                                     use_clear=True)
             return np.array(image.pixels[:], np.float32).reshape(height, width, 4)[:, :, :3] * TO_VRAD
 
