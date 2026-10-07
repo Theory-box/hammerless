@@ -111,7 +111,8 @@ def _aim(obj, direction):
     obj.rotation_quaternion = Vector(tuple(direction)).to_track_quat("-Z", "Y")
 
 
-def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = False) -> list[str]:
+def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = False,
+             stitch: bool = True) -> list[str]:
     """Bake the map's static lighting with Cycles and write it into the BSP. Returns log lines."""
     t0 = time.time()
     with open(bsp_path, "rb") as f:
@@ -271,17 +272,29 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
         else:
             values[f.index] = [p[y:y + f.h, x:x + f.w].astype(np.float64) for p in maps]
     near = lb.neighbours(faces)
-    samples_of = {}
+    samples_of, keep = {}, {}
     for f in faces:
         if f.index not in smp:
             samples_of[f.index] = values[f.index]
             continue
         others = [(g, smp[g.index], values[g.index]) for g in near[f.index] if g.index in smp]
-        samples_of[f.index] = lb.radial(f, (f, smp[f.index], values[f.index]), others)
+        maps, empty = lb.radial(f, (f, smp[f.index], values[f.index]), others)
+        if stitch:          # luxels no sample reached: grown in from the face (vrad leaves them black)
+            maps = [lb.fill_empty(mp, empty) for mp in maps]
+        samples_of[f.index] = maps
+        keep[f.index] = np.where(empty, 0.01, 1.0)      # those may move freely when stitching
+    seam_note = ""
+    if stitch:
+        ts = time.time()
+        edges = lb.shared_edges(faces)
+        before = lb.seam_error(edges, samples_of)
+        samples_of = lb.stitch(edges, samples_of, keep)
+        seam_note = (f"Cycles: stitched {len(edges)} shared edges in {time.time() - ts:.1f}s: seams "
+                     f"{before:.2%} -> {lb.seam_error(edges, samples_of):.2%} (mean difference across edges)")
     with open(bsp_path, "wb") as out:
         out.write(lb.write(data, lump_no, faces, samples_of))
     lines = [f"Cycles: {len(faces)} faces, {len(passes)} bake{'s' if len(passes) > 1 else ''} on "
              f"{'GPU' if gpu else 'CPU'} in {seconds:.1f}s ({time.time() - t0:.1f}s in all), "
              f"{samples} samples{', denoised' if denoise else ''}, "
              f"{len(lights)} light{'s' if len(lights) != 1 else ''}" + (" + sun and sky" if sun else "")]
-    return lines + [f"Cycles: {n}" for n in notes]
+    return lines + ([seam_note] if seam_note else []) + [f"Cycles: {n}" for n in notes]

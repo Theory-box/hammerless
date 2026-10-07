@@ -275,10 +275,11 @@ def neighbours(faces: list[BakeFace], cos_limit: float = 0.7071067) -> dict[int,
     return out
 
 
-def radial(face: BakeFace, own: tuple, others: list[tuple]) -> list[np.ndarray]:
+def radial(face: BakeFace, own: tuple, others: list[tuple]) -> tuple[list[np.ndarray], np.ndarray]:
     """BuildLuxelRadial + SampleRadial: each luxel is the weighted mean of the samples near it, the face's
     own and its neighbours' (their sample areas taken into this face's luxel space). own / others:
-    (BakeFace, Samples, [values (n, 3) per bump direction]). Returns (h, w, 3) maps."""
+    (BakeFace, Samples, [values (n, 3) per bump direction]). Returns (h, w, 3) maps and which luxels no
+    sample reached (vrad leaves those black)."""
     w, h = face.w, face.h
     nmaps = 4 if face.bump else 1
     acc = np.zeros((nmaps, h * w, 3))
@@ -322,7 +323,7 @@ def radial(face: BakeFace, own: tuple, others: list[tuple]) -> list[np.ndarray]:
                     np.add.at(acc[m], idx, vals[min(m, len(vals) - 1)][ok] * wgt[:, None])
     empty = weight <= 1e-6
     out = acc / np.where(empty, 1.0, weight)[None, :, None]
-    return [o.reshape(h, w, 3) for o in out]
+    return [o.reshape(h, w, 3) for o in out], empty.reshape(h, w)
 
 
 def uvs(face: BakeFace, width: int, height: int, lux: np.ndarray | None = None) -> np.ndarray:
@@ -489,3 +490,195 @@ def scene_lights(entity_text: str, hdr: bool = True) -> tuple[BakeLight | None, 
             notes.append(f"{name} at ({origin[0]:.0f} {origin[1]:.0f} {origin[2]:.0f}) {note}")
         lights.append(light)
     return sun, ambient, lights, notes
+
+
+# ---------------------------------------------------------------- seam stitching
+#
+# Every face has its own lightmap, so where two faces meet the game shows two separately filtered
+# lightmaps and they can disagree: a seam. Stitching changes the luxels next to shared edges as little as
+# possible (least squares) so both faces show the same light all along the edge.
+
+def _bilinear(face: BakeFace, coord: np.ndarray):
+    """The game's lightmap filtering: luxel (i, j) sits at luxel coordinate (i, j); a point is the bilinear
+    mix of the 4 luxels around it. Returns (n, 4) luxel numbers and (n, 4) weights."""
+    s = np.clip(coord[:, 0], 0, face.w - 1)
+    t = np.clip(coord[:, 1], 0, face.h - 1)
+    s0 = np.minimum(np.floor(s).astype(int), max(face.w - 2, 0))
+    t0 = np.minimum(np.floor(t).astype(int), max(face.h - 2, 0))
+    fs, ft = s - s0, t - t0
+    s1, t1 = np.minimum(s0 + 1, face.w - 1), np.minimum(t0 + 1, face.h - 1)
+    idx = np.stack([s0 + t0 * face.w, s1 + t0 * face.w, s0 + t1 * face.w, s1 + t1 * face.w], 1)
+    wgt = np.stack([(1 - fs) * (1 - ft), fs * (1 - ft), (1 - fs) * ft, fs * ft], 1)
+    return idx, wgt
+
+
+def shared_edges(faces: list[BakeFace], cos_limit: float = 0.7071067, per_luxel: int = 4) -> list:
+    """Points along every stretch of edge two flat faces share (also where one face's corner lands
+    mid-edge on the other), for faces within 45 degrees of each other.
+    Returns [(face a, face b, (n, 3) points)]."""
+    flat = [f for f in faces if f.rect is not None and f.poly_lux is not None]
+    cell = 128.0
+    grid: dict = {}
+    segs = {}
+    for f in flat:
+        p = f.to_world(f.poly_lux)
+        segs[f.index] = (p, np.roll(p, -1, 0))
+        lo = np.floor((p.min(0) - 0.5) / cell).astype(int)
+        hi = np.floor((p.max(0) + 0.5) / cell).astype(int)
+        for x in range(lo[0], hi[0] + 1):
+            for y in range(lo[1], hi[1] + 1):
+                for z in range(lo[2], hi[2] + 1):
+                    grid.setdefault((x, y, z), []).append(f)
+    box = {f.index: (segs[f.index][0].min(0) - 0.05, segs[f.index][0].max(0) + 0.05) for f in flat}
+    pairs = set()
+    for members in grid.values():
+        for i, a in enumerate(members):
+            for b in members[i + 1:]:
+                key = (a.index, b.index) if a.index < b.index else (b.index, a.index)
+                if key in pairs or float(a.normal @ b.normal) < cos_limit:
+                    continue
+                (alo, ahi), (blo, bhi) = box[a.index], box[b.index]
+                if np.all(alo <= bhi) and np.all(blo <= ahi):          # touching
+                    pairs.add(key)
+    by = {f.index: f for f in flat}
+    out = []
+    for ia, ib in sorted(pairs):
+        a, b = by[ia], by[ib]
+        luxel = 1.0 / max(np.linalg.norm(a.lvecs[0, :3]), np.linalg.norm(a.lvecs[1, :3]),
+                          np.linalg.norm(b.lvecs[0, :3]), np.linalg.norm(b.lvecs[1, :3]))
+        pts = []
+        for p0, p1 in zip(*segs[ia]):
+            d = p1 - p0
+            length = float(np.linalg.norm(d))
+            if length < 0.1:
+                continue
+            u = d / length
+            for r0, r1 in zip(*segs[ib]):
+                e = r1 - r0
+                if np.linalg.norm(np.cross(u, e)) > 1e-3 * max(float(np.linalg.norm(e)), 1e-9):
+                    continue                                  # not parallel
+                off = r0 - p0
+                if np.linalg.norm(off - (off @ u) * u) > 0.05:
+                    continue                                  # parallel but apart
+                lo = max(0.0, min(off @ u, (r1 - p0) @ u))
+                hi = min(length, max(off @ u, (r1 - p0) @ u))
+                if hi - lo < 0.25:
+                    continue
+                n = max(2, int(np.ceil((hi - lo) / luxel * per_luxel)) + 1)
+                k = lo + (hi - lo) * (np.arange(n) + 0.5) / n
+                pts.append(p0 + k[:, None] * u)
+        if pts:
+            out.append((a, b, np.concatenate(pts)))
+    return out
+
+
+def _edge_values(face: BakeFace, lm: np.ndarray, pts: np.ndarray) -> np.ndarray:
+    idx, wgt = _bilinear(face, face.to_luxel(pts))
+    return (lm.reshape(-1, 3)[idx] * wgt[..., None]).sum(1)
+
+
+def seam_error(edges: list, maps: dict, m: int = 0) -> float:
+    """Mean difference between the two faces' lighting along their shared edges, relative to its level."""
+    diff = level = 0.0
+    for a, b, pts in edges:
+        if len(maps.get(a.index, ())) <= m or len(maps.get(b.index, ())) <= m:
+            continue
+        va = _edge_values(a, maps[a.index][m], pts)
+        vb = _edge_values(b, maps[b.index][m], pts)
+        diff += float(np.abs(va - vb).sum())
+        level += float((np.abs(va) + np.abs(vb)).sum()) / 2
+    return diff / max(level, 1e-9)
+
+
+def fill_empty(lm: np.ndarray, empty: np.ndarray) -> np.ndarray:
+    """Luxels no sample reached (vrad leaves them black): grown in from their filled neighbours."""
+    lm, empty = lm.copy(), empty.copy()
+    h, w = empty.shape
+    for _ in range(h + w):
+        if not empty.any() or empty.all():
+            break
+        acc = np.zeros_like(lm)
+        cnt = np.zeros((h, w))
+        have = ~empty
+        for sl_dst, sl_src in (((slice(None), slice(1, None)), (slice(None), slice(None, -1))),
+                               ((slice(None), slice(None, -1)), (slice(None), slice(1, None))),
+                               ((slice(1, None), slice(None)), (slice(None, -1), slice(None))),
+                               ((slice(None, -1), slice(None)), (slice(1, None), slice(None)))):
+            ok = have[sl_src]
+            acc[sl_dst] += np.where(ok[..., None], lm[sl_src], 0)
+            cnt[sl_dst] += ok
+        grow = empty & (cnt > 0)
+        lm[grow] = acc[grow] / cnt[grow][:, None]
+        empty &= ~grow
+    return lm
+
+
+def stitch(edges: list, maps: dict, keep: dict | None = None, strength: float = 100.0,
+           iterations: int = 80, tol: float = 1e-3) -> dict:
+    """Least squares: the luxels' change from the bake (weighted by keep[face], (h, w): how firmly each
+    luxel holds its baked value; luxels off the face move freely) plus strength x the two faces' difference
+    at every edge point. Each lightmap (flat, then bump directions) is stitched on its own."""
+    out = {k: [m.copy() for m in v] for k, v in maps.items()}
+    nmaps = max((len(v) for v in maps.values()), default=0)
+    for m in range(nmaps):
+        terms = []                                          # (row numbers, face, luxels, weights)
+        r = 0
+        for a, b, pts in edges:
+            if len(maps.get(a.index, ())) <= m or len(maps.get(b.index, ())) <= m:
+                continue
+            ia, wa = _bilinear(a, a.to_luxel(pts))
+            ib, wb = _bilinear(b, b.to_luxel(pts))
+            rows = np.repeat(np.arange(r, r + len(pts)), 4)
+            terms.append((rows, a, ia.ravel(), wa.ravel()))
+            terms.append((rows, b, ib.ravel(), -wb.ravel()))
+            r += len(pts)
+        if not r:
+            continue
+        offset, start = {}, 0
+        for _rows, face, _idx, _w in terms:
+            if face.index not in offset:
+                offset[face.index] = (start, face)
+                start += face.w * face.h
+        R = np.concatenate([t[0] for t in terms])
+        V = np.concatenate([t[3] for t in terms])
+        all_x0 = np.zeros((start, 3))
+        all_mu = np.ones(start)
+        for key, (o, face) in offset.items():
+            all_x0[o:o + face.w * face.h] = maps[key][m].reshape(-1, 3)
+            if keep is not None and key in keep:
+                all_mu[o:o + face.w * face.h] = keep[key].ravel()
+        # only the luxels some edge point uses are unknowns
+        used, C = np.unique(np.concatenate([offset[t[1].index][0] + t[2] for t in terms]), return_inverse=True)
+        x0, mu = all_x0[used], all_mu[used]
+        n_var = len(used)
+
+        def apply(x):                                       # (strength C^T C + diag(mu)) x
+            y = np.empty_like(x)
+            for c in range(3):
+                cx = np.bincount(R, V * x[C, c], minlength=r)
+                y[:, c] = np.bincount(C, V * cx[R], minlength=n_var)
+            return strength * y + mu[:, None] * x
+
+        rhs = mu[:, None] * x0
+        inv = 1.0 / (strength * np.bincount(C, V * V, minlength=n_var) + mu)[:, None]   # Jacobi
+        x = x0.copy()                                       # preconditioned CG, starting from the bake
+        res = rhs - apply(x)
+        z = res * inv
+        p = z.copy()
+        rz = (res * z).sum(0)
+        stop = (tol * tol) * np.maximum((rhs * rhs).sum(0), 1e-30)
+        for _ in range(iterations):
+            if np.all((res * res).sum(0) <= stop):
+                break
+            ap = apply(p)
+            alpha = rz / np.maximum((p * ap).sum(0), 1e-30)
+            x += alpha * p
+            res -= alpha * ap
+            z = res * inv
+            new = (res * z).sum(0)
+            p = z + (new / np.maximum(rz, 1e-30)) * p
+            rz = new
+        all_x0[used] = np.maximum(x, 0.0)
+        for key, (o, face) in offset.items():
+            out[key][m] = all_x0[o:o + face.w * face.h].reshape(face.h, face.w, 3)
+    return out

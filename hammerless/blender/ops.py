@@ -61,7 +61,8 @@ def _cycles_options(s) -> dict:
     """Cycles bake settings (only when baking with Cycles, so they don't change vrad builds' fingerprint)."""
     if s.light_tool != "CYCLES":
         return {}
-    return {"cycles_samples": s.cycles_samples, "cycles_denoise": s.cycles_denoise}
+    return {"cycles_samples": s.cycles_samples, "cycles_denoise": s.cycles_denoise,
+            "cycles_stitch": s.cycles_stitch}
 
 
 def launch_options(s) -> cc.LaunchOptions:
@@ -1027,7 +1028,7 @@ class HL_OT_build(bpy.types.Operator):
             from .cyclesbake import bake_bsp
             opts = self._job._opts
             lines = bake_bsp(bsp, context.scene.hammerless.units_per_meter, opts.cycles_samples,
-                             opts.cycles_denoise)
+                             opts.cycles_denoise, opts.cycles_stitch)
         except Exception as ex:          # the map still has vrad's lighting
             import traceback
             traceback.print_exc()

@@ -108,6 +108,7 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         if s.light_tool == "CYCLES":
             row = col.row(align=True)
             row.prop(s, "cycles_samples")
+            row.prop(s, "cycles_stitch", text="Stitch", toggle=True)
             row.prop(s, "cycles_denoise", toggle=True)
         if _leaked(context):
             layout.separator()
@@ -578,6 +579,7 @@ class HL_PT_bake_settings(_Sub, bpy.types.Panel):
         col.prop(s, "light_tool")
         if s.light_tool == "CYCLES":
             col.prop(s, "cycles_samples")
+            col.prop(s, "cycles_stitch")
             col.prop(s, "cycles_denoise")
         col.prop(s, "lightmap_scale", text="Lightmap Scale (resolution)")
         _hint(self.layout, "Smaller lightmap scale: sharper shadows,", "slower bake. Materials can override it")
