@@ -910,6 +910,12 @@ class HL_OT_build(bpy.types.Operator):
 
     def _step(self, context):
         if self._job.bake_request:
+            if not getattr(self, "_bake_shown", False):      # the bake blocks Blender: show the status first,
+                self._bake_shown = True                       # bake on the next tick (after the redraw)
+                context.workspace.status_text_set("Hammerless: baking the lighting with Cycles "
+                                                  "(Blender pauses until it's done)...")
+                return {"PASS_THROUGH"}
+            self._bake_shown = False
             self._cycles_bake(context)
         new = self._job.poll()
         if new:
@@ -920,7 +926,9 @@ class HL_OT_build(bpy.types.Operator):
                     elif line.startswith("===="):
                         BUILD_PROGRESS["vis"] = ""
             write_log(new, append=True)
-            context.workspace.status_text_set(f"Hammerless: {new[-1][:120]}")
+            shown = [ln for ln in new if isinstance(ln, str) and not ln.startswith("CDynamicFunction")]
+            if shown:                                         # (not the compilers' DLL loading chatter)
+                context.workspace.status_text_set(f"Hammerless: {shown[-1][:120]}")
         self._start_analysis_early(context)
         if not self._job.done:
             return {"PASS_THROUGH"}
@@ -1023,7 +1031,6 @@ class HL_OT_build(bpy.types.Operator):
     def _cycles_bake(self, context):
         """The compile waits after vrad: bake its lighting with Cycles here (Blender's main thread)."""
         bsp = self._job.bake_request
-        context.workspace.status_text_set("Hammerless: baking the lighting with Cycles...")
         try:
             from .cyclesbake import bake_bsp
             opts = self._job._opts
