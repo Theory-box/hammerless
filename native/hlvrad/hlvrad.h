@@ -46,6 +46,7 @@ extern int map_revision;
 void LoadBSPFile(const char *path);
 void WriteBSPFile(const char *path);
 void SetLump(int i, void *data, int len, int version);    /* takes ownership of data */
+const unsigned char *GameLump(int id, int *len);
 
 /* ------------------------------------------------------------------ the map's arrays (views into lumps) */
 typedef struct { vec3_t normal; float dist; int type; } dplane_t;
@@ -173,6 +174,23 @@ void GetClusterPVS(int cluster, unsigned char *pvs);
 int PVSCheck(const unsigned char *pvs, int cluster);
 int LeafFlags(int leaf);
 void SetLeafFlags(int leaf, int flags);
+
+/* disp.c */
+typedef struct {
+    int face, power, contents, numverts;
+    vec3_t points[4];                  /* the base quad, from the corner nearest the start position */
+    vec3_t *verts, *flat;
+    float *alpha;
+} dispsurf_t;
+extern dispsurf_t *dispsurfs;
+extern int numdispsurfs;
+void LoadDisplacements(void);
+int DispTriangles(const dispsurf_t *d, unsigned short (*tris)[3]);
+void AddDispsForRayTrace(void);
+
+/* staticprops.c */
+extern const char *g_modeldir, *g_gamedir;
+void AddStaticPropsForRayTrace(void);
 
 /* raytrace.c */
 void RT_AddTriangle(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2);

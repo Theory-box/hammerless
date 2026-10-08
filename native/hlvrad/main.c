@@ -25,7 +25,9 @@ int main(int argc, char **argv) {
         if (!_stricmp(a, "-hdr")) g_bHDR = 1, g_bLDR = 0;
         else if (!_stricmp(a, "-ldr")) g_bHDR = 0, g_bLDR = 1;
         else if (!_stricmp(a, "-both")) g_bHDR = 1, g_bLDR = 1;
-        else if (!_stricmp(a, "-game") || !_stricmp(a, "-threads") || !_stricmp(a, "-bounce") ||
+        else if (!_stricmp(a, "-game") && i + 1 < argc) g_gamedir = argv[++i];
+        else if (!_stricmp(a, "-modeldir") && i + 1 < argc) g_modeldir = argv[++i];
+        else if (!_stricmp(a, "-threads") || !_stricmp(a, "-bounce") ||
                  !_stricmp(a, "-extrasky") || !_stricmp(a, "-lights") || !_stricmp(a, "-chop") ||
                  !_stricmp(a, "-maxchop") || !_stricmp(a, "-dispchop")) {
             if (++i >= argc) Error("expected a value after '%s'", a);
@@ -57,7 +59,10 @@ int main(int argc, char **argv) {
     PairEdges();
     SaveVertexNormals();
     CreateDirectLights();
+    LoadDisplacements();
     AddBrushesForRayTrace();
+    AddDispsForRayTrace();
+    AddStaticPropsForRayTrace();
     RT_SetupAccelerationStructure();
     AllocFacelights();
     for (int i = 0; i < numfaces; i++) BuildFacelights(i);

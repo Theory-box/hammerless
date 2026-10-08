@@ -1,0 +1,242 @@
+/* Static props in the ray tracer (vrad's CVradStaticPropMgr: Init and AddPolysForRayTrace).
+ *
+ * Each prop casts shadows with its model's collision model (the first solid of its .phy, triangulated by
+ * the game's vphysics.dll like vrad does), placed by its origin and angles. A model without one gets one
+ * built like L4D2's vrad does: a convex hull around each mesh's vertices. Only a model that can't be read
+ * casts a box shadow from its hull bounds. Props flagged "no shadow" cast none. The model files come
+ * from -modeldir (the Python side copies them out of the game's VPKs). */
+#include <windows.h>
+#include <float.h>
+#include "hlvrad.h"
+
+#define THISCALL __attribute__((thiscall))
+#define VT(obj, i) ((*(void ***)(obj))[i])
+typedef void *(*CreateInterfaceFn)(const char *name, int *ret);
+typedef void *(THISCALL *ConvexFromVerts_t)(void *, float **verts, int count);
+typedef void *(THISCALL *ConvertConvexToCollide_t)(void *, void **convex, int count);
+typedef void *(THISCALL *UnserializeCollide_t)(void *, char *buffer, int size, int index);
+typedef void *(THISCALL *CreateQueryModel_t)(void *, void *collide);
+typedef void (THISCALL *DestroyQueryModel_t)(void *, void *query);
+typedef int (THISCALL *ConvexCount_t)(void *);
+typedef int (THISCALL *TriangleCount_t)(void *, int convex);
+typedef void (THISCALL *GetTriangleVerts_t)(void *, int convex, int tri, float *verts);
+
+#define STATIC_PROP_NO_SHADOW 0x10
+#define PROP_RECORD 72
+
+const char *g_modeldir;
+const char *g_gamedir;
+static void *physcollision;
+
+static void *LoadPhysics(void) {
+    if (physcollision || !g_gamedir) return physcollision;
+    char bin[1100], dll[1200];
+    snprintf(bin, sizeof(bin), "%s\\..\\bin", g_gamedir);
+    SetDllDirectoryA(bin);
+    snprintf(dll, sizeof(dll), "%s\\vphysics.dll", bin);
+    HMODULE h = LoadLibraryA(dll);
+    if (!h) {
+        Msg("Warning: can't load %s: static props cast no shadows\n", dll);
+        return NULL;
+    }
+    CreateInterfaceFn ci = (CreateInterfaceFn)GetProcAddress(h, "CreateInterface");
+    if (ci) physcollision = ci("VPhysicsCollision007", NULL);
+    /* vphysics' maths runs on the x87 FPU at the precision an MSVC program starts with (53-bit) */
+    _controlfp(_PC_53, _MCW_PC);
+    return physcollision;
+}
+
+static unsigned char *ReadModelFile(const char *model, const char *ext, int *len) {
+    if (!g_modeldir) return NULL;
+    char path[1400];
+    snprintf(path, sizeof(path), "%s/%s", g_modeldir, model);
+    char *dot = strrchr(path, '.'), *slash = strrchr(path, '/');
+    if (dot && (!slash || dot > slash)) *dot = 0;
+    strncat(path, ext, sizeof(path) - strlen(path) - 1);
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    *len = (int)ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char *b = xalloc(*len + 1);
+    if (fread(b, 1, *len, f) != (size_t)*len) *len = 0;
+    fclose(f);
+    return b;
+}
+
+/* VMatrix::SetupMatrixOrgAngles (sines and cosines of float radians) */
+static void MatrixOrgAngles(const vec3_t origin, const vec3_t angles, float m[3][4]) {
+    const float d2r = (float)(3.14159265358979323846 / 180.0);
+    double y = angles[1] * d2r, p = angles[0] * d2r, r = angles[2] * d2r;
+    float sy = (float)sin(y), cy = (float)cos(y), sp = (float)sin(p), cp = (float)cos(p), sr = (float)sin(r), cr = (float)cos(r);
+    m[0][0] = cp * cy;
+    m[1][0] = cp * sy;
+    m[2][0] = -sp;
+    float srsp = sr * sp, crsp = cr * sp;      /* (VMatrix::SetupMatrixOrgAngles' grouping) */
+    m[0][1] = srsp * cy - cr * sy;
+    m[1][1] = srsp * sy + cr * cy;
+    m[2][1] = sr * cp;
+    m[0][2] = crsp * cy + sr * sy;
+    m[1][2] = crsp * sy - sr * cy;
+    m[2][2] = cr * cp;
+    for (int k = 0; k < 3; k++) m[k][3] = origin[k];
+}
+
+static void Transform(float m[3][4], const float *v, vec3_t out) {
+    for (int k = 0; k < 3; k++) out[k] = ((m[k][0] * v[0] + m[k][1] * v[1]) + m[k][2] * v[2]) + m[k][3];
+}
+
+static void AddQuad(int id, const vec3_t a, const vec3_t b, const vec3_t c, const vec3_t d) {
+    RT_AddTriangle(id, a, b, c);
+    RT_AddTriangle(id + 1, a, c, d);       /* (Valve's AddQuad: the second triangle gets id + 1) */
+}
+
+static void AddBox(int id, const vec3_t mn, const vec3_t mx) {
+    vec3_t p[8];
+    /* far, near, left, right, top, bottom, as RayTracingEnvironment::AddAxisAlignedRectangularSolid */
+#define V(i, x, y, z) (p[i][0] = (x), p[i][1] = (y), p[i][2] = (z))
+    V(0, mn[0], mx[1], mx[2]); V(1, mx[0], mx[1], mx[2]); V(2, mx[0], mn[1], mx[2]); V(3, mn[0], mn[1], mx[2]);
+    AddQuad(id, p[0], p[1], p[2], p[3]);
+    V(0, mn[0], mx[1], mn[2]); V(1, mx[0], mx[1], mn[2]); V(2, mx[0], mn[1], mn[2]); V(3, mn[0], mn[1], mn[2]);
+    AddQuad(id, p[0], p[1], p[2], p[3]);
+    V(0, mn[0], mx[1], mx[2]); V(1, mn[0], mx[1], mn[2]); V(2, mn[0], mn[1], mn[2]); V(3, mn[0], mn[1], mx[2]);
+    AddQuad(id, p[0], p[1], p[2], p[3]);
+    V(0, mx[0], mx[1], mx[2]); V(1, mx[0], mx[1], mn[2]); V(2, mx[0], mn[1], mn[2]); V(3, mx[0], mn[1], mx[2]);
+    AddQuad(id, p[0], p[1], p[2], p[3]);
+    V(0, mn[0], mx[1], mx[2]); V(1, mx[0], mx[1], mx[2]); V(2, mx[0], mx[1], mn[2]); V(3, mn[0], mx[1], mn[2]);
+    AddQuad(id, p[0], p[1], p[2], p[3]);
+    V(0, mn[0], mn[1], mx[2]); V(1, mx[0], mn[1], mx[2]); V(2, mx[0], mn[1], mn[2]); V(3, mn[0], mn[1], mn[2]);
+    AddQuad(id, p[0], p[1], p[2], p[3]);
+#undef V
+}
+
+/* No collision model: one hull per mesh (all body parts and models), around the mesh's vertices as the
+ * .vvd stores them (CreatePhysCollide in L4D2's vrad). */
+static void *CollideFromMeshes(void *pc, const unsigned char *mdl, int mlen, const char *name) {
+    int vlen;
+    unsigned char *vvd = ReadModelFile(name, ".vvd", &vlen);
+    if (!vvd || vlen < 64 || memcmp(vvd, "IDSV", 4)) {
+        free(vvd);
+        return NULL;
+    }
+    int vstart, tstart, numbp, bpindex;
+    memcpy(&vstart, vvd + 56, 4);
+    memcpy(&tstart, vvd + 60, 4);
+    int rawcount = (tstart > vstart ? tstart - vstart : vlen - vstart) / 48;
+    memcpy(&numbp, mdl + 232, 4);
+    memcpy(&bpindex, mdl + 236, 4);
+    void **hulls = NULL;
+    int nhulls = 0;
+    for (int b = 0; b < numbp; b++) {
+        int bp = bpindex + 16 * b, nmodels, modelindex;
+        if (bp + 16 > mlen) break;
+        memcpy(&nmodels, mdl + bp + 4, 4);
+        memcpy(&modelindex, mdl + bp + 12, 4);
+        for (int k = 0; k < nmodels; k++) {
+            int sub = bp + modelindex + 148 * k, nmeshes, meshindex, vertexindex;
+            if (sub + 88 > mlen) break;
+            memcpy(&nmeshes, mdl + sub + 72, 4);
+            memcpy(&meshindex, mdl + sub + 76, 4);
+            memcpy(&vertexindex, mdl + sub + 84, 4);
+            int first = vertexindex / 48;
+            for (int mm = 0; mm < nmeshes; mm++) {
+                int mesh = sub + meshindex + 116 * mm, nverts, vofs;
+                if (mesh + 16 > mlen) break;
+                memcpy(&nverts, mdl + mesh + 8, 4);
+                memcpy(&vofs, mdl + mesh + 12, 4);
+                float **pts = xalloc(sizeof(float *) * (nverts + 1));
+                int n = 0;
+                for (int i = 0; i < nverts && first + vofs + i < rawcount; i++)
+                    pts[n++] = (float *)(vvd + vstart + 48 * (first + vofs + i) + 16);
+                hulls = realloc(hulls, sizeof(void *) * (nhulls + 1));
+                hulls[nhulls++] = ((ConvexFromVerts_t)VT(pc, 1))(pc, pts, n);
+                free(pts);
+            }
+        }
+    }
+    void *collide = nhulls ? ((ConvertConvexToCollide_t)VT(pc, 14))(pc, hulls, nhulls) : NULL;
+    free(hulls);
+    free(vvd);
+    return collide;
+}
+
+typedef struct {
+    char name[128];
+    void *collide;
+    vec3_t mins, maxs;
+    int have_bounds;
+} propdict_t;
+
+void AddStaticPropsForRayTrace(void) {
+    int len;
+    const unsigned char *g = GameLump(0x73707270 /* 'sprp' */, &len);
+    if (!g || len < 12) return;
+    int numdict;
+    memcpy(&numdict, g, 4);
+    const unsigned char *p = g + 4;
+    propdict_t *dict = xalloc(sizeof(propdict_t) * (numdict + 1));
+    void *pc = LoadPhysics();
+    for (int i = 0; i < numdict; i++, p += 128) {
+        memcpy(dict[i].name, p, 127);
+        int n;
+        unsigned char *mdl = ReadModelFile(dict[i].name, ".mdl", &n);
+        int mlen = n;
+        if (mdl && n >= 240) {
+            memcpy(dict[i].mins, mdl + 104, 12);          /* studiohdr_t hull_min, hull_max */
+            memcpy(dict[i].maxs, mdl + 116, 12);
+            dict[i].have_bounds = 1;
+        }
+        unsigned char *phy = ReadModelFile(dict[i].name, ".phy", &n);
+        if (phy && pc && n >= 20) {
+            int hsize, solids, ssize;
+            memcpy(&hsize, phy, 4);
+            memcpy(&solids, phy + 8, 4);
+            memcpy(&ssize, phy + 16, 4);
+            if (hsize == 16 && solids > 0 && 20 + ssize <= n)
+                dict[i].collide = ((UnserializeCollide_t)VT(pc, 19))(pc, (char *)phy + 20, ssize, 0);
+        }
+        free(phy);
+        if (!dict[i].collide && dict[i].have_bounds && pc) dict[i].collide = CollideFromMeshes(pc, mdl, mlen, dict[i].name);
+        free(mdl);
+    }
+    int numleaves;
+    memcpy(&numleaves, p, 4);
+    p += 4 + 2 * numleaves;
+    int numprops;
+    memcpy(&numprops, p, 4);
+    p += 4;
+    for (int i = 0; i < numprops; i++, p += PROP_RECORD) {
+        vec3_t origin, angles;
+        memcpy(origin, p, 12);
+        memcpy(angles, p + 12, 12);
+        unsigned short model;
+        memcpy(&model, p + 24, 2);
+        unsigned char flags = p[31];
+        if (flags & STATIC_PROP_NO_SHADOW) continue;
+        if (model >= numdict) continue;
+        int id = TRACE_ID_STATICPROP | i;
+        if (dict[model].collide) {
+            float m[3][4];
+            MatrixOrgAngles(origin, angles, m);
+            void *q = ((CreateQueryModel_t)VT(pc, 48))(pc, dict[model].collide);
+            int nconvex = ((ConvexCount_t)VT(q, 1))(q);
+            for (int c = 0; c < nconvex; c++) {
+                int ntri = ((TriangleCount_t)VT(q, 2))(q, c);
+                for (int t = 0; t < ntri; t++) {
+                    float v[9];
+                    vec3_t w[3];
+                    ((GetTriangleVerts_t)VT(q, 4))(q, c, t, v);
+                    for (int k = 0; k < 3; k++) Transform(m, v + 3 * k, w[k]);
+                    RT_AddTriangle(id, w[0], w[1], w[2]);
+                }
+            }
+            ((DestroyQueryModel_t)VT(pc, 49))(pc, q);
+        } else if (dict[model].have_bounds) {
+            vec3_t mn, mx;
+            VectorAdd(dict[model].mins, origin, mn);
+            VectorAdd(dict[model].maxs, origin, mx);
+            AddBox(id, mn, mx);
+        }
+    }
+    free(dict);
+}

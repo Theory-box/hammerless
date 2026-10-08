@@ -725,8 +725,7 @@ static int SampleRadial(radial_t *rad, const vec3_t pnt, vec3_t *light, int bump
         if (rad->weight[i] > WEIGHT_EPS) {
             float sc = (float)(1.0 / rad->weight[i]);
             VectorScale(rad->light[b][i], sc, light[b]);
-        } else {
-            light[b][0] = 2550, light[b][1] = light[b][2] = 0;
+        } else {                               /* no sample reaches it: black (L4D2 vrad) */
             if (b == 0) ok = 0;
         }
     }

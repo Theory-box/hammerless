@@ -133,3 +133,23 @@ void WriteBSPFile(const char *path) {
     fwrite(header, 1, sizeof(header), f);
     fclose(f);
 }
+
+/* one game lump's data by its id (e.g. 'sprp' for static props), as read from the file */
+const unsigned char *GameLump(int id, int *len) {
+    const lump_t *l = &lumps[LUMP_GAME_LUMP];
+    if (l->len < 4) return NULL;
+    int count;
+    memcpy(&count, l->data, 4);
+    for (int g = 0; g < count && 4 + 16 * g + 16 <= l->len; g++) {
+        int gid, ofs, glen;
+        memcpy(&gid, l->data + 4 + 16 * g, 4);
+        memcpy(&ofs, l->data + 4 + 16 * g + 8, 4);
+        memcpy(&glen, l->data + 4 + 16 * g + 12, 4);
+        if (gid != id) continue;
+        int rel = ofs - game_lump_offset;
+        if (rel < 0 || rel + glen > l->len) return NULL;
+        *len = glen;
+        return l->data + rel;
+    }
+    return NULL;
+}
