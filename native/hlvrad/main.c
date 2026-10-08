@@ -2,6 +2,7 @@
  *
  * Done so far: the HDR faces, the smoothed vertex normals, the lightmap layout (values still zero). */
 #include <float.h>
+#include <windows.h>
 #include "hlvrad.h"
 
 int g_bHDR = 1;
@@ -29,6 +30,22 @@ double VectorNormalizeD(vec3_t v) {
     return r;
 }
 
+/* each stage's time (-timing) */
+static int g_timing;
+static double Now(void) {
+    LARGE_INTEGER f, c;
+    QueryPerformanceFrequency(&f), QueryPerformanceCounter(&c);
+    return (double)c.QuadPart / (double)f.QuadPart;
+}
+static double t_last;
+static void Stage(const char *name) {
+    double t = Now();
+    if (g_timing && name) Msg("[time] %-28s %7.2f s\n", name, t - t_last);
+    t_last = t;
+}
+
+static void FacelightsWork(int face, int thread) { (void)thread; BuildFacelights(face); }
+
 int main(int argc, char **argv) {
     const char *map = NULL, *designer_lights = NULL;
     Msg("Hammerless hlvrad\n");
@@ -41,7 +58,8 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-modeldir") && i + 1 < argc) g_modeldir = argv[++i];
         else if (!_stricmp(a, "-lights") && i + 1 < argc) designer_lights = argv[++i];
         else if (!_stricmp(a, "-bounce") && i + 1 < argc) g_numbounce = atoi(argv[++i]);
-        else if (!_stricmp(a, "-threads") ||
+        else if (!_stricmp(a, "-threads") && i + 1 < argc) g_numthreads = atoi(argv[++i]);
+        else if (
                  !_stricmp(a, "-extrasky") || !_stricmp(a, "-chop") ||
                  !_stricmp(a, "-maxchop") || !_stricmp(a, "-dispchop")) {
             if (++i >= argc) Error("expected a value after '%s'", a);
@@ -52,6 +70,8 @@ int main(int argc, char **argv) {
             g_bFast = 1;
         } else if (!_stricmp(a, "-StaticPropLighting")) {
             g_bStaticPropLighting = 1;
+        } else if (!_stricmp(a, "-timing")) {
+            g_timing = 1;
         } else if (!_stricmp(a, "-noextra")) {
             g_bExtra = 0;
         } else if (!_stricmp(a, "-extra")) {
@@ -66,6 +86,7 @@ int main(int argc, char **argv) {
     snprintf(path, sizeof(path), "%s", map);
     size_t n = strlen(path);
     if (n < 4 || _stricmp(path + n - 4, ".bsp")) strncat(path, ".bsp", sizeof(path) - n - 1);
+    Stage(NULL);
     LoadBSPFile(path);
     MapArrays();
     /* light the HDR copy of the faces (made from the faces the first time) */
@@ -87,6 +108,7 @@ int main(int argc, char **argv) {
             SetLump(59, d, 4, lumps[59].version);
         }
     }
+    Stage("load");
     MapVis();
     ParseEntities();
     FindFacePatches();
@@ -97,7 +119,9 @@ int main(int argc, char **argv) {
     SaveVertexNormals();
     SubdividePatches();
     AddDispsToClusterTable();
+    Stage("setup, patches");
     CreateDirectLights();
+    Stage("direct lights");
     if (getenv("SKYDBG")) {      /* (debugging: a point's cluster and whether each light's PVS has it) */
         vec3_t p;
         sscanf(getenv("SKYDBG"), "%f %f %f", &p[0], &p[1], &p[2]);
@@ -109,6 +133,7 @@ int main(int argc, char **argv) {
     AddDispsForRayTrace();
     AddStaticPropsForRayTrace();
     RT_SetupAccelerationStructure();
+    Stage("ray tracer");
     if (getenv("RTTEST")) {       /* (debugging: trace packets of 4 rays, as vradhook does with vrad's tracer) */
         FILE *rf = fopen(getenv("RTTEST"), "rb"), *of = fopen("raysout_ours.bin", "wb");
         float pk[32];
@@ -123,19 +148,28 @@ int main(int argc, char **argv) {
         return 0;
     }
     AllocFacelights();
-    for (int i = 0; i < numfaces; i++) BuildFacelights(i);
+    RunThreadsOn(numfaces, FacelightsWork);
+    Stage("direct lighting (faces)");
     PrecompLightmapOffsets();
     if (g_numbounce > 0) {
+        Stage("lightmap offsets");
         MakeAllScales();
+        Stage("transfers");
         BounceLight();
+        Stage("bounce");
     }
     for (int i = 0; i < numfaces; i++) FinalLightFace(i);
+    Stage("final light");
     ExportDirectLightsToWorldLights();
     ComputeDetailPropLighting();
+    Stage("detail props");
     ComputePerLeafAmbientLighting();
+    Stage("leaf ambient");
     ComputeStaticPropLighting();
+    Stage("static prop lighting");
     SetLump(LUMP_LIGHTING_HDR, dlightdata, lightdatasize, 1);
     WriteBSPFile(path);
+    Stage("write");
     Msg("done\n");
     return 0;
 }

@@ -106,10 +106,17 @@ typedef struct {
     float (*luxel)[2];                 /* per vertex lightmap coordinate */
     unsigned short (*tris)[3];
     int ntris;
-    int tested;                        /* (the ray it was last tested against) */
+    /* (speed only: boxes around the whole and around each band of BAND triangles, a little bigger than
+     * they are, so a ray that misses a box can't hit its triangles; the triangles still go in order) */
+    vec3_t bmins, bmaxs;
+    float (*band)[6];
 } dispcoll_t;
+#define BAND 16
 static dispcoll_t *dcoll;
-static int **leafdisps, *nleafdisps, rayenum;
+static int **leafdisps, *nleafdisps;
+/* per thread: the ray number, and the ray each displacement was last tested against */
+static __thread int rayenum;
+static __thread int *tested;
 
 /* CCoreDispSurface::CalcLuxelCoords: the corners' lightmap coordinates from the quad's longest sides */
 static void DispLuxelCoords(const dispsurf_t *d, dispcoll_t *c) {
@@ -193,6 +200,21 @@ static void BuildDispCollision(void) {
                 if (d->verts[v][k] > c->maxs[k]) c->maxs[k] = d->verts[v][k];
             }
         for (int k = 0; k < 3; k++) c->mins[k] -= 1.0f, c->maxs[k] += 1.0f;     /* (bloated a little, as vrad) */
+        for (int k = 0; k < 3; k++) c->bmins[k] = c->mins[k] - 1.0f, c->bmaxs[k] = c->maxs[k] + 1.0f;
+        int nb = (c->ntris + BAND - 1) / BAND;
+        c->band = xalloc(sizeof(float[6]) * (nb + 1));
+        for (int b = 0; b < nb; b++) {
+            float *bx = c->band[b];
+            for (int k = 0; k < 3; k++) bx[k] = FLT_MAX, bx[3 + k] = -FLT_MAX;
+            for (int t = b * BAND; t < c->ntris && t < (b + 1) * BAND; t++)
+                for (int j = 0; j < 3; j++)
+                    for (int k = 0; k < 3; k++) {
+                        float v = d->verts[c->tris[t][j]][k];
+                        if (v < bx[k]) bx[k] = v;
+                        if (v > bx[3 + k]) bx[3 + k] = v;
+                    }
+            for (int k = 0; k < 3; k++) bx[k] -= 1.0f, bx[3 + k] += 1.0f;
+        }
         LeavesInBox_r(0, c->mins, c->maxs, i);
     }
 }
@@ -222,6 +244,25 @@ static int RayTriangle(const vec3_t start, const vec3_t delta, const vec3_t v1, 
     return 1;
 }
 
+/* can the ray (start + t delta, t from a little before 0 to a little past 1) touch the box? (in double: no
+ * rounding can wrongly say no) */
+static int RayMayHitBox(const vec3_t start, const vec3_t delta, const float *mins, const float *maxs) {
+    double t0 = -0.01, t1 = 1.01;
+    for (int k = 0; k < 3; k++) {
+        double s = start[k], d = delta[k];
+        if (d == 0.0) {
+            if (s < mins[k] || s > maxs[k]) return 0;
+            continue;
+        }
+        double a = (mins[k] - s) / d, b = (maxs[k] - s) / d;
+        if (a > b) { double x = a; a = b; b = x; }
+        if (a > t0) t0 = a;
+        if (b < t1) t1 = b;
+        if (t0 > t1) return 0;
+    }
+    return 1;
+}
+
 /* the nearest displacement hit in a leaf (each displacement tested once per ray) */
 static float ClipRayToDispInLeaf(const vec3_t start, const vec3_t delta, int leaf, int *face, float luxel[2], vec3_t normal) {
     float best = 1.0f;
@@ -229,13 +270,19 @@ static float ClipRayToDispInLeaf(const vec3_t start, const vec3_t delta, int lea
     for (int k = 0; k < nleafdisps[leaf]; k++) {
         int di = leafdisps[leaf][k];
         dispcoll_t *c = &dcoll[di];
-        if (c->tested == rayenum) continue;
-        c->tested = rayenum;
+        if (!tested) tested = xalloc(sizeof(int) * (numdispsurfs + 1));
+        if (tested[di] == rayenum) continue;
+        tested[di] = rayenum;
         const dispsurf_t *d = &dispsurfs[di];
         if (!(d->contents & MASK_OPAQUE)) continue;
+        if (!RayMayHitBox(start, delta, c->bmins, c->bmaxs)) continue;
         float dist = FLT_MAX, bu = 0, bv = 0;
         int bt = -1;
         for (int t = 0; t < c->ntris; t++) {
+            if (t % BAND == 0 && !RayMayHitBox(start, delta, c->band[t / BAND], c->band[t / BAND] + 3)) {
+                t += BAND - 1;
+                continue;
+            }
             const unsigned short *tr = c->tris[t];
             float u, v, tt;
             if (!RayTriangle(start, delta, d->verts[tr[0]], d->verts[tr[2]], d->verts[tr[1]], &u, &v, &tt)) continue;
@@ -492,9 +539,9 @@ static void ColorPointSample(const dface_t *f, const float luv[2], float scale, 
     }
 }
 
-static int g_dbgSurf, g_dbgHasLux;          /* (the last ray's hit, for AMBRAYS) */
-static float g_dbgFrac, g_dbgLux[2];
-float g_lastHitFrac;      /* (debugging: FindLightSurface's hit fraction) */
+static __thread int g_dbgSurf, g_dbgHasLux;          /* (the last ray's hit, for AMBRAYS) */
+static __thread float g_dbgFrac, g_dbgLux[2];
+__thread float g_lastHitFrac;      /* (debugging: FindLightSurface's hit fraction) */
 /* the surface a ray (start + delta) meets, as vrad's CLightSurface::FindIntersection: -1 for none */
 int FindLightSurface(const vec3_t start, const vec3_t delta, int *hasluxel, float luxel[2]) {
     lightsurf_t ls;
@@ -512,7 +559,7 @@ int FindLightSurface(const vec3_t start, const vec3_t delta, int *hasluxel, floa
 /* the same with one surface finder kept across rays (as the static props' bounced light keeps vrad's
  * CLightSurface for all of a vertex's rays): its nearest hit so far stays, so later rays find only nearer
  * displacements and leaf faces (a node's face is taken at any distance), and a miss leaves the old luxel */
-static lightsurf_t keep;
+static __thread lightsurf_t keep;
 void LightSurfaceBegin(void) { keep.surface = -1, keep.hitfrac = 1.0f, keep.hasluxel = 0; }
 int FindLightSurfaceKept(const vec3_t start, const vec3_t delta, int *hasluxel, float luxel[2]) {
     VectorCopy(start, keep.start);
@@ -753,6 +800,15 @@ static int AmbientForLeaf(int leaf, ambsample_t *list, plane_t *planes) {
     return CompressSamples(list, n);
 }
 
+static ambsample_t *leafresults;
+static int *leafcounts;
+static void LeafWork(int leaf, int thread) {
+    static __thread plane_t *planes;
+    (void)thread;
+    if (!planes) planes = xalloc(sizeof(plane_t) * (numnodes + 1));
+    leafcounts[leaf] = AmbientForLeaf(leaf, leafresults + (MAX_SAMPLES + 1) * leaf, planes);
+}
+
 static unsigned char Fixed8Fraction(float t, float tmin, float tmax) {
     if (tmax <= tmin) return 0;
     float frac = (t - tmin) / (tmax - tmin) * 255.0f;
@@ -885,10 +941,12 @@ void ComputePerLeafAmbientLighting(void) {
     unsigned short (*index)[2] = xalloc(sizeof(*index) * (numleafs + 1));
     unsigned char *out = xalloc(28 * MAX_SAMPLES * (numleafs + 1));
     int nout = 0;
-    ambsample_t list[MAX_SAMPLES + 1];
-    plane_t *planes = xalloc(sizeof(plane_t) * (numnodes + 1));
+    leafresults = xalloc(sizeof(ambsample_t) * (MAX_SAMPLES + 1) * (numleafs + 1));
+    leafcounts = xalloc(sizeof(int) * (numleafs + 1));
+    RunThreadsOn(numleafs, LeafWork);
     for (int leaf = 0; leaf < numleafs; leaf++) {
-        int n = AmbientForLeaf(leaf, list, planes);
+        int n = leafcounts[leaf];
+        const ambsample_t *list = leafresults + (MAX_SAMPLES + 1) * leaf;
         index[leaf][0] = (unsigned short)n;
         index[leaf][1] = n ? (unsigned short)nout : 0;
         const dleaf_t *l = &dleafs[leaf];
@@ -908,5 +966,5 @@ void ComputePerLeafAmbientLighting(void) {
         }
     SetLump(g_bHDR ? LUMP_LEAF_AMBIENT_INDEX_HDR : LUMP_LEAF_AMBIENT_INDEX, index, 4 * numleafs, 0);   /* (vrad: version 0 for the index, 1 for the samples) */
     SetLump(g_bHDR ? LUMP_LEAF_AMBIENT_LIGHTING_HDR : LUMP_LEAF_AMBIENT_LIGHTING, out, 28 * nout, 1);
-    free(planes);
+    free(leafresults), free(leafcounts);
 }

@@ -19,7 +19,7 @@
 #define PROP_RECORD 72
 #define MAX_TRACE_LENGTH_F 56755.84f
 
-extern int g_gatherFlags, g_gatherSkipProp;
+extern __thread int g_gatherFlags, g_gatherSkipProp;
 float GatherSampleLightAtPoint(const directlight_t *dl, const vec3_t pos, const vec3_t normal);
 void LightSurfaceBegin(void);
 int FindLightSurfaceKept(const vec3_t start, const vec3_t delta, int *hasluxel, float luxel[2]);
@@ -121,7 +121,7 @@ static void IndirectLightingAtPoint(const vec3_t pos, const vec3_t normal, vec3_
         if (logRays) {
             float rec[12];
             memcpy(rec, pos, 12), memcpy(rec + 3, delta, 12), memcpy(rec + 6, &s, 4);
-            extern float g_lastHitFrac;
+            extern __thread float g_lastHitFrac;
             rec[7] = g_lastHitFrac, rec[8] = luxel[0], rec[9] = luxel[1], rec[10] = (float)hasluxel, rec[11] = s < 0;
             fwrite(rec, 4, 12, rayLog);
         }

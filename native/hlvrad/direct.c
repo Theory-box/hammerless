@@ -399,8 +399,8 @@ static float Dot4(const float v[3][LANES], int i, const float *w) {
  * a constant dot instead of the normals', and one static prop that casts no shadow */
 #define GATHERLFLAGS_FORCE_FAST 1
 #define GATHERLFLAGS_IGNORE_NORMALS 2
-int g_gatherFlags;
-int g_gatherSkipProp = -1;
+__thread int g_gatherFlags;
+__thread int g_gatherSkipProp = -1;
 
 static void GatherSampleStandardLight4(lightout4_t *out, const directlight_t *dl, const points4_t *p) {
     float src[3][LANES], delta[3][LANES], dist[LANES], dist2[LANES], dot[LANES];
@@ -720,7 +720,7 @@ static void SetupPoints4(const lightinfo_t *l, int facenum, int normalCount, int
  * can be rejected because of what was left there: its own previous mask (an all-outside row rejects the
  * rest of the sample), the last light's value in ResampleLightAt4Points, and also whatever the ray
  * tracer's deeper frames left (its mailbox, the sky test's temporaries), which isn't reproduced here. */
-static __m128 g_staleSlot;
+static __thread __m128 g_staleSlot;
 static int extrapasses = 4;
 
 static void ResampleLightAt4Points(const points4_t *p, const int cluster[LANES], const dface_t *f, int style, int flags,
@@ -884,6 +884,7 @@ static void BuildSupersampleFaceLights(const lightinfo_t *l, int facenum, faceli
 }
 
 void BuildFacelights(int facenum) {
+    g_staleSlot = _mm_setzero_ps();     /* (what's left there before a face: unknown; nothing matches vrad best) */
     dface_t *f = &g_pFaces[facenum];
     facelight_t *fl = &facelight[facenum];
     f->lightofs = -1;

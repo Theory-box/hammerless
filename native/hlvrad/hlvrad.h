@@ -301,6 +301,10 @@ void ExportDirectLightsToWorldLights(void);
 void ComputePerLeafAmbientLighting(void);
 void ComputeDetailPropLighting(void);
 void ComputeStaticPropLighting(void);
+#define MAX_THREADS 64
+extern int g_numthreads;
+int NumThreads(void);
+void RunThreadsOn(int count, void (*fn)(int item, int thread));
 extern int g_bStaticPropLighting;
 int ClusterFromPoint(const vec3_t p);
 int PointLeafnum(const vec3_t p);

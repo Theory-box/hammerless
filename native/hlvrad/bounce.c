@@ -555,8 +555,9 @@ typedef struct {
     int out[8][4];
 } raystream_t;
 
-static int ntests, *test_shooter, *test_receiver, *test_hit;
-static float *test_dist, *test_len;
+/* (per thread: the patch being shot from's rays and their results) */
+static __thread int ntests, *test_shooter, *test_receiver, *test_hit;
+static __thread float *test_dist, *test_len;
 
 static void FlushStream(raystream_t *s, int m) {
     float d[3][4], len[4];
@@ -605,7 +606,7 @@ static void FinishStream(raystream_t *s) {
     }
 }
 
-static raystream_t stream;
+static __thread raystream_t stream;
 
 static void TestPatchToPatch(int i1, int i2) {
     patch_t *p = &patches[i1], *p2 = &patches[i2];
@@ -651,21 +652,68 @@ static void MakeScales(int i, const transfer_t *all) {
 
 static int total_transfer, max_transfer;
 
+/* each patch's transfers: the patches it sees (in clusters its cluster's PVS has), unblocked; the patches
+ * in parallel, each writing only its own list */
+static int **ms_cluster_leaves, *ms_nleaves, *ms_order, *ms_cluster;
+static FILE *ms_dump;
+
+static void ScalesWork(int item, int thread) {
+    (void)thread;
+    static __thread transfer_t *all;
+    static __thread unsigned char *pvs, *face_tested, *disp_tested;
+    static __thread int pvs_cluster;
+    if (!all) {
+        all = xalloc(sizeof(transfer_t) * MAX_PATCHES);
+        test_shooter = xalloc(sizeof(int) * MAX_PATCHES);
+        test_receiver = xalloc(sizeof(int) * MAX_PATCHES);
+        test_hit = xalloc(sizeof(int) * MAX_PATCHES);
+        test_dist = xalloc(sizeof(float) * MAX_PATCHES);
+        test_len = xalloc(sizeof(float) * MAX_PATCHES);
+        pvs = xalloc(VisRowBytes() + 1), face_tested = xalloc(numfaces + 1), disp_tested = xalloc(numfaces + 1);
+        pvs_cluster = -1;
+    }
+    int i = ms_order[item], c = ms_cluster[item];
+    if (c != pvs_cluster) GetClusterPVS(c, pvs), pvs_cluster = c;
+    patch_t *p = &patches[i];
+    memset(face_tested, 0, numfaces);
+    memset(disp_tested, 0, numfaces);
+    ntests = 0;
+    for (int j = 0; j < numclusters; j++) {
+        if (!(pvs[j >> 3] & (1 << (j & 7)))) continue;
+        for (int li = 0; li < ms_nleaves[j]; li++) {
+            const dleaf_t *leaf = &dleafs[ms_cluster_leaves[j][li]];
+            for (int k = 0; k < leaf->numleaffaces; k++) {
+                int l = dleaffaces[leaf->firstleafface + k];
+                if (face_tested[l]) continue;
+                face_tested[l] = 1;
+                if (p->face == l) continue;
+                TestPatchToFace(i, l);
+            }
+        }
+        for (int k = 0; k < ncluster_disps[j]; k++) {
+            int l = cluster_disps[j][k];
+            if (disp_tested[l]) continue;
+            disp_tested[l] = 1;
+            if (p->face == l) continue;
+            TestPatchToFace(i, l);
+        }
+    }
+    FinishStream(&stream);
+    p->numtransfers = 0;
+    for (int t = 0; t < ntests; t++)
+        if (test_hit[t] == -1 || test_dist[t] >= test_len[t]) MakeTransfer(test_shooter[t], test_receiver[t], all);
+    if (ms_dump) fwrite(&i, 4, 1, ms_dump), fwrite(&p->numtransfers, 4, 1, ms_dump), fwrite(all, 8, p->numtransfers, ms_dump);
+    MakeScales(i, all);
+}
+
 void MakeAllScales(void) {
-    int **cluster_leaves = xalloc(sizeof(int *) * (numclusters + 1)), *nleaves = xalloc(sizeof(int) * (numclusters + 1));
+    ms_cluster_leaves = xalloc(sizeof(int *) * (numclusters + 1)), ms_nleaves = xalloc(sizeof(int) * (numclusters + 1));
     for (int l = 0; l < numleafs; l++) {
         int c = dleafs[l].cluster;
         if (c < 0 || c >= numclusters) continue;
-        cluster_leaves[c] = realloc(cluster_leaves[c], sizeof(int) * (nleaves[c] + 1));
-        cluster_leaves[c][nleaves[c]++] = l;
+        ms_cluster_leaves[c] = realloc(ms_cluster_leaves[c], sizeof(int) * (ms_nleaves[c] + 1));
+        ms_cluster_leaves[c][ms_nleaves[c]++] = l;
     }
-    transfer_t *all = xalloc(sizeof(transfer_t) * MAX_PATCHES);
-    test_shooter = xalloc(sizeof(int) * MAX_PATCHES);
-    test_receiver = xalloc(sizeof(int) * MAX_PATCHES);
-    test_hit = xalloc(sizeof(int) * MAX_PATCHES);
-    test_dist = xalloc(sizeof(float) * MAX_PATCHES);
-    test_len = xalloc(sizeof(float) * MAX_PATCHES);
-    unsigned char *pvs = xalloc(VisRowBytes() + 1), *face_tested = xalloc(numfaces + 1), *disp_tested = xalloc(numfaces + 1);
     if (getenv("HLPATCHES")) {      /* (debugging: origin, normal, plane dist, area, face, cluster, children) */
         FILE *pf = fopen(getenv("HLPATCHES"), "wb");
         for (int i = 0; i < numpatches; i++) {
@@ -675,47 +723,25 @@ void MakeAllScales(void) {
         }
         fclose(pf);
     }
-    FILE *dumpf = getenv("HLTRANSFERS") ? fopen(getenv("HLTRANSFERS"), "wb") : NULL;   /* (debugging: the lists as MakeScales gets them) */
-    for (int c = 0; c < numclusters; c++) {
-        GetClusterPVS(c, pvs);
-        for (int i = cluster_children[c]; i != -1; i = patches[i].next_cluster_child) {
-            patch_t *p = &patches[i];
-            memset(face_tested, 0, numfaces);
-            memset(disp_tested, 0, numfaces);
-            ntests = 0;
-            for (int j = 0; j < numclusters; j++) {
-                if (!(pvs[j >> 3] & (1 << (j & 7)))) continue;
-                for (int li = 0; li < nleaves[j]; li++) {
-                    const dleaf_t *leaf = &dleafs[cluster_leaves[j][li]];
-                    for (int k = 0; k < leaf->numleaffaces; k++) {
-                        int l = dleaffaces[leaf->firstleafface + k];
-                        if (face_tested[l]) continue;
-                        face_tested[l] = 1;
-                        if (p->face == l) continue;
-                        TestPatchToFace(i, l);
-                    }
-                }
-                for (int k = 0; k < ncluster_disps[j]; k++) {
-                    int l = cluster_disps[j][k];
-                    if (disp_tested[l]) continue;
-                    disp_tested[l] = 1;
-                    if (p->face == l) continue;
-                    TestPatchToFace(i, l);
-                }
-            }
-            FinishStream(&stream);
-            p->numtransfers = 0;
-            for (int t = 0; t < ntests; t++)
-                if (test_hit[t] == -1 || test_dist[t] >= test_len[t]) MakeTransfer(test_shooter[t], test_receiver[t], all);
-            if (dumpf) fwrite(&i, 4, 1, dumpf), fwrite(&p->numtransfers, 4, 1, dumpf), fwrite(all, 8, p->numtransfers, dumpf);
-            MakeScales(i, all);
-            total_transfer += p->numtransfers;
-            if (p->numtransfers > max_transfer) max_transfer = p->numtransfers;
-        }
+    /* the patches in vrad's order: by cluster, each cluster's leaf patches */
+    ms_order = xalloc(sizeof(int) * (numpatches + 1)), ms_cluster = xalloc(sizeof(int) * (numpatches + 1));
+    int n = 0;
+    for (int c = 0; c < numclusters; c++)
+        for (int i = cluster_children[c]; i != -1; i = patches[i].next_cluster_child) ms_order[n] = i, ms_cluster[n++] = c;
+    ms_dump = getenv("HLTRANSFERS") ? fopen(getenv("HLTRANSFERS"), "wb") : NULL;   /* (debugging: the lists as MakeScales gets them) */
+    int threads = g_numthreads;
+    if (ms_dump) g_numthreads = 1;                 /* (the dump in order) */
+    RunThreadsOn(n, ScalesWork);
+    g_numthreads = threads;
+    if (ms_dump) fclose(ms_dump), ms_dump = NULL;
+    for (int k = 0; k < n; k++) {
+        int t = patches[ms_order[k]].numtransfers;
+        total_transfer += t;
+        if (t > max_transfer) max_transfer = t;
     }
-    if (dumpf) fclose(dumpf);
     Msg("transfers %d, max %d\n", total_transfer, max_transfer);
-    free(all), free(test_shooter), free(test_receiver), free(test_hit), free(test_dist), free(test_len), free(pvs), free(face_tested), free(disp_tested);
+    for (int c = 0; c < numclusters; c++) free(ms_cluster_leaves[c]);
+    free(ms_cluster_leaves), free(ms_nleaves), free(ms_order), free(ms_cluster);
 }
 
 /* ------------------------------------------------------------------ bouncing */
