@@ -46,6 +46,10 @@ def event(name: str) -> dict | None:
 
 
 def is_pure(f: dict) -> bool:
+    """A value node (no event wires): it only works something out. Functions that fill a table in
+    (GetAllAreas...) are values too: the node gives the table."""
+    if f.get("fills") is not None:
+        return True
     return f["returns"] != "void" and PURE.match(f["name"]) is not None
 
 
@@ -70,20 +74,27 @@ def param_sockets(f: dict) -> list[tuple[str, str, str]]:
     out = []
     if f.get("on"):
         out.append(("target", ON_LABEL[f["on"]], THING))
+    names = f.get("names") or []
     counts: dict[str, int] = {}
     for t in f["params"]:
         counts[t] = counts.get(t, 0) + 1
     seen: dict[str, int] = {}
     for i, t in enumerate(f["params"]):
+        if i == f.get("fills"):
+            continue                       # filled in by the function: the node's Result
         seen[t] = seen.get(t, 0) + 1
-        name = TYPE_LABEL.get(t, "Value")
-        if counts[t] > 1:
-            name += f" {seen[t]}"
-        out.append((f"p{i}", name, KIND_OF_TYPE.get(t, ANY)))
+        if i < len(names):
+            name = names[i]
+        else:
+            name = TYPE_LABEL.get(t, "Value") + (f" {seen[t]}" if counts[t] > 1 else "")
+        kind = ANY if i in (f.get("tables") or []) else KIND_OF_TYPE.get(t, ANY)
+        out.append((f"p{i}", name, kind))
     return out
 
 
 def result_kind(f: dict) -> str | None:
+    if f.get("fills") is not None:
+        return ANY
     return None if f["returns"] == "void" else KIND_OF_TYPE.get(f["returns"], ANY)
 
 
@@ -97,10 +108,18 @@ def cast(expr: str, t: str) -> str:
 
 
 def call_expr(f: dict, target: str | None, args: list[str]) -> str:
-    a = ", ".join(cast(x, t) for x, t in zip(args, f["params"]))
-    if f.get("on"):
-        return f"{target}.{f['name']}({a})"
-    return f"{f['call']}({a})"
+    """The call as an expression. args are the shown inputs in order; a filled-in table is made here
+    and the expression gives it."""
+    fills = f.get("fills")
+    it = iter(args)
+    parts = []
+    for i, t in enumerate(f["params"]):
+        parts.append("t" if i == fills else cast(next(it, "null"), t))
+    a = ", ".join(parts)
+    call = f"{target}.{f['name']}({a})" if f.get("on") else f"{f['call']}({a})"
+    if fills is not None:
+        return f"(function() {{ local t = {{}}; {call}; return t; }})()"
+    return call
 
 
 def literal(kind: str, value) -> str:

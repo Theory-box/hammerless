@@ -43,6 +43,7 @@ SKIP = re.compile(r"^(__|ScriptDebug|RegisterFunctionDocumentation|Document$|Pri
                   r"RetrieveNativeSignature$|GetFunctionSignature$|DumpObject$)")
 # global functions -> menu group, by name
 GLOBAL_GROUPS = [
+    (r"^Debug", "Debug Drawing"),
     (r"^HUD", "HUD"),
     (r"^Screen", "Screen Effects"),
     (r"Scavenge|Survival|Versus|Difficulty|Mission|Dedicated|MOTD", "Game Mode"),
@@ -135,23 +136,22 @@ def _events() -> list[dict]:
                 player = ftype in ("short", "long") and not entity and (
                     name in ("userid", "attacker", "victim", "subject", "rescuer", "healer", "infected_id")
                     or re.search(r"user ?id", note, re.I) is not None)
-                fields.append({"name": name, "type": ftype, "player": bool(player), "entity": bool(entity),
-                               "note": note})
-            found[m.group(1)] = {"name": m.group(1), "fields": fields,      # later files win, like the game
-                                 "note": (m.group(2) or "").lstrip("/ ").strip()}
+                # (the file's comments only help tell players and entities apart: they aren't kept)
+                fields.append({"name": name, "type": ftype, "player": bool(player), "entity": bool(entity)})
+            found[m.group(1)] = {"name": m.group(1), "fields": fields}      # later files win, like the game
     return sorted(found.values(), key=lambda e: e["name"])
 
 
 def build():
     with open(HELP, encoding="utf-8") as f:
         text = f.read()
-    desc = {}
+    desc = {}       # id -> (input names, description)
     if os.path.exists(DESCRIPTIONS):
         with open(DESCRIPTIONS, encoding="utf-8") as f:
             for line in f:
-                if ":" in line and not line.startswith("#"):
-                    k, v = line.split(":", 1)
-                    desc[k.strip()] = v.strip()
+                if line.count("|") >= 2 and not line.startswith("#"):
+                    fid, names, about = (x.strip() for x in line.split("|", 2))
+                    desc[fid] = ([n.strip() for n in names.split(",")] if names else [], about)
     functions = []
     for m in re.finditer(r"Function:\s+(\S+)\s*\nSignature:\s+(.*?)\s*\n", text):
         full, sig = m.groups()
@@ -173,8 +173,24 @@ def build():
         fid = f"{on}:{name}" if on else call
         if any(f["id"] == fid for f in functions):          # the same method on two script classes
             continue
-        functions.append({"id": fid, "name": name, "call": call, "on": on, "returns": _type(ret),
-                          "params": params, "group": group, "desc": desc.get(fid, desc.get(name, ""))})
+        entry = {"id": fid, "name": name, "call": call, "on": on, "returns": _type(ret), "params": params,
+                 "group": group, "desc": "", "names": [], "tables": [], "fills": None}
+        if fid in desc:
+            names, entry["desc"] = desc[fid]
+            if len(names) != len(params):
+                print(f"!! {fid}: {len(names)} input names for {len(params)} inputs ({', '.join(params)})")
+            else:
+                for i, n in enumerate(names):
+                    if n == "=fills":
+                        entry["fills"] = i
+                        n = "Result"
+                    elif n.endswith("=table"):
+                        entry["tables"].append(i)
+                        n = n[:-len("=table")]
+                    entry["names"].append(n)
+        else:
+            print(f"-- no description: {fid}")
+        functions.append(entry)
     functions.sort(key=lambda f: (f["group"], f["name"]))
     events = _events()
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

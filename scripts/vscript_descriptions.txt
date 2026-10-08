@@ -1,0 +1,451 @@
+# Hammerless's own descriptions of L4D2's script functions, and names for their inputs.
+# One line per function:  id | input names, comma separated | description
+# An input written "Name=table" takes a table (or list) of values, "=fills" is a table the function fills
+# in: it isn't an input; the node gives the filled table as its Result instead.
+# The thing a method acts on (player / entity / nav area) is its first socket and isn't listed here.
+
+Convars.GetClientConvarValue | Setting Name, Player Index | A client's own value of a console setting, as text.
+Convars.GetFloat | Setting Name | A console setting's value as a number (empty if there's no such setting).
+Convars.GetStr | Setting Name | A console setting's value as text (empty if there's no such setting).
+Convars.SetValue | Setting Name, Value | Changes a console setting (on/off, number or text).
+
+DebugDrawBox | Origin, Min, Max, Red, Green, Blue, Alpha, Seconds | Draws a box for debugging (needs developer mode to be seen).
+DebugDrawBoxDirection | Center, Min, Max, Forward, Color, Alpha, Seconds | Draws a box facing a direction, for debugging.
+DebugDrawCircle | Center, Color, Alpha, Radius, Hide Behind Walls, Seconds | Draws a circle, for debugging.
+DebugDrawClear | | Clears all debug drawings.
+DebugDrawText | Position, Text, Only When Visible, Seconds | Draws text in the world, for debugging.
+DebugDrawLine | Start, End, Red, Green, Blue, Hide Behind Walls, Seconds | Draws a line, for debugging.
+DebugDrawLine_vCol | Start, End, Color, Hide Behind Walls, Seconds | Draws a coloured line, for debugging.
+DebugDrawScreenTextLine | X, Y, Line, Text, Red, Green, Blue, Alpha, Seconds | Draws a line of text on screen, for debugging.
+DebugDrawBoxAngles | Origin, Min, Max, Angles, Color, Alpha, Seconds | Draws a rotated box, for debugging.
+
+Director.AreAllSurvivorsInBattlefield | | True when every survivor is inside the battlefield area of a crescendo.
+Director.AreAllSurvivorsInFinaleArea | | True when every survivor is inside the finale area.
+Director.AreTeamsFlipped | | True in versus when the teams have swapped sides.
+Director.ClearCachedBotQueries | | Makes bots ask their questions again (forgets cached answers).
+Director.ForceNextStage | | Moves a scripted finale or custom stage sequence on to its next stage.
+Director.GetAveragedSurvivorSpan | | How spread out the survivors are along the route (distance from the first to the last, smoothed).
+Director.GetAveragedSurvivorSpeed | | How fast the leading survivor is moving along the route (smoothed).
+Director.GetClosestActivePipeBomb | Position | The live pipe bomb closest to a position.
+Director.GetClosestCharacterWhoIsIT | Player | The closest character covered in bile.
+Director.GetClosestSurvivor | Position, Include Incapacitated, Include Ledge Hangers | The survivor closest to a position.
+Director.GetCommonInfectedCount | | How many common infected are alive right now.
+Director.GetFurthestSurvivorFlow | | How far along the route (in units) the furthest survivor has got.
+Director.GetGameMode | | The game mode's name (coop, versus, a mutation...).
+Director.GetGameModeBase | | The base game mode (coop, versus, survival, scavenge, realism).
+Director.GetHighestFlowSurvivor | | The survivor furthest along the route.
+Director.GetHoldoutCooldownEndTime | | When the holdout cooldown ends (game time).
+Director.GetLowestFlowSurvivor | | The survivor furthest behind on the route.
+Director.GetMapName | | The current map's name.
+Director.GetMapNumber | | Which chapter of the campaign this is (0 = the first).
+Director.GetMissionWipes | | How many times the team has been wiped out on this map.
+Director.GetPendingMobCount | | How many infected are queued to spawn in the current mob.
+Director.GetRandomSurvivor | | A random survivor.
+Director.GetSurvivorSet | | Which survivors are playing: 1 = the original four, 2 = the L4D2 four.
+Director.GetTimeSinceSpecialZombieKilled | Zombie Type | Seconds since a special infected of this type was last killed.
+Director.GetTotalElapsedMissionTime | | Seconds since the campaign began.
+Director.HasAnySurvivorLeftSafeArea | | True once any survivor has left the start safe area.
+Director.IsAnySurvivorBypassingTank | | True when a survivor is running past a Tank.
+Director.IsAnySurvivorInCombat | | True if any survivor recently hurt something or got hurt.
+Director.IsAnySurvivorInExitCheckpoint | | True when a survivor is in the end safe room.
+Director.IsAnySurvivorInStartArea | | True when a survivor is in the start safe area.
+Director.IsFinale | | True once the finale has started.
+Director.IsFinaleEscapeInProgress | | True while the finale escape is under way.
+Director.IsFinaleVehicleReady | | True when the rescue vehicle has arrived.
+Director.IsFinaleWon | | True when the finale has been won.
+Director.IsFirstMapInScenario | | True on the first map of a campaign.
+Director.IsL4D1Campaign | | True if this campaign comes from the first game.
+Director.IsLocationFoggedToSurvivors | Position | True if fog hides this position from the survivors.
+Director.IsPlayingIntro | | True while the map's intro is playing.
+Director.IsPlayingOnConsole | | True on a games console.
+Director.IsSessionStartMap | | True on the map the session started on.
+Director.IsSinglePlayerGame | | True in single player.
+Director.IsTankInPlay | | True while a Tank is attacking the survivors.
+Director.L4D1SurvivorGiveItem | | Tells the original survivors (when present as helpers) that now is a good moment to hand out items.
+Director.PlayMegaMobWarningSounds | | Plays the horde scream and has the survivors call out the incoming horde.
+Director.RegisterForbiddenTarget | Entity | Tells infected never to target this entity.
+Director.ResetMobTimer | | Brings the next mob forward to as soon as possible.
+Director.ResetSpecialTimers | | Resets the special infected timers so specials come again soon.
+Director.SetHoldoutCooldownEndTime | Time | Sets when the holdout cooldown ends (game time).
+Director.UnregisterForbiddenTarget | Entity | Lets infected target this entity again.
+Director.UserDefinedEvent1 | | Fires the Director's user event 1 (its OnUserDefinedScriptEvent1 output).
+Director.UserDefinedEvent2 | | Fires the Director's user event 2.
+Director.UserDefinedEvent3 | | Fires the Director's user event 3.
+Director.UserDefinedEvent4 | | Fires the Director's user event 4.
+Director.WarpAllSurvivorsToBattlefield | | Teleports every survivor to the crescendo battlefield.
+Director.WarpAllSurvivorsToCheckpoint | | Teleports every survivor to the next safe room.
+Director.WarpAllSurvivorsToFinale | | Teleports every survivor to the finale area.
+
+EntFire | Target Name, Input, Value, Delay, Activator | Sends an input to named entities (like an output wire, from script).
+EntIndexToHScript | Entity Index | The entity with this index number.
+GetFriction | Player | A player's friction.
+GetModelIndex | Model | The index of a precached model.
+GetPhysAngularVelocity | Entity | How fast a physics object is spinning.
+GetPhysVelocity | Entity | How fast a physics object is moving.
+PickupObject | Player, Entity | Makes a player pick up a nearby object.
+RotateOrientation | Angles, Rotate By | Angles turned by other angles.
+RotatePosition | Center, Angles, Position | A position rotated around a center.
+
+entity:ApplyAbsVelocityImpulse | Push | Pushes the entity (adds to its velocity).
+entity:ApplyLocalAngularVelocityImpulse | Spin | Spins the entity (adds to how fast it turns).
+entity:ConnectOutput | Output, Script Function | Runs a script function when one of this entity's outputs fires.
+entity:DisconnectOutput | Output, Script Function | Stops running a script function from this output.
+entity:FindBodygroupByName | Name | The number of a model part group, by its name.
+entity:FirstMoveChild | | The first entity attached (parented) to this one.
+entity:GetAngles | | Which way the entity faces (pitch, yaw, roll).
+entity:GetAttachmentAngles | Attachment | Which way one of the model's attachment points faces.
+entity:GetAttachmentBone | Attachment | The bone an attachment point sits on.
+entity:GetAttachmentOrigin | Attachment | Where one of the model's attachment points is.
+entity:GetBaseVelocity | | The velocity the entity gets from what it stands on (conveyors...).
+entity:GetBodygroup | Group | Which part a model part group is showing.
+entity:GetBodygroupName | Group | A model part group's name.
+entity:GetBodygroupPartName | Group, Part | A model part's name.
+entity:GetBoneAngles | Bone | Which way a bone faces.
+entity:GetBoneOrigin | Bone | Where a bone is.
+entity:GetCenter | | The entity's center in the world.
+entity:GetClassname | | The entity's class (player, prop_physics, infected...).
+entity:GetContext | Name | A speech context value stored on the entity (empty if not set).
+entity:GetCurrentScene | | The oldest speech/animation scene the entity is playing.
+entity:GetEntityHandle | | The entity as a handle that stays safe after it's removed.
+entity:GetEntityIndex | | The entity's index number.
+entity:GetForwardVector | | The direction the entity faces, as a vector.
+entity:GetHealth | | The entity's health.
+entity:GetLocalAngles | | Which way it faces relative to what it's attached to.
+entity:GetLocalAngularVelocity | | How fast it turns, relative to what it's attached to.
+entity:GetLocalOrigin | | Where it is relative to what it's attached to.
+entity:GetLocalVelocity | | Its velocity relative to what it's attached to.
+entity:GetMaxHealth | | The entity's maximum health.
+entity:GetModelName | | The entity's model file.
+entity:GetModelScale | | How much its model is scaled.
+entity:GetMoveParent | | What the entity is attached (parented) to.
+entity:GetName | | The entity's name (targetname).
+entity:GetOrigin | | Where the entity is.
+entity:GetOwnerEntity | | The entity that owns this one (if any).
+entity:GetPreTemplateName | | The entity's name without the suffix templates add.
+entity:GetRootMoveParent | | The top of the chain of things it's attached to.
+entity:GetSceneByIndex | Index | One of the scenes the entity is playing.
+entity:GetScriptId | | The entity's id in the script system.
+entity:GetScriptScope | | The entity's own script table.
+entity:GetSequence | | The animation the model is playing (its number).
+entity:GetSequenceActivityName | Animation | The activity name of an animation.
+entity:GetSequenceDuration | Animation | How long an animation lasts.
+entity:GetSequenceName | Animation | An animation's name.
+entity:GetVelocity | | How fast and which way the entity moves.
+entity:IsPlayer | | True if the entity is a player.
+entity:IsSequenceFinished | | True when the current animation has finished.
+entity:Kill | | Removes the entity from the game.
+entity:LookupActivity | Activity Name | An activity's number.
+entity:LookupAttachment | Attachment Name | An attachment point's number.
+entity:LookupBone | Bone Name | A bone's number.
+entity:LookupSequence | Animation Name | An animation's number, by its name or activity.
+entity:NextMovePeer | | The next entity attached to the same parent.
+entity:OverrideFriction | Seconds, Friction | Changes a player's friction for a while.
+entity:PlayScene | Scene File, Delay | Plays a speech/animation scene (.vcd).
+entity:PrecacheModel | Model | Loads a model so it can be used.
+entity:PrecacheScriptSound | Sound | Loads a sound so it can be played.
+entity:ResetSequence | Animation | Starts an animation from the beginning.
+entity:SetAngles | Angles | Turns the entity to face these angles.
+entity:SetBodygroup | Group, Part | Shows a part in a model part group.
+entity:SetContext | Name, Value, Seconds | Stores a text value on the entity for speech rules (-1 seconds = forever).
+entity:SetContextNum | Name, Value, Seconds | Stores a number on the entity for speech rules (-1 seconds = forever).
+entity:SetForwardVector | Direction | Turns the entity to face a direction.
+entity:SetFriction | Friction | Sets a player's friction.
+entity:SetGravity | Gravity | Sets a player's gravity (1 = normal).
+entity:SetHealth | Health | Sets the entity's health.
+entity:SetLocalAngles | Angles | Turns it relative to what it's attached to.
+entity:SetLocalOrigin | Position | Moves it relative to what it's attached to.
+entity:SetMaxHealth | Health | Sets the entity's maximum health.
+entity:SetModel | Model | Changes the entity's model.
+entity:SetModelScale | Scale, Seconds | Scales the model, over this many seconds.
+entity:SetOrigin | Position | Moves the entity there.
+entity:SetPoseParameter | Parameter, Value | Sets one of the model's pose controls.
+entity:SetSequence | Animation | Switches to an animation.
+entity:SetVelocity | Velocity | Sets how fast and which way the entity moves.
+entity:TakeDamage | Damage, Damage Type, Attacker | Hurts the entity.
+entity:TakeDamageEx | Inflictor, Attacker, Weapon, Force, Position, Damage, Damage Type | Hurts the entity, with full details.
+entity:ValidateScriptScope | | Makes sure the entity has its own script table.
+
+EntityOutputs.AddOutput | Entity, Output, Target Name, Input, Value, Delay, Times | Adds an output wire to an entity.
+EntityOutputs.GetNumElements | Entity, Output | How many connections an output has.
+EntityOutputs.GetOutputTable | Entity, Output, Table=table, Index | Reads one of an output's connections into a table.
+EntityOutputs.HasAction | Entity, Output | True if the output is connected to anything.
+EntityOutputs.HasOutput | Entity, Output | True if the entity has this output.
+EntityOutputs.RemoveOutput | Entity, Output, Target Name, Input, Value | Removes an output wire from an entity.
+
+NetProps.GetPropArraySize | Entity, Property | How many values a list property holds.
+NetProps.GetPropEntity | Entity, Property | Reads an entity property (any property the game networks, by name).
+NetProps.GetPropEntityArray | Entity, Property, Index | Reads one entity from a list property.
+NetProps.GetPropFloat | Entity, Property | Reads a decimal number property.
+NetProps.GetPropFloatArray | Entity, Property, Index | Reads one number from a list property.
+NetProps.GetPropInt | Entity, Property | Reads a whole number property.
+NetProps.GetPropIntArray | Entity, Property, Index | Reads one whole number from a list property.
+NetProps.GetPropString | Entity, Property | Reads a text property.
+NetProps.GetPropStringArray | Entity, Property, Index | Reads one text value from a list property.
+NetProps.GetPropType | Entity, Property | What kind of value a property holds.
+NetProps.GetPropVector | Entity, Property | Reads a vector property.
+NetProps.GetPropVectorArray | Entity, Property, Index | Reads one vector from a list property.
+NetProps.HasProp | Entity, Property | True if the entity has this property.
+NetProps.SetPropEntity | Entity, Property, Value | Writes an entity property.
+NetProps.SetPropEntityArray | Entity, Property, Value, Index | Writes one entity in a list property.
+NetProps.SetPropFloat | Entity, Property, Value | Writes a decimal number property.
+NetProps.SetPropFloatArray | Entity, Property, Value, Index | Writes one number in a list property.
+NetProps.SetPropInt | Entity, Property, Value | Writes a whole number property.
+NetProps.SetPropIntArray | Entity, Property, Value, Index | Writes one whole number in a list property.
+NetProps.SetPropString | Entity, Property, Value | Writes a text property.
+NetProps.SetPropStringArray | Entity, Property, Value, Index | Writes one text value in a list property.
+NetProps.SetPropVector | Entity, Property, Value | Writes a vector property.
+NetProps.SetPropVectorArray | Entity, Property, Value, Index | Writes one vector in a list property.
+
+FileToString | File Name | Reads a text file (from left4dead2/ems/).
+StringToFile | File Name, Text | Writes a text file (into left4dead2/ems/).
+UniqueString | Prefix | Text guaranteed not to have been used before.
+
+Entities.FindByClassname | Start After, Class | The next entity of this class (Start After empty = the first).
+Entities.FindByClassnameNearest | Class, Position, Radius | The entity of this class nearest a position.
+Entities.FindByClassnameWithin | Start After, Class, Position, Radius | The next entity of this class within a radius.
+Entities.FindByModel | Start After, Model | The next entity with this model.
+Entities.FindByName | Start After, Name | The next entity with this name (* works as a wildcard).
+Entities.FindByNameNearest | Name, Position, Radius | The entity with this name nearest a position.
+Entities.FindByNameWithin | Start After, Name, Position, Radius | The next entity with this name within a radius.
+Entities.FindByTarget | Start After, Target | The next entity whose target is this name.
+Entities.FindInSphere | Start After, Position, Radius | The next entity within a radius.
+Entities.First | | The first entity of all.
+Entities.Next | After | The entity after this one.
+
+ForceScavengeStart | | Starts the scavenge round now.
+ForceSurvivalStart | | Starts the survival round now.
+ForceVersusStart | | Starts the versus round now.
+GetDifficulty | | The difficulty: 0 Easy, 1 Normal, 2 Advanced, 3 Expert.
+GetDifficultyString | | The difficulty's name.
+GetScavengeItemsGoal | | How many scavenge items are needed.
+GetScavengeItemsRemaining | | How many scavenge items are still needed.
+HasConfigurableDifficultySetting | | True if the mode lets you choose a difficulty.
+IsDedicatedServer | | True on a dedicated server.
+IsMissionFinalMap | | True on the campaign's last map.
+ReloadMOTD | | Reloads the message of the day.
+SetScavengeItemsGoal | Count | Sets how many scavenge items are needed.
+SetScavengeItemsRemaining | Count | Sets how many scavenge items are still needed.
+
+HUDManageTimers | Timer, Command, Value | Starts, stops or sets one of the HUD timers.
+HUDPlace | Slot, X, Y, Width, Height | Places a HUD element on screen (0 to 1 across and down).
+HUDReadTimer | Timer | A HUD timer's current value.
+HUDSetLayout | Layout=table | Sets the custom HUD's layout (what each slot shows).
+
+RushVictim | Victim, Range | Makes every common infected within range rush at this player.
+StartAssault | | Makes every infected stop idling and attack.
+
+area:AddIncomingConnection | From Area, Direction | Adds a one-way link from another area into this one.
+area:ComputeDirection | Point | Which side of the area (0 north, 1 east, 2 south, 3 west) a point lies.
+area:ConnectTo | Area, Direction | Links this area to another on one side.
+area:ConnectToLadder | Ladder | Links this area to a ladder.
+area:Contains | Area | True if the other area is on or above this one.
+area:ContainsOrigin | Point | True if the point is on or above this area.
+area:DebugDrawFilled | Red, Green, Blue, Alpha, Seconds, Hide Behind Walls | Draws the area filled in, for debugging.
+area:Disconnect | Area | Removes the link to another area.
+area:DisconnectLadder | Ladder | Removes the link to a ladder.
+area:FindRandomSpot | | A random position inside the area.
+area:GetAdjacentArea | Direction, Index | One of the areas linked on a side.
+area:GetAdjacentAreas | Direction, =fills | The areas linked on a side.
+area:GetAdjacentCount | Direction | How many areas are linked on a side.
+area:GetAttributes | | The area's flags (crouch, jump, ...), as bits.
+area:GetAvoidanceObstacleHeight | | How tall the obstacle in the area is.
+area:GetCenter | | The area's center.
+area:GetCorner | Corner | Where a corner of the area is.
+area:GetDistanceSquaredToPoint | Point | The squared distance from the area to a point.
+area:GetDoor | | The door over this area (if any).
+area:GetElevator | | The elevator this area is on the path of (if any).
+area:GetElevatorAreas | =fills | The areas an elevator from here reaches.
+area:GetID | | The area's id.
+area:GetIncomingConnections | Direction, =fills | The areas with a one-way link into this one.
+area:GetLadders | Direction, =fills | The ladders linked to this area.
+area:GetParent | | The area before this one on the last path search.
+area:GetParentHow | | How the last path search got here from its parent area.
+area:GetPlaceName | | The area's place name.
+area:GetPlayerCount | Team | How many players of a team are in the area (0 = everyone).
+area:GetRandomAdjacentArea | Direction | A random area linked on a side.
+area:GetSizeX | | How wide the area is (along x).
+area:GetSizeY | | How deep the area is (along y).
+area:GetSpawnAttributes | | The area's L4D2 flags (checkpoint, finale, empty...), as bits.
+area:GetTimeSinceCleared | | Seconds since the survivors cleared the area.
+area:GetZ | Point | The area's floor height under a point.
+area:HasAttributes | Bits | True if the area has these flags.
+area:HasAvoidanceObstacle | Max Height | True if a big fixed object blocks the area.
+area:HasSpawnAttributes | Bits | True if the area has these L4D2 flags.
+area:IsBlocked | Team, Affects Flow | True if the area is blocked for this team.
+area:IsBottleneck | | True if the area is a bottleneck.
+area:IsCleared | Player | True if this player's team has cleared the area.
+area:IsCompletelyVisibleToTeam | Team | True if the team can see the whole area.
+area:IsConnected | Area, Direction | True if linked to the other area on a side.
+area:IsConnectedLadder | Ladder, Direction | True if linked to the ladder.
+area:IsCoplanar | Area | True if the two areas lie in about the same plane.
+area:IsDamaging | | True while something (fire...) hurts in the area.
+area:IsDegenerate | | True if the area is badly formed.
+area:IsEdge | Direction | True if no two-way links leave this side.
+area:IsFlat | | True if the area is about flat.
+area:IsOverlapping | Area | True if the other area overlaps this one seen from above.
+area:IsOverlappingOrigin | Point, Tolerance | True if the point lies over the area.
+area:IsPotentiallyVisibleToTeam | Team | True if anyone on the team could see part of the area.
+area:IsRoughlySquare | | True if the area is about square.
+area:IsSpawningAllowed | | True if infected may spawn in the area.
+area:IsUnderwater | | True if the area is under water.
+area:IsValidForWanderingPopulation | | True if wandering infected may be placed here.
+area:IsVisible | Eye Position | True if the area can be seen from this point.
+area:MarkAreaCleared | Player | Marks the area cleared for a player.
+area:MarkAreaNotCleared | | Marks the area not cleared.
+area:MarkAsBlocked | Team | Blocks the area for a team.
+area:MarkAsDamaging | Seconds | Marks the area as hurting for a while (bots avoid it).
+area:MarkObstacleToAvoid | Height | Marks the area as having an obstacle.
+area:RemoveAttributes | Bits | Clears some of the area's flags.
+area:RemoveOrthogonalConnections | Direction | Removes the links to the sides left and right of a direction.
+area:RemoveSpawnAttributes | Bits | Clears some of the area's L4D2 flags.
+area:SetAttributes | Bits | Sets some of the area's flags.
+area:SetPlaceName | Name | Sets the area's place name.
+area:SetSpawnAttributes | Bits | Sets some of the area's L4D2 flags.
+area:UnblockArea | | Unblocks the area.
+
+NavMesh.FindLadderAlongRay | Start, End, Ignore Area | The first nav ladder along a line.
+NavMesh.FindNavAreaAlongRay | Start, End, Ignore Area | The first nav area along a line.
+NavMesh.GetAllAreas | =fills | Every nav area in the map.
+NavMesh.GetAllLadders | =fills | Every nav ladder in the map.
+NavMesh.GetAreasWithAttributes | Bits, =fills | Every nav area with these flags.
+NavMesh.GetLadderByID | Ladder ID | The nav ladder with this id.
+NavMesh.GetLadderCount | | How many nav ladders the map has.
+NavMesh.GetNavArea | Position, Below | The nav area under a position (searching this far down).
+NavMesh.GetNavAreaByID | Area ID | The nav area with this id.
+NavMesh.GetNavAreaCount | | How many nav areas the map has.
+NavMesh.GetNavAreasFromBuildPath | Start Area, End Area, Goal, Max Length, Team, Ignore Blockers, =fills | The areas along a path between two areas (Result: the list, empty if no path).
+NavMesh.GetNavAreasInRadius | Position, Radius, =fills | The nav areas within a radius.
+NavMesh.GetNavAreasOverlappingEntityExtent | Entity, =fills | The nav areas an entity covers.
+NavMesh.GetNearestNavArea | Position, Max Distance, Check Line Of Sight, Check Ground | The nav area nearest a position.
+NavMesh.GetObstructingEntities | =fills | Every entity registered as an obstacle.
+NavMesh.NavAreaBuildPath | Start Area, End Area, Goal, Max Length, Team, Ignore Blockers | True if there's a path between two areas.
+NavMesh.NavAreaTravelDistance | Start Area, End Area, Max Length | The travel distance between two areas (-1 if unreachable).
+NavMesh.RegisterAvoidanceObstacle | Entity | Makes bots path around an entity.
+NavMesh.UnblockRescueVehicleNav | | Opens the rescue vehicle's areas so bots can path into it.
+NavMesh.UnregisterAvoidanceObstacle | Entity | Stops bots pathing around an entity.
+
+SetFakeClientConVarValue | Bot, Setting Name, Value | Sets one of a bot's client settings.
+
+player:DropItem | Item Name | Makes the player drop an item or weapon.
+player:Extinguish | | Puts out a burning player.
+player:EyeAngles | | Which way the player is looking.
+player:EyePosition | | Where the player's eyes are.
+player:GetActiveWeapon | | The weapon the player is holding.
+player:GetAliveDuration | | Seconds the player has been alive.
+player:GetButtonMask | | Which buttons the player is pressing, as bits.
+player:GetHealthBuffer | | The player's temporary health (from pills, adrenaline, revives).
+player:GetLastKnownArea | | The nav area the player was last on.
+player:GetNetworkIDString | | The player's Steam ID.
+player:GetPlayerName | | The player's name.
+player:GetPlayerUserId | | The player's user id.
+player:GetSenseFlags | | A bot's sense flags, as bits.
+player:GetSpecialInfectedDominatingMe | | The special infected pinning this survivor (if any).
+player:GetSurvivorSlot | | The survivor's slot (0 to 3).
+player:GetZombieType | | Which infected the player is (1 smoker, 2 boomer, 3 hunter, 4 spitter, 5 jockey, 6 charger, 8 tank, 9 survivor).
+player:GiveAmmo | Amount | Gives ammo for the main weapon.
+player:GiveItem | Item Name | Gives an item or weapon by its name (pain_pills, rifle_ak47, health, ...).
+player:GiveItemWithSkin | Item Name, Skin | Gives an item or weapon with a skin.
+player:GiveUpgrade | Upgrade | Adds a weapon upgrade (0 incendiary, 1 explosive, 2 laser sight).
+player:HasEverBeenInjured | Team | True if a member of the team has ever hurt this player.
+player:HitWithVomit | | Covers the player in bile (infected rush at them).
+player:IsAdrenalineActive | | True while adrenaline is working.
+player:IsDead | | True if the player is dead.
+player:IsDominatedBySpecialInfected | | True while a special infected pins the player.
+player:IsDying | | True while the player is dying.
+player:IsFiringWeapon | | True while the player fires.
+player:IsGettingUp | | True while the player gets back up.
+player:IsGhost | | True while an infected player is a ghost (not yet spawned).
+player:IsHangingFromLedge | | True while the player hangs from a ledge.
+player:IsIT | | True while the player is covered in bile.
+player:IsImmobilized | | True while the player can't move.
+player:IsInCombat | | True while the player is fighting.
+player:IsIncapacitated | | True while the player is down.
+player:IsOnFire | | True while the player burns.
+player:IsOnThirdStrike | | True when the next fall would kill the player (black and white).
+player:IsStaggering | | True while the player staggers.
+player:IsSuppressingFallingDamage | | True while the player takes no falling damage.
+player:IsSurvivor | | True for survivors, false for infected.
+player:RemoveUpgrade | Upgrade | Removes a weapon upgrade (0 incendiary, 1 explosive, 2 laser sight).
+player:ReviveByDefib | | Brings a dead survivor back as if defibrillated.
+player:ReviveFromIncap | | Helps a downed player up.
+player:SetHealthBuffer | Amount | Sets the player's temporary health.
+player:SetReviveCount | Count | Sets how many times the player has been revived.
+player:SetSenseFlags | Bits | Sets a bot's sense flags (replaces them).
+player:SnapEyeAngles | Angles | Turns the player's view.
+player:Stagger | From | Staggers the player, as if pushed from a position.
+player:SwitchToItem | Item Name | Makes the player switch to an item or weapon.
+player:TryGetPathableLocationWithin | Radius | A spot within a radius the player could walk to.
+player:UseAdrenaline | Seconds | Gives the adrenaline speed boost (no health).
+
+CommandABot | Command=table | Orders a bot: a table with bot, cmd (0 attack, 1 move, 2 retreat, 3 reset), target and/or pos.
+FindRescueAreaTrigger | | The rescue area's trigger.
+GetAverageSurvivorFlowDistance | | How far along the route the survivors are on average.
+GetCharacterDisplayName | Player | A survivor's character name (empty for infected).
+GetCurrentFlowDistanceForPlayer | Player | How far along the route a player is.
+GetCurrentFlowPercentForPlayer | Player | How far along the route a player is, in percent.
+GetFlowDistanceForPosition | Position | How far along the route a position is.
+GetFlowPercentForPosition | Position, Clamp | How far along the route a position is, in percent.
+GetInfectedStats | =fills | Counts of the infected alive now (a table).
+GetListenServerHost | | The player hosting the game (on a local game).
+GetMaxFlowDistance | | How long the route is, start to end safe room.
+GetPlayerFromCharacter | Character | The player playing this survivor character.
+GetPlayerFromUserID | User ID | The player with this user id.
+HasPlayerControlledZombies | | True if people play as infected in this mode.
+IsPlayerABot | Player | True if the player is a bot.
+PlayerInstanceFromIndex | Player Index | The player with this index number.
+ReapplyInfectedFlags | Flags, Infected | Applies flags to a common infected (or every common if empty).
+
+RandomFloat | Min, Max | A random number between Min and Max.
+RandomInt | Min, Max | A random whole number between Min and Max.
+
+ClearSavedTables | | Forgets every saved table.
+GetInvTable | Player, =fills | A player's inventory, as a table.
+RestoreTable | Name, Into=table | Loads a saved table back (it survives map changes).
+SaveTable | Name, Data=table | Saves a table under a name (it survives map changes).
+
+ScreenFade | Player, Red, Green, Blue, Alpha, Fade Seconds, Hold Seconds, Flags | Fades a player's screen to a colour.
+ScreenShake | Center, Amplitude, Frequency, Seconds, Radius, Stop, In The Air Too | Shakes everyone's screen near a position.
+
+DoIncludeScript | Script, Into=table | Runs another script file.
+FireGameEvent | Event, Values=table | Sends a game event to scripts listening for it.
+RegisterScriptGameEventListener | Event | Starts listening for a game event in script.
+ShowMessage | Text | Shows a message on everyone's screen.
+
+EmitAmbientSoundOn | Sound, Volume, Sound Level, Pitch, Entity | Plays a sound from an entity, loudness and pitch set.
+EmitSoundOn | Sound, Entity | Plays a sound from an entity.
+EmitSoundOnClient | Sound, Player | Plays a sound only that player hears.
+GetSoundDuration | Sound, Actor Model | How long a sound lasts.
+StopAmbientSoundOn | Sound, Entity | Stops an ambient sound on an entity.
+StopSoundOn | Sound, Entity | Stops a sound on an entity.
+
+DropFire | Position | Drops a pool of fire there.
+DropSpit | Position | Drops a pool of spitter acid there.
+IsModelPrecached | Model | True if a model is loaded.
+IsSoundPrecached | Sound | True if a sound is loaded.
+PrecacheEntityFromTable | Values=table | Loads what an entity needs, from its key values.
+PrecacheModel | Model | Loads a model so it can be used.
+PrecacheSound | Sound | Loads a sound so it can be played.
+SpawnEntityFromTable | Class, Key Values=table | Creates an entity (any class) with these key values.
+SpawnEntityGroupFromTable | Group=table | Creates a group of entities from spawn tables.
+ZSpawn | Spawn=table | Spawns an infected like the z_spawn command: a table with type (1 smoker ... 8 tank, 10 mob), pos and ang.
+
+ResponseCriteria.GetTable | Entity, =fills | Every speech criterion of an entity.
+ResponseCriteria.GetValue | Entity, Criterion | One speech criterion's value.
+ResponseCriteria.HasCriterion | Entity, Criterion | True if the entity has this speech criterion.
+QueueSpeak | Speaker, Concept, Delay, Criteria | Has a character speak a concept (a line chosen by the speech rules).
+rr_AddDecisionRule | Rule=table | Adds a speech rule.
+rr_CommitAIResponse | Speaker, Response=table | Plays a response found by the speech rules.
+rr_GetResponseTargets | | Everyone who can speak, by name.
+rr_QueryBestResponse | Speaker, Query=table | The best speech response for a query.
+
+ClientPrint | Player, Where, Text | Prints a message to one player (Where: 2 console, 3 chat, 4 center). Empty player = everyone.
+Say | Speaker, Text, Team Only | Says something in chat as a player (empty speaker: nothing is shown).
+SendToConsole | Command | Runs a console command as the local player.
+SendToServerConsole | Command | Runs a console command on the server.
+
+AddThinkToEnt | Entity, Script Function | Runs a script function on an entity every tick (it returns the seconds until the next run).
+GetFrameCount | | The engine's frame number.
+LocalTime | =fills | The real-world date and time (a table).
+Time | | The game time in seconds.
+
+TraceLine | Trace=table | Traces a line: a table with start, end, ignore (and mask); afterwards it holds pos, fraction, hit, enthit.

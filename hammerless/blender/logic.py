@@ -1210,7 +1210,7 @@ class HL_NodeScriptEvent(_Node, bpy.types.Node):
             box = layout.box()
             for fld in e["fields"]:
                 kind = "player" if fld.get("player") else "entity" if fld.get("entity") else fld["type"]
-                box.label(text=f"{fld['name']} ({kind}){': ' + fld['note'] if fld['note'] else ''}"[:90])
+                box.label(text=f"{fld['name']} ({kind})")
 
     def settings(self):
         return {"event": self.event}
@@ -1241,7 +1241,7 @@ _function_items.cache = []
 def _event_items(self, context):
     from ..core import vscript as vs
     if not _event_items.cache:
-        _event_items.cache = [(e["name"], vs.event_label(e), e.get("note") or e["name"]) for e in vs.catalogue()["events"]]
+        _event_items.cache = [(e["name"], vs.event_label(e), e["name"]) for e in vs.catalogue()["events"]]
     return _event_items.cache
 
 
