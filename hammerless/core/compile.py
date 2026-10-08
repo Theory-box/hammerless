@@ -26,7 +26,7 @@ class CompileOptions:
     extra_vvis: str = ""
     extra_vrad: str = ""
     vis_tool: str = "VALVE"     # VALVE: L4D2's vvis.exe / HAMMERLESS: hlvvis.exe (same results, faster)
-    map_tool: str = "VALVE"     # VALVE: L4D2's vbsp.exe / HAMMERLESS: hlvbsp.exe (same map)
+    map_tool: str = "HAMMERLESS"  # HAMMERLESS: hlvbsp.exe (same map as vbsp) / VALVE: L4D2's vbsp.exe
     light_tool: str = "VALVE"   # VALVE: vrad's lightmaps / CYCLES: Blender bakes them after vrad (bake_handler)
     cycles_samples: int = 1024
     cycles_stitch: bool = True     # make neighbouring faces' lightmaps agree along shared edges
