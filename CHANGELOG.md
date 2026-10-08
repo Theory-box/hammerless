@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **In-game test bench (for development, in `tests/ingame`):** drives the running game from Python (about 0.1 s per request), builds test maps without lighting in about 30 s, reads which logic wires fired, takes screenshots. `tests/ingame/test_examples.py` plays every logic example in the game and checks it: 38 of 42 automated (the rest need real play). It found the fixes below.
+- **Debug Log** wire lines now say which graph they're in (`[Example 21: Two-Step Gate] button.pressed -> steps.in`), for maps with several graphs.
+- **Fixes:**
+  - Override questions the game asks while it creates the map's entities (Convert / Allow Weapon Spawn, Get Default Item) were answered before the map's logic existed, so most got the game's own answer (measured: every weapon spawn but one late one). The mode script now loads the logic early.
+  - **Keep Across Maps** saved every map variable, entities included, instead of only the kept ones; on the next map the restored junk broke checks (a script error several times a second, and the Nuke never dropped). Only the kept variables, and only plain values, are saved now.
+  - **Compare Values: Is Set** and the guard on entity functions only ask real entities whether they still exist.
+  - Example 12 (Countdown to a Horde) started its horde when the map loaded: its When saw the countdown at 0 before it started. It now also waits for a 'counting' variable.
+
 ## 0.7.0 (test release, 2026-10-08)
 
 - **Logic examples (Shift+A > Examples):** 20 ready-made graphs, from a hello message to an ambush that picks hidden nav areas ahead of the survivors. Each has notes on what it does and how, numbered frames, and any objects it needs (button, gate, room) at the 3D cursor.

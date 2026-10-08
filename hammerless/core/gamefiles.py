@@ -304,6 +304,10 @@ def mode_files(ir: MapIR) -> dict[str, str]:
         body = f'return ({ready}) ? {call} : {fallback};' if answer else f'if ({ready}) {call};'
         (mode if where == "mode" else options).append(f"function {hook}({params}) {{ {body} }}")
     text = f"// Hammerless: {name}'s rules for its scripted mode (the logic graph's Override nodes)\n"
+    # the game asks some questions (weapon spawns, starting items) while it creates the map's entities,
+    # before any entity's script runs (measured): load the map's logic now, into its own table
+    text += ("::HL_EarlyScope <- {};\n"
+             f'IncludeScript("hammerless/logic_{name}", ::HL_EarlyScope);\n')
     text += "".join(m + "\n" for m in mode)
     if options:
         text += "MapOptions <- {\n" + "".join("    " + o + "\n" for o in options) + "}\n"

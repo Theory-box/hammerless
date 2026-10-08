@@ -207,9 +207,14 @@ EXAMPLES = [
     dict(title="Countdown to a Horde", level="HUD & Director",
          about="Leaving the safe room sets 'countdown' to 60 and starts a 1-second Timer (it starts "
                "stopped, Running off, until something fires its Start). Each tick takes 1 off. A When "
-               "watches the countdown: at 0 it stops the timer, starts the horde and hides the HUD text.",
+               "watches the countdown: at 0 it stops the timer, starts the horde and hides the HUD text. "
+               "The 'counting' variable makes the When wait for the countdown to start: before that the "
+               "countdown variable is 0 too.",
          nodes=[N("left", "HL_NodeGameEvent", 0, 0, event="LEFT_SAFE_ROOM", once=True),
                 N("set", "HL_NodeSetVariable", 1, 0, var_name="countdown", sockets={"value": 60.0}),
+                N("on", "HL_NodeSetVariable", 0, 1, var_name="counting", value_kind="bool", sockets={"value": True}),
+                N("counting", "HL_NodeGetVariable", 0, 4, var_name="counting", value_kind="bool"),
+                N("both", "HL_NodeBoolMath", 1, 4, op="AND"),
                 N("hud", "HL_NodeHudText", 2, 0, slot="2"),
                 N("timer", "HL_NodeTimer", 3, 0, seconds=1.0, running=False),
                 N("count", "HL_NodeGetVariable", 1, 1, var_name="countdown"),
@@ -219,13 +224,14 @@ EXAMPLES = [
                 N("when", "HL_NodeWhen", 2, 3, once=True),
                 N("horde", "HL_NodeHorde", 3, 3),
                 N("hide", "HL_NodeHudHide", 3, 4, slot="2")],
-         links=[("left.happened", "set.run"), ("set.then", "hud.run"), ("count.result", "line.a"),
+         links=[("left.happened", "set.run"), ("left.happened", "on.run"), ("set.then", "hud.run"), ("count.result", "line.a"),
                 ("line.result", "hud.text"), ("hud.then", "timer.start"), ("timer.tick", "tick.run"),
-                ("count.result", "zero.a"), ("zero.result", "when.condition"),
+                ("count.result", "zero.a"), ("zero.result", "both.a"), ("counting.result", "both.b"),
+                ("both.result", "when.condition"),
                 ("when.true", "horde.start"), ("when.true", "timer.stop"), ("when.true", "hide.run")],
-         steps=[("Start the countdown", ["left", "set", "hud", "timer", "count", "line"]),
+         steps=[("Start the countdown", ["left", "set", "on", "hud", "timer", "count", "line"]),
                 ("Every second: one less", ["tick"]),
-                ("At 0: stop, and the horde", ["zero", "when", "horde", "hide"])]),
+                ("Counting, and at 0: stop, and the horde", ["zero", "counting", "both", "when", "horde", "hide"])]),
 
     dict(title="The Director Eases Off", level="HUD & Director",
          about="Director Mood's Anger is how intense the AI Director thinks the game is (0 calm, 1 "

@@ -15,7 +15,7 @@ tests/unit/            core tests (plain Python, no Blender)
 tests/blender/         headless Blender tests
 tests/fixtures/        scripts that build test scenes; vis/: a small compiled map and vvis's output, for hlvvis
 tests/compile/         real-compile helpers (need the Authoring Tools)
-tests/ingame/          in-game probe scripts (see its README)
+tests/ingame/          the test bench (drives the running game from Python), the example regression, probes (see its README)
 scripts/               release helpers (the release zip)
 demo/                  demo maps: demo_level.blend (a full small level), demo_level2.blend (the next map, for testing the safe room transition); made by the scripts in tests/fixtures/ (demo_level.blend was hand-edited since)
 docs/                  user guides
@@ -40,6 +40,15 @@ Real compile of a .blend (prints the full compiler log):
 
 ```bash
 "C:\Program Files\Blender Foundation\Blender 4.4\blender.exe" --background demo/demo_level.blend --python tests/compile/build_blend.py -- FAST
+```
+
+In the game (needs L4D2 and the Authoring Tools): the **test bench** in `tests/ingame` drives the running game
+from Python (about 0.1 s per request): it builds test maps without lighting in about 30 s, runs script in the
+game, reads which logic wires fired, holds Use on buttons, and takes screenshots. Its README explains it, with
+the lessons learned. Every logic example is played and checked by:
+
+```bash
+python tests/ingame/test_examples.py
 ```
 
 The demo .blend contains no game content: open it with the add-on and press *Settings > Folders & Game Data > Refresh Previews* to see the game's textures and models (read from your own L4D2 install).

@@ -147,11 +147,20 @@ HELPERS = {
         "    if (typeof list == \"array\") return list;\n"
         "    if (typeof list == \"table\") foreach (k, v in list) out.append(v);\n    return out;\n}"),
     "HL_Vars": (
-        "::HL_Var <- {};\n::HL_PVar <- {};\n"
-        "if (\"RestoreTable\" in getroottable()) RestoreTable(\"hl_vars\", ::HL_Var);   // kept across map changes\n"
+        "::HL_Var <- {};\n::HL_PVar <- {};\n::HL_VarKeep <- {};   // the variables kept across map changes\n"
+        "if (\"RestoreTable\" in getroottable()) {\n"
+        "    local t = {}; RestoreTable(\"hl_kept\", t);\n"
+        "    foreach (k, x in t) { ::HL_Var[k] <- x; ::HL_VarKeep[k] <- true; }\n}\n"
         "::HL_VarGet <- function(name, d) { return (name in ::HL_Var && ::HL_Var[name] != null) ? ::HL_Var[name] : d; }\n"
         "::HL_VarSet <- function(name, v, keep) {\n    ::HL_Var[name] <- v;\n"
-        "    if (keep) { local t = {}; foreach (k, x in ::HL_Var) t[k] <- x; SaveTable(\"hl_vars\", t); }\n}\n"
+        "    if (!keep) return;\n"
+        "    ::HL_VarKeep[name] <- true;     // only these, and only plain values: entities don't outlive the map\n"
+        "    local t = {};\n"
+        "    foreach (k, _ in ::HL_VarKeep) {\n"
+        "        local x = (k in ::HL_Var) ? ::HL_Var[k] : null, ty = typeof x;\n"
+        "        if (ty == \"integer\" || ty == \"float\" || ty == \"bool\" || ty == \"string\") t[k] <- x;\n"
+        "    }\n"
+        "    SaveTable(\"hl_kept\", t);\n}\n"
         "::HL_PKey <- function(p) { return (p == null) ? \"\" : (\"GetPlayerUserId\" in p ? p.GetPlayerUserId() : p.GetEntityIndex()).tostring(); }\n"
         "::HL_PVarGet <- function(p, name, d) {\n    local k = ::HL_PKey(p);\n"
         "    return (k in ::HL_PVar && name in ::HL_PVar[k] && ::HL_PVar[k][name] != null) ? ::HL_PVar[k][name] : d;\n}\n"
@@ -193,7 +202,9 @@ HELPERS = {
         "    if ((\"s\" + slot) in ::HL_Hud.Fields) delete ::HL_Hud.Fields[\"s\" + slot];\n    HUDSetLayout(::HL_Hud);\n}"),
     "HL_IsSet": (
         "::HL_IsSet <- function(v) {   // there, and still in the game if it's an entity\n"
-        "    if (v == null) return false;\n    try { return v.IsValid(); } catch (e) { return true; }\n}"),
+        "    if (v == null) return false;\n"
+        "    if (typeof v == \"instance\") { try { return v.IsValid(); } catch (e) { return false; } }\n"
+        "    return true;\n}"),
 }
 
 
@@ -205,6 +216,7 @@ class _Compiler:
         self.problems = problems
         self.graph = _slug(graph) if graph else ""
         self.graph_tag = f"_{self.graph}" if self.graph else ""
+        self.graph_title = graph            # (the debug log says which graph a wire is in, when there are several)
         self.fires: dict[tuple[str, str], _Fire] = {}
         self.takes: dict[tuple[str, str], list[_Take]] = {}
         self.filters: dict[str, str] = {}
@@ -358,7 +370,7 @@ class _Compiler:
                 if not f.get("on"):
                     return vs.call_expr(f, target, args)
                 # nothing to ask (no player yet, a deleted entity): null rather than a script error
-                return (f"(function(hl_t) {{ return (hl_t != null && hl_t.IsValid()) ? "
+                return (f"(function(hl_t) {{ return (typeof hl_t == \"instance\" && hl_t.IsValid()) ? "
                         f"{vs.call_expr(f, 'hl_t', args)} : null; }})({target})")
             return f'(("{slug}" in ::HL_R) ? ::HL_R["{slug}"] : null)'
         if k == "SCRIPT_EVENT":
@@ -458,7 +470,7 @@ class _Compiler:
             target, args = self.script_args(n, f)
             guard = ""
             if f.get("on"):            # what it acts on, worked out once
-                guard = (f"    local t = {target};\n    if (t == null || !t.IsValid()) {{ printl(\"HAMMERLESS_SCRIPT "
+                guard = (f"    local t = {target};\n    if (typeof t != \"instance\" || !t.IsValid()) {{ printl(\"HAMMERLESS_SCRIPT "
                          f"'{sq_text(nid)}': nothing to act on\"); return; }}\n")
                 target = "t"
             call = vs.call_expr(f, target, args)
@@ -1091,7 +1103,8 @@ class _Compiler:
         """(Re)write the one map script shared by all graphs: their functions, and one handler per
         game event registered on the script's own scope (the pattern that works in L4D2)."""
         if self.log_names:
-            names = ", ".join('"' + n.replace('"', "'") + '"' for n in self.log_names)
+            where = f"[{self.graph_title}] " if self.graph_title else ""
+            names = ", ".join('"' + (where + n).replace('"', "'").replace("\\", "/") + '"' for n in self.log_names)
             self.functions.append(f"HL_LogNames{self.graph_tag} <- [{names}];\n"
                                   f"function HL_Log{self.graph_tag}(i) {{ printl(\"HAMMERLESS_EVENT \" + "
                                   f"HL_LogNames{self.graph_tag}[i]); }}")
@@ -1248,7 +1261,9 @@ class _Compiler:
                 body += "\n".join(ir.logic_script_events[game_event]) + "\n"
             parts.append(f"function OnGameEvent_{game_event}(params) {{\n{body}}}\n")
         if events:
-            parts.append("__CollectEventCallbacks(this, \"OnGameEvent_\", \"GameEventCallbacks\", "
+            # only the copy the map's logic entity runs (it has "self") listens: the mode script loads an
+            # early copy too, for the Override questions asked before the map's entities exist
+            parts.append("if (\"self\" in this) __CollectEventCallbacks(this, \"OnGameEvent_\", \"GameEventCallbacks\", "
                          "RegisterScriptGameEventListener);\n")
         self.ir.extra_scripts[f"scripts/vscripts/hammerless/logic_{self.ir.settings.name}.nut"] = "".join(parts)
         script = next((e for e in self.ir.entities if e.keyvalues.get("targetname") == LOGIC_SCRIPT), None)
