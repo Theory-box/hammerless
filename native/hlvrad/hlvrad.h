@@ -28,7 +28,7 @@ typedef vec_t vec3_t[3];
 enum {
     LUMP_ENTITIES = 0, LUMP_PLANES = 1, LUMP_TEXDATA = 2, LUMP_VERTEXES = 3, LUMP_VISIBILITY = 4, LUMP_NODES = 5,
     LUMP_TEXINFO = 6, LUMP_FACES = 7, LUMP_LIGHTING = 8, LUMP_LEAFS = 10, LUMP_EDGES = 12, LUMP_SURFEDGES = 13,
-    LUMP_MODELS = 14, LUMP_WORLDLIGHTS = 15, LUMP_LEAFFACES = 16, LUMP_DISPINFO = 26, LUMP_ORIGINALFACES = 27,
+    LUMP_MODELS = 14, LUMP_LEAFBRUSHES = 17, LUMP_BRUSHES = 18, LUMP_BRUSHSIDES = 19, LUMP_WORLDLIGHTS = 15, LUMP_LEAFFACES = 16, LUMP_DISPINFO = 26, LUMP_ORIGINALFACES = 27,
     LUMP_VERTNORMALS = 30, LUMP_VERTNORMALINDICES = 31, LUMP_DISP_VERTS = 33, LUMP_GAME_LUMP = 35,
     LUMP_PAKFILE = 40, LUMP_TEXDATA_STRING_DATA = 43, LUMP_TEXDATA_STRING_TABLE = 44,
     LUMP_LEAF_AMBIENT_INDEX_HDR = 51, LUMP_LEAF_AMBIENT_INDEX = 52, LUMP_LIGHTING_HDR = 53,
@@ -92,6 +92,22 @@ typedef struct {
     unsigned short firstface, numfaces;
     short area, pad;
 } dnode_t;
+
+typedef struct { int firstside, numsides, contents; } dbrush_t;
+typedef struct { unsigned short planenum; short texinfo, dispinfo, bevel; } dbrushside_t;
+#define CONTENTS_SOLID 0x1
+#define CONTENTS_OPAQUE 0x80
+#define CONTENTS_MOVEABLE 0x4000
+#define MASK_OPAQUE (CONTENTS_SOLID | CONTENTS_MOVEABLE | CONTENTS_OPAQUE)
+#define TRACE_ID_SKY 0x01000000
+#define TRACE_ID_OPAQUE 0x02000000
+#define TRACE_ID_STATICPROP 0x04000000
+#define NUMVERTEXNORMALS 162
+#define MAX_TRACE_LENGTH (1.732050807569 * 2 * 16384)
+extern const float g_anorms[NUMVERTEXNORMALS][3];
+extern dbrush_t *dbrushes; extern int numbrushes;
+extern dbrushside_t *dbrushsides; extern int numbrushsides;
+extern unsigned short *dleafbrushes; extern int numleafbrushes;
 
 typedef struct {
     vec3_t mins, maxs, origin;
@@ -158,6 +174,15 @@ int PVSCheck(const unsigned char *pvs, int cluster);
 int LeafFlags(int leaf);
 void SetLeafFlags(int leaf, int flags);
 
+/* raytrace.c */
+void RT_AddTriangle(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2);
+void RT_SetupAccelerationStructure(void);
+int RT_TraceRay(const vec3_t o, const vec3_t dir, float tmax, int skip_id, float *hitdist);
+int RT_TriangleID(int tri);
+float TestLine(const vec3_t start, const vec3_t stop, int static_prop_to_skip);
+float TestLine_DoesHitSky(const vec3_t start, const vec3_t stop, int static_prop_to_skip);
+void AddBrushesForRayTrace(void);
+
 /* entities.c */
 void ParseEntities(void);
 const char *ValueForKey(const entity_t *e, const char *key);
@@ -181,6 +206,8 @@ void FreeWinding(winding_t *w);
 winding_t *WindingFromFace(const dface_t *f, const vec3_t origin);
 void RemoveColinearPoints(winding_t *w);
 float WindingArea(const winding_t *w);
+winding_t *BaseWindingForPlane(const vec3_t normal, vec_t dist);
+void ChopWindingInPlace(winding_t **inout, const vec3_t normal, vec_t dist, vec_t epsilon);
 void AssignLightStyles(void);
 void PrecompLightmapOffsets(void);
 void CreateDirectLights(void);

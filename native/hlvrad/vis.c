@@ -4,6 +4,9 @@
 dleaf_t *dleafs; int numleafs;
 dnode_t *dnodes; int numnodes;
 unsigned short *dleaffaces; int numleaffaces;
+dbrush_t *dbrushes; int numbrushes;
+dbrushside_t *dbrushsides; int numbrushsides;
+unsigned short *dleafbrushes; int numleafbrushes;
 int numclusters;
 static const unsigned char *visdata;
 static int visdatasize;
@@ -12,6 +15,10 @@ void MapVis(void) {
     dleafs = (dleaf_t *)lumps[LUMP_LEAFS].data; numleafs = lumps[LUMP_LEAFS].len / sizeof(dleaf_t);
     dnodes = (dnode_t *)lumps[LUMP_NODES].data; numnodes = lumps[LUMP_NODES].len / sizeof(dnode_t);
     dleaffaces = (unsigned short *)lumps[LUMP_LEAFFACES].data; numleaffaces = lumps[LUMP_LEAFFACES].len / 2;
+    dbrushes = (dbrush_t *)lumps[LUMP_BRUSHES].data; numbrushes = lumps[LUMP_BRUSHES].len / sizeof(dbrush_t);
+    dbrushsides = (dbrushside_t *)lumps[LUMP_BRUSHSIDES].data;
+    numbrushsides = lumps[LUMP_BRUSHSIDES].len / sizeof(dbrushside_t);
+    dleafbrushes = (unsigned short *)lumps[LUMP_LEAFBRUSHES].data; numleafbrushes = lumps[LUMP_LEAFBRUSHES].len / 2;
     visdata = lumps[LUMP_VISIBILITY].data;
     visdatasize = lumps[LUMP_VISIBILITY].len;
     numclusters = 0;

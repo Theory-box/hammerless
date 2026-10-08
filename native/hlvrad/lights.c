@@ -13,7 +13,6 @@
 #define LEAF_FLAGS_SKY 0x01
 #define LEAF_FLAGS_RADIAL 0x02
 #define LEAF_FLAGS_SKY2D 0x04
-#define CONTENTS_SOLID 0x1
 #define EQUAL_EPSILON 0.001
 #define TEST_EPSILON 0.1
 #define DWL_FLAGS_CASTENTITYSHADOWS 0x2
@@ -309,6 +308,12 @@ static void ParseLightSpot(const entity_t *e) {
 }
 
 /* ------------------------------------------------------------------ the sky's leaves */
+static int MapHasSky(void) {
+    for (int i = 0; i < numfaces; i++)
+        if (texinfo[g_pFaces[i].texinfo].flags & SURF_SKY) return 1;
+    return 0;
+}
+
 static void BuildVisForLightEnvironment(directlight_t **suns, int nsuns) {
     for (int leaf = 0; leaf < numleafs; leaf++) {
         int flags = LeafFlags(leaf) & ~(LEAF_FLAGS_SKY | LEAF_FLAGS_SKY2D);
@@ -348,8 +353,12 @@ static void BuildVisForLightEnvironment(directlight_t **suns, int nsuns) {
         if (dleafs[leaf].contents & CONTENTS_SOLID) continue;
         if (sky2d[leaf >> 3] & (1 << (leaf & 7))) flags |= LEAF_FLAGS_SKY2D;
         if (sky3d[leaf >> 3] & (1 << (leaf & 7))) flags = (flags | LEAF_FLAGS_SKY) & ~LEAF_FLAGS_SKY2D;
-        else if (flags & LEAF_FLAGS_RADIAL) {
-            /* TODO: vrad traces rays to find the sky from leaves radial vis cut short */
+        else if ((flags & LEAF_FLAGS_RADIAL) && MapHasSky()) {
+            /* vrad means to trace rays from the leaf's centre to find the sky that radial vis cut off,
+             * but its rays start from memory it never sets (CanLeafTraceToSky, in the SDK too): they
+             * see the sky from wherever that is. Measured: every such leaf gets the sky when the map
+             * has sky faces. */
+            flags |= LEAF_FLAGS_SKY;
         }
         SetLeafFlags(leaf, flags);
     }
