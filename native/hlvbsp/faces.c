@@ -500,7 +500,16 @@ static face_t *FaceFromPortal(portal_t *p, int pside) {
     }
     if (p->nodes[pside]->contents & MASK_WATER) f->fogleaf = p->nodes[pside];
     else if (p->nodes[!pside]->contents & MASK_WATER) f->fogleaf = p->nodes[!pside];
-    /* (a water surface seen from below takes its $bottommaterial: not yet) */
+    /* a water surface seen from below takes its $bottommaterial */
+    if ((p->nodes[pside]->contents & CONTENTS_WATER) && delta == CONTENTS_WATER) {
+        extern int BottomWaterTexinfo(int texinfo);
+        int t = BottomWaterTexinfo(f->texinfo);
+        if (t < 0) {
+            FreeFace(f);
+            return NULL;
+        }
+        f->texinfo = t;
+    }
     if (pside) {
         f->w = ReverseWinding(p->winding);
         f->contents = p->nodes[1]->contents;

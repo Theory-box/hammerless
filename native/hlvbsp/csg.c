@@ -235,7 +235,9 @@ newlist:
             if (!sub && !sub2) continue;
             if (c1 > 1 && c2 > 1) {
                 int ca = b1->original->contents, cb = b2->original->contents;
-                if (!((ca & cb) & CONTENTS_DETAIL) && !((ca | cb) & CONTENTS_AREAPORTAL)) {
+                /* (L4D2's vbsp also lets solid cut water into pieces: measured from its code) */
+                if (!((ca & cb) & CONTENTS_DETAIL) && !((ca | cb) & CONTENTS_AREAPORTAL) &&
+                    ((ca | cb) & (CONTENTS_SOLID | CONTENTS_WATER)) != (CONTENTS_SOLID | CONTENTS_WATER)) {
                     if (sub2) FreeBrushList(sub2);
                     if (sub) FreeBrushList(sub);
                     continue;

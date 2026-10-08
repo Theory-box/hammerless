@@ -105,7 +105,7 @@ def prepare_hlvbsp(tools: "Tools", vmf_path: str, base: str) -> list[str]:
     detail_text = write_detail_file(detail, vmf_path, content, tools.gamedir)
     write_prop_table(props, vmf_path, content, tools.gamedir, detail_text)
     with open(vmf_path, encoding="utf-8", errors="replace") as f:
-        return unsupported(f.read(), mat)
+        return unsupported(f.read())
 
 
 def _opts_vis(text: str) -> str | None:

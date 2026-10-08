@@ -178,6 +178,12 @@ int main(int argc, char **argv) {
     if (!matfile) Error("hlvbsp needs -materials <file> (written by Hammerless)");
     LoadMaterials(matfile);
     char path[1100];
+    {
+        const char *b = source, *s;
+        for (s = source; *s; s++)
+            if (*s == '/' || *s == 92) b = s + 1;          /* (92: backslash) */
+        g_mapbase = copystring(b);
+    }
     sprintf(path, "%s.vmf", source);
     LoadMapFile(path);
     SetModelNumbers();

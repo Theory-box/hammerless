@@ -251,6 +251,7 @@ void WriteBSP(node_t *headnode, face_t *leaffaces) {
         EmitDispFaceVertexes(&mapdisps[i].face);
         EmitFace(&mapdisps[i].face, 0);
     }
+    EmitWaterVolumesForBSP(headnode);
 }
 
 /* ------------------------------------------------------------------ entities */
@@ -496,6 +497,7 @@ static void CompactTexinfos(void) {
         }
     }
     Overlay_CountTexinfos(ref);
+    Water_CountTexinfos(ref);
     for (int i = 0; i < numtexinfo; i++)
         if (ref[i] > 0) tdref[texinfos[i].texdata]++;
     int oldcount = numtexinfo, oldtd = numtexdata, oldstr = texdata_strings_len;
@@ -519,6 +521,7 @@ static void CompactTexinfos(void) {
     }
     numtexinfo = n;
     Overlay_RemapTexinfos(out);
+    Water_RemapTexinfos(out);
     /* texdata, with a fresh string table */
     char *oldstrings = texdata_strings;
     int *oldtable = texdata_string_table;
@@ -725,6 +728,7 @@ void EndBSPFile(const char *path) {
     EmitStaticProps();
     EmitDetailObjects();
     ComputeBoundsNoSkybox();
+    EnsurePresenceOfWaterLODControlEntity();
     UnparseEntities();
     CompactTexinfos();
     facemacro = xalloc(sizeof(unsigned short) * (numfaces + 1));
@@ -788,6 +792,8 @@ void EndBSPFile(const char *path) {
         SetLump(45, ov, len, 0);
         SetLump(60, fades, len60, 0);
         SetLump(61, levels, len61, 0);
+        unsigned char *lw = Water_Lump(&len);
+        SetLump(36, lw, len, 0);
     }
     /* the pakfile: the default cubemap (vbsp makes it whenever the world has a sky) */
     {

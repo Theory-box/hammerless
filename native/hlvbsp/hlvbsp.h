@@ -204,6 +204,7 @@ typedef struct {
     int width, height;
     float reflectivity[3];
     char detailtype[128];                     /* %detailtype ("" = none) */
+    char bottommaterial[256];                 /* a water material's $bottommaterial ("" = none) */
     char surfaceprop[64], surfaceprop2[64];   /* $surfaceprop / $surfaceprop2 names ("" = none) */
     int found;
 } material_t;
@@ -332,6 +333,16 @@ int FindMaterial(const char *name);
 int TexinfoForBrushTexture(plane_t *plane, brush_texture_t *bt, const vec3_t origin);
 int FindOrCreateTexData(int material);
 int TexDataString(const char *s);
+/* water.c */
+void EmitWaterVolumesForBSP(node_t *headnode);
+int WaterModelCount(int model);
+int WaterModelInfo(int model, int k, int *contents, int **leaves, int *nleaves, float *normal, float *dist, int *has_surface);
+void Water_CountTexinfos(int *refcount);
+void Water_RemapTexinfos(const int *newindex);
+unsigned char *Water_Lump(int *len);
+void EnsurePresenceOfWaterLODControlEntity(void);
+extern const char *g_mapbase;
+extern int g_has_water;
 /* overlay.c */
 int Overlay_FromEntity(entity_t *e);
 void Overlay_UpdateSideLists(void);

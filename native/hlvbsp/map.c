@@ -195,11 +195,12 @@ void LoadMaterials(const char *path) {
         material_t *m = &materials[nummaterials];
         memset(m, 0, sizeof(*m));
         strncpy(m->name, line, sizeof(m->name) - 1);
-        if (sscanf(tab + 1, "%i %i %i %i %f %f %f %63s %i %63s %127s", &m->contents, &m->flags, &m->width, &m->height,
+        if (sscanf(tab + 1, "%i %i %i %i %f %f %f %63s %i %63s %127s %255s", &m->contents, &m->flags, &m->width, &m->height,
                    &m->reflectivity[0], &m->reflectivity[1], &m->reflectivity[2], m->surfaceprop, &m->found,
-                   m->surfaceprop2, m->detailtype) < 9)
+                   m->surfaceprop2, m->detailtype, m->bottommaterial) < 9)
             m->found = 1;
         if (!strcmp(m->detailtype, "-")) m->detailtype[0] = 0;
+        if (!strcmp(m->bottommaterial, "-")) m->bottommaterial[0] = 0;
         if (!strcmp(m->surfaceprop, "-")) m->surfaceprop[0] = 0;
         if (!strcmp(m->surfaceprop2, "-")) m->surfaceprop2[0] = 0;
         unsigned h = name_hash(m->name);
@@ -242,6 +243,7 @@ int FindMaterial(const char *name) {
     }
     texrefs[numtexrefs].name = copystring(name);
     texrefs[numtexrefs].material = m;
+    if (materials[m].contents & (CONTENTS_WATER | CONTENTS_SLIME)) g_has_water = 1;
     return numtexrefs++;
 }
 
@@ -325,6 +327,52 @@ static int FindOrCreateTexInfo(const texinfo_t *t) {
     }
     texinfos[numtexinfo] = *t;
     return numtexinfo++;
+}
+
+static int strstr_i(const char *h, const char *n) {
+    size_t ln = strlen(n);
+    for (; *h; h++)
+        if (!_strnicmp(h, n, ln)) return 1;
+    return 0;
+}
+
+int FindOrCreateTexInfoPublic(const texinfo_t *t) { return FindOrCreateTexInfo(t); }
+const char *TexDataName(int texdata) { return texdata_strings + texdata_string_table[texdatas[texdata].name_id]; }
+
+/* A texdata under another name with the settings of `source` (vbsp's FindAliasedTexData, for the
+   one-off water depth materials). */
+int AliasedTexData(const char *name, int source) {
+    for (int i = 0; i < numtexdata; i++)
+        if (!strcmp(TexDataName(i), name)) return i;
+    if (numtexdata == max_texdata) {
+        max_texdata = max_texdata ? max_texdata * 2 : 256;
+        texdatas = realloc(texdatas, sizeof(texdata_t) * max_texdata);
+    }
+    texdata_t *td = &texdatas[numtexdata];
+    *td = texdatas[source];
+    td->name_id = TexDataString(name);
+    return numtexdata++;
+}
+
+/* The $bottommaterial of a texinfo's material ("" = none). */
+const char *BottomMaterial(int texinfo) {
+    int m = LookupMaterial(TexDataName(texinfos[texinfo].texdata));
+    return m >= 0 ? materials[m].bottommaterial : "";
+}
+
+/* A water face seen from below: the same mapping with the bottom material (vbsp's
+   AssignBottomWaterMaterialToFace). 0 = the material has none (the face is dropped). */
+int BottomWaterTexinfo(int texinfo) {
+    const char *bottom = BottomMaterial(texinfo);
+    if (!bottom[0]) {
+        const char *name = TexDataName(texinfos[texinfo].texdata);
+        if (!strstr_i(name, "nodraw") && !strstr_i(name, "toolsskip"))
+            Warning("error: material %s doesn't have a $bottommaterial\n", name);
+        return -1;
+    }
+    texinfo_t t = texinfos[texinfo];
+    t.texdata = FindOrCreateTexData(FindMaterial(bottom));
+    return FindOrCreateTexInfo(&t);
 }
 
 /* An overlay's texinfo: no axes, offsets of -99999 (vbsp's marker), its material's texdata. */

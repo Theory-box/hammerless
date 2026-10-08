@@ -279,10 +279,11 @@ static int pl_add_brushes(planelist_t *pl) {
 /* ------------------------------------------------------------------ collision entries */
 typedef struct {
     void *collide;
-    int kind;              /* 0 static solid, 1 solid (brush entity), 2 static mesh */
+    int kind;              /* 0 static solid, 1 solid (brush entity), 2 static mesh, 3 fluid */
     int contents;
     float mass, volume;
     const char *material;
+    float normal[3], dist; /* a fluid's surface plane */
 } entry_t;
 typedef struct { entry_t *e; int n, cap; } entrylist_t;
 
@@ -545,6 +546,46 @@ static void ConvertModelToPhysCollide(entrylist_t *list, int model, int contents
 }
 
 /* ------------------------------------------------------------------ the lump */
+/* The world's water volumes as fluids (vbsp's ConvertWaterModelToPhysCollide). */
+static void ConvertWaterModelToPhysCollide(entrylist_t *list, int model) {
+    int n = WaterModelCount(model);
+    for (int k = 0; k < n; k++) {
+        int contents, *leaves, nleaves, has_surface;
+        float normal[3], dist;
+        WaterModelInfo(model, k, &contents, &leaves, &nleaves, normal, &dist, &has_surface);
+        planelist_t pl;
+        pl_init(&pl, 0.0f, VPHYSICS_MERGE);
+        pl.contents_mask = contents;
+        pl.leaves = xalloc(sizeof(int) * (nleaves + 1));
+        memcpy(pl.leaves, leaves, sizeof(int) * nleaves);
+        pl.nleaves = nleaves;
+        VisitLeaves_r(&pl, dmodels[model].headnode);
+        pl_add_brushes(&pl);
+        if (pl.count) {
+            void *collide = PC(14, ConvertConvexToCollide_t)(physcollision, pl.convex, pl.count);
+            if (collide) {
+                if (!has_surface) {
+                    float top[3];
+                    static const float zero[3] = {0, 0, 0};
+                    normal[0] = normal[1] = 0;
+                    normal[2] = 1;
+                    PC(22, CollideGetExtent_t)(physcollision, top, collide, zero, zero, normal);
+                    dist = top[2];
+                }
+                entry_t e;
+                memset(&e, 0, sizeof(e));
+                e.collide = collide;
+                e.kind = 3;
+                e.contents = contents;
+                memcpy(e.normal, normal, sizeof(e.normal));
+                e.dist = dist;
+                add_entry(list, e);
+            }
+        }
+        pl_free(&pl);
+    }
+}
+
 void EmitPhysCollision(void) {
     for (int i = 0; i < numleafs; i++) {
         dleafs[i].leafwaterdata = -1;
@@ -578,7 +619,7 @@ void EmitPhysCollision(void) {
             ConvertWorldBrushes(&lists[0], 0.0f, VPHYSICS_MERGE, CONTENTS_MONSTERCLIP);
             if (virtualmesh) Disp_BuildVirtualMesh(L4D2_MASK_SOLID);
             else if (nummapdisps) Warning("(displacement collision without virtual meshes: not yet)\n");
-            /* (water volumes: not yet) */
+            ConvertWaterModelToPhysCollide(&lists[0], 0);
         } else {
             ConvertModelToPhysCollide(&lists[i], i, L4D2_MASK_SOLID | CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP | L4D2_MASK_WATER,
                                       VPHYSICS_SHRINK, VPHYSICS_MERGE);
@@ -587,7 +628,18 @@ void EmitPhysCollision(void) {
         textbuf_t *t = &texts[i];
         for (int j = 0; j < lists[i].n; j++) {
             entry_t *e = &lists[i].e[j];
-            if (e->kind == 1) {
+            if (e->kind == 3) {
+                char tmp[256];
+                tb_text(t, "fluid {\n");
+                tb_int(t, "index", j);
+                tb_string(t, "surfaceprop", "water");
+                tb_float(t, "damping", 0.01f);
+                tb_int(t, "contents", e->contents);
+                sprintf(tmp, "\"surfaceplane\" \"%f %f %f %f \"\n", e->normal[0], e->normal[1], e->normal[2], e->dist);
+                tb_text(t, tmp);
+                tb_text(t, "\"currentvelocity\" \"0.000000 0.000000 0.000000 \"\n");
+                tb_text(t, "}\n");
+            } else if (e->kind == 1) {
                 tb_text(t, "solid {\n");
                 tb_int(t, "index", j);
                 tb_float(t, "mass", e->mass);

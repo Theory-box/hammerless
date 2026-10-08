@@ -23,6 +23,8 @@ CONTENTS_SLIME = 0x10
 CONTENTS_WATER = 0x20
 CONTENTS_BLOCKLOS = 0x40
 CONTENTS_OPAQUE = 0x80
+CONTENTS_TEAM1 = 0x800
+CONTENTS_TEAM2 = 0x1000
 CONTENTS_PLAYERCLIP = 0x10000
 CONTENTS_MONSTERCLIP = 0x20000
 CONTENTS_ORIGIN = 0x1000000
@@ -44,8 +46,8 @@ SURF_NOSHADOWS = 0x1000
 SURF_NODECALS = 0x2000
 SURF_NOCHOP = 0x4000
 
-# shaders whose surfaces get a lightmap
-LIGHTMAPPED = {"lightmappedgeneric", "worldvertextransition", "lightmapped_4wayblend", "lightmappedreflective",
+# shaders whose surfaces get a lightmap (L4D2's Water shader does: measured)
+LIGHTMAPPED = {"water", "lightmappedgeneric", "worldvertextransition", "lightmapped_4wayblend", "lightmappedreflective",
                "lightmappedtwotexture", "worldtwotextureblend", "lightmappedgeneric_dx9", "worldvertextransition_dx9"}
 BUMPED = {"lightmappedgeneric", "worldvertextransition", "lightmapped_4wayblend", "lightmappedgeneric_dx9",
           "worldvertextransition_dx9"}
@@ -73,7 +75,7 @@ def material_row(content, name: str, game_dir: str | None, surfaceprops: dict[st
     contents = flags = 0
     width = height = 0
     refl = (0.0, 0.0, 0.0)
-    surfaceprop = surfaceprop2 = detailtype = "-"
+    surfaceprop = surfaceprop2 = detailtype = bottom = "-"
     if p:
         g = p.get
         shader = g("shader", "")
@@ -106,7 +108,12 @@ def material_row(content, name: str, game_dir: str | None, surfaceprops: dict[st
         else:
             if _true(g("%compileladder")):
                 contents |= CONTENTS_LADDER
+            team = (g("%compileteam") or "").strip()
+            if team[:1].isdigit() and int(team.split()[0]) in (1, 2):
+                contents |= CONTENTS_TEAM1 if int(team.split()[0]) == 1 else CONTENTS_TEAM2
             if _true(g("%noportal")):
+                flags |= SURF_NOPORTAL
+            if _true(g("%hotsurface")):          # (L4D2's vbsp marks these like %noPortal)
                 flags |= SURF_NOPORTAL
             if _true(g("%compilepassbullets")):
                 contents &= ~CONTENTS_SOLID
@@ -137,7 +144,9 @@ def material_row(content, name: str, game_dir: str | None, surfaceprops: dict[st
                 contents &= ~(CONTENTS_SOLID | CONTENTS_DETAIL)
                 contents |= CONTENTS_WATER
                 flags |= SURF_WARP | SURF_NOSHADOWS | SURF_NODECALS
-            if (not keep_light and shader.startswith("water")) or shader.startswith("unlitgeneric"):
+            if _true(g("%compilenoshadows")):
+                flags |= SURF_NOSHADOWS
+            if shader.startswith("unlitgeneric"):       # (L4D2's vbsp no longer forces water unlit)
                 flags |= SURF_NOLIGHT
             if _true(g("%compileslime")):
                 contents &= ~(CONTENTS_SOLID | CONTENTS_DETAIL)
@@ -156,12 +165,19 @@ def material_row(content, name: str, game_dir: str | None, surfaceprops: dict[st
         info = _texture_info(content, g("$basetexture"), game_dir)
         if info:
             width, height, refl = info
+        else:
+            # no base texture: the size of the tool texture, the material system's default reflectivity
+            refl = (0.2, 0.2, 0.2)
+            tool = _texture_info(content, g("%tooltexture"), game_dir)
+            if tool:
+                width, height = tool[0], tool[1]
         surfaceprop = _name(g("$surfaceprop"))
         surfaceprop2 = _name(g("$surfaceprop2"))
         detailtype = _name(g("%detailtype"))
+        bottom = _name(g("$bottommaterial"))
     clean = name.replace("\t", " ").replace("\n", " ")
     return (f"{clean}\t{contents}\t{flags}\t{width}\t{height}\t{refl[0]!r}\t{refl[1]!r}\t{refl[2]!r}"
-            f"\t{surfaceprop}\t{found}\t{surfaceprop2}\t{detailtype}")
+            f"\t{surfaceprop}\t{found}\t{surfaceprop2}\t{detailtype}\t{bottom}")
 
 
 def _name(v: str | None) -> str:
@@ -310,6 +326,13 @@ def write_material_table(path: str, vmf_path: str, content, game_dir: str | None
         names = vmf_materials(f.read())
     surfaceprops: dict[str, int] = {}
     rows = [material_row(content, n, game_dir, surfaceprops) for n in names]
+    # water materials' $bottommaterial: the underside of the water uses it
+    known = {n.lower() for n in names}
+    for row in list(rows):
+        bottom = row.split("\t")[12]
+        if bottom != "-" and bottom.lower() not in known:
+            known.add(bottom.lower())
+            rows.append(material_row(content, bottom, game_dir, surfaceprops))
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(rows) + "\n")
@@ -324,7 +347,7 @@ UNSUPPORTED_CLASSES = {
 }
 
 
-def unsupported(vmf_text: str, material_table: str) -> list[str]:
+def unsupported(vmf_text: str) -> list[str]:
     """Reasons hlvbsp can't compile this map exactly like vbsp yet (empty: it can)."""
     from .vmf import parse
     why: list[str] = []
@@ -337,9 +360,4 @@ def unsupported(vmf_text: str, material_table: str) -> list[str]:
             cls = (b.get("classname") or "").lower()
             if cls in UNSUPPORTED_CLASSES:
                 add(UNSUPPORTED_CLASSES[cls])
-    with open(material_table, encoding="utf-8") as f:
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) > 1 and int(parts[1]) & (CONTENTS_WATER | CONTENTS_SLIME):
-                add("water")
     return why
