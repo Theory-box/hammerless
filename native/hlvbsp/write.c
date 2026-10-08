@@ -154,6 +154,7 @@ static void EmitFace(face_t *f, int onnode) {
     df->area = f->w ? WindingArea(f->w) : 0;
     df->firstprim = (unsigned short)f->firstprim;
     df->numprims = (unsigned short)(f->numprims & 0x7FFF);   /* top bit set = no dynamic shadows */
+    if (f->originalface && f->originalface->no_dynamic_shadows) df->numprims |= 0x8000;
     for (int i = 0; i < f->numpoints; i++) {
         int e = GetEdge2(f->vertexnums[i], f->vertexnums[(i + 1) % f->numpoints], f);
         dsurfedges[numsurfedges++] = e;

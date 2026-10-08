@@ -352,7 +352,7 @@ def write_material_table(path: str, vmf_path: str, content, game_dir: str | None
 UNSUPPORTED_CLASSES = {
     "info_overlay_transition": "water overlays",
     "func_occluder": "occluders", "func_viscluster": "vis clusters",
-    "sky_camera": "3D skyboxes", "func_instance": "instances", "info_no_dynamic_shadow": "shadow blockers",
+    "sky_camera": "3D skyboxes", "func_instance": "instances",
 }
 
 

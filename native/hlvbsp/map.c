@@ -11,6 +11,7 @@ static plane_t *planehash[PLANE_HASHES];
 mapbrush_t *mapbrushes;
 int nummapbrushes, max_mapbrushes;
 side_t *brushsides;
+static int *noshadow_ids, num_noshadow_ids;     /* info_no_dynamic_shadow sides */
 brush_texture_t *side_textures;
 int nummapbrushsides;
 entity_t *entities;
@@ -963,6 +964,25 @@ static void load_entity(parser_t *p) {
         SetKeyValue(mapent, "classname", "info_ladder");
         return;
     }
+    if (!_stricmp(cls, "info_no_dynamic_shadow")) {
+        /* its sides cast no dynamic shadows (marked once the map is read) */
+        char *list = copystring(ValueForKey(mapent, "sides")), *tok = strtok(list, " ");
+        while (tok) {
+            int id, k;
+            if (sscanf(tok, "%d", &id) == 1) {
+                for (k = 0; k < num_noshadow_ids; k++)
+                    if (noshadow_ids[k] == id) break;
+                if (k == num_noshadow_ids) {
+                    noshadow_ids = realloc(noshadow_ids, sizeof(int) * (num_noshadow_ids + 1));
+                    noshadow_ids[num_noshadow_ids++] = id;
+                }
+            }
+            tok = strtok(NULL, " ");
+        }
+        free(list);
+        mapent->epairs = NULL;
+        return;
+    }
     if (!strcmp(cls, "env_cubemap")) {
         extern void Cubemap_FromEntity(entity_t *e);
         Cubemap_FromEntity(mapent);
@@ -1003,6 +1023,14 @@ static void load_entity(parser_t *p) {
             for (int j = 0; j < b->numsides; j++) b->original_sides[j].contents &= ~CONTENTS_DETAIL;
         }
     }
+}
+
+/* vbsp's MarkNoDynamicShadowSides */
+void MarkNoDynamicShadowSides(void) {
+    for (int i = 0; i < nummapbrushsides; i++) brushsides[i].no_dynamic_shadows = 0;
+    for (int k = 0; k < num_noshadow_ids; k++)
+        for (int i = 0; i < nummapbrushsides; i++)
+            if (brushsides[i].id == noshadow_ids[k]) brushsides[i].no_dynamic_shadows = 1;
 }
 
 void LoadMapFile(const char *path) {

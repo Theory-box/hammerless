@@ -173,6 +173,7 @@ typedef struct side_s {
     int material;            /* the side's material (for messages and dispinfo) */
     int disp;                /* index into mapdisps + 1; 0 = not a displacement */
     int *overlays, noverlays;  /* info_overlays on this side (shared by the side's copies) */
+    int no_dynamic_shadows;    /* listed by an info_no_dynamic_shadow */
 } side_t;
 
 typedef struct {

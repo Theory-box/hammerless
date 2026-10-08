@@ -199,6 +199,10 @@ int main(int argc, char **argv) {
     SetModelNumbers();
     SetLightStyles();
     BeginBSPFile();
+    {
+        extern void MarkNoDynamicShadowSides(void);
+        MarkNoDynamicShadowSides();
+    }
     EmitInitialDispInfos();
     {
         extern const char *g_linpath;
