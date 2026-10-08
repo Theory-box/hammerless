@@ -296,6 +296,7 @@ const char *TexDataName(int texdata);
 extern float g_SunAngularExtent;
 extern int g_bFast, g_bExtra;
 void ExportDirectLightsToWorldLights(void);
+void ComputePerLeafAmbientLighting(void);
 int ClusterFromPoint(const vec3_t p);
 
 /* ------------------------------------------------------------------ utilities */
