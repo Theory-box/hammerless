@@ -5,6 +5,7 @@
  * same grass. The objects are sorted by leaf with the MSVC library's quicksort (its order for equal
  * leaves is part of the result). */
 #include <ctype.h>
+#include <float.h>
 #include "hlvbsp.h"
 #include "disp.h"
 
@@ -17,6 +18,8 @@ const char *g_detail_file;               /* detail.vbsp text (Python reads it fr
 static unsigned long holdrand = 1;
 static void crt_srand(unsigned seed) { holdrand = seed; }
 static int crt_rand(void) { return (int)(((holdrand = holdrand * 214013L + 2531011L) >> 16) & 0x7fff); }
+/* rand() / VALVE_RAND_MAX as vbsp compiles it: times the reciprocal */
+static float rand01(void) { return (float)crt_rand() * (1.0f / 0x7fff); }
 #define VALVE_RAND_MAX 0x7fff
 
 /* vstdlib's uniform stream (Numerical Recipes' ran1) and its Gaussian stream */
@@ -60,29 +63,32 @@ static int GenerateRandomNumber(void) {
     return r_iy;
 }
 
-/* vstdlib's Gaussian stream. vstdlib is x87 code: the uniform values reach it unrounded and its
-   arithmetic runs in double; this matches most of vbsp's scales exactly (the rest within a few ulps). */
+/* vstdlib's Gaussian stream, as its x87 code computes it (read from the binary): the uniform values
+   come back unrounded, v1 is stored as a float but v2 stays unrounded, rsq is a float sum (v2 first),
+   the result is rounded only by the caller; the cached second value is plain float maths. */
 static double RandomDouble01(void) {
     double fl = AM * GenerateRandomNumber();
-    if (fl > RNMX) fl = RNMX;
+    if (fl > RNMX) fl = (float)RNMX;
     return fl;
 }
 
-static float RandomGaussianFloat(float mean, float stddev) {
+static double RandomGaussian(float mean, float stddev) {
     if (!g_have) {
-        float v1, v2, rsq;
+        float v1, rsq;
+        double v2;
         do {
             v1 = (float)(2.0 * RandomDouble01() - 1.0);
-            v2 = (float)(2.0 * RandomDouble01() - 1.0);
-            rsq = (float)((double)v1 * v1 + (double)v2 * v2);
+            v2 = 2.0 * RandomDouble01() - 1.0;
+            float v2f = (float)v2;
+            rsq = v2f * v2f + v1 * v1;
         } while ((rsq > 1.0f) || (rsq == 0.0f));
-        double fac = sqrt(-2.0 * log((double)rsq) / rsq);
+        double fac = sqrt(log((double)rsq) * -2.0 / rsq);
         g_value = (float)(v1 * fac);
         g_have = 1;
-        return (float)(stddev * (v2 * fac) + mean);
+        return v2 * fac * stddev + mean;
     }
     g_have = 0;
-    return (float)(stddev * (double)g_value + mean);
+    return g_value * stddev + mean;
 }
 
 /* ------------------------------------------------------------------ KeyValues (detail.vbsp) */
@@ -409,37 +415,44 @@ static void BasisAngles(const vec3_t xaxis, const vec3_t yaxis, const vec3_t zax
     }
 }
 
+/* mathlib's VectorNormalize: the length in x87, rounded to float, then times 1/(length + FLT_EPSILON) */
+static void NormalizeX87(vec3_t v) {
+    float len = (float)sqrt((double)v[0] * v[0] + (double)v[1] * v[1] + (double)v[2] * v[2]);
+    float oo = 1.0f / (len + FLT_EPSILON);
+    v[0] *= oo; v[1] *= oo; v[2] *= oo;
+}
+
 static void PlaceDetail(const detailmodel_t *m, const vec3_t pt, const vec3_t normal) {
     float cosangle = normal[2];
     if (cosangle < m->maxcos) return;
     if (cosangle < m->mincos) {
         float prob = (cosangle - m->maxcos) / (m->mincos - m->maxcos);
-        float t = crt_rand() / (float)VALVE_RAND_MAX;
+        float t = rand01();
         if (t > prob) return;
     }
     vec3_t angles;
     if (m->flags & 1) {
         angles[0] = 0;
-        angles[1] = 360.0f * crt_rand() / (float)VALVE_RAND_MAX;
+        angles[1] = ((float)crt_rand() * 360.0f) * (1.0f / VALVE_RAND_MAX);
         angles[2] = 0.0f;
     } else {
         vec3_t z, x = {1, 0, 0}, y;
         VectorCopy(normal, z);
-        VectorNormalize(z);
+        NormalizeX87(z);
         if (fabs(DotProduct(x, z)) - 1.0 > -1e-3) {
             x[0] = 0; x[1] = 1; x[2] = 0;
         }
         CrossProduct(z, x, y);
-        VectorNormalize(y);
+        NormalizeX87(y);
         CrossProduct(y, z, x);
-        VectorNormalize(x);
-        float rot = 360.0f * crt_rand() / (float)VALVE_RAND_MAX;
+        NormalizeX87(x);
+        float rot = (float)((double)crt_rand() * 360.0f * (1.0f / VALVE_RAND_MAX));     /* (x87) */
         BasisAngles(x, y, z, rot, angles);
     }
     if (m->type == TYPE_MODEL) AddDetailModel(m->model, pt, angles, m->orientation);
     else {
         float scale = 1.0f;
-        if (m->scalestddev != 0.0f) scale = fabsf(RandomGaussianFloat(1.0f, m->scalestddev));
+        if (m->scalestddev != 0.0f) scale = (float)fabs(RandomGaussian(1.0f, m->scalestddev));
         AddDetailSprite(pt, angles, m->orientation, m->pos, m->tex, scale, m->type, m->shapeangle, m->shapesize, m->sway);
     }
 }
@@ -453,12 +466,12 @@ static int SelectGroup(const detailobject_t *d, float alpha) {
     if (start == end) return start;
     float dist = 0.0f, da = d->groups[end].alpha - d->groups[start].alpha;
     if (da != 0.0f) dist = (alpha - d->groups[start].alpha) / da;
-    float r = crt_rand() / (float)VALVE_RAND_MAX;
+    float r = rand01();
     return r > dist ? start : end;
 }
 
 static int SelectDetail(const detailgroup_t *g) {
-    float r = crt_rand() / (float)VALVE_RAND_MAX;
+    float r = rand01();
     for (int i = 0; i < g->nmodels; ++i)
         if (r <= g->models[i].amount) return i;
     return -1;
@@ -476,12 +489,12 @@ static void EmitOnFace(dface_t *face, const detailobject_t *d) {
         VectorSubtract(dvertexes[e->v[vidx]].point, first, e1);
         VectorSubtract(dvertexes[e->v[1 - vidx]].point, first, e2);
         CrossProduct(e1, e2, areavec);
-        float len = VectorLength(areavec);
+        float len = sqrtf((areavec[1] * areavec[1] + areavec[2] * areavec[2]) + areavec[0] * areavec[0]);
         float area = 0.5f * len;
         int n = (int)(area * d->density * 0.000001);
         for (int k = 0; k < n; ++k) {
-            float u = crt_rand() / (float)VALVE_RAND_MAX;
-            float v = crt_rand() / (float)VALVE_RAND_MAX;
+            float u = rand01();
+            float v = rand01();
             if (v > 1.0f - u) {
                 u = 1.0f - u;
                 v = 1.0f - v;
@@ -517,12 +530,12 @@ static void EmitOnDisplacement(dface_t *face, const detailobject_t *d) {
     }
     int n = (int)(area * d->density * 0.000001);
     for (int i = 0; i < n; ++i) {
-        float u = crt_rand() / (float)VALVE_RAND_MAX;
-        float v = crt_rand() / (float)VALVE_RAND_MAX;
+        float u = rand01();
+        float v = rand01();
         float alpha = 0;
         vec3_t pt = {0, 0, 0}, normal = {0, 0, 0};
         DispPositionOnSurface(face->dispinfo, u, v, pt, normal, &alpha);
-        alpha /= 255.0f;
+        alpha *= 1.0f / 255.0f;
         int g = SelectGroup(d, alpha);
         int m = SelectDetail(&d->groups[g]);
         if (m < 0) continue;

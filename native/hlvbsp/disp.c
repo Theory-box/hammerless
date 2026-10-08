@@ -1,3 +1,4 @@
+#include <float.h>
 /* Displacements (terrain): reading them from the .vmf, their records in the BSP (dispinfo, vertices,
  * triangle tags), lightmap sizes and sample positions, which displacements neighbour which, and the
  * vertices each may drop for level of detail (so neighbours of different sizes don't crack).
@@ -1090,7 +1091,10 @@ static void tri_normal(const vec3_t a, const vec3_t b, const vec3_t o, int swap,
     VectorSubtract(b, o, ev);
     if (swap) CrossProduct(ev, eu, n);
     else CrossProduct(eu, ev, n);
-    VectorNormalize(n);
+    /* mathlib's VectorNormalize: the length in x87 (double), rounded to float, times 1/(length + FLT_EPSILON) */
+    float len = (float)sqrt((double)n[0] * n[0] + (double)n[1] * n[1] + (double)n[2] * n[2]);
+    float oo = 1.0f / (len + FLT_EPSILON);
+    n[0] *= oo; n[1] *= oo; n[2] *= oo;
 }
 
 /* kind: 0 TLtoBR_1, 1 TLtoBR_2, 2 BLtoTR_1, 3 BLtoTR_2 (vbsp's four triangle cases) */
