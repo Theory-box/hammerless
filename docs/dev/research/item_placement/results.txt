@@ -1,0 +1,49 @@
+== per-map density settings Valve uses (median, [25%-75%]) and what they mean for a map of median size
+  walkable area: median 2.00 x (100 yd)^2  [1.23-2.83]
+  PainPillDensity        median  2.50 [2.00-3.90]   default 6.48
+  AdrenalineDensity      median  2.00 [1.38-3.00]   default 6.48
+  MolotovDensity         median  2.00 [1.35-3.00]   default 6.48
+  PipeBombDensity        median  3.00 [1.50-3.25]   default 6.48
+  VomitJarDensity        median  2.00 [1.00-3.00]   default 6.48
+  DefibrillatorDensity   median  0.80 [0.50-1.21]   default 3.0
+  AmmoDensity            median  0.81 [0.00-1.00]   default 6.48
+  MeleeWeaponDensity     median  2.00 [1.60-3.00]   default 6.48
+  PistolDensity          median  2.00 [1.00-3.00]   default 6.48
+  UpgradepackDensity     median  1.00 [1.00-1.00]   default 1.0
+  ChainsawDensity        median  1.00 [0.62-1.00]   default 1.0
+  ItemClusterRange               [('50', 32), ('1', 10), ('(default 50)', 4), ('20', 3)]
+  ConfigurableWeaponDensity      [('(default -1)', 26), ('-1.0', 16), ('-1', 5), ('3', 2)]
+  ConfigurableWeaponClusterRange [('(default 100)', 26), ('100', 21), ('50', 4), ('15', 3)]
+  FinaleItemClusterCount         [('3', 41), ('5', 6), ('(default 3)', 4), ('4', 2)]
+  MagnumDensity                  [('(default -1)', 26), ('2', 11), ('-1.0', 5), ('3', 5)]
+
+== candidate clusters Valve places per item the density asks for (outside saferooms, non-finale)
+   (expected = density x walkable area; a cluster = spawners offering it within ItemClusterRange)
+  pills        candidates per expected item: median  11.0 [7.0-16.0]   spawners per cluster 1.1   must-exist 6%
+  adrenaline   candidates per expected item: median  13.8 [7.2-22.6]   spawners per cluster 1.1   must-exist 7%
+  molotov      candidates per expected item: median  12.7 [7.6-22.5]   spawners per cluster 1.1   must-exist 7%
+  pipe         candidates per expected item: median  13.5 [7.1-24.9]   spawners per cluster 1.1   must-exist 7%
+  bile         candidates per expected item: median  10.0 [2.2-24.7]   spawners per cluster 1.0   must-exist 3%
+  defib        candidates per expected item: median   9.4 [0.6-24.7]   spawners per cluster 1.0   must-exist 2%
+  ammo         candidates per expected item: median   1.2 [0.4-2.5]   spawners per cluster 1.1   must-exist 30%
+  melee        candidates per expected item: median   2.3 [1.7-3.9]   spawners per cluster 1.0   must-exist 46%
+  pistol       candidates per expected item: median   1.4 [0.5-1.8]   spawners per cluster 1.0   must-exist 6%
+  upgradepack  candidates per expected item: median   0.9 [0.6-1.3]   spawners per cluster 1.1   must-exist 100%
+  chainsaw     candidates per expected item: median   3.2 [1.4-6.0]   spawners per cluster 1.0   must-exist 14%
+
+== where candidates sit (outside saferooms): straight distance to the main route, height above the floor
+  pills/adrenaline       n  3600  route dist 25/50/75/90%:  347  665 1268  2082   floor 53%  table 19%  other raised 28%
+  throwables             n  4510  route dist 25/50/75/90%:  352  668 1243  2045   floor 60%  table 16%  other raised 25%
+  kit                    n   287  route dist 25/50/75/90%:  308  554 1354  2204   floor 69%  table 20%  other raised 11%
+  ammo                   n   314  route dist 25/50/75/90%:  337  626 1329  2140   floor 62%  table 18%  other raised 20%
+  melee                  n   788  route dist 25/50/75/90%:  311  629 1147  2011   floor 69%  table 18%  other raised 13%
+  defib                  n  1520  route dist 25/50/75/90%:  389  711 1311  1979   floor 52%  table 20%  other raised 28%
+  chainsaw/launcher/m60  n   338  route dist 25/50/75/90%:  376  770 1347  2417   floor 70%  table 12%  other raised 19%
+  upgradepack            n    44  route dist 25/50/75/90%:  319  829 1183  1934   floor 91%  table  9%  other raised  0%
+  weapons tier1          n    94  route dist median  698  along the chapter (fifths):  3% 16% 22% 30% 29%
+  weapons tier2          n   653  route dist median  659  along the chapter (fifths): 10% 13% 22% 23% 32%
+  weapons any            n   523  route dist median  578  along the chapter (fifths): 13% 20% 23% 25% 18%
+
+== saferooms (non-finale, per room, median [max])
+  start kits       4 [8]     start ammo       1 [2]     start melee      0 [4]     start pistols    0 [1]   weapons   2 [5]
+  end   kits       4 [8]     end   ammo       1 [3]     end   melee      1 [6]     end   pistols    0 [3]   weapons   3 [8]
