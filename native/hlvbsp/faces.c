@@ -167,7 +167,7 @@ static void TestEdge(vec_t start, vec_t end, int p1, int p2, int startvert) {
         vec3_t p, delta, exact, off;
         VectorCopy(dvertexes[j].point, p);
         VectorSubtract(p, edge_start, delta);
-        vec_t dist = (delta[1] * edge_dir[1] + delta[0] * edge_dir[0]) + delta[2] * edge_dir[2];   /* (vbsp's order) */
+        vec_t dist = DotProduct(delta, edge_dir);
         if (dist <= start || dist >= end) continue;
         VectorMA(edge_start, dist, edge_dir, exact);
         VectorSubtract(p, exact, off);
@@ -447,7 +447,7 @@ static void SubdivideFace(face_t **list, face_t *f) {
             VectorCopy(tex->lmvecs[axis], temp);
             winding_t *w = f->w;
             for (int i = 0; i < w->numpoints; i++) {
-                vec_t v = (w->p[i][1] * temp[1] + w->p[i][0] * temp[0]) + w->p[i][2] * temp[2];   /* (vbsp's order) */
+                vec_t v = DotProduct(w->p[i], temp);
                 if (v < mins) mins = v;
                 if (v > maxs) maxs = v;
             }

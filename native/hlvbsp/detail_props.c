@@ -439,13 +439,13 @@ static int InsideBlocker(const vec3_t pt) {
     return 0;
 }
 
-/* The leaf a point is in, walking the written tree (vbsp's arithmetic: y, x, then z) */
+/* The leaf a point is in, walking the written tree */
 static int PointLeafnum(const vec3_t p) {
     int n = 0;
     do {
         const dnode_t *node = &dnodes[n];
         const plane_t *pl = &mapplanes[node->planenum];
-        float d = (pl->normal[1] * p[1] + pl->normal[0] * p[0]) + pl->normal[2] * p[2];
+        float d = DotProduct(pl->normal, p);
         n = pl->dist > d ? node->children[1] : node->children[0];
     } while (n >= 0);
     return -1 - n;

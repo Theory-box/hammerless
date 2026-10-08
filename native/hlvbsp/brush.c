@@ -102,7 +102,9 @@ bspbrush_t *BrushFromBounds(const vec3_t mins, const vec3_t maxs) {
     return b;
 }
 
-vec_t BrushVolume(bspbrush_t *b) {
+/* (vbsp's x87 code: each height in double, y, x, z, rounded to float; the sum kept as a float;
+   the result is sum * 0.33333334f, unrounded - measured) */
+double BrushVolume(bspbrush_t *b) {
     if (!b) return 0;
     int i;
     winding_t *w = NULL;
@@ -113,17 +115,17 @@ vec_t BrushVolume(bspbrush_t *b) {
     if (!w) return 0;
     vec3_t corner;
     VectorCopy(w->p[0], corner);
-    vec_t volume = 0;
+    float volume = 0;
     for (; i < b->numsides; i++) {
         w = b->sides[i].winding;
         if (!w) continue;
         plane_t *plane = &mapplanes[b->sides[i].planenum];
-        vec_t d = -(DotProduct(corner, plane->normal) - plane->dist);
-        vec_t area = WindingArea(w);
-        volume += d * area;
+        float d = (float)-((((double)plane->normal[1] * corner[1] + (double)plane->normal[0] * corner[0]) +
+                            (double)plane->normal[2] * corner[2]) - plane->dist);
+        float area = WindingArea(w);
+        volume = (float)((double)area * d + volume);
     }
-    volume /= 3;
-    return volume;
+    return (double)volume * (double)(1.0f / 3.0f);
 }
 
 node_t *AllocNode(void) {

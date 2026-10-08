@@ -370,7 +370,7 @@ int CountBrushList(bspbrush_t *b);
 void BoundBrush(bspbrush_t *b);
 void CreateBrushWindings(bspbrush_t *b);
 bspbrush_t *BrushFromBounds(const vec3_t mins, const vec3_t maxs);
-vec_t BrushVolume(bspbrush_t *b);
+double BrushVolume(bspbrush_t *b);
 void SplitBrush(bspbrush_t *brush, int planenum, bspbrush_t **front, bspbrush_t **back);
 int BoxOnPlaneSide(const vec3_t mins, const vec3_t maxs, const plane_t *plane);
 node_t *AllocNode(void);

@@ -196,8 +196,7 @@ static void classify(const winding_t *in, const vec3_t normal, vec_t dist, vec_t
     int i;
     counts[0] = counts[1] = counts[2] = 0;
     for (i = 0; i < in->numpoints; i++) {
-        /* (vbsp's order: y, x, then z - measured) */
-        vec_t dot = (in->p[i][1] * normal[1] + in->p[i][0] * normal[0]) + in->p[i][2] * normal[2];
+        vec_t dot = DotProduct(in->p[i], normal);
         dot -= dist;
         dists[i] = dot;
         if (dot > epsilon) sides[i] = SIDE_FRONT;
