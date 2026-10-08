@@ -1835,7 +1835,25 @@ class HL_NodeOverride(_Block, bpy.types.Node):
         return {"hook": self.hook}
 
 
-DIRECTOR_CLASSES = (HL_NodeDirectorOption, HL_NodeHudText, HL_NodeHudHide, HL_NodeOverride)
+class HL_NodeDirectorMood(_Block, bpy.types.Node):
+    """How intense the AI Director thinks the game is right now (Anger, 0 calm to 1 furious, updated
+    twice a second), and warnings before its next mob"""
+    bl_idname, bl_label, bl_icon = "HL_NodeDirectorMood", "Director Mood", "FUND"
+    kind = "DIRECTOR_MOOD"
+    category = "Director"
+
+    def init(self, context):
+        self.use_custom_color = True
+        self.color = CATEGORY_COLORS["Director"]
+        self.make_sockets()
+
+    def make_sockets(self):
+        self.data_out("num", "anger", "Anger")
+        self.ev_out("mob60", "60 s Before a Mob")
+        self.ev_out("mob20", "20 s Before a Mob")
+
+
+DIRECTOR_CLASSES = (HL_NodeDirectorOption, HL_NodeDirectorMood, HL_NodeHudText, HL_NodeHudHide, HL_NodeOverride)
 
 
 class HL_MT_logic_rules(bpy.types.Menu):

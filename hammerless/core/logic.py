@@ -362,6 +362,9 @@ class _Compiler:
             return vs.field_expr(sock, vs.field_kind(fld)) if fld else "null"
         if k in BLOCK_VALUES or k in ("FOR_EACH",):
             return self.block_value(n, sock, slug)
+        if k == "DIRECTOR_MOOD":
+            self.director_query()
+            return '(("HL_Anger" in getroottable()) ? ::HL_Anger : 0.0)'
         if k == "OVERRIDE":
             from .director_options import HOOKS_BY_NAME
             hook = HOOKS_BY_NAME.get(s.get("hook", ""))
@@ -468,6 +471,11 @@ class _Compiler:
                 self.problems.append(f"Logic node '{nid}': pick a game event")
                 return
             self.script_events.setdefault(e["name"], []).append(nid)
+            return
+        if k == "DIRECTOR_MOOD":
+            query = self.director_query()
+            fire("mob60", query, "On60SecondsToMob")
+            fire("mob20", query, "On20SecondsToMob")
             return
         if k == "OVERRIDE":
             from .director_options import HOOKS_BY_NAME
@@ -805,6 +813,24 @@ class _Compiler:
                 take("reset", dname, "EndScript")
         else:
             self.problems.append(f"Logic node '{nid}': unknown kind {k}")
+
+    def director_query(self) -> Entity:
+        """The Director's anger (0-1) for scripts: a logic_director_query asked twice a second; its
+        OutAnger value (0-15) goes through a logic_case, whose matching case stores it (one per map)."""
+        found = next((e for e in self.ir.entities if e.keyvalues.get("targetname") == "hl_director_query"), None)
+        if found is not None:
+            return found
+        query = self.add("logic_director_query", "hl_director_query", {"minAngerRange": "0", "maxAngerRange": "15",
+                                                                       "noise": "0"})
+        case = self.add("logic_case", "hl_director_anger", {f"Case{i + 1:02d}": str(i) for i in range(16)})
+        timer = self.add("logic_timer", "hl_director_ask", {"RefireTime": "0.5", "StartDisabled": "0",
+                                                            "UseRandomTime": "0", "spawnflags": "0"})
+        timer.outputs.append(Output("OnTimer", "hl_director_query", "HowAngry", "", 0.0, -1))
+        query.outputs.append(Output("OutAnger", "hl_director_anger", "InValue", "", 0.0, -1))
+        for i in range(16):
+            case.outputs.append(Output(f"OnCase{i + 1:02d}", LOGIC_SCRIPT, "RunScriptCode",
+                                       f"::HL_Anger <- {i / 15:.3f}", 0.0, -1))
+        return query
 
     def nav_blocker(self, e: Entity, obj: str, always: bool = False) -> Entity:
         """func_nav_blocker over an entity's bounds; always = blocking from map start for good."""

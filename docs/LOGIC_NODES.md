@@ -38,7 +38,7 @@ Everything L4D2's script language (VScript) can do is available as nodes.
 | **Game Functions** | All 419 of the game's script functions, grouped (Player, Director, Nav Mesh, Entity, Find Entities, Entity Properties, Spawning, Sound, HUD...) or found with *Search...*. Value functions (Get Health, Find By Name...) just give a Result; actions (Give Item, Stagger...) run when an event wire arrives and then fire *Then*. |
 | **Game Events** | Any of the game's 381 events (player hurt, item picked up, tank killed...). Its details come out as values: user ids already turned into players, entity ids into entities. |
 | **Script Blocks** | For Each (survivors, infected, players, commons, entities by class or name, a list), Set / Get Variable (for the map or per player, kept across maps if you like), Make Table / Get Field, Format Text, Make / Break Vector, Vector Math, Compare Values, Script and Script Value (your own Squirrel code). |
-| **Director, HUD & Overrides** | Director Setting (any of the ~140 Director settings, changed while playing), HUD Text / HUD Hide, Override. |
+| **Director, HUD & Overrides** | Director Setting (any of the ~140 Director settings, changed while playing), Director Mood (the Director's intensity, 0 calm to 1 furious, and warnings 60 s and 20 s before a mob), HUD Text / HUD Hide, Override. |
 
 Wire colours added for these: teal **text**, purple **vector**, pink **entity / player / nav area**, dark grey **any value**.
 
