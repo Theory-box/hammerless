@@ -33,6 +33,7 @@ typedef struct {
     float s, t;
     float coord[2], mins[2], maxs[2];
     float area;
+    winding_t *w;                              /* (-extra: a partial luxel's piece of the face, in world space) */
 } sample_t;
 
 typedef struct {
@@ -287,7 +288,16 @@ static int BuildFacesamples(lightinfo_t *l, facelight_t *fl) {
                 sp->maxs[0] = maxs[0];
                 sp->maxs[1] = maxs[1];
                 LuxelSpaceToWorld(l, sp->coord[0], sp->coord[1], sp->pos);
-                FreeWinding(s2);
+                if (g_bExtra && sp->area < fl->worldAreaPerLuxel - EQUAL_EPSILON) {
+                    for (int k = 0; k < s2->numpoints; k++) {
+                        vec3_t wp;
+                        LuxelSpaceToWorld(l, s2->p[k][0], s2->p[k][1], wp);
+                        VectorCopy(wp, s2->p[k]);
+                    }
+                    sp->w = s2;
+                } else {
+                    FreeWinding(s2);
+                }
             }
             if (t2) FreeWinding(t2);
             t2 = s1;
@@ -629,6 +639,217 @@ static int FindOrAllocateLightstyleSamples(dface_t *f, facelight_t *fl, int styl
     return k;
 }
 
+/* 4 points' illumination positions (1 unit off the face), normals (bumped too) and clusters, as vrad's
+ * ComputeIlluminationPointAndNormalsSSE: a displacement's own normal, else the flat or phong normal */
+static void SetupPoints4(const lightinfo_t *l, int facenum, int normalCount, int isdisp, const vec3_t *flatBump,
+                         const float pos[LANES][3], const float nin[LANES][3], points4_t *p, int cluster[LANES],
+                         float nout[LANES][3]) {
+    const texinfo_t *tex = &texinfo[g_pFaces[facenum].texinfo];
+    p->normalCount = normalCount;
+    for (int i = 0; i < LANES; i++) {
+        vec3_t normal, bumps[NUM_BUMP_VECTS];
+        if (isdisp) {
+            /* (the sample's own normal; the point still moves along the base face's normal) */
+            VectorCopy(nin[i], normal);
+            if (normalCount > 1)
+                GetBumpNormals(tex->textureVecsTexelsPerWorldUnits[0], tex->textureVecsTexelsPerWorldUnits[1], l->facenormal,
+                               normal, bumps);
+        } else if (l->isflat) {
+            VectorCopy(l->facenormal, normal);
+            for (int b = 0; b < NUM_BUMP_VECTS && normalCount > 1; b++) VectorCopy(flatBump[b], bumps[b]);
+        } else {
+            vec3_t spot;
+            VectorSubtract(pos[i], l->modelorg, spot);
+            GetPhongNormal(facenum, spot, normal);
+            if (normalCount > 1)
+                GetBumpNormals(tex->textureVecsTexelsPerWorldUnits[0], tex->textureVecsTexelsPerWorldUnits[1], l->facenormal,
+                               normal, bumps);
+        }
+        VectorCopy(normal, nout[i]);
+        for (int c = 0; c < 3; c++) {
+            /* (the point moves 1 unit off the face so the face itself doesn't shadow it) */
+            p->pos[c][i] = pos[i][c] + l->facenormal[c];
+            p->normals[0][c][i] = normal[c];
+            for (int b = 1; b < normalCount; b++) p->normals[b][c][i] = bumps[b - 1][c];
+        }
+        cluster[i] = ClusterFromPoint(pos[i]);
+    }
+}
+
+/* ------------------------------------------------------------------ supersampling (-extra) */
+/* Where neighbouring samples differ a lot (in perceived brightness), a sample is lit again at 16 points
+ * across its luxel (direct light) and 4 (sky ambient), points outside a partial luxel's piece of the face
+ * dropped; then again for samples next to changed ones, up to 4 passes. */
+#define AMBIENT_ONLY 1
+#define NON_AMBIENT_ONLY 2
+
+/* L4D2's PointsInWinding ORs its "outside" mask into a stack slot it never initialises, so a row of points
+ * can be rejected because of what was left there: its own previous mask (an all-outside row rejects the
+ * rest of the sample), the last light's value in ResampleLightAt4Points, and also whatever the ray
+ * tracer's deeper frames left (its mailbox, the sky test's temporaries), which isn't reproduced here. */
+static __m128 g_staleSlot;
+static int extrapasses = 4;
+
+static void ResampleLightAt4Points(const points4_t *p, const int cluster[LANES], const dface_t *f, int style, int flags,
+                                   vec3_t result[LANES][NUM_BUMP_VECTS + 1]) {
+    memset(result, 0, sizeof(vec3_t) * LANES * (NUM_BUMP_VECTS + 1));
+    for (directlight_t *dl = activelights; dl; dl = dl->next) {
+        if ((flags & AMBIENT_ONLY) && dl->light.type != emit_skyambient) continue;
+        if ((flags & NON_AMBIENT_ONLY) && dl->light.type == emit_skyambient) continue;
+        if (dl->light.style != f->styles[style]) continue;
+        float mask[LANES] = {0};
+        int any = 0;
+        for (int i = 0; i < LANES; i++)
+            if (PVSCheck(dl->pvs, cluster[i])) mask[i] = 1.0f, any = 1;
+        if (!any) continue;
+        lightout4_t out;
+        GatherSampleLight4(&out, dl, p);
+        for (int b = 0; b < p->normalCount; b++)
+            for (int i = 0; i < LANES; i++) {
+                float fx = out.dot[b][i] * out.falloff[i];
+                fx = fx * mask[i];
+                if (b == 0) ((float *)&g_staleSlot)[i] = fx;
+                for (int k = 0; k < 3; k++) result[i][b][k] += fx * dl->light.intensity[k];
+            }
+    }
+}
+
+/* which of 4 points lie in the winding (every edge turns the same way as the first); bit i: point i is out */
+static int PointsInWinding(const float pt[3][LANES], const winding_t *w, int *invalid) {
+    __m128 px = _mm_loadu_ps(pt[0]), py = _mm_loadu_ps(pt[1]), pz = _mm_loadu_ps(pt[2]);
+    __m128 mask = g_staleSlot, tx = _mm_setzero_ps(), ty = tx, tz = tx;
+    *invalid = 0;
+    for (int k = 0; k < w->numpoints; k++) {
+        const float *a = w->p[k], *b = w->p[(k + 1) % w->numpoints];
+        __m128 ex = _mm_sub_ps(_mm_set1_ps(b[0]), _mm_set1_ps(a[0])), ey = _mm_sub_ps(_mm_set1_ps(b[1]), _mm_set1_ps(a[1])),
+               ez = _mm_sub_ps(_mm_set1_ps(b[2]), _mm_set1_ps(a[2]));
+        __m128 vx = _mm_sub_ps(px, _mm_set1_ps(a[0])), vy = _mm_sub_ps(py, _mm_set1_ps(a[1])),
+               vz = _mm_sub_ps(pz, _mm_set1_ps(a[2]));
+        __m128 cx = _mm_sub_ps(_mm_mul_ps(ey, vz), _mm_mul_ps(ez, vy));
+        __m128 cy = _mm_sub_ps(_mm_mul_ps(ez, vx), _mm_mul_ps(ex, vz));
+        __m128 cz = _mm_sub_ps(_mm_mul_ps(ex, vy), _mm_mul_ps(ey, vx));
+        __m128 r = _mm_rsqrt_ps(_mm_add_ps(_mm_add_ps(_mm_mul_ps(cx, cx), _mm_mul_ps(cy, cy)), _mm_mul_ps(cz, cz)));
+        cx = _mm_mul_ps(cx, r), cy = _mm_mul_ps(cy, r), cz = _mm_mul_ps(cz, r);
+        if (k == 0) {
+            tx = cx, ty = cy, tz = cz;
+            continue;
+        }
+        __m128 dot = _mm_add_ps(_mm_add_ps(_mm_mul_ps(cx, tx), _mm_mul_ps(cy, ty)), _mm_mul_ps(cz, tz));
+        mask = _mm_or_ps(mask, _mm_cmplt_ps(dot, _mm_setzero_ps()));
+        g_staleSlot = mask;
+        *invalid = _mm_movemask_ps(mask);
+        if (*invalid == 0xF) return 0;
+    }
+    return 1;
+}
+
+static int SupersampleLightAtPoint(const lightinfo_t *l, int facenum, facelight_t *fl, int si, int style, int normalCount,
+                                   const vec3_t *flatBump, vec3_t *light, int flags) {
+    const sample_t *sample = &fl->sample[si];
+    const dface_t *f = &g_pFaces[facenum];
+    float origin[2];
+    WorldToLuxelSpace(l, sample->pos, origin);
+    float width = flags & NON_AMBIENT_ONLY ? 4 : 2;
+    float cscale = 1.0f / width, csshift = (float)(-((width - 1) * cscale) / 2.0);
+    for (int n = 0; n < normalCount; n++) VectorClear(light[n]);
+    int count = 0;
+    float nin[LANES][3], nout[LANES][3], pos[LANES][3], pt[3][LANES];
+    for (int i = 0; i < LANES; i++) VectorCopy(sample->normal, nin[i]);
+    int rows = flags & NON_AMBIENT_ONLY ? 4 : 1;
+    float row[4];
+    for (int c = 0; c < 4; c++) row[c] = csshift + (float)c * cscale;
+    for (int srow = 0; srow < rows; srow++) {
+        for (int i = 0; i < LANES; i++) {
+            float cs, ct;
+            if (flags & NON_AMBIENT_ONLY) cs = origin[0] + row[srow], ct = origin[1] + row[i];
+            else cs = origin[0] + (i < 2 ? csshift : csshift + cscale), ct = origin[1] + ((i & 1) ? csshift + cscale : csshift);
+            LuxelSpaceToWorld(l, cs, ct, pos[i]);
+            for (int c = 0; c < 3; c++) pt[c][i] = pos[i][c];
+        }
+        int invalid = 0;
+        if (sample->w && !PointsInWinding((const float(*)[LANES])pt, sample->w, &invalid)) {
+            if (flags & NON_AMBIENT_ONLY) continue;
+            return 0;
+        }
+        points4_t p;
+        int cluster[LANES];
+        SetupPoints4(l, facenum, normalCount, 0, flatBump, (const float(*)[3])pos, (const float(*)[3])nin, &p, cluster, nout);
+        vec3_t result[LANES][NUM_BUMP_VECTS + 1];
+        ResampleLightAt4Points(&p, cluster, f, style, flags, result);
+        for (int i = 0; i < LANES; i++) {
+            if ((invalid >> i) & 1) continue;
+            for (int n = 0; n < normalCount; n++) VectorAdd(light[n], result[i][n], light[n]);
+            count++;
+        }
+    }
+    return count;
+}
+
+static void SampleIntensity(vec3_t **ls, int i, int normalCount, int dest, int size, float *intensity) {
+    for (int n = 0; n < normalCount; n++) {
+        float in = (ls[n][i][0] + ls[n][i][1]) + ls[n][i][2];
+        intensity[n * size + dest] = (float)pow(in / 256.0, 1.0 / 2.2);
+    }
+}
+
+static void BuildSupersampleFaceLights(const lightinfo_t *l, int facenum, facelight_t *fl, int style, int normalCount,
+                                       const vec3_t *flatBump) {
+    const dface_t *f = &g_pFaces[facenum];
+    int w = f->m_LightmapTextureSizeInLuxels[0] + 1, h = f->m_LightmapTextureSizeInLuxels[1] + 1, size = w * h;
+    unsigned char *done = xalloc(size + 1);
+    float *gradient = xalloc(sizeof(float) * (fl->numsamples + 1)), *intensity = xalloc(sizeof(float) * (normalCount * size + 1));
+    vec3_t **ls = fl->light[style];
+    for (int i = 0; i < fl->numsamples; i++)
+        SampleIntensity(ls, i, normalCount, (int)fl->sample[i].s + (int)fl->sample[i].t * w, size, intensity);
+    for (int pass = 1, another = 1; another && pass <= extrapasses; pass++) {
+        for (int i = 0; i < fl->numsamples; i++) {
+            if (done[i]) continue;
+            gradient[i] = 0.0f;
+            int ss = (int)fl->sample[i].s, st = (int)fl->sample[i].t;
+            for (int n = 0; n < normalCount; n++) {
+                int j = n * size + ss + st * w;
+#define G(o)                                                       \
+    {                                                              \
+        float g_ = fabsf(intensity[j] - intensity[(o)]);           \
+        gradient[i] = gradient[i] > g_ ? gradient[i] : g_;         \
+    }
+                if (st > 0) {
+                    if (ss > 0) G(j - 1 - w);
+                    G(j - w);
+                    if (ss < w - 1) G(j + 1 - w);
+                }
+                if (st < h - 1) {
+                    if (ss > 0) G(j - 1 + w);
+                    G(j + w);
+                    if (ss < w - 1) G(j + 1 + w);
+                }
+                if (ss > 0) G(j - 1);
+                if (ss < w - 1) G(j + 1);
+#undef G
+            }
+        }
+        another = 0;
+        for (int i = 0; i < fl->numsamples; i++) {
+            if (done[i] || gradient[i] < 0.0625) continue;
+            done[i] = 1;
+            another = 1;
+            vec3_t amb[NUM_BUMP_VECTS + 1], dir[NUM_BUMP_VECTS + 1];
+            int na = SupersampleLightAtPoint(l, facenum, fl, i, style, normalCount, flatBump, amb, AMBIENT_ONLY);
+            int nd = SupersampleLightAtPoint(l, facenum, fl, i, style, normalCount, flatBump, dir, NON_AMBIENT_ONLY);
+            if (na > 0 && nd > 0) {
+                float sd = 1.0f / nd, sa = 1.0f / na;
+                for (int n = 0; n < normalCount; n++)
+                    for (int k = 0; k < 3; k++) {
+                        ls[n][i][k] = 0.0f + dir[n][k] * sd;
+                        ls[n][i][k] = ls[n][i][k] + amb[n][k] * sa;
+                    }
+                SampleIntensity(ls, i, normalCount, (int)fl->sample[i].s + (int)fl->sample[i].t * w, size, intensity);
+            }
+        }
+    }
+    free(done), free(gradient), free(intensity);
+}
+
 void BuildFacelights(int facenum) {
     dface_t *f = &g_pFaces[facenum];
     facelight_t *fl = &facelight[facenum];
@@ -657,37 +878,17 @@ void BuildFacelights(int facenum) {
     for (int group = 0; group < fl->numsamples; group += LANES) {
         int count = fl->numsamples - group < LANES ? fl->numsamples - group : LANES;
         points4_t p;
-        p.normalCount = normalCount;
         int cluster[LANES];
+        float pos[LANES][3], nin[LANES][3], nout[LANES][3];
         for (int i = 0; i < LANES; i++) {
             sample_t *sp = &fl->sample[group + (i < count ? i : count - 1)];
-            vec3_t normal, bumps[NUM_BUMP_VECTS];
-            if (isdisp) {
-                /* (the sample's own normal; the point still moves along the base face's normal) */
-                VectorCopy(sp->normal, normal);
-                if (normalCount > 1)
-                    GetBumpNormals(tex->textureVecsTexelsPerWorldUnits[0], tex->textureVecsTexelsPerWorldUnits[1],
-                                   l.facenormal, normal, bumps);
-            } else if (l.isflat) {
-                VectorCopy(l.facenormal, normal);
-                for (int b = 0; b < NUM_BUMP_VECTS && normalCount > 1; b++) VectorCopy(flatBump[b], bumps[b]);
-            } else {
-                vec3_t spot;
-                VectorSubtract(sp->pos, l.modelorg, spot);
-                GetPhongNormal(facenum, spot, normal);
-                if (normalCount > 1)
-                    GetBumpNormals(tex->textureVecsTexelsPerWorldUnits[0], tex->textureVecsTexelsPerWorldUnits[1],
-                                   l.facenormal, normal, bumps);
-                if (i < count) VectorCopy(normal, sp->normal);
-            }
-            for (int c = 0; c < 3; c++) {
-                /* (the point moves 1 unit off the face so the face itself doesn't shadow it) */
-                p.pos[c][i] = sp->pos[c] + l.facenormal[c];
-                p.normals[0][c][i] = normal[c];
-                for (int b = 1; b < normalCount; b++) p.normals[b][c][i] = bumps[b - 1][c];
-            }
-            cluster[i] = ClusterFromPoint(sp->pos);
+            VectorCopy(sp->pos, pos[i]);
+            VectorCopy(sp->normal, nin[i]);
         }
+        SetupPoints4(&l, facenum, normalCount, isdisp, (const vec3_t *)flatBump, (const float(*)[3])pos,
+                     (const float(*)[3])nin, &p, cluster, nout);
+        if (!isdisp && !l.isflat)
+            for (int i = 0; i < count; i++) VectorCopy(nout[i], fl->sample[group + i].normal);
         for (directlight_t *dl = activelights; dl; dl = dl->next) {
             float mask[LANES] = {0};
             int any = 0;
@@ -712,6 +913,9 @@ void BuildFacelights(int facenum) {
                     for (int k = 0; k < 3; k++) fl->light[style][b][group + i][k] += fxdot[b][i] * dl->light.intensity[k];
         }
     }
+    if (g_bExtra && !isdisp)
+        for (int k = 0; k < MAXLIGHTMAPS && f->styles[k] != 255; k++)
+            BuildSupersampleFaceLights(&l, facenum, fl, k, normalCount, (const vec3_t *)flatBump);
     /* the samples' direct light (style 0) onto the face's patches, for bouncing */
     int k0;
     for (k0 = 0; k0 < MAXLIGHTMAPS; k0++)

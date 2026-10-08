@@ -294,7 +294,7 @@ void LoadTexLights(const char *gamedir, const char *bsppath, const char *designe
 void LightForTexture(const char *name, vec3_t result);
 const char *TexDataName(int texdata);
 extern float g_SunAngularExtent;
-extern int g_bFast;
+extern int g_bFast, g_bExtra;
 void ExportDirectLightsToWorldLights(void);
 int ClusterFromPoint(const vec3_t p);
 

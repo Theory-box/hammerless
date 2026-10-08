@@ -6,6 +6,7 @@
 
 int g_bHDR = 1;
 int g_bFast;
+int g_bExtra = 1;
 static int g_bLDR = 0;
 
 vec_t VectorNormalize(vec3_t v) {
@@ -49,6 +50,10 @@ int main(int argc, char **argv) {
             smoothing_threshold = (float)cos(atof(argv[i]) * (3.14159265358979323846 / 180.0));
         } else if (!_stricmp(a, "-fast")) {
             g_bFast = 1;
+        } else if (!_stricmp(a, "-noextra")) {
+            g_bExtra = 0;
+        } else if (!_stricmp(a, "-extra")) {
+            g_bExtra = 1;
         } else if (a[0] == '-') {
             /* -fast, -final, -StaticPropLighting, ...: accepted (not all done yet) */
         } else map = a;
