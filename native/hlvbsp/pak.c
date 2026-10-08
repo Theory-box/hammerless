@@ -6,7 +6,7 @@
 #include "hlvbsp.h"
 
 typedef struct { char name[300]; unsigned char *data; int len; unsigned crc; } pakfile_t;
-static pakfile_t pakfiles[64];
+static pakfile_t pakfiles[4096];
 static int numpakfiles;
 
 static unsigned crc32(const unsigned char *p, int n) {
@@ -23,9 +23,16 @@ static unsigned crc32(const unsigned char *p, int n) {
     return c ^ 0xFFFFFFFFu;
 }
 
+static int FileInPak(const char *name) {
+    for (int i = 0; i < numpakfiles; i++)
+        if (!_stricmp(pakfiles[i].name, name)) return i;
+    return -1;
+}
+
 void AddFileToPak(const char *name, unsigned char *data, int len) {
-    if (numpakfiles == 64) Error("too many files in the pakfile");
-    pakfile_t *f = &pakfiles[numpakfiles++];
+    int at = FileInPak(name);         /* (the same name again replaces the file in its place) */
+    if (at < 0 && numpakfiles == 4096) Error("too many files in the pakfile");
+    pakfile_t *f = &pakfiles[at >= 0 ? at : numpakfiles++];
     strncpy(f->name, name, sizeof(f->name) - 1);
     f->data = data;
     f->len = len;
@@ -135,7 +142,21 @@ void AddDefaultCubemaps(const char *mapname) {
     unsigned char *ldr = CubemapVTF(0, &len);
     snprintf(name, sizeof(name), "materials/maps/%s/cubemapdefault.vtf", mapname);
     AddFileToPak(name, ldr, len);
-    unsigned char *hdr = CubemapVTF(1, &len);
+    /* each env_cubemap's texture starts as the default cubemap */
+    extern int Cubemap_DefaultNames(const char ***names);
+    const char **names;
+    int n = Cubemap_DefaultNames(&names);
+    for (int i = 0; i < n; i++)
+        if (FileInPak(names[i]) < 0) AddFileToPak(names[i], ldr, len);
+    int hlen;
+    unsigned char *hdr = CubemapVTF(1, &hlen);
     snprintf(name, sizeof(name), "materials/maps/%s/cubemapdefault.hdr.vtf", mapname);
-    AddFileToPak(name, hdr, len);
+    AddFileToPak(name, hdr, hlen);
+    for (int i = 0; i < n; i++) {
+        char h[700];
+        snprintf(h, sizeof(h), "%s", names[i]);
+        char *dot = strrchr(h, '.');
+        if (dot && !_stricmp(dot, ".vtf")) strcpy(dot, ".hdr.vtf");
+        if (FileInPak(h) < 0) AddFileToPak(h, hdr, hlen);
+    }
 }

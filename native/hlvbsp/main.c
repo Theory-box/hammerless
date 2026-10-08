@@ -154,6 +154,9 @@ int main(int argc, char **argv) {
         if (!_stricmp(argv[i], "-game") && i + 1 < argc) {
             extern const char *g_gamedir;
             g_gamedir = argv[++i];
+        } else if (!_stricmp(argv[i], "-cubemaps") && i + 1 < argc) {
+            extern const char *g_cubemap_file;
+            g_cubemap_file = argv[++i];
         } else if (!_stricmp(argv[i], "-detail") && i + 1 < argc) {
             extern const char *g_detail_file;
             g_detail_file = argv[++i];
@@ -186,6 +189,13 @@ int main(int argc, char **argv) {
     }
     sprintf(path, "%s.vmf", source);
     LoadMapFile(path);
+    {
+        extern void Cubemap_FixupBrushSidesMaterials(void), Cubemap_AttachDefaultCubemapToSpecularSides(void),
+            Cubemap_AddUnreferencedCubemaps(void);
+        Cubemap_FixupBrushSidesMaterials();
+        Cubemap_AttachDefaultCubemapToSpecularSides();
+        Cubemap_AddUnreferencedCubemaps();
+    }
     SetModelNumbers();
     SetLightStyles();
     BeginBSPFile();

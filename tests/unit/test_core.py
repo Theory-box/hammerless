@@ -2296,5 +2296,45 @@ class TestCustomModels(unittest.TestCase):
         self.assertEqual(base_texture_of('LightmappedGeneric { $basetexture concrete/floor01 }'), "concrete/floor01")
 
 
+class TestCubemapPatch(unittest.TestCase):
+    """env_cubemap material patches, written as vbsp writes them (measured on L4D2's vbsp output)."""
+    VMTS = {
+        "metal/pipe": 'LightmappedGeneric\n{\n$envmap env_cubemap\nLightmappedGeneric_HDR_dx9\n{\n$envmaptint "[.1 .1 .1]"\n}\n}',
+        "glass/pane": 'LightmappedGeneric\n{\n$envmap env_cubemap\n$crackmaterial "glass\\broken"\n'
+                      'lightmappedgeneric_HDR_dx9\n{\n$crackmaterial "glass\\broken_hdr"\n}\n}',
+        "glass/broken": 'ShatteredGlass\n{\n$envmap env_cubemap\nShatteredGlass_DX7\n{\n$x 1\n}\nProxies\n{\nBreakableSurface\n{\n}\n}\n}',
+        "plain/wall": 'LightmappedGeneric\n{\n$basetexture "a/b"\n$envmap "env_cubemap" [$X360]\n}',
+    }
+
+    def _cm(self):
+        from hammerless.core.cubemappatch import CubemapMaterials
+        cm = CubemapMaterials(lambda n: self.VMTS.get(n))
+        for n in ("metal/pipe", "glass/pane"):
+            cm.load(n)
+        return cm
+
+    def test_blocks_without_content_are_left_out(self):
+        lines = self._cm().template("metal/pipe")
+        self.assertEqual(lines, ['"patch"', "{", '\t"include"\t\t"materials/@NAME@.vmt"', '\t"replace"', "\t{",
+                                 '\t\t"$envmap"\t\t"@CUBE@"', "\t}", "}"])
+
+    def test_dependent_and_symbol_spelling(self):
+        cm = self._cm()
+        self.assertEqual(cm.dependent("glass/pane"), ("$crackmaterial", "glass\\broken"))
+        lines = cm.template("glass/pane")
+        # the HDR block is spelled as the first material wrote it; the dependent is patched everywhere
+        self.assertIn('\t\t"LightmappedGeneric_HDR_dx9"', lines)
+        self.assertEqual(lines.count('\t\t\t"$crackmaterial"\t\t"@DEP@"'), 1)
+        # Proxies has a (written-out-empty) child, so it appears as an empty block; DX7 doesn't
+        broken = cm.template("glass\\broken")
+        self.assertIn('\t\t"Proxies"', broken)
+        self.assertNotIn('\t\t"ShatteredGlass_DX7"', broken)
+
+    def test_console_only_keys_are_ignored(self):
+        cm = self._cm()
+        self.assertFalse(cm.specular("plain/wall"))
+        self.assertFalse(cm.patchable("plain/wall"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -73,7 +73,8 @@ def use_hlvvis(opts: "CompileOptions") -> bool:
 
 
 HLVBSP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvbsp.exe")
-HLVBSP_TABLES = (".hlvbsp_materials.txt", ".hlvbsp_surfaceprops.txt", ".hlvbsp_props.txt", ".hlvbsp_detail.txt")
+HLVBSP_TABLES = (".hlvbsp_materials.txt", ".hlvbsp_surfaceprops.txt", ".hlvbsp_props.txt", ".hlvbsp_detail.txt",
+                 ".hlvbsp_cubemaps.txt")
 
 
 def use_hlvbsp(opts: "CompileOptions") -> bool:
@@ -82,9 +83,9 @@ def use_hlvbsp(opts: "CompileOptions") -> bool:
 
 
 def hlvbsp_command(tools: "Tools", base: str) -> list[str]:
-    mat, surf, props, detail = (base + ext for ext in HLVBSP_TABLES)
+    mat, surf, props, detail, cubemaps = (base + ext for ext in HLVBSP_TABLES)
     return [HLVBSP, "-game", tools.gamedir, "-materials", mat, "-surfaceprops", surf, "-props", props,
-            "-detail", detail, base]
+            "-detail", detail, "-cubemaps", cubemaps, base]
 
 
 _CONTENT: dict = {}
@@ -93,14 +94,15 @@ _CONTENT: dict = {}
 def prepare_hlvbsp(tools: "Tools", vmf_path: str, base: str) -> list[str]:
     """Write what hlvbsp reads from the game's files (materials, surface properties, prop models).
     Returns the reasons it can't compile this map yet (then Valve's vbsp does)."""
-    from .mapcompiler import (unsupported, write_detail_file, write_material_table, write_prop_table,
-                              write_surfaceprops)
+    from .mapcompiler import (unsupported, write_cubemap_materials, write_detail_file, write_material_table,
+                              write_prop_table, write_surfaceprops)
     from .vpk import GameContent
     if tools.root not in _CONTENT:
         _CONTENT[tools.root] = GameContent(tools.root)
     content = _CONTENT[tools.root]
-    mat, surf, props, detail = (base + ext for ext in HLVBSP_TABLES)
+    mat, surf, props, detail, cubemaps = (base + ext for ext in HLVBSP_TABLES)
     write_material_table(mat, vmf_path, content, tools.gamedir)
+    write_cubemap_materials(cubemaps, vmf_path, content, tools.gamedir)
     write_surfaceprops(surf, content)
     detail_text = write_detail_file(detail, vmf_path, content, tools.gamedir)
     write_prop_table(props, vmf_path, content, tools.gamedir, detail_text)

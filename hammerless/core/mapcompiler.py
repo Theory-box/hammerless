@@ -194,6 +194,15 @@ def vmf_materials(vmf_text: str) -> list[str]:
     return list(seen.values())
 
 
+def write_cubemap_materials(path: str, vmf_path: str, content, game_dir: str | None) -> int:
+    """For env_cubemap: which materials are specular and their patch .vmt templates (core/cubemappatch)."""
+    from .cubemappatch import write_cubemap_table
+    from .gamematerials import _read_text
+    with open(vmf_path, encoding="utf-8", errors="replace") as f:
+        names = vmf_materials(f.read())
+    return write_cubemap_table(path, names, lambda n: _read_text(content, f"materials/{n}.vmt", game_dir))
+
+
 def write_surfaceprops(path: str, content) -> int:
     """The game's surface property scripts (in the manifest's order) for hlvbsp to hand to vphysics:
     blocks of name \\n byte count \\n text."""
@@ -342,7 +351,7 @@ def write_material_table(path: str, vmf_path: str, content, game_dir: str | None
 # what hlvbsp doesn't do yet: maps with these are compiled by Valve's vbsp
 UNSUPPORTED_CLASSES = {
     "info_overlay_transition": "water overlays",
-    "func_occluder": "occluders", "func_viscluster": "vis clusters", "env_cubemap": "cubemaps",
+    "func_occluder": "occluders", "func_viscluster": "vis clusters",
     "sky_camera": "3D skyboxes", "func_instance": "instances", "info_no_dynamic_shadow": "shadow blockers",
 }
 

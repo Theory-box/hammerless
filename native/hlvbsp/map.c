@@ -283,13 +283,36 @@ int FindOrCreateTexData(int texref) {
 }
 
 int MaterialSurfaceProp(int texdata);
+
+/* texdatas copied from another (vbsp's AddCloneTexData / FindAliasedTexData): source + 1, 0 = none */
+static int *texdata_source, texdata_source_cap;
+
+static void SetTexDataSource(int texdata, int source) {
+    if (texdata >= texdata_source_cap) {
+        int n = texdata + 256;
+        texdata_source = realloc(texdata_source, sizeof(int) * n);
+        memset(texdata_source + texdata_source_cap, 0, sizeof(int) * (n - texdata_source_cap));
+        texdata_source_cap = n;
+    }
+    texdata_source[texdata] = source + 1;
+}
+
+/* The texdata of the material a copied texdata stands for (vbsp's GetOriginalMaterialNameForPatchedMaterial). */
+int OriginalTexData(int texdata) {
+    for (int guard = 0; guard < 16 && texdata < texdata_source_cap && texdata_source[texdata]; guard++)
+        texdata = texdata_source[texdata] - 1;
+    return texdata;
+}
+
 const char *MaterialDetailType(int texdata) {
+    texdata = OriginalTexData(texdata);
     const char *name = texdata_strings + texdata_string_table[texdatas[texdata].name_id];
     int m = LookupMaterial(name);
     return m >= 0 ? materials[m].detailtype : "";
 }
 
 const char *MaterialSurfacePropName(int texdata) {
+    texdata = OriginalTexData(texdata);
     const char *name = texdata_strings + texdata_string_table[texdatas[texdata].name_id];
     int m = LookupMaterial(name);
     return m >= 0 ? materials[m].surfaceprop : "";
@@ -351,12 +374,41 @@ int AliasedTexData(const char *name, int source) {
     texdata_t *td = &texdatas[numtexdata];
     *td = texdatas[source];
     td->name_id = TexDataString(name);
+    SetTexDataSource(numtexdata, source);
     return numtexdata++;
+}
+
+/* vbsp's AddCloneTexData: a copy of `source` under `name` (no search). */
+int CloneTexData(int source, const char *name) {
+    if (numtexdata == max_texdata) {
+        max_texdata = max_texdata ? max_texdata * 2 : 256;
+        texdatas = realloc(texdatas, sizeof(texdata_t) * max_texdata);
+    }
+    texdatas[numtexdata] = texdatas[source];
+    texdatas[numtexdata].name_id = TexDataString(name);
+    SetTexDataSource(numtexdata, source);
+    return numtexdata++;
+}
+
+/* vbsp's FindTexData: by name, any case; -1 = none. */
+int FindTexDataByName(const char *name) {
+    for (int i = 0; i < numtexdata; i++)
+        if (!_stricmp(TexDataName(i), name)) return i;
+    return -1;
+}
+
+int FindTexInfoExact(const texinfo_t *t) {
+    for (int i = 0; i < numtexinfo; i++)
+        if (texinfos[i].texdata == t->texdata && !memcmp(&texinfos[i], t, sizeof(texinfo_t))) return i;
+    return -1;
 }
 
 /* The $bottommaterial of a texinfo's material ("" = none). */
 const char *BottomMaterial(int texinfo) {
-    int m = LookupMaterial(TexDataName(texinfos[texinfo].texdata));
+    extern const char *Cubemap_PatchedValue(int texdata, const char *key);
+    const char *patched = Cubemap_PatchedValue(texinfos[texinfo].texdata, "$bottommaterial");
+    if (patched) return patched;
+    int m = LookupMaterial(TexDataName(OriginalTexData(texinfos[texinfo].texdata)));
     return m >= 0 ? materials[m].bottommaterial : "";
 }
 
@@ -909,6 +961,12 @@ static void load_entity(parser_t *p) {
         sprintf(buf, "%2.2f", maxs[2]); SetKeyValue(mapent, "maxs.z", buf);
         MoveBrushesToWorld(mapent);
         SetKeyValue(mapent, "classname", "info_ladder");
+        return;
+    }
+    if (!strcmp(cls, "env_cubemap")) {
+        extern void Cubemap_FromEntity(entity_t *e);
+        Cubemap_FromEntity(mapent);
+        mapent->epairs = NULL;
         return;
     }
     if (!strcmp(cls, "info_overlay")) {

@@ -794,6 +794,9 @@ void EndBSPFile(const char *path) {
         SetLump(61, levels, len61, 0);
         unsigned char *lw = Water_Lump(&len);
         SetLump(36, lw, len, 0);
+        extern unsigned char *Cubemap_Lump(int *len);
+        unsigned char *cm = Cubemap_Lump(&len);
+        SetLump(42, cm, len, 0);
     }
     /* the pakfile: the default cubemap (vbsp makes it whenever the world has a sky) */
     {
