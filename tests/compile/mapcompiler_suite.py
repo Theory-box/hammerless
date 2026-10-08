@@ -357,6 +357,18 @@ def m_skybox(m):
     m.ent("light", "3256 3256 200", '"_light" "255 255 255 100"')
 
 
+def m_ladders(m):
+    L, N = "TOOLS/TOOLSINVISIBLELADDER", "TOOLS/TOOLSNODRAW"
+    m.solids = m.room((0, 0, 0), (1024, 512, 256))
+    m.solids.append(m.box((500, 0, 0), (516, 512, 200)))
+    m.player_and_light("100 100 64", "512 256 200")
+    # a ladder face on one side; one all ladder; a zombies-only one (team 2 is kept by build.py)
+    m.ent("func_ladder", None, "", [m.box((484, 100, 0), (500, 132, 200), mats=[N, N, L, N, N, N])])
+    m.ent("func_ladder", None, "", [m.box((516, 300, 0), (520, 332, 200), L)])
+    m.ent("func_simpleladder", None, '"team" "2" "normal.x" "1" "normal.y" "0" "normal.z" "0"',
+          [m.box((516, 400, 0), (520, 432, 200), mats=[N, N, N, L, N, N])])
+
+
 MAPS = {
     "box": m_box, "props": m_props, "leak": m_leak, "areaportal": m_areaportal,
     "areaportal_leak": m_areaportal_leak, "areaportal_window": m_areaportal_window,
@@ -365,6 +377,7 @@ MAPS = {
     "water_cubemap": m_water_cubemap, "cubemaps": m_cubemaps, "blend_on_brushes": m_blend_on_brushes,
     "blend_cubemap": lambda m: m_blend_on_brushes(m, True), "no_dynamic_shadow": m_no_dynamic_shadow,
     "viscluster": m_viscluster, "occluders": m_occluders, "skybox": m_skybox,
+    "ladders": m_ladders,
 }
 
 

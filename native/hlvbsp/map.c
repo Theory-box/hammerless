@@ -925,7 +925,7 @@ static void load_entity(parser_t *p) {
         const char *v = p->token;
         if (!_stricmp(key, "classname")) {
             if (!_stricmp(v, "func_detail")) le.base_contents = CONTENTS_DETAIL;
-            else if (!_stricmp(v, "func_ladder")) le.base_contents = CONTENTS_LADDER;
+            /* (L4D2: func_ladder adds no contents - the ladder material does) */
             else if (!_stricmp(v, "func_water")) le.base_contents = CONTENTS_WATER;
         } else if (!_stricmp(key, "id")) {
             SetKeyValue(mapent, "hammerid", v);
@@ -962,23 +962,26 @@ static void load_entity(parser_t *p) {
         return;
     }
     if (!strcmp(cls, "func_ladder")) {
-        /* info_ladder keeps the ladder's box for the bots */
-        vec3_t mins, maxs;
+        /* L4D2 keeps the ladder as a brush model (func_simpleladder) facing its ladder sides' normal */
         char buf[128];
-        ClearBounds(mins, maxs);
+        SetKeyValue(mapent, "team", "0");
+        SetKeyValue(mapent, "normal.x", "0");
+        SetKeyValue(mapent, "normal.y", "0");
+        SetKeyValue(mapent, "normal.z", "1");
         for (int i = 0; i < mapent->numbrushes; i++) {
             mapbrush_t *b = &mapbrushes[mapent->firstbrush + i];
-            AddPointToBounds(b->mins, mins, maxs);
-            AddPointToBounds(b->maxs, mins, maxs);
+            for (int j = 0; j < b->numsides; j++) {
+                const side_t *sd = &b->original_sides[j];
+                if (!(sd->contents & CONTENTS_LADDER)) continue;
+                if (sd->contents & 0x800) SetKeyValue(mapent, "team", "1");             /* CONTENTS_TEAM1 */
+                else if (sd->contents & 0x1000) SetKeyValue(mapent, "team", "2");       /* CONTENTS_TEAM2 */
+                const float *n = mapplanes[sd->planenum].normal;
+                sprintf(buf, "%f", n[0]); SetKeyValue(mapent, "normal.x", buf);
+                sprintf(buf, "%f", n[1]); SetKeyValue(mapent, "normal.y", buf);
+                sprintf(buf, "%f", n[2]); SetKeyValue(mapent, "normal.z", buf);
+            }
         }
-        sprintf(buf, "%2.2f", mins[0]); SetKeyValue(mapent, "mins.x", buf);
-        sprintf(buf, "%2.2f", mins[1]); SetKeyValue(mapent, "mins.y", buf);
-        sprintf(buf, "%2.2f", mins[2]); SetKeyValue(mapent, "mins.z", buf);
-        sprintf(buf, "%2.2f", maxs[0]); SetKeyValue(mapent, "maxs.x", buf);
-        sprintf(buf, "%2.2f", maxs[1]); SetKeyValue(mapent, "maxs.y", buf);
-        sprintf(buf, "%2.2f", maxs[2]); SetKeyValue(mapent, "maxs.z", buf);
-        MoveBrushesToWorld(mapent);
-        SetKeyValue(mapent, "classname", "info_ladder");
+        SetKeyValue(mapent, "classname", "func_simpleladder");
         return;
     }
     if (!strcmp(cls, "func_viscluster")) {
