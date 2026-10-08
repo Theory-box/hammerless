@@ -40,6 +40,7 @@ typedef struct {
     sample_t *sample;
     int numluxels;
     vec3_t *luxel;
+    vec3_t *luxelNormals;                                /* (displacements) */
     float worldAreaPerLuxel;
     vec3_t *light[MAXLIGHTMAPS][NUM_BUMP_VECTS + 1];     /* per style, per normal, per sample */
 } facelight_t;
@@ -281,6 +282,43 @@ static void BuildFaceLuxels(lightinfo_t *l, facelight_t *fl) {
         for (int s = 0; s < width; s++) LuxelSpaceToWorld(l, s, t, fl->luxel[s + t * width]);
 }
 
+/* A displacement's samples: a grid of width x height cells in its (u, v), each at its centre on the
+ * surface (pushed 1 unit out), with the blended vertex normal there. Its luxels sit on the surface at
+ * the grid corners (u, v = 0 .. 1). */
+static void BuildDispSamples(lightinfo_t *l, facelight_t *fl) {
+    const dispsurf_t *d = &dispsurfs[l->face->dispinfo];
+    int width = l->face->m_LightmapTextureSizeInLuxels[0] + 1, height = l->face->m_LightmapTextureSizeInLuxels[1] + 1;
+    float stepU = 1.0f / (float)width, stepV = 1.0f / (float)height;
+    float halfU = stepU * 0.5f, halfV = stepV * 0.5f;
+    fl->numsamples = width * height;
+    fl->sample = xalloc(sizeof(sample_t) * (fl->numsamples + 1));
+    for (int v = 0; v < height; v++)
+        for (int u = 0; u < width; u++) {
+            sample_t *sp = &fl->sample[v * width + u];
+            sp->s = (float)u;
+            sp->t = (float)v;
+            sp->coord[0] = (float)u * stepU + halfU;
+            sp->coord[1] = (float)v * stepV + halfV;
+            DispUVToSurfPoint(d, sp->coord[0], sp->coord[1], 1.0f, sp->pos);
+            DispUVToSurfNormal(d, sp->coord[0], sp->coord[1], sp->normal);
+        }
+}
+
+static void BuildDispLuxels(lightinfo_t *l, facelight_t *fl) {
+    const dispsurf_t *d = &dispsurfs[l->face->dispinfo];
+    int width = l->face->m_LightmapTextureSizeInLuxels[0] + 1, height = l->face->m_LightmapTextureSizeInLuxels[1] + 1;
+    fl->numluxels = width * height;
+    fl->luxel = xalloc(sizeof(vec3_t) * (fl->numluxels + 1));
+    fl->luxelNormals = xalloc(sizeof(vec3_t) * (fl->numluxels + 1));
+    float stepU = 1.0f / (float)(width - 1), stepV = 1.0f / (float)(height - 1);
+    for (int v = 0; v < height; v++)
+        for (int u = 0; u < width; u++) {
+            float uv[2] = {(float)u * stepU, (float)v * stepV};
+            DispUVToSurfPoint(d, uv[0], uv[1], 1.0f, fl->luxel[v * width + u]);
+            DispUVToSurfNormal(d, uv[0], uv[1], fl->luxelNormals[v * width + u]);
+        }
+}
+
 /* ------------------------------------------------------------------ light at 4 points (vrad's SSE gather) */
 /* Samples go through in groups of 4 (the last group padded with copies of its last sample), each light's
  * shadow rays traced as one packet, as vrad does: the packet decides which tree leaves are visited. */
@@ -399,6 +437,8 @@ static void GatherSampleStandardLight4(lightout4_t *out, const directlight_t *dl
         }
 }
 
+static void SkyDirection(int i, vec3_t out);
+
 static void GatherSampleSkyLight4(lightout4_t *out, const directlight_t *dl, const points4_t *p) {
     float dot[LANES];
     int allzero = 1;
@@ -409,16 +449,28 @@ static void GatherSampleSkyLight4(lightout4_t *out, const directlight_t *dl, con
         if (dot[i] != 0) allzero = 0;
     }
     if (allzero) return;
-    /* TODO: sun spread (SunSpreadAngle) samples */
-    float stop[3][LANES], see[LANES];
+    /* a sun with a spread angle: 30 rays (7 with -fast), all but the first jittered over a disc of that size */
+    float extent = dl->has_sun_extent ? dl->sun_extent : g_SunAngularExtent;
+    int nsamples = extent > 0.0f ? (g_bFast ? 7 : 30) : 1;
+    float see[LANES] = {0}, frac[LANES], stop[3][LANES];
     float L = (float)MAX_TRACE_LENGTH;
-    for (int c = 0; c < 3; c++) {
-        float dc = dl->light.normal[c] * -L;
-        for (int i = 0; i < LANES; i++) stop[c][i] = dc + p->pos[c][i];
+    float jitter = (float)((double)extent * MAX_TRACE_LENGTH);
+    for (int d = 0; d < nsamples; d++) {
+        vec3_t delta;
+        for (int c = 0; c < 3; c++) delta[c] = dl->light.normal[c] * -L;
+        if (d) {
+            vec3_t ofs;
+            SkyDirection(d - 1, ofs);
+            for (int c = 0; c < 3; c++) delta[c] = ofs[c] * jitter + delta[c];
+        }
+        for (int c = 0; c < 3; c++)
+            for (int i = 0; i < LANES; i++) stop[c][i] = p->pos[c][i] + delta[c];
+        TestLine_DoesHitSky4(p->pos, (const float(*)[LANES])stop, -1, frac);
+        for (int i = 0; i < LANES; i++) see[i] += frac[i];
     }
-    TestLine_DoesHitSky4(p->pos, (const float(*)[LANES])stop, -1, see);
+    float scale = 1.0f / (float)nsamples;
     for (int i = 0; i < LANES; i++) {
-        see[i] = see[i] * (1.0f / 1);
+        see[i] = see[i] * scale;
         out->dot[0][i] = dot[i] * see[i];
         out->falloff[i] = 1.0f;
         out->sunAmount[i] = see[i] * 10000.0f;
@@ -540,13 +592,14 @@ void BuildFacelights(int facenum) {
     if (!FaceHasPatches(facenum)) return;
     lightinfo_t l;
     InitLightinfo(&l, facenum);
-    if (f->dispinfo != -1) {
-        /* TODO: displacements */
-        f->styles[0] = 0;
-        return;
+    int isdisp = f->dispinfo != -1;
+    if (isdisp) {
+        BuildDispSamples(&l, fl);
+        BuildDispLuxels(&l, fl);
+    } else {
+        BuildFacesamples(&l, fl);
+        BuildFaceLuxels(&l, fl);
     }
-    BuildFacesamples(&l, fl);
-    BuildFaceLuxels(&l, fl);
     const texinfo_t *tex = &texinfo[f->texinfo];
     int normalCount = tex->flags & SURF_BUMPLIGHT ? NUM_BUMP_VECTS + 1 : 1;
     f->styles[0] = 0;
@@ -563,7 +616,13 @@ void BuildFacelights(int facenum) {
         for (int i = 0; i < LANES; i++) {
             sample_t *sp = &fl->sample[group + (i < count ? i : count - 1)];
             vec3_t normal, bumps[NUM_BUMP_VECTS];
-            if (l.isflat) {
+            if (isdisp) {
+                /* (the sample's own normal; the point still moves along the base face's normal) */
+                VectorCopy(sp->normal, normal);
+                if (normalCount > 1)
+                    GetBumpNormals(tex->textureVecsTexelsPerWorldUnits[0], tex->textureVecsTexelsPerWorldUnits[1],
+                                   l.facenormal, normal, bumps);
+            } else if (l.isflat) {
                 VectorCopy(l.facenormal, normal);
                 for (int b = 0; b < NUM_BUMP_VECTS && normalCount > 1; b++) VectorCopy(flatBump[b], bumps[b]);
             } else {
@@ -711,6 +770,133 @@ static radial_t *BuildLuxelRadial(int facenum, int style) {
     return rad;
 }
 
+/* -- displacements: each luxel gathers the samples (of its own and its neighbouring faces) within the
+ * displacement's sample radius, found through a hash of 64-unit cells (vrad's sample hash) */
+typedef struct { int x, y, z, count, cap; int *handles; } samplecell_t;
+static samplecell_t *cells;
+static int cellcap, numcells, *cellhash, cellmask;
+
+static int CellFind(int x, int y, int z, int add) {
+    unsigned h = ((unsigned)x * 73856093u ^ (unsigned)y * 19349663u ^ (unsigned)z * 83492791u) & (unsigned)cellmask;
+    for (; cellhash[h] != -1; h = (h + 1) & (unsigned)cellmask) {
+        samplecell_t *c = &cells[cellhash[h]];
+        if (c->x == x && c->y == y && c->z == z) return cellhash[h];
+    }
+    if (!add) return -1;
+    if (numcells == cellcap) {
+        cellcap = cellcap ? cellcap * 2 : 1024;
+        cells = realloc(cells, sizeof(samplecell_t) * cellcap);
+    }
+    samplecell_t *c = &cells[numcells];
+    memset(c, 0, sizeof(*c));
+    c->x = x, c->y = y, c->z = z;
+    cellhash[h] = numcells;
+    return numcells++;
+}
+
+static void InsertSamplesDataIntoHashTable(void) {
+    int total = 0;
+    for (int f = 0; f < numfaces; f++) total += facelight[f].numsamples;
+    int size = 1024;
+    while (size < 2 * total) size *= 2;        /* (at most one cell per sample: never more than half full) */
+    cellmask = size - 1;
+    cellhash = xalloc(sizeof(int) * size);
+    for (int i = 0; i < size; i++) cellhash[i] = -1;
+    for (int f = 0; f < numfaces; f++) {
+        if (texinfo[g_pFaces[f].texinfo].flags & TEX_SPECIAL) continue;
+        facelight_t *fl = &facelight[f];
+        for (int k = 0; k < fl->numsamples; k++) {
+            const float *p = fl->sample[k].pos;
+            int ci = CellFind((int)(p[0] / 64.0f), (int)(p[1] / 64.0f), (int)(p[2] / 64.0f), 1);
+            samplecell_t *c = &cells[ci];
+            if (c->count == c->cap) {
+                c->cap = c->cap ? c->cap * 2 : 16;
+                c->handles = realloc(c->handles, sizeof(int) * c->cap);
+            }
+            c->handles[c->count++] = (k & 0xFFFF) | (f << 16);
+        }
+    }
+}
+
+static int IsNeighbor(int face, int other) {
+    if (face == other) return 1;
+    int nn;
+    const int *n = FaceNeighbours(face, &nn);
+    for (int i = 0; i < nn; i++)
+        if (n[i] == other) return 1;
+    return 0;
+}
+
+static radial_t *BuildDispLuxelRadial(int facenum, int style) {
+    static int hashed;
+    if (!hashed) InsertSamplesDataIntoHashTable(), hashed = 1;
+    facelight_t *fl = &facelight[facenum];
+    radial_t *rad = AllocateRadial(facenum);
+    const dispsurf_t *d = &dispsurfs[g_pFaces[facenum].dispinfo];
+    int bump = texinfo[g_pFaces[facenum].texinfo].flags & SURF_BUMPLIGHT ? 1 : 0;
+    float radius = (float)sqrt(d->sample_radius2), r2 = radius * radius;
+    int lightstyle = g_pFaces[facenum].styles[style];
+    for (int j = 0; j < rad->w * rad->h; j++) {
+        const float *lp = fl->luxel[j], *ln = fl->luxelNormals[j];
+        int vmin[3], vmax[3];
+        for (int a = 0; a < 3; a++) {
+            vmin[a] = (int)((lp[a] - radius) * (1.0f / 64.0f));
+            vmax[a] = (int)((lp[a] + radius) * (1.0f / 64.0f)) + 1;
+        }
+        for (int z = vmin[2]; z < vmax[2] + 1; z++)
+            for (int y = vmin[1]; y < vmax[1] + 1; y++)
+                for (int x = vmin[0]; x < vmax[0] + 1; x++) {
+                    int ci = CellFind(x, y, z, 0);
+                    if (ci < 0) continue;
+                    const samplecell_t *c = &cells[ci];
+                    for (int h = 0; h < c->count; h++) {
+                        int ns = c->handles[h] & 0xFFFF, nf = (c->handles[h] >> 16) & 0xFFFF;
+                        if (!IsNeighbor(facenum, nf)) continue;
+                        int nstyle = -1;
+                        for (int k = 0; k < MAXLIGHTMAPS; k++)
+                            if (g_pFaces[nf].styles[k] == lightstyle) {
+                                nstyle = k;
+                                break;
+                            }
+                        if (nstyle == -1) continue;
+                        facelight_t *nfl = &facelight[nf];
+                        int nbump = texinfo[g_pFaces[nf].texinfo].flags & SURF_BUMPLIGHT ? 1 : 0;
+                        const sample_t *sp = &nfl->sample[ns];
+                        float angle = DotProduct(sp->normal, ln);
+                        if (angle < 0.15f) continue;
+                        vec3_t seg;
+                        VectorSubtract(sp->pos, lp, seg);
+                        float dist = sqrtf(DotProduct(seg, seg));
+                        float influence = 1.0f - (dist * dist) / r2;
+                        if (influence <= 0.0f) continue;
+                        influence *= angle;
+                        if (bump && nbump) {
+                            for (int b = 0; b < NUM_BUMP_VECTS + 1; b++)
+                                for (int k = 0; k < 3; k++) rad->light[b][j][k] += nfl->light[nstyle][b][ns][k] * influence;
+                        } else if (bump) {
+                            influence *= 0.05f;
+                            for (int b = 0; b < NUM_BUMP_VECTS + 1; b++)
+                                for (int k = 0; k < 3; k++) rad->light[b][j][k] += nfl->light[nstyle][0][ns][k] * influence;
+                        } else {
+                            for (int k = 0; k < 3; k++) rad->light[0][j][k] += nfl->light[nstyle][0][ns][k] * influence;
+                        }
+                        rad->weight[j] += influence;
+                    }
+                }
+    }
+    return rad;
+}
+
+static int DispSampleRadial(radial_t *rad, int j, vec3_t *light, int bumpCount) {
+    int ok = 1;
+    for (int b = 0; b < bumpCount; b++) {
+        VectorClear(light[b]);
+        if (rad->weight[j] > 0.0f) VectorScale(rad->light[b][j], 1.0f / rad->weight[j], light[b]);
+        else if (b == 0) ok = 0;
+    }
+    return ok;
+}
+
 static int SampleRadial(radial_t *rad, const vec3_t pnt, vec3_t *light, int bumpCount) {
     float coord[2];
     WorldToLuxelSpace(&rad->l, pnt, coord);
@@ -761,7 +947,6 @@ static int FloatCompare(const void *a, const void *b) {
 void FinalLightFace(int facenum) {
     dface_t *f = &g_pFaces[facenum];
     if (texinfo[f->texinfo].flags & TEX_SPECIAL) return;
-    if (f->dispinfo != -1) return;               /* TODO: displacements */
     facelight_t *fl = &facelight[facenum];
     int nstyles;
     for (nstyles = 0; nstyles < MAXLIGHTMAPS; nstyles++)
@@ -772,13 +957,14 @@ void FinalLightFace(int facenum) {
     float *reds = xalloc(sizeof(float) * (fl->numluxels + 1)), *greens = xalloc(sizeof(float) * (fl->numluxels + 1)),
           *blues = xalloc(sizeof(float) * (fl->numluxels + 1));
     for (int k = 0; k < nstyles; k++) {
-        radial_t *rad = BuildLuxelRadial(facenum, k);
+        int isdisp = f->dispinfo != -1;
+        radial_t *rad = isdisp ? BuildDispLuxelRadial(facenum, k) : BuildLuxelRadial(facenum, k);
         unsigned char *pdata[NUM_BUMP_VECTS + 1];
         for (int b = 0; b < bumpCount; b++) pdata[b] = dlightdata + f->lightofs + (k * bumpCount + b) * fl->numluxels * 4;
         int avgCount = 0;
         for (int j = 0; j < fl->numluxels; j++) {
             vec3_t lb[NUM_BUMP_VECTS + 1];
-            int ok = SampleRadial(rad, fl->luxel[j], lb, bumpCount);
+            int ok = isdisp ? DispSampleRadial(rad, j, lb, bumpCount) : SampleRadial(rad, fl->luxel[j], lb, bumpCount);
             if (fl->numsamples == 0) {
                 for (int b = 0; b < bumpCount; b++) lb[b][0] = 255, lb[b][1] = lb[b][2] = 0;
                 ok = 0;

@@ -136,7 +136,8 @@ typedef struct directlight_s {
     unsigned char *pvs;               /* clusters it can reach */
     int facenum;
     float m_flStartFadeDistance, m_flEndFadeDistance, m_flCapDist;
-    float sun_extent;                 /* sin of the sun's spread angle (SunSpreadAngle) */
+    float sun_extent;                 /* sin of its own spread angle (a light_directional's SunSpreadAngle) */
+    int has_sun_extent;               /* (else the light_environment's: g_SunAngularExtent) */
     int directional;                  /* a light_directional */
     struct directlight_s *next;
 } directlight_t;
@@ -181,12 +182,16 @@ typedef struct {
     vec3_t points[4];                  /* the base quad, from the corner nearest the start position */
     vec3_t *verts, *flat;
     float *alpha;
+    vec3_t *normals;                   /* per vertex, smoothed across neighbours */
+    float sample_radius2;              /* how far a luxel gathers samples */
 } dispsurf_t;
 extern dispsurf_t *dispsurfs;
 extern int numdispsurfs;
 void LoadDisplacements(void);
 int DispTriangles(const dispsurf_t *d, unsigned short (*tris)[3]);
 void AddDispsForRayTrace(void);
+void DispUVToSurfPoint(const dispsurf_t *d, float u, float v, float push, vec3_t out);
+void DispUVToSurfNormal(const dispsurf_t *d, float u, float v, vec3_t out);
 
 /* staticprops.c */
 extern const char *g_modeldir, *g_gamedir;
@@ -252,6 +257,8 @@ float face_entity_minlight(int facenum);
 void AssignLightStyles(void);
 void PrecompLightmapOffsets(void);
 void CreateDirectLights(void);
+extern float g_SunAngularExtent;
+extern int g_bFast;
 void ExportDirectLightsToWorldLights(void);
 int ClusterFromPoint(const vec3_t p);
 

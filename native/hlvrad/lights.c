@@ -367,17 +367,19 @@ static void BuildVisForLightEnvironment(directlight_t **suns, int nsuns) {
     free(pvs);
 }
 
+float g_SunAngularExtent;
+
 static void ParseLightEnvironment(const entity_t *e) {
     vec3_t dest;
     GetVectorForKey(e, "origin", dest);
     directlight_t *dl = AllocDLight(dest, 0);
     ParseLightGeneric(e, dl);
-    if (gSkyLight) return;                       /* only the first light_environment */
     const char *spread = ValueForKeyOrNull(e, "SunSpreadAngle");
     if (spread) {
-        dl->sun_extent = (float)sin(atof(spread) * (PI / 180.0));
-        Msg("sun extent from map=%f\n", dl->sun_extent);
+        g_SunAngularExtent = (float)sin(atof(spread) * (PI / 180.0));
+        Msg("sun extent from map=%f\n", g_SunAngularExtent);
     }
+    if (gSkyLight) return;                       /* only the first light_environment */
     gSkyLight = dl;
     dl->light.type = emit_skylight;
     gAmbient = AllocDLight(dl->light.origin, 0);
@@ -403,6 +405,7 @@ static void ParseLightDirectional(const entity_t *e) {
     directlight_t *dl = AllocDLight(dest, 1);
     ParseLightGeneric(e, dl);
     const char *spread = ValueForKeyOrNull(e, "SunSpreadAngle");
+    dl->has_sun_extent = 1;                      /* (its own, 0 without the key) */
     if (spread) dl->sun_extent = (float)sin(atof(spread) * (PI / 180.0));
     dl->light.type = emit_skylight;
     dl->directional = 1;

@@ -5,6 +5,7 @@
 #include "hlvrad.h"
 
 int g_bHDR = 1;
+int g_bFast;
 static int g_bLDR = 0;
 
 vec_t VectorNormalize(vec3_t v) {
@@ -34,6 +35,8 @@ int main(int argc, char **argv) {
         } else if (!_stricmp(a, "-smooth")) {
             if (++i >= argc) Error("expected an angle after '-smooth'");
             smoothing_threshold = (float)cos(atof(argv[i]) * (3.14159265358979323846 / 180.0));
+        } else if (!_stricmp(a, "-fast")) {
+            g_bFast = 1;
         } else if (a[0] == '-') {
             /* -fast, -final, -StaticPropLighting, ...: accepted (not all done yet) */
         } else map = a;
