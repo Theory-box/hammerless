@@ -887,6 +887,52 @@ static void CreateVisPortals_r(node_t *node) {
     CreateVisPortals_r(node->children[1]);
 }
 
+/* func_viscluster: leaves mostly inside one share a single vis cluster */
+typedef struct { bspbrush_t *brushes; int cluster; } viscluster_t;
+static viscluster_t *visclusters;
+static int numvisclusterents;
+
+bspbrush_t *ChopBrushes(bspbrush_t *head);
+
+void AddVisCluster(entity_t *e) {
+    vec3_t mins = {MIN_COORD_INTEGER, MIN_COORD_INTEGER, MIN_COORD_INTEGER};
+    vec3_t maxs = {MAX_COORD_INTEGER, MAX_COORD_INTEGER, MAX_COORD_INTEGER};
+    bspbrush_t *list = MakeBspBrushList(e->firstbrush, e->firstbrush + e->numbrushes, mins, maxs, NO_DETAIL);
+    visclusters = realloc(visclusters, sizeof(viscluster_t) * (numvisclusterents + 1));
+    visclusters[numvisclusterents].brushes = ChopBrushes(list);
+    visclusters[numvisclusterents++].cluster = -1;
+    e->epairs = NULL;
+    e->numbrushes = 0;
+}
+
+static int BoxesIntersect(const vec3_t amin, const vec3_t amax, const vec3_t bmin, const vec3_t bmax) {
+    for (int i = 0; i < 3; i++)
+        if (amin[i] > bmax[i] || amax[i] < bmin[i]) return 0;
+    return 1;
+}
+
+static vec_t VolumeOfIntersection(bspbrush_t *list, node_t *node) {
+    vec_t volume = 0.0f;
+    for (bspbrush_t *b = list; b; b = b->next) {
+        if (!BoxesIntersect(node->mins, node->maxs, b->mins, b->maxs)) continue;
+        bspbrush_t *x = IntersectBrush(node->volume, b);
+        if (x) {
+            volume += BrushVolume(x);
+            FreeBrush(x);
+        }
+    }
+    return volume;
+}
+
+/* The viscluster covering more than 10% of the leaf (vbsp keeps the lowest-numbered such one). */
+static int GetVisCluster(node_t *node) {
+    vec_t limit = BrushVolume(node->volume) * 0.10f;
+    int found = -1;
+    for (int i = numvisclusterents; --i >= 0;)
+        if (VolumeOfIntersection(visclusters[i].brushes, node) > limit) found = i;
+    return found;
+}
+
 static int clusterleaf;
 static void SaveClusters_r(node_t *node) {
     if (node->planenum == PLANENUM_LEAF) {
@@ -908,29 +954,42 @@ void WritePortalFile(tree_t *tree, const char *path) {
     int n = 0, cap = 0;
     BuildVisLeafList_r(headnode, &leaves, &n, &cap);
     num_visclusters = 0;
-    for (int i = 0; i < n; i++) leaves[i]->cluster = num_visclusters++;   /* (func_viscluster: not yet) */
-    /* per cluster, the portals written from their first leaf */
-    portal_t **list = xalloc(sizeof(portal_t *) * 1);
-    int nlist = 0, listcap = 0;
-    int *start = xalloc(sizeof(int) * (num_visclusters + 1));
+    for (int c = 0; c < numvisclusterents; c++) visclusters[c].cluster = -1;
+    for (int i = 0; i < n; i++) {
+        int vc = numvisclusterents ? GetVisCluster(leaves[i]) : -1;
+        if (vc >= 0) {
+            if (visclusters[vc].cluster < 0) visclusters[vc].cluster = num_visclusters++;
+            leaves[i]->cluster = visclusters[vc].cluster;
+        } else leaves[i]->cluster = num_visclusters++;
+    }
+    /* per cluster (in cluster order), the portals written from its leaves, as vbsp lists them */
+    typedef struct { portal_t **p; int n, cap; } plist_t;
+    plist_t *clusters = xalloc(sizeof(plist_t) * (num_visclusters + 1));
     num_visportals = 0;
     for (int c = 0; c < n; c++) {
         node_t *node = leaves[c];
-        start[node->cluster] = nlist;
         for (portal_t *p = node->portals; p;) {
             if (p->nodes[0] == node) {
                 if (p->nodes[0]->cluster != p->nodes[1]->cluster && Portal_VisFlood(p)) {
-                    if (nlist == listcap) {
-                        listcap = listcap ? listcap * 2 : 1024;
-                        list = realloc(list, sizeof(portal_t *) * listcap);
+                    plist_t *l = &clusters[node->cluster];
+                    if (l->n == l->cap) {
+                        l->cap = l->cap ? l->cap * 2 : 8;
+                        l->p = realloc(l->p, sizeof(portal_t *) * l->cap);
                     }
-                    list[nlist++] = p;
+                    l->p[l->n++] = p;
                     num_visportals++;
                 }
                 p = p->next[0];
             } else p = p->next[1];
         }
     }
+    portal_t **list = xalloc(sizeof(portal_t *) * (num_visportals + 1));
+    int nlist = 0;
+    for (int c = 0; c < num_visclusters; c++) {
+        for (int k = 0; k < clusters[c].n; k++) list[nlist++] = clusters[c].p[k];
+        free(clusters[c].p);
+    }
+    free(clusters);
     FILE *pf = fopen(path, "w");
     if (!pf) Error("Error opening %s", path);
     fprintf(pf, "PRT1\n%i\n%i\n", num_visclusters, num_visportals);
@@ -958,6 +1017,5 @@ void WritePortalFile(tree_t *tree, const char *path) {
     SaveClusters_r(headnode);
     free(leaves);
     free(list);
-    free(start);
     Msg("done (0)\n");
 }

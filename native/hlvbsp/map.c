@@ -964,6 +964,11 @@ static void load_entity(parser_t *p) {
         SetKeyValue(mapent, "classname", "info_ladder");
         return;
     }
+    if (!strcmp(cls, "func_viscluster")) {
+        extern void AddVisCluster(entity_t *e);
+        AddVisCluster(mapent);
+        return;
+    }
     if (!_stricmp(cls, "info_no_dynamic_shadow")) {
         /* its sides cast no dynamic shadows (marked once the map is read) */
         char *list = copystring(ValueForKey(mapent, "sides")), *tok = strtok(list, " ");
