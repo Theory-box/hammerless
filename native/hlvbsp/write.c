@@ -295,6 +295,37 @@ void SetLightStyles(void) {
     }
 }
 
+/* ------------------------------------------------------------------ the 3D skybox */
+static int *skyareas, numskyareas;       /* the areas sky_cameras are in */
+
+static node_t *PointInLeaf(node_t *node, const vec3_t p) {
+    while (node->planenum != PLANENUM_LEAF) {
+        plane_t *plane = &mapplanes[node->planenum];
+        vec_t d = plane->type < 3 ? p[plane->type] - plane->dist : DotProduct(p, plane->normal) - plane->dist;
+        node = d >= 0 ? node->children[0] : node->children[1];
+    }
+    return node;
+}
+
+/* After the world's faces are made (vbsp's Compute3DSkyboxAreas). */
+void Compute3DSkyboxAreas(node_t *headnode) {
+    for (int i = 0; i < num_entities; ++i) {
+        if (strcmp(ValueForKey(&entities[i], "classname"), "sky_camera")) continue;
+        node_t *leaf = PointInLeaf(headnode, entities[i].origin);
+        if (leaf->contents & CONTENTS_SOLID)
+            Error("Error! Entity sky_camera in solid volume! at %.1f %.1f %.1f\n", entities[i].origin[0], entities[i].origin[1],
+                  entities[i].origin[2]);
+        skyareas = realloc(skyareas, sizeof(int) * (numskyareas + 1));
+        skyareas[numskyareas++] = leaf->area;
+    }
+}
+
+static int Is3DSkyboxArea(int area) {
+    for (int i = numskyareas; --i >= 0;)
+        if (skyareas[i] == area) return 1;
+    return 0;
+}
+
 static void AddNodeToBounds(int node, vec3_t mins, vec3_t maxs) {
     if (node >= 0) {
         AddNodeToBounds(dnodes[node].children[0], mins, maxs);
@@ -303,6 +334,7 @@ static void AddNodeToBounds(int node, vec3_t mins, vec3_t maxs) {
     }
     int leaf = -1 - node;
     if (dleafs[leaf].contents & CONTENTS_SOLID) return;
+    if (Is3DSkyboxArea(dleafs[leaf].area_flags & 0x1FF)) return;
     for (int i = 0; i < dleafs[leaf].numleaffaces; ++i) {
         int face = dleaffaces[dleafs[leaf].firstleafface + i];
         if (texinfos[dfaces[face].texinfo].flags & SURF_NODRAW) continue;    /* (L4D2's vbsp counts sky faces) */
@@ -316,7 +348,7 @@ static void AddNodeToBounds(int node, vec3_t mins, vec3_t maxs) {
 
 static int IsBoxInsideWorld(int node, const vec3_t mins, const vec3_t maxs) {
     for (;;) {
-        if (node < 0) return !(dleafs[-1 - node].contents & CONTENTS_SOLID);
+        if (node < 0) return !(dleafs[-1 - node].contents & CONTENTS_SOLID) && !Is3DSkyboxArea(dleafs[-1 - node].area_flags & 0x1FF);
         dnode_t *n = &dnodes[node];
         int side = BoxOnPlaneSide(mins, maxs, &mapplanes[n->planenum]);
         if (side == 1) node = n->children[0];
@@ -328,7 +360,7 @@ static int IsBoxInsideWorld(int node, const vec3_t mins, const vec3_t maxs) {
     }
 }
 
-/* world_mins / world_maxs: the drawn world (3D sky areas left out: not yet). */
+/* world_mins / world_maxs: the drawn world, the 3D skybox left out. */
 void ComputeBoundsNoSkybox(void) {
     vec3_t mins, maxs;
     ClearBounds(mins, maxs);
@@ -958,11 +990,16 @@ void WritePortalFile(tree_t *tree, const char *path) {
     BuildVisLeafList_r(headnode, &leaves, &n, &cap);
     num_visclusters = 0;
     for (int c = 0; c < numvisclusterents; c++) visclusters[c].cluster = -1;
+    int skycluster = -1;
     for (int i = 0; i < n; i++) {
         int vc = numvisclusterents ? GetVisCluster(leaves[i]) : -1;
         if (vc >= 0) {
             if (visclusters[vc].cluster < 0) visclusters[vc].cluster = num_visclusters++;
             leaves[i]->cluster = visclusters[vc].cluster;
+        } else if (Is3DSkyboxArea(leaves[i]->area)) {
+            /* the whole 3D skybox is one cluster */
+            if (skycluster < 0) skycluster = num_visclusters++;
+            leaves[i]->cluster = skycluster;
         } else leaves[i]->cluster = num_visclusters++;
     }
     /* per cluster (in cluster order), the portals written from its leaves, as vbsp lists them */

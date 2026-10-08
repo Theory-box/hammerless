@@ -110,7 +110,9 @@ static void ProcessWorldModel(void) {
     MakeFaces(tree->headnode);
     {
         extern void AssignOccluderAreas(tree_t *tree);
+        extern void Compute3DSkyboxAreas(node_t *headnode);
         AssignOccluderAreas(tree);
+        Compute3DSkyboxAreas(tree->headnode);
     }
     face_t *leaffaces = MergeDetailTree(tree, brush_start, brush_end);
     Msg("FixTjuncs...\n");
