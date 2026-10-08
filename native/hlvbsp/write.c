@@ -754,7 +754,10 @@ void EndBSPFile(const char *path) {
     SetLump(44, texdata_string_table, 4 * numtexdata_strings, 0);
     SetLump(29, phys_collide, phys_collide_len, 0);
     static unsigned short physdisp = 0;
-    SetLump(28, &physdisp, 2, 0);
+    extern unsigned char *phys_disp;
+    extern int phys_disp_len;
+    if (phys_disp) SetLump(28, phys_disp, phys_disp_len, 0);
+    else SetLump(28, &physdisp, 2, 0);
     SetLump(30, vertnormals, 12 * numvertnormals, 0);
     SetLump(31, vertnormalindices, 2 * numvertnormalindices, 0);
     SetLump(46, leafmindist, 2 * numleafs, 0);

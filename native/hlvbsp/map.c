@@ -173,7 +173,8 @@ static unsigned name_hash(const char *s) {
 }
 static int *material_next;
 
-/* Lines of: name \t contents \t flags \t width \t height \t r \t g \t b \t surfaceprop */
+/* Lines of: name \t contents \t flags \t width \t height \t r \t g \t b \t surfaceprop \t found \t surfaceprop2
+ * (a surface property name of "-" means none) */
 void LoadMaterials(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) Error("can't open the material table %s", path);
@@ -194,10 +195,12 @@ void LoadMaterials(const char *path) {
         material_t *m = &materials[nummaterials];
         memset(m, 0, sizeof(*m));
         strncpy(m->name, line, sizeof(m->name) - 1);
-        m->surfaceprop = -1;
-        if (sscanf(tab + 1, "%i %i %i %i %f %f %f %i %i", &m->contents, &m->flags, &m->width, &m->height,
-                   &m->reflectivity[0], &m->reflectivity[1], &m->reflectivity[2], &m->surfaceprop, &m->found) < 9)
+        if (sscanf(tab + 1, "%i %i %i %i %f %f %f %63s %i %63s", &m->contents, &m->flags, &m->width, &m->height,
+                   &m->reflectivity[0], &m->reflectivity[1], &m->reflectivity[2], m->surfaceprop, &m->found,
+                   m->surfaceprop2) < 9)
             m->found = 1;
+        if (!strcmp(m->surfaceprop, "-")) m->surfaceprop[0] = 0;
+        if (!strcmp(m->surfaceprop2, "-")) m->surfaceprop2[0] = 0;
         unsigned h = name_hash(m->name);
         material_next[nummaterials] = material_hash[h];
         material_hash[h] = nummaterials;
@@ -234,7 +237,6 @@ int FindMaterial(const char *name) {
         m = nummaterials++;
         memset(&materials[m], 0, sizeof(material_t));
         strncpy(materials[m].name, name, sizeof(materials[m].name) - 1);
-        materials[m].surfaceprop = -1;
         material_next[m] = -1;
     }
     texrefs[numtexrefs].name = copystring(name);
@@ -278,10 +280,22 @@ int FindOrCreateTexData(int texref) {
 }
 
 int MaterialSurfaceProp(int texdata);
-int texdata_surfaceprop(int texdata) {
+const char *MaterialSurfacePropName(int texdata) {
     const char *name = texdata_strings + texdata_string_table[texdatas[texdata].name_id];
     int m = LookupMaterial(name);
-    return m >= 0 ? materials[m].surfaceprop : -1;
+    return m >= 0 ? materials[m].surfaceprop : "";
+}
+
+/* vbsp's g_SurfaceProperties[texdata]: vphysics' index when it's loaded, else a stand-in per name. */
+int SurfacePropIndex(int texdata);
+int texdata_surfaceprop(int texdata) {
+    extern void *physprops_loaded(void);
+    if (physprops_loaded()) return SurfacePropIndex(texdata);
+    const char *p = MaterialSurfacePropName(texdata);
+    if (!p[0]) return -1;
+    unsigned h = 5381;
+    for (; *p; p++) h = h * 33 + (unsigned char)*p;
+    return (int)(h & 0x7FFFFFFF);
 }
 
 int AppendTexinfo(const texinfo_t *t) {

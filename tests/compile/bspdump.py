@@ -76,6 +76,40 @@ def _fmt(v) -> str:
     return repr(v) if isinstance(v, float) else str(v)
 
 
+def _mask_ivp_points(solid: bytes) -> bytes:
+    """A collision solid (VPHY + IVP compact surface) with the unused 4th word of every ledge point
+    zeroed: vphysics leaves it uninitialised, so it differs from run to run even in vbsp's output."""
+    body = bytearray(solid)
+    if body[:4] != b"VPHY":
+        return bytes(body)
+    cs = 28
+    try:
+        (root,) = struct.unpack_from("<i", body, cs + 32)
+        stack, seen = [cs + root], set()
+        while stack:
+            node = stack.pop()
+            if node in seen or not 0 <= node <= len(body) - 28:
+                break
+            seen.add(node)
+            right, ledge_off = struct.unpack_from("<ii", body, node)
+            if right == 0:
+                ledge = node + ledge_off
+                point_off, _client, _flags, ntri = struct.unpack_from("<iiih", body, ledge)
+                used = set()
+                for t in range(ntri):
+                    for e in range(3):
+                        used.add(struct.unpack_from("<I", body, ledge + 16 + 16 * t + 4 + 4 * e)[0] & 0xFFFF)
+                for i in used:
+                    p = ledge + point_off + 16 * i + 12
+                    body[p:p + 4] = bytes(4)
+            else:
+                stack.append(node + 28)
+                stack.append(node + right)
+    except struct.error:
+        pass
+    return bytes(body)
+
+
 def records(index: int, blob: bytes) -> list[str]:
     """One text line per record of lump `index`."""
     if not blob:
@@ -107,7 +141,7 @@ def records(index: int, blob: bytes) -> list[str]:
             at += 16
             for _ in range(count):
                 n = struct.unpack_from("<i", blob, at)[0]
-                out.append(f"  solid {n} bytes: " + blob[at + 4:at + 4 + n].hex())
+                out.append(f"  solid {n} bytes: " + _mask_ivp_points(blob[at + 4:at + 4 + n]).hex())
                 at += 4 + n
             out.append("  text: " + blob[at:at + keysize].decode("latin-1").replace("\n", " | "))
             at += keysize

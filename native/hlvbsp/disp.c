@@ -1039,3 +1039,19 @@ void ParseDispTriTags(const char *key, const char *value, mapdisp_t *md) {
         tri++;
     }
 }
+
+/* ------------------------------------------------------------------ for the physics */
+int DispPower(int disp) { return mapdisps[disp].power; }
+
+const float *DispVert(int disp, int index) { return cores[disp].verts[index]; }
+
+/* The displacement's triangles with its allowed vertices (the caller frees the indices). */
+int DispTesselate(int disp, unsigned short **indices) {
+    tess_t t;
+    memset(&t, 0, sizeof(t));
+    t.active = cores[disp].allowed;
+    t.pi = cores[disp].pi;
+    Tesselate_R(&t, cores[disp].pi->root, 0);
+    *indices = t.indices;
+    return t.n;
+}

@@ -17,10 +17,11 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORE = os.path.join(HERE, "..", "hammerless", "core")
 FLAGS = ["-O2", "-ffp-contract=off", "-fno-fast-math", "-target", "x86_64-windows-gnu", "-mcpu=baseline"]
+FLAGS32 = ["-O2", "-ffp-contract=off", "-fno-fast-math", "-target", "x86-windows-gnu", "-mcpu=pentium4", "-mfpmath=sse"]
 TARGETS = {
     "hlnav": (["-shared"], "_hlnav.dll", "hlnav.c"),
     "hlvvis": ([], "hlvvis.exe", "hlvvis.c"),
-    "hlvbsp": ([], "hlvbsp.exe", ["hlvbsp/main.c", "hlvbsp/poly.c", "hlvbsp/map.c", "hlvbsp/brush.c", "hlvbsp/csg.c",
+    "hlvbsp": (["32bit"], "hlvbsp.exe", ["hlvbsp/main.c", "hlvbsp/poly.c", "hlvbsp/map.c", "hlvbsp/brush.c", "hlvbsp/csg.c",
                                   "hlvbsp/portals.c", "hlvbsp/faces.c", "hlvbsp/detail.c", "hlvbsp/write.c",
                                   "hlvbsp/phys.c", "hlvbsp/disp.c"]),
 }
@@ -29,7 +30,9 @@ for name in sys.argv[1:] or list(TARGETS):
     extra, out_name, src = TARGETS[name]
     out = os.path.abspath(os.path.join(CORE, out_name))
     srcs = src if isinstance(src, list) else [src]
-    cmd = [sys.executable, "-m", "ziglang", "cc", *extra, *FLAGS, "-o", out, *(os.path.join(HERE, s) for s in srcs)]
+    flags = FLAGS32 if "32bit" in extra else FLAGS      # 32-bit: hlvbsp loads the game's (32-bit) vphysics.dll
+    extra = [e for e in extra if e != "32bit"]
+    cmd = [sys.executable, "-m", "ziglang", "cc", *extra, *flags, "-o", out, *(os.path.join(HERE, s) for s in srcs)]
     print(" ".join(cmd))
     subprocess.run(cmd, check=True)
     stem = out[:-4]

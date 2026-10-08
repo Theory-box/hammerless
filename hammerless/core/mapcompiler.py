@@ -73,7 +73,7 @@ def material_row(content, name: str, game_dir: str | None, surfaceprops: dict[st
     contents = flags = 0
     width = height = 0
     refl = (0.0, 0.0, 0.0)
-    surfaceprop = -1
+    surfaceprop = surfaceprop2 = "-"
     if p:
         g = p.get
         shader = g("shader", "")
@@ -156,12 +156,17 @@ def material_row(content, name: str, game_dir: str | None, surfaceprops: dict[st
         info = _texture_info(content, g("$basetexture"), game_dir)
         if info:
             width, height, refl = info
-        prop = (g("$surfaceprop") or "").lower()
-        if prop:
-            surfaceprop = surfaceprops.setdefault(prop, len(surfaceprops))
+        surfaceprop = _name(g("$surfaceprop"))
+        surfaceprop2 = _name(g("$surfaceprop2"))
     clean = name.replace("\t", " ").replace("\n", " ")
     return (f"{clean}\t{contents}\t{flags}\t{width}\t{height}\t{refl[0]!r}\t{refl[1]!r}\t{refl[2]!r}"
-            f"\t{surfaceprop}\t{found}")
+            f"\t{surfaceprop}\t{found}\t{surfaceprop2}")
+
+
+def _name(v: str | None) -> str:
+    """A surface property name for the table: one word, '-' for none."""
+    v = (v or "").strip()
+    return v.split()[0] if v else "-"
 
 
 def vmf_materials(vmf_text: str) -> list[str]:
@@ -170,6 +175,22 @@ def vmf_materials(vmf_text: str) -> list[str]:
     for m in re.finditer(r'"material"\s+"([^"]*)"', vmf_text):
         seen.setdefault(m.group(1).lower(), m.group(1))
     return list(seen.values())
+
+
+def write_surfaceprops(path: str, content) -> int:
+    """The game's surface property scripts (in the manifest's order) for hlvbsp to hand to vphysics:
+    blocks of name \\n byte count \\n text."""
+    manifest = content.read("scripts/surfaceproperties_manifest.txt") if content else None
+    names = re.findall(r'"file"\s+"([^"]+)"', manifest.decode("utf-8", "replace")) if manifest else []
+    n = 0
+    with open(path, "wb") as f:
+        for name in names:
+            data = content.read(name)
+            if data is None:
+                continue
+            f.write(name.encode("latin-1") + b"\n" + str(len(data)).encode() + b"\n" + data)
+            n += 1
+    return n
 
 
 def write_material_table(path: str, vmf_path: str, content, game_dir: str | None) -> int:

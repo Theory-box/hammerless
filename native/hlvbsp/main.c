@@ -1,5 +1,6 @@
 /* hlvbsp: the program. Same arguments as vbsp.exe, plus -materials <file> (the material table the
- * Python side wrote: the game's materials live in VPKs that we don't read here).
+ * Python side wrote: the game's materials live in VPKs that we don't read here) and -surfaceprops <file>
+ * (the game's surface property scripts, for the physics).
  *
  *   hlvbsp [-game <dir>] -materials <file> <map>     (reads <map>.vmf, writes <map>.bsp and <map>.prt)
  */
@@ -147,7 +148,13 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     Msg("Hammerless hlvbsp\n");
     for (i = 1; i < argc; i++) {
-        if (!_stricmp(argv[i], "-game") && i + 1 < argc) i++;
+        if (!_stricmp(argv[i], "-game") && i + 1 < argc) {
+            extern const char *g_gamedir;
+            g_gamedir = argv[++i];
+        } else if (!_stricmp(argv[i], "-surfaceprops") && i + 1 < argc) {
+            extern const char *g_surfaceprops_file;
+            g_surfaceprops_file = argv[++i];
+        }
         else if (!_stricmp(argv[i], "-materials") && i + 1 < argc) matfile = argv[++i];
         else if (!_stricmp(argv[i], "-v") || !_stricmp(argv[i], "-verbose")) verbose = 1;
         else if (!_stricmp(argv[i], "-threads") && i + 1 < argc) i++;
