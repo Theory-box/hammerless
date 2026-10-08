@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.6.0 (test release, 2026-10-07)
+
+- **Light Compiler: Cycles (optional, Build & Play).** vrad still lays out the lighting, then Blender's Cycles bakes the lightmaps with the same lights and units vrad uses, on the GPU when there is one, and writes them into the map. Prop and character lighting and switchable lights stay vrad's.
+  - **Matches vrad.** Samples are placed and filtered the way vrad's source does it. Measured on a real level against vrad: correlation 0.976, the same overall brightness within 1-3%, no fitting.
+  - **Seam stitching.** Where two faces meet within 45 degrees, the lightmap texels next to the shared edge are adjusted (least squares) so both sides show the same light. Mean difference across edges: 1.6% for vrad, 0.02% stitched.
+  - **Surfaces baked as one picture.** Connected faces in one plane are baked as a single continuous image at twice the lightmap resolution, so a floor vbsp cut into many faces can't disagree with itself.
+  - **Faces nobody sees are skipped.** Using the nav mesh and the map's visibility data, faces no player position can see keep vrad's lighting and aren't baked; they still block and bounce light (22% of the lightmap on a real level).
+  - **Settings:** Samples (default 1024; 256 is already within 0.3% of 4096), Stitch (on), Denoise (off: Blender's denoiser smears the packed bake, measured), and the log shows the time per step.
+- **Lights fade with distance.** Point and spot lights were exported without falloff settings, so vrad lit everything they could see at full strength, however far away (the safe room light lit the whole map). They now get Hammer's default inverse-square falloff, and a Blender light's watts give the brightness Cycles would show. **Existing maps' lights look different (correct) after rebuilding.**
+- **Logic nodes: all of L4D2's scripting.** New Add menus in the logic editor:
+  - **Game Functions:** all 419 of the game's script functions (Player, Director, Nav Mesh, Entity, Find Entities, Entity Properties, Spawning, Sound, HUD...), with named inputs and descriptions, built from the game's own script help (`scripts/vscript_catalog.py` rebuilds the list).
+  - **Game Events:** all 381 game events, their details as values (user ids become players).
+  - **Script Blocks:** For Each, Set / Get Variable (map or per player, optionally kept across maps), Make Table, Get Field, Format Text, vectors, Compare Values, and Script / Script Value for your own code.
+  - **Director, HUD & Overrides:** Director Setting (any of ~140 Director settings, changed while playing), Director Mood (the Director's intensity and warnings before a mob), HUD Text / Hide, and Override (the game asks the map before damage, chat, weapon spawns, zombie types...).
+  - New wire types: text, vector, entity / player / nav area, and any value.
+- **Co-op (Hammerless) game mode.** The game only uses overrides and a custom HUD in scripted mode, which plain co-op never turns on (tested). Maps that use those nodes are started in Hammerless's own co-op mode, installed as `addons/hammerless_mode.vpk`. The first time, restart the game once (it reads game modes when it starts).
 - **Automatic sound (World > Sound):** Build ray traces the map from every floor survivors can reach and adds soundscapes. *Automatic Reverb* (the default) turns on the engine's own room reverb everywhere, which traces the space around you while playing (Valve's maps use it almost everywhere; a map without soundscapes didn't get it). *Reverb + City Ambience* also plays city ambience outdoors, and indoors a room tone with the outside coming in through the doorways and windows ("sound portals", placed where indoor spaces open to the outside, louder through wider openings), so the engine's 3D sound places it correctly as you move. *View > Sound* shows the result: outdoors, sheltered, indoors and the sound portals (**Trace Sound** works without building).
 
 ## 0.5.6 (test release, 2026-10-07)
