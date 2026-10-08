@@ -81,6 +81,9 @@ static int LoadPhysics(void) {
     CreateInterfaceFn ci = (CreateInterfaceFn)GetProcAddress(h, "CreateInterface");
     if (!ci) return 0;
     physcollision = ci("VPhysicsCollision007", NULL);
+    /* vphysics' maths runs on the x87 FPU: use the precision an MSVC program starts with (53-bit), as
+     * vbsp does, not our runtime's 64-bit default */
+    _controlfp(_PC_53, _MCW_PC);
     physprops = ci("VPhysicsSurfaceProps001", NULL);
     if (!physcollision) {
         Warning("!!! WARNING: Can't build collision data!\n");
@@ -109,6 +112,8 @@ static int LoadPhysics(void) {
 }
 
 void *physprops_loaded(void) { return physprops; }
+
+void *PhysCollision(void) { return LoadPhysics() ? physcollision : NULL; }
 
 /* A material's surface property index in vphysics (vbsp's g_SurfaceProperties). */
 extern const char *MaterialSurfacePropName(int texdata);

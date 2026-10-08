@@ -151,6 +151,9 @@ int main(int argc, char **argv) {
         if (!_stricmp(argv[i], "-game") && i + 1 < argc) {
             extern const char *g_gamedir;
             g_gamedir = argv[++i];
+        } else if (!_stricmp(argv[i], "-props") && i + 1 < argc) {
+            extern const char *g_props_file;
+            g_props_file = argv[++i];
         } else if (!_stricmp(argv[i], "-surfaceprops") && i + 1 < argc) {
             extern const char *g_surfaceprops_file;
             g_surfaceprops_file = argv[++i];

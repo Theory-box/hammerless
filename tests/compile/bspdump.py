@@ -110,6 +110,29 @@ def _mask_ivp_points(solid: bytes) -> bytes:
     return bytes(body)
 
 
+def _static_props_v9(b: bytes) -> list[str]:
+    """L4D2's static props: dictionary, leaves, 72-byte records. vbsp leaves the lighting origin
+    unset (unless the prop has one) and the 3 bytes after disableX360 uninitialised: masked."""
+    out = []
+    n = struct.unpack_from("<i", b, 0)[0]
+    at = 4
+    out += ["  model " + b[at + 128 * i:at + 128 * i + 128].split(b"\0")[0].decode("latin-1") for i in range(n)]
+    at += 128 * n
+    nl = struct.unpack_from("<i", b, at)[0]
+    at += 4
+    out.append("  leaves " + " ".join(str(x) for x in struct.unpack_from(f"<{nl}H", b, at)))
+    at += 2 * nl
+    np_ = struct.unpack_from("<i", b, at)[0]
+    at += 4
+    for i in range(np_):
+        p = bytearray(b[at + 72 * i:at + 72 * i + 72])
+        if not p[31] & 0x2:
+            p[44:56] = bytes(12)
+        p[69:72] = bytes(3)
+        out.append("  prop " + p.hex())
+    return out
+
+
 def records(index: int, blob: bytes) -> list[str]:
     """One text line per record of lump `index`."""
     if not blob:
@@ -127,9 +150,17 @@ def records(index: int, blob: bytes) -> list[str]:
     if index == 35:
         n = struct.unpack_from("<i", blob, 0)[0]
         out = [f"count {n}"]
+        first = None
         for k in range(n):
             gid, flags, ver, off, length = struct.unpack_from("<4sHHii", blob, 4 + 16 * k)
             out.append(f"{gid[::-1].decode('latin-1')} flags {flags} version {ver} length {length}")
+            if first is None:
+                first = off - (4 + 16 * n)          # file offset of the game lump itself
+            data = blob[off - first:off - first + length]
+            if gid == b"prps" and ver == 9:
+                out += _static_props_v9(data)
+            else:
+                out.append("  data " + data.hex())
         return out
     if index == 29:
         out, at = [], 0

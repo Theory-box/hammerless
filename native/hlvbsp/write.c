@@ -701,6 +701,9 @@ static unsigned char *pack_primitives(int *len) {
 }
 
 void EmitPhysCollision(void);
+void EmitStaticProps(void);
+extern unsigned char *g_sprp;
+extern int g_sprp_len;
 
 void AddDefaultCubemaps(const char *mapname);
 unsigned char *BuildPakLump(int *outlen);
@@ -712,6 +715,7 @@ void EndBSPFile(const char *path) {
     EmitDispLMAlphaAndNeighbors();
     EmitPhysCollision();
     leafmindist = xalloc(sizeof(unsigned short) * (numleafs + 1));
+    EmitStaticProps();
     ComputeBoundsNoSkybox();
     UnparseEntities();
     CompactTexinfos();
@@ -783,24 +787,28 @@ void EndBSPFile(const char *path) {
         unsigned char *pak = BuildPakLump(&paklen);
         SetLump(40, pak, paklen, 0);
     }
-    /* game lumps: no static props and no detail props yet (sprp v9, dprp v4: three zero counts) */
-    static unsigned char game[60];
-    memset(game, 0, sizeof(game));
+    /* game lumps: static props (sprp v9) and detail props (dprp v4: no detail props yet, three zero
+     * counts); their directory holds file offsets, so it is filled in once the lump's place is known */
+    static unsigned char empty12[12];
+    unsigned char *sprp = g_sprp ? g_sprp : empty12;
+    int sprp_len = g_sprp ? g_sprp_len : 12;
+    int gamelen = 4 + 2 * 16 + sprp_len + 12;
+    unsigned char *game = xalloc(gamelen);
     int count = 2;
     memcpy(game, &count, 4);
     memcpy(game + 4, "prps", 4);
     unsigned short flags = 0, ver = 9;
     memcpy(game + 8, &flags, 2);
     memcpy(game + 10, &ver, 2);
-    int glen = 12;
-    memcpy(game + 16, &glen, 4);
+    memcpy(game + 16, &sprp_len, 4);
     memcpy(game + 20, "prpd", 4);
     ver = 4;
     memcpy(game + 24, &flags, 2);
     memcpy(game + 26, &ver, 2);
-    memcpy(game + 32, &glen, 4);
-    SetLump(35, game, 60, 0);
-    /* the game lump's offsets are file offsets: patch them once the lump's own offset is known */
+    int dprp_len = 12;
+    memcpy(game + 32, &dprp_len, 4);
+    memcpy(game + 36, sprp, sprp_len);
+    SetLump(35, game, gamelen, 0);
     {
         int offset = 1036;
         for (unsigned k = 0; k < sizeof(lump_order) / sizeof(lump_order[0]); k++) {
@@ -809,7 +817,7 @@ void EndBSPFile(const char *path) {
             offset += lumps[i].len;
             offset = (offset + 3) & ~3;
         }
-        int o1 = offset + 4 + 2 * 16, o2 = o1 + 12;
+        int o1 = offset + 4 + 2 * 16, o2 = o1 + sprp_len;
         memcpy(game + 12, &o1, 4);
         memcpy(game + 28, &o2, 4);
     }

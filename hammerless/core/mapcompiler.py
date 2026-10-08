@@ -193,6 +193,87 @@ def write_surfaceprops(path: str, content) -> int:
     return n
 
 
+STUDIOHDR_FLAGS_STATIC_PROP = 0x10
+
+
+def _model_bytes(content, path: str, game_dir: str | None) -> bytes | None:
+    rel = path.replace("\\", "/").lower()
+    if game_dir:
+        full = os.path.join(game_dir, *rel.split("/"))
+        if os.path.isfile(full):
+            with open(full, "rb") as f:
+                return f.read()
+    return content.read(rel) if content else None
+
+
+def prop_model_record(content, model: str, game_dir: str | None) -> list[str]:
+    """What vbsp reads from a prop_static's model: whether it may be a static prop, and each mesh's
+    vertices (all body parts and models; the .vvd's vertices as stored, without LOD fixups, as
+    vbsp reads them) for the hull it tests leaves against."""
+    mdl = _model_bytes(content, model, game_dir)
+    if not mdl or mdl[:4] not in (b"IDST", b"IDAG"):
+        return [f"model {model} missing"]
+    version = struct.unpack_from("<i", mdl, 4)[0]
+    flags = struct.unpack_from("<i", mdl, 152)[0]
+    if not flags & STUDIOHDR_FLAGS_STATIC_PROP:
+        return [f"model {model} notstatic"]
+    kv_index, kv_size = struct.unpack_from("<ii", mdl, 312)
+    keyvalues = mdl[kv_index:kv_index + kv_size].decode("latin-1", "replace") if kv_size > 0 else ""
+    m = re.search(r'prop_data\s*\{([^}]*)\}', keyvalues, re.IGNORECASE)
+    if m:
+        allow = re.search(r'"?allowstatic"?\s+"?([-\d.]+)', m.group(1), re.IGNORECASE)
+        if not allow or int(float(allow.group(1))) == 0:
+            return [f"model {model} dynamic"]
+    vvd = _model_bytes(content, os.path.splitext(model)[0] + ".vvd", game_dir)
+    if not vvd or vvd[:4] != b"IDSV":
+        return [f"model {model} missing"]
+    vertex_start, tangent_start = struct.unpack_from("<ii", vvd, 56)
+    raw_count = (tangent_start - vertex_start) // 48 if tangent_start > vertex_start else (len(vvd) - vertex_start) // 48
+    num_bp, bp_idx = struct.unpack_from("<ii", mdl, 232)
+    lines = [f"model {model} ok"]
+    for b in range(num_bp):
+        bp = bp_idx + b * 16
+        _name, num_models, _base, model_off = struct.unpack_from("<4i", mdl, bp)
+        for k in range(num_models):
+            sub = bp + model_off + k * 148
+            num_meshes, mesh_off, _nv, vertex_index = struct.unpack_from("<4i", mdl, sub + 72)
+            first = vertex_index // 48
+            for mm in range(num_meshes):
+                mesh = sub + mesh_off + mm * 116
+                _material, _model_idx, nverts, vertex_offset = struct.unpack_from("<4i", mdl, mesh)
+                pts = []
+                for i in range(nverts):
+                    v = first + vertex_offset + i
+                    if v >= raw_count:
+                        break
+                    pts.extend(struct.unpack_from("<3f", vvd, vertex_start + 48 * v + 16))
+                lines.append(f"mesh {len(pts) // 3} " + " ".join(repr(x) for x in pts))
+    del version
+    return lines
+
+
+def vmf_static_prop_models(vmf_text: str) -> list[str]:
+    """The models of the .vmf's prop_static entities (first spelling of each, in order)."""
+    from .vmf import parse
+    seen: dict[str, str] = {}
+    for block in parse(vmf_text):
+        if block.name.lower() != "entity" or (block.get("classname") or "") not in ("prop_static", "static_prop"):
+            continue
+        model = block.get("model")
+        if model:
+            seen.setdefault(model.lower().replace("\\", "/"), model)
+    return list(seen.values())
+
+
+def write_prop_table(path: str, vmf_path: str, content, game_dir: str | None) -> int:
+    with open(vmf_path, encoding="utf-8", errors="replace") as f:
+        models = vmf_static_prop_models(f.read())
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        for model in models:
+            f.write("\n".join(prop_model_record(content, model, game_dir)) + "\n")
+    return len(models)
+
+
 def write_material_table(path: str, vmf_path: str, content, game_dir: str | None) -> int:
     with open(vmf_path, encoding="utf-8", errors="replace") as f:
         names = vmf_materials(f.read())
