@@ -702,6 +702,9 @@ static unsigned char *pack_primitives(int *len) {
 
 void EmitPhysCollision(void);
 
+void AddDefaultCubemaps(const char *mapname);
+unsigned char *BuildPakLump(int *outlen);
+
 void EndBSPFile(const char *path) {
     EmitBrushes();
     SaveVertexNormals();
@@ -766,6 +769,20 @@ void EndBSPFile(const char *path) {
     SetLump(48, g_disptris, 2 * g_numdisptris, 0);
     SetLump(34, g_lmsamples, g_numlmsamples, 0);
     SetLump(62, NULL, 0, 16);
+    /* the pakfile: the default cubemap (vbsp makes it whenever the world has a sky) */
+    {
+        char base[256];
+        const char *slash = strrchr(path, '/'), *bslash = strrchr(path, 92);   /* backslash */
+        const char *b = slash > bslash ? slash : bslash;
+        strncpy(base, b ? b + 1 : path, sizeof(base) - 1);
+        base[sizeof(base) - 1] = 0;
+        char *dot = strrchr(base, '.');
+        if (dot) *dot = 0;
+        if (ValueForKey(&entities[0], "skyname")[0]) AddDefaultCubemaps(base);
+        int paklen;
+        unsigned char *pak = BuildPakLump(&paklen);
+        SetLump(40, pak, paklen, 0);
+    }
     /* game lumps: no static props and no detail props yet (sprp v9, dprp v4: three zero counts) */
     static unsigned char game[60];
     memset(game, 0, sizeof(game));
