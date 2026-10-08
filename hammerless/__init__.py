@@ -9,7 +9,7 @@ the `blender` package is only loaded when running inside Blender.
 bl_info = {
     "name": "Hammerless",
     "author": "Hammerless contributors",
-    "version": (0, 6, 0),
+    "version": (0, 7, 0),
     "blender": (4, 0, 0),
     "location": "3D View > Sidebar (N) > Hammerless",
     "description": "Build and play Left 4 Dead 2 maps straight from Blender",

@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "hammerless"
-version = "0.6.0"
+version = "0.7.0"
 name = "Hammerless"
 tagline = "Build and play Left 4 Dead 2 maps straight from Blender"
 maintainer = "Hammerless contributors"

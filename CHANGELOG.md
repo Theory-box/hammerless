@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+## 0.7.0 (test release, 2026-10-08)
+
 - **Logic examples (Shift+A > Examples):** 20 ready-made graphs, from a hello message to an ambush that picks hidden nav areas ahead of the survivors. Each has notes on what it does and how, numbered frames, and any objects it needs (button, gate, room) at the 3D cursor.
 - **Logic examples 2 (Shift+A > Examples 2):** 21 more (21-41), chosen so that between the two sets every node and every Override is used: map parts (sequences, lifts, fuses, power, teleporters, secret walls), zombies and the Director, scripting (vectors, lists, For Each) and all the Override questions.
-- **Examples 3 (Shift+A > Examples 3):** special modes, starting with **Power-Up: Nuke** (Call of Duty style: a kill may drop a glowing pickup; walking over it blows up every common infected, nearest first, a few per tick). Test map: `tests/fixtures/nuke_test.py` makes `demo/hl_test_nuke.blend`.
+- **Examples 3 (Shift+A > Examples 3):** special modes, starting with **Power-Up: Nuke** (Call of Duty style: a kill may drop a glowing pickup; walking over it blows up the common infected within an adjustable radius, nearest first, a few per tick; a 30 s cooldown before the next drop). Test map: `tests/fixtures/nuke_test.py` makes `demo/hl_test_nuke.blend`.
 - **Branch: Toggle, Then Test** (flips the value, then fires If True / If False: a lever with one wire).
 - **Logic editor menus:** one place per purpose (Events, Flow, Values, Scene, Actions, Director, HUD & Messages, Overrides, Script); the game's full function and event lists sit under Actions and Events.
 - **Answer node:** works an Override's answer out from what the game asked (Blender doesn't allow wires from an Override back into itself). With If nodes, different answers for different cases.
