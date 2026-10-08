@@ -267,7 +267,25 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
         with open(stamp, "w") as f:
             f.write(sig)
         built += 1
+    _remove_old_models(gamedir, ir)
     rep.info.append(f"Custom Models: {len(ir.models)} ({built} compiled now)")
+
+
+def _remove_old_models(gamedir: str, ir) -> None:
+    """Model files this map no longer uses (a renamed or deleted Custom Model mesh) in models/hammerless/<map>/."""
+    folder = os.path.join(gamedir, "models", "hammerless", ir.settings.name)
+    keep = {n.split("/")[-1] for n in ir.models}
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    for f in names:
+        stem = f.split(".")[0]
+        if stem not in keep and f.endswith((".mdl", ".vvd", ".vtx", ".phy")):
+            try:
+                os.remove(os.path.join(folder, f))
+            except OSError:
+                pass
 
 
 def export_vmf(op, context) -> tuple[str | None, str | None, Report]:

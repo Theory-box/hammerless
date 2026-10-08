@@ -477,6 +477,18 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
                   object_outputs(obj))
 
 
+def _hull_thickness(hull) -> float:
+    """The smallest distance across a convex hull (Hammer units): from each face's plane to the farthest point."""
+    best = float("inf")
+    for f in hull.faces:
+        n = f.normal
+        if n.length < 1e-9:
+            continue
+        d0 = n.dot(f.verts[0].co)
+        best = min(best, max(abs(n.dot(v.co) - d0) for v in hull.verts))
+    return 0.0 if best == float("inf") else best
+
+
 def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, collide):
     from ..core.models import ModelSpec
     eval_obj = obj.evaluated_get(depsgraph)
@@ -526,7 +538,7 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
                             hull.verts.remove(g)
                     bmesh.ops.triangulate(hull, faces=hull.faces[:])
                     hull.verts.index_update()
-                    if hull.faces:
+                    if hull.faces and _hull_thickness(hull) > 0.5:      # a flat part (a plane) has no inside
                         pieces.append(([tuple(v.co) for v in hull.verts],
                                        [tuple(v.index for v in f.verts) for f in hull.faces]))
                 hull.free()
