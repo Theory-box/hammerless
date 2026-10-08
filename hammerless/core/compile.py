@@ -700,16 +700,18 @@ LOADED = "server number:"
 READY = "hammerless_ready survivors spawned"   # not just the name: the game also prints "hammerless_ready executing script"
 
 
-def nav_steps(map_name: str, mark: bool = True) -> list[tuple[str, list[str]]]:
-    """Generate nav, mark safe-room attributes (see nav.py), save, reload fresh."""
+def nav_steps(map_name: str, mark: bool = True, map_cmd: str | None = None) -> list[tuple[str, list[str]]]:
+    """Generate nav, mark safe-room attributes (see nav.py), save, reload fresh (map_cmd: the map and
+    its game mode, see map_mode)."""
+    map_cmd = map_cmd or map_name
     steps = [(f"host_newgame on map {map_name.lower()}", []),
              (READY, ["sv_cheats 1", "nav_generate"]),
              (".nav' saved.", []),
              (READY, [f"script_execute hammerless/navmark_{map_name}"] if mark
-              else ["sv_cheats 0", f"map {map_name}"])]
+              else ["sv_cheats 0", f"map {map_cmd}"])]
     if mark:
         steps.append(("hammerless_navmark done", []))
-        steps.append((".nav' saved.", ["sv_cheats 0", f"map {map_name}"]))
+        steps.append((".nav' saved.", ["sv_cheats 0", f"map {map_cmd}"]))
     return steps
 
 
@@ -982,6 +984,17 @@ def _start_with_steam(cmd: list[str], cwd: str, launch_id: int, then) -> None:
         then()
 
 
+def map_mode(tools: Tools, map_name: str) -> str:
+    """The game mode a map is started in: co-op, or Hammerless's scripted mode when its logic uses
+    overrides or the HUD (gamefiles.mode_files writes maps/<map>.hlmode)."""
+    try:
+        with open(os.path.join(tools.maps_dir, map_name + ".hlmode"), encoding="utf-8") as f:
+            mode = f.read().strip()
+        return mode if re.fullmatch(r"[a-z0-9_]+", mode or "") else "coop"
+    except OSError:
+        return "coop"
+
+
 def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: list[str] | None = None,
                 window: LaunchOptions | None = None, analyze_nav: bool = False):
     """Load the map. Reuses a running game if there is one.
@@ -993,7 +1006,10 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
     log = os.path.join(tools.gamedir, "console.log")
     log_start = os.path.getsize(log) if os.path.exists(log) else 0
     window = window or LaunchOptions()
-    if game_running():
+    mode = map_mode(tools, map_name)
+    map_cmd = f"{map_name} {mode}" if mode != "coop" else map_name
+    fresh = not game_running()
+    if not fresh:
         # sv_cheats 0 resets every cheat cvar (nb_stop, z_common_limit, ...) left over
         # from earlier testing or play, so each build starts from a clean game.
         pre = [f"z_difficulty {window.difficulty}"] if window.difficulty else []
@@ -1001,7 +1017,7 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
             # the engine turns mat_fullbright on for a map without lighting (a Quick build) and leaves
             # it on for the rest of the session: a lit map loaded after one would look unlit
             pre = ["sv_cheats 1", "mat_fullbright 0"] + pre
-        proc = send_commands(tools, ["con_logfile console.log"] + pre + ["sv_cheats 0", f"map {map_name}"])
+        proc = send_commands(tools, ["con_logfile console.log"] + pre + ["sv_cheats 0", f"map {map_cmd}"])
     else:
         cmd = [os.path.join(tools.root, "left4dead2.exe"), "-game", "left4dead2",
                "-novid", "-console", "-condebug", "-windowed",
@@ -1011,7 +1027,7 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
         cmd += window.extra.split() + (extra or [])
         if window.difficulty:
             cmd += ["+z_difficulty", window.difficulty]
-        cmd += ["+map", map_name]
+        cmd += ["+map", map_name] + ([mode] if mode != "coop" else [])
         proc = None
     LOAD_STATUS["launch_id"] += 1
     LOAD_STATUS["seconds"] = None
@@ -1035,8 +1051,17 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
     else:
         move_window()
     threading.Thread(target=_watch_ready, args=(log, log_start, launch_id), daemon=True).start()
+    # a fresh game ignores the mode on its command line (measured): load the map, then switch it into
+    # its mode from the console (the game's own reloads, like nav_analyze's, keep the mode it's in)
+    switch = [(READY, [f"map {map_cmd}"])] if fresh and mode != "coop" and not generate_nav else []
     if analyze_nav and not generate_nav:
-        threading.Thread(target=_run_console_script, args=(tools, analyze_steps(), log_start),
+        steps = analyze_steps()
+        if switch:
+            steps[-1] = (steps[-1][0], steps[-1][1] + [f"map {map_cmd}"])
+        threading.Thread(target=_run_console_script, args=(tools, steps, log_start),
+                         kwargs={"launch_id": launch_id}, daemon=True).start()
+    elif switch:
+        threading.Thread(target=_run_console_script, args=(tools, switch, log_start),
                          kwargs={"launch_id": launch_id}, daemon=True).start()
     if generate_nav:
         set_nav_maker(tools, map_name, "game")
@@ -1046,6 +1071,6 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
         def marked():                       # the marks count as applied only once they are
             if mark:
                 shutil.copyfile(script, used)
-        threading.Thread(target=_run_console_script, args=(tools, nav_steps(map_name, mark), log_start),
+        threading.Thread(target=_run_console_script, args=(tools, nav_steps(map_name, mark, map_cmd), log_start),
                          kwargs={"launch_id": launch_id, "on_done": marked}, daemon=True).start()
     return proc

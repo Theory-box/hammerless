@@ -184,6 +184,32 @@ def build_map_text(context, root: str | None):
     return ir, text, rep2
 
 
+def _write_mode_addon(gamedir: str, rep: Report) -> None:
+    """Hammerless's game mode (scripted mode, for Override and HUD nodes) as a small addon VPK. The
+    game reads modes when it starts: a new or changed addon needs one restart of the game."""
+    from ..core.gamefiles import MODE_ADDON, mode_addon_files
+    from ..core.vpk import write_vpk
+    import tempfile
+    full = os.path.join(gamedir, *MODE_ADDON.split("/"))
+    tmp = os.path.join(tempfile.gettempdir(), "hammerless_mode.vpk")
+    write_vpk(tmp, mode_addon_files())
+    with open(tmp, "rb") as f:
+        new = f.read()
+    old = None
+    if os.path.exists(full):
+        with open(full, "rb") as f:
+            old = f.read()
+    if old == new:
+        return
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "wb") as f:
+        f.write(new)
+    rep.info.append(f"Wrote Hammerless's game mode ({MODE_ADDON}): the map uses Override or HUD nodes")
+    if cc.game_running():
+        rep.warnings.append("Override and HUD nodes need Hammerless's game mode, which was just installed: "
+                            "close Left 4 Dead 2 and Build & Play again (the game reads game modes when it starts)")
+
+
 def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
     """Extract + build + write. Returns (vmf_path, game_root, report)."""
     s = context.scene.hammerless
@@ -230,6 +256,8 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
                 with open(full, "w", encoding="utf-8") as f:
                     f.write(content)
             cc.set_map_owner(cc.Tools(root), s.map_name, path)
+            if ir.scripted_mode:
+                _write_mode_addon(gamedir, rep2)
         except OSError as ex:
             rep2.errors.append(f"Can't write the map's scripts into the game folder ({ex}). Is Left 4 Dead 2 "
                                "installed somewhere that needs administrator rights?")

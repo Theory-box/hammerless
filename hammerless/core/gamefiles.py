@@ -278,6 +278,61 @@ def collect_crescendos(ir: MapIR) -> list[str]:
     return problems
 
 
+# ---------------------------------------------------------------- Hammerless's game mode (scripted mode)
+
+def mode_files(ir: MapIR) -> dict[str, str]:
+    """Override hooks and the custom HUD only work in scripted mode, which the game turns on for a mode
+    with its own script (measured: plain co-op never calls the hooks or shows the HUD). Maps that use
+    them get Hammerless's mode: co-op plus an empty mode script, and the map's <map>_hammerless.nut,
+    which scripted mode loads as it starts and where the game looks for the hooks. maps/<map>.hlmode
+    tells Build & Play which mode to start the map in."""
+    from .director_options import GAME_MODE, HOOKS_BY_NAME
+    name = ir.settings.name
+    if not ir.scripted_mode:
+        return {f"maps/{name}.hlmode": "coop\n"}
+    files = {f"maps/{name}.hlmode": GAME_MODE + "\n"}
+    mode, options = [], []
+    for hook in sorted(ir.logic_hooks):
+        _n, where, args, answer, _about = HOOKS_BY_NAME[hook]
+        params = "dt" if hook == "AllowTakeDamage" else ", ".join(a for a, _k in args)
+        fallback = {"AllowTakeDamage": "true", "ShouldAvoidItem": "false", "ConvertWeaponSpawn": "0",
+                    "GetDefaultItem": "0", "ConvertZombieClass": args[0][0] if args else "0"}.get(hook, "true")
+        call = f"::HL_Hook_{hook}({params})"
+        body = (f'return ("HL_Hook_{hook}" in getroottable()) ? {call} : {fallback};' if answer
+                else f'if ("HL_Hook_{hook}" in getroottable()) {call};')
+        (mode if where == "mode" else options).append(f"function {hook}({params}) {{ {body} }}")
+    text = f"// Hammerless: {name}'s rules for its scripted mode (the logic graph's Override nodes)\n"
+    text += "".join(m + "\n" for m in mode)
+    if options:
+        text += "MapOptions <- {\n" + "".join("    " + o + "\n" for o in options) + "}\n"
+    files[f"scripts/vscripts/{name}_{GAME_MODE}.nut"] = text
+    return files
+
+
+MODE_ADDON = "addons/hammerless_mode.vpk"
+
+
+def mode_addon_files() -> dict[str, bytes]:
+    """Hammerless's game mode as the files of a small addon (MODE_ADDON under left4dead2/): the game
+    only learns modes from its packed files and addon VPKs, when it starts (measured: a loose
+    modes/*.txt is ignored, and so is the mode on the command line)."""
+    from .director_options import GAME_MODE
+    mode = (f'"{GAME_MODE}"\n{{\n\t"base"\t\t"coop"\n\t"maxplayers"\t"4"\n\t"hasdifficulty"\t"1"\n'
+            '\t"DisplayTitle"\t"Co-op (Hammerless)"\n'
+            "\t\"ShortDescription\"\t\"Co-op with the map's own rules and HUD.\"\n"
+            "\t\"Description\"\t\"Co-op, with the custom rules and HUD the map's Hammerless logic sets up.\"\n"
+            '\t"Image"\t\t"maps/any"\n\t"Author"\t"Hammerless"\n}\n')
+    script = ("// Hammerless's game mode: co-op in scripted mode, so maps can override the game's decisions\n"
+              "// (damage, weapon spawns, ...) and show a HUD. The map's rules are in <map>_hammerless.nut.\n"
+              'MutationOptions <- {}\nprintl("HAMMERLESS_MODE scripted mode on");\n')
+    info = ('"AddonInfo"\n{\n\t"addontitle"\t"Hammerless game mode"\n\t"addonversion"\t"1"\n'
+            '\t"addonauthor"\t"Hammerless"\n'
+            '\t"addonDescription"\t"Co-op in scripted mode, for maps made with Hammerless that use overrides or a HUD."\n'
+            '\t"addonContent_Script"\t"1"\n}\n')
+    return {f"modes/{GAME_MODE}.txt": mode.encode(), f"scripts/vscripts/{GAME_MODE}.nut": script.encode(),
+            "addoninfo.txt": info.encode()}
+
+
 # ---------------------------------------------------------------- all files
 
 def game_files(ir: MapIR) -> dict[str, str]:
@@ -297,6 +352,7 @@ def game_files(ir: MapIR) -> dict[str, str]:
         route, _ = plan_route(ir)
         files[f"{SCRIPT_DIR}/autotest_{s.name}.nut"] = autotest_script(route, s.name, start_door(ir))
     files.update(ir.extra_scripts)
+    files.update(mode_files(ir))
     for name, stages in ir.crescendos.items():
         if f"scripts/vscripts/{director_input_script(s.name, name)}.nut" in ir.extra_scripts:
             continue          # reported by collect_crescendos_conflicts (a Director Settings node has this name)

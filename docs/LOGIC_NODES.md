@@ -29,6 +29,25 @@ Map logic (events, timers, buttons, gates, spawns, Director changes) is built as
 | **Director** | Director, Director Settings |
 | **Objectives** | Objective |
 
+## The game's own scripting (Add menu, bottom)
+
+Everything L4D2's script language (VScript) can do is available as nodes.
+
+| Menu | What's in it |
+|---|---|
+| **Game Functions** | All 419 of the game's script functions, grouped (Player, Director, Nav Mesh, Entity, Find Entities, Entity Properties, Spawning, Sound, HUD...) or found with *Search...*. Value functions (Get Health, Find By Name...) just give a Result; actions (Give Item, Stagger...) run when an event wire arrives and then fire *Then*. |
+| **Game Events** | Any of the game's 381 events (player hurt, item picked up, tank killed...). Its details come out as values: user ids already turned into players, entity ids into entities. |
+| **Script Blocks** | For Each (survivors, infected, players, commons, entities by class or name, a list), Set / Get Variable (for the map or per player, kept across maps if you like), Make Table / Get Field, Format Text, Make / Break Vector, Vector Math, Compare Values, Script and Script Value (your own Squirrel code). |
+| **Director, HUD & Overrides** | Director Setting (any of the ~140 Director settings, changed while playing), HUD Text / HUD Hide, Override. |
+
+Wire colours added for these: teal **text**, purple **vector**, pink **entity / player / nav area**, dark grey **any value**.
+
+Script nodes chain straight into each other (an event's player flows into the next node), and mix with the other nodes both ways. Inside a For Each, use script nodes for each item: an entity-wiring node fires a moment later, after the loop has moved on.
+
+### Overrides and the HUD need Hammerless's game mode
+
+The game only asks the map before doing things (Override nodes) and only shows a custom HUD in *scripted mode*, which plain co-op never turns on (tested). A map that uses these nodes gets **Co-op (Hammerless)**: co-op plus an empty mode script, installed as `addons/hammerless_mode.vpk`. Build & Play starts the map in it. The first time, close the game and Build & Play again: the game learns new modes when it starts.
+
 ## Examples
 
 **A Tank somewhere between 20% and 100% of the way:**

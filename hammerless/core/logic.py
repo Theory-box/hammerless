@@ -107,7 +107,7 @@ def _base(source: str) -> str:
     return re.sub(r" \(part \d+\)$", "", source)
 
 
-BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE")
+BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE")
 BLOCK_VALUES = ("GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
                 "CHECK", "SCRIPT_VALUE")
 VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
@@ -172,6 +172,25 @@ HELPERS = {
         "        try { local n = v.GetName(); return n != \"\" ? n : v.GetClassname(); } catch (e) {}\n"
         "        try { return v.x + \" \" + v.y + \" \" + v.z; } catch (e) {}\n    }\n"
         "    return v.tostring();\n}"),
+    "HL_DirOpts": (
+        "::HL_DirOpts <- {};   // Director settings changed by the graph (kept on top of every Director script)\n"
+        "::HL_TopOptions <- function() {   // the table the Director reads first\n"
+        "    local m = ::DirectorScript.MapScript;\n"
+        "    if (m.ChallengeScript.rawin(\"DirectorOptions\")) return m.ChallengeScript.DirectorOptions;\n"
+        "    if (m.LocalScript.rawin(\"DirectorOptions\")) return m.LocalScript.DirectorOptions;\n"
+        "    if (!m.rawin(\"DirectorOptions\")) m.DirectorOptions <- {};\n"
+        "    return m.DirectorOptions;\n}\n"
+        "::HL_ApplyOpts <- function() { local t = ::HL_TopOptions(); foreach (k, v in ::HL_DirOpts) t[k] <- v; }\n"
+        "::HL_SetOpt <- function(k, v) { ::HL_DirOpts[k] <- v; ::HL_ApplyOpts(); }\n"
+        "::HL_ResetOpt <- function(k) {\n    if (k in ::HL_DirOpts) delete ::HL_DirOpts[k];\n"
+        "    local t = ::HL_TopOptions(); if (t.rawin(k)) delete t[k];\n}"),
+    "HL_Hud": (
+        "::HL_Hud <- { Fields = {} };   // the custom HUD (scripted mode)\n"
+        "::HL_HudShow <- function(slot, func, flags) {\n"
+        "    ::HL_Hud.Fields[\"s\" + slot] <- { slot = slot, name = \"s\" + slot, datafunc = func, dataval = func(), flags = flags };\n"
+        "    HUDSetLayout(::HL_Hud);\n}\n"
+        "::HL_HudHide <- function(slot) {\n"
+        "    if ((\"s\" + slot) in ::HL_Hud.Fields) delete ::HL_Hud.Fields[\"s\" + slot];\n    HUDSetLayout(::HL_Hud);\n}"),
     "HL_IsSet": (
         "::HL_IsSet <- function(v) {   // there, and still in the game if it's an entity\n"
         "    if (v == null) return false;\n    try { return v.IsValid(); } catch (e) { return true; }\n}"),
@@ -204,6 +223,7 @@ class _Compiler:
         self.script_conts: dict[tuple[str, str], list[str]] = {}   # (node, output) -> code it runs
         self.script_events: dict[str, list[str]] = {}       # game event -> event nodes
         self.script_sources: set[tuple[str, str]] = set()   # (node, output) whose wires run as script
+        self.hook_nodes: dict[str, list[str]] = {}           # override hook -> Override nodes
 
     # -- names and entities
     def fn_name(self, base: str) -> str:
@@ -342,6 +362,11 @@ class _Compiler:
             return vs.field_expr(sock, vs.field_kind(fld)) if fld else "null"
         if k in BLOCK_VALUES or k in ("FOR_EACH",):
             return self.block_value(n, sock, slug)
+        if k == "OVERRIDE":
+            from .director_options import HOOKS_BY_NAME
+            hook = HOOKS_BY_NAME.get(s.get("hook", ""))
+            kind = dict(hook[2]).get(sock) if hook else None
+            return vs.field_expr(sock, kind) if kind else "null"
         if k == "VALUE":
             return self.expr_in(n, "value") if sock == "value" else "0.0"
         if k == "PROGRESS":
@@ -443,6 +468,16 @@ class _Compiler:
                 self.problems.append(f"Logic node '{nid}': pick a game event")
                 return
             self.script_events.setdefault(e["name"], []).append(nid)
+            return
+        if k == "OVERRIDE":
+            from .director_options import HOOKS_BY_NAME
+            hook = HOOKS_BY_NAME.get(s.get("hook", ""))
+            if hook is None:
+                self.problems.append(f"Logic node '{nid}': pick what to override")
+                return
+            self.ir.scripted_mode = True
+            self.script_sources.add((nid, "asked"))
+            self.hook_nodes.setdefault(hook[0], []).append(nid)
             return
         if k in ("OBJECT", "DIRECTOR"):
             e = self.director() if k == "DIRECTOR" else self.entity_of(n.obj)
@@ -874,6 +909,41 @@ class _Compiler:
             else:
                 line = f"    HL_VarSet({name}, {value}, {'true' if s.get('keep') else 'false'});\n"
             self.script_action(nid, fn, line + "@@then@@", ["then"], take)
+        elif k == "DIRECTOR_OPTION":
+            from .director_options import BY_KEY
+            self.helper("HL_DirOpts", HELPERS["HL_DirOpts"])
+            self.ir.logic_diropts = True
+            key = s.get("key", "CommonLimit")
+            opt = BY_KEY.get(key)
+            if opt is None:
+                self.problems.append(f"Logic node '{nid}': '{key}' isn't a Director setting")
+                return
+            if s.get("op") == "RESET":
+                line = f'    ::HL_ResetOpt("{key}");\n'
+            else:
+                kind = opt[1]
+                v = self.typed_in(n, "value", vs.NUM if kind in ("int", "num") else kind)
+                if kind == "int":
+                    v = f"({v}).tointeger()"
+                line = f'    ::HL_SetOpt("{key}", {v});\n'
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
+        elif k in ("HUD_TEXT", "HUD_HIDE"):
+            self.helper("HL_Hud", HELPERS["HL_Hud"])
+            self.ir.scripted_mode = True
+            slot = int(s.get("slot", 2))
+            if k == "HUD_HIDE":
+                line = f"    ::HL_HudHide({slot});\n"
+            else:
+                from .director_options import HUD_ALIGN, HUD_FLAG_BLINK, HUD_FLAG_NOBG, HUD_TEAM
+                flags = HUD_ALIGN.get(s.get("align", "CENTER"), 512) | HUD_TEAM.get(s.get("team", "ALL"), 0)
+                flags |= (HUD_FLAG_NOBG if s.get("no_background") else 0) | (HUD_FLAG_BLINK if s.get("blink") else 0)
+                text = self.typed_in(n, "text", vs.TEXT)
+                self.helper("HL_Str", HELPERS["HL_Str"])
+                line = f"    ::HL_HudShow({slot}, function() {{ return HL_Str({text}); }}, {flags});\n"
+                if s.get("place"):
+                    x, y, w, h = (float(s.get(c, d)) for c, d in (("x", 0.25), ("y", 0.1), ("w", 0.5), ("h", 0.08)))
+                    line += f"    HUDPlace({slot}, {x:g}, {y:g}, {w:g}, {h:g});\n"
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
         elif k == "SCRIPT_CODE":
             args = "".join(f"    local {x} = {self.typed_in(n, x, vs.ANY)};\n" for x in "abcd")
             code = "\n".join("    " + line for line in (s.get("code") or "").splitlines())
@@ -954,6 +1024,19 @@ class _Compiler:
         for nid, (fn, body) in self.script_fns.items():
             body = _re.sub(r"@@(\w+)@@", lambda m: "\n".join(self.script_conts.get((nid, m.group(1)), [])), body)
             self.functions.append(f"::{fn} <- function() {{\n{body}\n}}")   # root: callable from anywhere
+        for hook, nids in self.hook_nodes.items():
+            from .director_options import HOOKS_BY_NAME
+            answer_kind = HOOKS_BY_NAME[hook][3]
+            for nid in nids:
+                n = self.nodes[nid]
+                code = "\n".join(self.script_conts.get((nid, "asked"), []))
+                answer = None
+                typed = n.consts.get("answer")
+                changes = (typed is False) if answer_kind == "bool" else bool(typed)   # typed values that change anything
+                if answer_kind and ((nid, "answer") in self.data_links or changes):
+                    answer = self.typed_in(n, "answer", answer_kind)
+                damage = self.typed_in(n, "damage", vs.NUM) if (nid, "damage") in self.data_links else None
+                self.ir.logic_hooks.setdefault(hook, []).append((code, answer, damage))
         for ev, nids in self.script_events.items():
             code = "\n".join(line for nid in nids for line in self.script_conts.get((nid, "happened"), []))
             if code:
@@ -974,9 +1057,9 @@ class _Compiler:
         self.ir.logic_whens += self.whens
         ir = self.ir
         if not (ir.logic_functions or ir.logic_events or ir.logic_progress or ir.logic_counts or ir.logic_whens
-                or ir.logic_script_events):
+                or ir.logic_script_events or ir.logic_hooks):
             return
-        thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens)
+        thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens or ir.logic_diropts)
         parts = [f"// Hammerless logic graphs for {ir.settings.name}\n",
                  "::HL_Ctx <- {};   // the event being handled, its fields\n::HL_R <- {};     // what action nodes returned\n"
                  "::HL_L <- {};     // For Each: the current item\n::HL_I <- {};     // and its number\n"]
@@ -1035,6 +1118,8 @@ class _Compiler:
                          "function HL_PathLast() { local a = HL_PathSurvivors(), m = 2.0; foreach (v in a) if (v < m) m = v; "
                          "return a.len() ? m : 0.0; }\n")
         parts += [f + "\n" for f in ir.logic_functions]
+        for hook, rows in ir.logic_hooks.items():
+            parts.append(hook_function(hook, rows))
         if ir.logic_whens:
             rows = ", ".join(f'{{ fn = {fn}, t = "{rt}", f = "{rf}", once = {"true" if once else "false"}, last = false, '
                              f'done = false }}' for fn, rt, rf, once in ir.logic_whens)
@@ -1068,7 +1153,11 @@ class _Compiler:
             parts.append("function HL_Think() {\n"
                          + ("    HL_Progress_Think();\n" if ir.logic_progress else "")
                          + ("    HL_When_Think();\n" if ir.logic_whens else "")
-                         + ("    HL_Retry();\n" if ir.logic_retry else "") + "}\n")
+                         + ("    HL_Retry();\n" if ir.logic_retry else "")
+                         + ("    if (Time() >= HL_OptsNext) { HL_OptsNext = Time() + 0.5; ::HL_ApplyOpts(); }\n"
+                            if ir.logic_diropts else "") + "}\n")
+            if ir.logic_diropts:
+                parts.insert(-1, "HL_OptsNext <- 0.0;\n")
         events = {ev: list(t) for ev, t in ir.logic_events.items()}
         for ev in ir.logic_script_events:
             events.setdefault(ev, [])
@@ -1098,6 +1187,38 @@ class _Compiler:
             self.ir.entities.append(script)
         if thinks:
             script.keyvalues = {**script.keyvalues, "thinkfunction": "HL_Think"}
+
+
+def hook_function(hook: str, rows: list) -> str:
+    """::HL_Hook_<hook>: what the map's mode script calls when the game asks (see gamefiles.mode_files).
+    rows: one per Override node: (the code its Asked wire runs, its answer or None, new damage or None)."""
+    from .director_options import HOOKS_BY_NAME
+    _name, _where, args, answer_kind, _about = HOOKS_BY_NAME[hook]
+    if hook == "AllowTakeDamage":
+        params = "dt"
+        ctx = ("    ::HL_Ctx <- { attacker = dt.Attacker, victim = dt.Victim, inflictor = dt.Inflictor, "
+               "damage = dt.DamageDone, damage_type = dt.DamageType, weapon = dt.Weapon, position = dt.Location };\n")
+    else:
+        params = ", ".join(a for a, _k in args)
+        ctx = "    ::HL_Ctx <- { " + ", ".join(f"{a} = {a}" for a, _k in args) + " };\n"
+    default = {"bool": "true", "text": '""', "num": args[0][0] if args else "0"}.get(answer_kind, "null")
+    if hook == "ShouldAvoidItem":
+        default = "false"
+    body = ctx + f"    local answer = {default};\n"
+    for code, answer, damage in rows:
+        body += (code + "\n") if code else ""
+        if damage is not None:
+            body += f"    dt.DamageDone = {damage};\n"
+        if answer is not None:
+            body += (f"    answer = answer && ({answer});\n" if answer_kind == "bool"
+                     else f"    {{ local a = {answer}; if (a != null && a != \"\") answer = a; }}\n")
+    if answer_kind == "num":
+        body += "    return answer.tointeger();\n"
+    elif answer_kind == "text":
+        body += "    return answer == \"\" ? 0 : answer;\n"
+    elif answer_kind:
+        body += "    return answer;\n"
+    return f"::HL_Hook_{hook} <- function({params}) {{\n{body}}}\n"
 
 
 def compile_graph(nodes: list[LNode], links: list[LLink], ir: MapIR, graph: str = "", log: bool = False) -> list[str]:

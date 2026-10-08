@@ -1336,6 +1336,7 @@ def _script_add_menu(self, context):
     self.layout.menu("HL_MT_logic_game_functions", icon="SCRIPT")
     self.layout.menu("HL_MT_logic_game_events", icon="LIGHT")
     self.layout.menu("HL_MT_logic_blocks", icon="LOOP_FORWARDS")
+    self.layout.menu("HL_MT_logic_rules", icon="MODIFIER")
 
 
 # ---------------------------------------------------------------- Script blocks: loops, variables, tables, text, vectors
@@ -1637,6 +1638,216 @@ class HL_MT_logic_blocks(bpy.types.Menu):
             op.type, op.use_transform = c.bl_idname, True
 
 
+# ---------------------------------------------------------------- Director settings, HUD, overrides
+
+def _option_items(self, context):
+    from ..core.director_options import OPTIONS
+    if not _option_items.cache:
+        _option_items.cache = [(k, f"{group}: {k}", desc) for k, _kind, _v, group, desc in OPTIONS]
+    return _option_items.cache
+
+
+_option_items.cache = []
+
+
+def _rebuild_option(self, context=None):
+    from ..core.director_options import BY_KEY
+    self.inputs.clear()
+    self.outputs.clear()
+    self.ev_in("run", "Run")
+    opt = BY_KEY.get(self.key)
+    if opt is not None and self.op == "SET":
+        kind = {"int": "num"}.get(opt[1], opt[1])
+        s = _data_socket(self.inputs, kind, "value", "Value")
+        if opt[2] is not None and hasattr(s, "value"):
+            s.value = opt[2] if kind != "num" else float(opt[2])
+    self.ev_out("then", "Then")
+    self.label = f"{'Reset' if self.op == 'RESET' else 'Set'} {self.key}" if opt else ""
+
+
+class HL_NodeDirectorOption(_Block, bpy.types.Node):
+    """Changes one of the AI Director's settings while the map runs (stays on until changed or reset)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeDirectorOption", "Director Setting", "MODIFIER"
+    kind = "DIRECTOR_OPTION"
+    category = "Director"
+    key: StringProperty(name="Setting", default="CommonLimit", update=_rebuild_option)
+    op: EnumProperty(name="Do", default="SET", update=_rebuild_option, items=[
+        ("SET", "Set", "Change the setting"), ("RESET", "Reset", "Back to what the map's Director scripts say")])
+
+    def init(self, context):
+        self.use_custom_color = True
+        self.color = CATEGORY_COLORS["Director"]
+        _rebuild_option(self)
+
+    def make_sockets(self):
+        _rebuild_option(self)
+
+    def draw_buttons(self, context, layout):
+        op = layout.operator("hammerless.logic_pick_option", text=self.key or "Pick Setting", icon="VIEWZOOM")
+        op.node_name = self.name
+        layout.prop(self, "op", expand=True)
+
+    def draw_buttons_ext(self, context, layout):
+        from ..core.director_options import BY_KEY
+        self.draw_buttons(context, layout)
+        opt = BY_KEY.get(self.key)
+        if opt:
+            box = layout.box()
+            for line in _wrap(opt[4], 40):
+                box.label(text=line)
+
+    def settings(self):
+        return {"key": self.key, "op": self.op}
+
+
+class HL_OT_logic_pick_option(bpy.types.Operator):
+    bl_idname = "hammerless.logic_pick_option"
+    bl_label = "Pick Director Setting"
+    bl_description = "Search the AI Director's settings"
+    bl_property = "choice"
+    node_name: StringProperty(options={"HIDDEN"})
+    choice: EnumProperty(items=_option_items)
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        node = _node_in_editor(context, self.node_name)
+        if node is not None:
+            node.key = self.choice
+        return {"FINISHED"}
+
+
+def _hud_slots(self, context):
+    from ..core.director_options import HUD_SLOTS
+    return HUD_SLOTS
+
+
+class HL_NodeHudText(_Block, bpy.types.Node):
+    """Shows text in one of the HUD's slots and keeps it up to date (a score, a timer, a count...).
+    Needs scripted mode: Build & Play starts the map in Hammerless's own co-op mode for it"""
+    bl_idname, bl_label, bl_icon = "HL_NodeHudText", "HUD Text", "FONT_DATA"
+    kind = "HUD_TEXT"
+    slot: EnumProperty(name="Where", items=_hud_slots)
+    align: EnumProperty(name="Align", default="CENTER", items=[("LEFT", "Left", ""), ("CENTER", "Center", ""),
+                                                               ("RIGHT", "Right", "")])
+    team: EnumProperty(name="Seen By", default="ALL", items=[("ALL", "Everyone", ""), ("SURVIVORS", "Survivors", ""),
+                                                             ("INFECTED", "Infected", "")])
+    no_background: BoolProperty(name="No Background", default=False)
+    blink: BoolProperty(name="Blink", default=False)
+    place: BoolProperty(name="Own Position", default=False, description="Place it yourself (0 to 1 across / down the screen)")
+    x: FloatProperty(name="X", default=0.25, min=0, max=1)
+    y: FloatProperty(name="Y", default=0.1, min=0, max=1)
+    w: FloatProperty(name="Width", default=0.5, min=0, max=1)
+    h: FloatProperty(name="Height", default=0.08, min=0, max=1)
+
+    def make_sockets(self):
+        self.ev_in("run", "Show")
+        self.data_in("text", "text", "Text")
+        self.ev_out("then", "Then")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "slot", text="")
+        row = layout.row(align=True)
+        row.prop(self, "align", text="")
+        row.prop(self, "team", text="")
+        row = layout.row(align=True)
+        row.prop(self, "no_background", toggle=True)
+        row.prop(self, "blink", toggle=True)
+        layout.prop(self, "place")
+        if self.place:
+            col = layout.column(align=True)
+            for p in ("x", "y", "w", "h"):
+                col.prop(self, p)
+
+    def settings(self):
+        return {"slot": self.slot, "align": self.align, "team": self.team, "no_background": self.no_background,
+                "blink": self.blink, "place": self.place, "x": self.x, "y": self.y, "w": self.w, "h": self.h}
+
+
+class HL_NodeHudHide(_Block, bpy.types.Node):
+    """Clears a HUD slot"""
+    bl_idname, bl_label, bl_icon = "HL_NodeHudHide", "HUD Hide", "HIDE_ON"
+    kind = "HUD_HIDE"
+    slot: EnumProperty(name="Where", items=_hud_slots)
+
+    def make_sockets(self):
+        self.ev_in("run", "Hide")
+        self.ev_out("then", "Then")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "slot", text="")
+
+    def settings(self):
+        return {"slot": self.slot}
+
+
+def _hook_items(self, context):
+    from ..core.director_options import HOOKS
+    return [(h[0], h[0], h[4]) for h in HOOKS]
+
+
+def _rebuild_override(self, context=None):
+    from ..core.director_options import HOOKS_BY_NAME
+    self.inputs.clear()
+    self.outputs.clear()
+    hook = HOOKS_BY_NAME.get(self.hook)
+    if hook is None:
+        return
+    _n, _where, args, answer, _about = hook
+    self.ev_out("asked", "Asked")
+    for name, kind in args:
+        _data_socket(self.outputs, kind, name, name.replace("_", " ").title())
+    if answer:
+        s = _data_socket(self.inputs, answer, "answer", "Allow" if answer == "bool" else "Answer")
+        if answer == "bool":
+            s.value = self.hook != "ShouldAvoidItem"
+    if self.hook == "AllowTakeDamage":
+        _data_socket(self.inputs, "num", "damage", "New Damage")
+    self.label = f"Override: {self.hook}"
+
+
+class HL_NodeOverride(_Block, bpy.types.Node):
+    """The game asks the map before it does something (allow this damage? turn this weapon spawn into
+    something else?): Asked runs your nodes, then the answer goes back. Needs scripted mode: Build & Play
+    starts the map in Hammerless's own co-op mode for it"""
+    bl_idname, bl_label, bl_icon = "HL_NodeOverride", "Override", "QUESTION"
+    kind = "OVERRIDE"
+    hook: EnumProperty(name="Override", items=_hook_items, update=_rebuild_override)
+
+    def make_sockets(self):
+        _rebuild_override(self)
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "hook", text="")
+
+    def draw_buttons_ext(self, context, layout):
+        from ..core.director_options import HOOKS_BY_NAME
+        self.draw_buttons(context, layout)
+        hook = HOOKS_BY_NAME.get(self.hook)
+        if hook:
+            box = layout.box()
+            for line in _wrap(hook[4], 40):
+                box.label(text=line)
+
+    def settings(self):
+        return {"hook": self.hook}
+
+
+DIRECTOR_CLASSES = (HL_NodeDirectorOption, HL_NodeHudText, HL_NodeHudHide, HL_NodeOverride)
+
+
+class HL_MT_logic_rules(bpy.types.Menu):
+    bl_idname = "HL_MT_logic_rules"
+    bl_label = "Director, HUD & Overrides"
+
+    def draw(self, context):
+        for c in DIRECTOR_CLASSES:
+            op = self.layout.operator("node.add_node", text=c.bl_label, icon=c.bl_icon)
+            op.type, op.use_transform = c.bl_idname, True
+
+
 CATEGORIES = [
     ("Events", [HL_NodeMapStart, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton, HL_NodeTimer]),
     ("Values", [HL_NodeProgress, HL_NodeRandomValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath,
@@ -1929,7 +2140,7 @@ class HL_OT_logic_refresh_node(bpy.types.Operator):
 CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_BoolSocket, HL_TextSocket, HL_VectorSocket,
            HL_ThingSocket, HL_AnySocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + tuple(SCRIPT_MENUS) + (
     HL_NodeScriptCall, HL_NodeScriptEvent, HL_OT_logic_pick_function, HL_OT_logic_pick_event) + BLOCK_CLASSES + (
-    HL_MT_logic_blocks,
+    HL_MT_logic_blocks,) + DIRECTOR_CLASSES + (HL_OT_logic_pick_option, HL_MT_logic_rules,
     HL_OT_logic_new, HL_OT_logic_from_outputs, HL_OT_logic_refresh_node)
 
 

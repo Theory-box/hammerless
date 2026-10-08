@@ -1,4 +1,4 @@
-"""Minimal read-only VPK reader.
+"""Minimal VPK reader, and a writer for small single-file addons.
 
 Lists file paths (to check that materials/models exist in the game) and reads
 individual files (e.g. model headers for their bounding boxes).
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import struct
+import zlib
 
 VPK_SIGNATURE = 0x55AA1234
 DIR_ARCHIVE = 0x7FFF  # entry data stored in the _dir.vpk itself
@@ -128,3 +129,32 @@ class GameContent:
             for f in self.files
             if f.startswith("materials/") and f.endswith(".vmt") and f[len("materials/"):].startswith(prefix)
         )
+
+
+def write_vpk(path: str, files: dict[str, bytes]) -> None:
+    """A version 1 VPK with every file's data inside it (how addon .vpk files are made).
+    files: path inside the VPK -> contents."""
+    tree: dict[str, dict[str, list[tuple[str, bytes]]]] = {}
+    for full, data in sorted(files.items()):
+        full = full.replace(chr(92), "/").lower()
+        folder, _, leaf = full.rpartition("/")
+        name, _, ext = leaf.rpartition(".")
+        if not name:
+            name, ext = ext, ""
+        tree.setdefault(ext or " ", {}).setdefault(folder or " ", []).append((name, data))
+    nul = bytes(1)
+    out, blobs, offset = bytearray(), bytearray(), 0
+    for ext, folders in tree.items():
+        out += ext.encode() + nul
+        for folder, entries in folders.items():
+            out += folder.encode() + nul
+            for name, data in entries:
+                out += name.encode() + nul
+                out += struct.pack("<IHHIIH", zlib.crc32(data) & 0xFFFFFFFF, 0, DIR_ARCHIVE, offset, len(data), 0xFFFF)
+                blobs += data
+                offset += len(data)
+            out += nul
+        out += nul
+    out += nul
+    with open(path, "wb") as f:
+        f.write(struct.pack("<III", VPK_SIGNATURE, 1, len(out)) + out + blobs)
