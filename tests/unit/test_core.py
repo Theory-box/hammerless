@@ -977,7 +977,7 @@ class TestValueNodes(unittest.TestCase):
         self.assertIn("(HL_PathFurthest() >= (HL_Random_rand() * 0.5))", script)
         self.assertIn("RandomFloat(0.2, 1.0)", script)
         self.assertEqual(script.count("function HL_Random_rand()"), 1)     # one roll, shared
-        self.assertIn("if ((HL_Alive(8) >= 1.0)) EntFire(\"hl_if_true\"", script)
+        self.assertIn("if ((HL_Alive(8) >= 1.0)) {\n    EntFire(\"hl_msg\", \"ShowHint\"", script)   # runs in script
         self.assertIn("w.fn.call(this)", script)
         self.assertIn("HL_ZSpawn(type)", script)                            # lifts the Director's limit
         self.assertIn("HL_When_Think();", script)

@@ -354,7 +354,12 @@ class _Compiler:
             if f is None or sock != "result":
                 return "null"
             if vs.is_pure(f):
-                return vs.call_expr(f, *self.script_args(n, f))
+                target, args = self.script_args(n, f)
+                if not f.get("on"):
+                    return vs.call_expr(f, target, args)
+                # nothing to ask (no player yet, a deleted entity): null rather than a script error
+                return (f"(function(hl_t) {{ return (hl_t != null && hl_t.IsValid()) ? "
+                        f"{vs.call_expr(f, 'hl_t', args)} : null; }})({target})")
             return f'(("{slug}" in ::HL_R) ? ::HL_R["{slug}"] : null)'
         if k == "SCRIPT_EVENT":
             e = vs.event(s.get("event", ""))
@@ -609,15 +614,12 @@ class _Compiler:
             fire("true", on_true, "OnTrigger")
             fire("false", on_false, "OnTrigger")
         elif k == "IF":
+            # a script function: an event's chain runs straight through it (its values still current);
+            # True / False run the next script nodes directly, or fire entity inputs
             cond = self.expr_in(n, "condition", False)
-            on_true = self.add("logic_relay", f"hl_{slug}_true", {"spawnflags": RELAY})
-            on_false = self.add("logic_relay", f"hl_{slug}_false", {"spawnflags": RELAY})
-            fn = self.fn_name(f"HL_If_{slug}")
-            self.functions.append(f"function {fn}() {{\n    if ({cond}) EntFire(\"{on_true.keyvalues['targetname']}\", "
-                                  f"\"Trigger\");\n    else EntFire(\"{on_false.keyvalues['targetname']}\", \"Trigger\");\n}}")
-            take("in", *self.script_call(fn))
-            fire("true", on_true, "OnTrigger")
-            fire("false", on_false, "OnTrigger")
+            fn = self.fn_name(f"HL_S_{slug}")
+            self.script_action(nid, fn, f"    if ({cond}) {{\n@@true@@\n    }} else {{\n@@false@@\n    }}",
+                               ["true", "false"], take, inp="in")
         elif k == "MAP_START":
             e = self.add("logic_auto", f"hl_{slug}", {"spawnflags": "1"})
             # after the map-wide Director settings (they load at 1 s), or settings a graph applies at
@@ -889,13 +891,13 @@ class _Compiler:
         n = self.nodes.get(nid)
         return (nid, sock) in self.script_sources or (n is not None and n.kind == "SCRIPT_EVENT" and sock == "happened")
 
-    def script_action(self, nid: str, fn: str, body: str, outputs: list[str], take) -> None:
+    def script_action(self, nid: str, fn: str, body: str, outputs: list[str], take, inp: str = "run") -> None:
         """A node that runs as a script function: its event input calls it, and @@output@@ in the body is
         where each event output's wires go."""
         self.script_fns[nid] = (fn, body)
-        self.script_takes[(nid, "run")] = fn
+        self.script_takes[(nid, inp)] = fn
         self.script_sources |= {(nid, o) for o in outputs}
-        take("run", *self.script_call(fn))
+        take(inp, *self.script_call(fn))
 
     def helper(self, name: str, code: str) -> None:
         """A shared script function, written once."""

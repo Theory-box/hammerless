@@ -131,10 +131,10 @@ def _events() -> list[dict]:
             fields = []
             for fm in re.finditer(r'"([A-Za-z0-9_]+)"\s+"([a-z]+)"[ \t]*(//[^\n]*)?', m.group(3)):
                 name, ftype, note = fm.group(1), fm.group(2), (fm.group(3) or "").lstrip("/ ").strip()
-                entity = ftype in ("short", "long") and (re.search(r"(entid|entindex|entityid)$", name) is not None
+                entity = ftype in ("short", "long") and (re.search(r"(entid|entindex|entityid|infected_id)$", name) is not None
                                                          or re.match(r"entity (id|index)", note, re.I) is not None)
                 player = ftype in ("short", "long") and not entity and (
-                    name in ("userid", "attacker", "victim", "subject", "rescuer", "healer", "infected_id")
+                    name in ("userid", "attacker", "victim", "subject", "rescuer", "healer")
                     or re.search(r"user ?id", note, re.I) is not None)
                 # (the file's comments only help tell players and entities apart: they aren't kept)
                 fields.append({"name": name, "type": ftype, "player": bool(player), "entity": bool(entity)})

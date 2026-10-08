@@ -10114,8 +10114,8 @@
 {
 "name":"infected_id",
 "type":"short",
-"player":true,
-"entity":false
+"player":false,
+"entity":true
 },
 {
 "name":"gender",
@@ -13524,8 +13524,8 @@
 {
 "name":"infected_id",
 "type":"short",
-"player":true,
-"entity":false
+"player":false,
+"entity":true
 },
 {
 "name":"gender",
