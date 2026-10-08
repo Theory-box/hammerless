@@ -1321,22 +1321,12 @@ def _script_menus():
         return type(idname, (bpy.types.Menu,), {"bl_idname": idname, "bl_label": title, "draw": draw})
 
     menus += fn_menus + ev_menus
-    menus.append(parent("HL_MT_logic_game_functions", "Game Functions", fn_menus, ("HL_NodeScriptCall", "Search...")))
-    menus.append(parent("HL_MT_logic_game_events", "Game Events", ev_menus, ("HL_NodeScriptEvent", "Search...")))
+    menus.append(parent("HL_MT_logic_game_functions", "All Game Functions", fn_menus, ("HL_NodeScriptCall", "Pick by Search...")))
+    menus.append(parent("HL_MT_logic_game_events", "All Game Events", ev_menus, ("HL_NodeScriptEvent", "Pick by Search...")))
     return menus
 
 
 SCRIPT_MENUS = _script_menus()
-
-
-def _script_add_menu(self, context):
-    if getattr(context.space_data, "tree_type", "") != TREE:
-        return
-    self.layout.separator()
-    self.layout.menu("HL_MT_logic_game_functions", icon="SCRIPT")
-    self.layout.menu("HL_MT_logic_game_events", icon="LIGHT")
-    self.layout.menu("HL_MT_logic_blocks", icon="LOOP_FORWARDS")
-    self.layout.menu("HL_MT_logic_rules", icon="MODIFIER")
 
 
 # ---------------------------------------------------------------- Script blocks: loops, variables, tables, text, vectors
@@ -1628,16 +1618,6 @@ BLOCK_CLASSES = (HL_NodeForEach, HL_NodeSetVariable, HL_NodeGetVariable, HL_Node
                  HL_NodeScriptCode, HL_NodeScriptValue)
 
 
-class HL_MT_logic_blocks(bpy.types.Menu):
-    bl_idname = "HL_MT_logic_blocks"
-    bl_label = "Script Blocks"
-
-    def draw(self, context):
-        for c in BLOCK_CLASSES:
-            op = self.layout.operator("node.add_node", text=c.bl_label, icon=c.bl_icon)
-            op.type, op.use_transform = c.bl_idname, True
-
-
 # ---------------------------------------------------------------- Director settings, HUD, overrides
 
 def _option_items(self, context):
@@ -1856,16 +1836,6 @@ class HL_NodeDirectorMood(_Block, bpy.types.Node):
 DIRECTOR_CLASSES = (HL_NodeDirectorOption, HL_NodeDirectorMood, HL_NodeHudText, HL_NodeHudHide, HL_NodeOverride)
 
 
-class HL_MT_logic_rules(bpy.types.Menu):
-    bl_idname = "HL_MT_logic_rules"
-    bl_label = "Director, HUD & Overrides"
-
-    def draw(self, context):
-        for c in DIRECTOR_CLASSES:
-            op = self.layout.operator("node.add_node", text=c.bl_label, icon=c.bl_icon)
-            op.type, op.use_transform = c.bl_idname, True
-
-
 CATEGORIES = [
     ("Events", [HL_NodeMapStart, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton, HL_NodeTimer]),
     ("Values", [HL_NodeProgress, HL_NodeRandomValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath,
@@ -1881,16 +1851,43 @@ CATEGORIES = [
 NODE_CLASSES = tuple(c for _t, cs in CATEGORIES for c in cs) + (HL_NodePathProgress,)   # (old graphs)
 
 
-def _category_menu(title, classes):
+# The Add menu: one place per purpose. The game's full API sits one submenu deeper where it belongs
+# (all its events under Events, all its functions under Actions); Blender's Add search finds them too.
+SUB = "SUB"          # ("SUB", menu idname, label, icon) entries open a submenu
+MENU_LAYOUT = [
+    ("Events", [HL_NodeMapStart, HL_NodeVolume, HL_NodeButton, HL_NodeTimer, HL_NodeGameEvent, None,
+                (SUB, "HL_MT_logic_game_events", "All Game Events", "LIGHT")]),
+    ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
+              HL_NodeCounter, HL_NodeRandom, None, HL_NodeForEach]),
+    ("Values", [HL_NodeValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath, HL_NodeRandomValue, HL_NodeProgress,
+                HL_NodeInfectedCount, None, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeFormatText,
+                HL_NodeCheck, None, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, None,
+                HL_NodeMakeTable, HL_NodeGetField]),
+    ("Scene", [HL_NodeObjectInfo, HL_NodeObject, HL_NodeCollision]),
+    ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
+                 HL_NodeTeleport, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
+    ("Director", [HL_NodeDirector, HL_NodeDirectorSettings, HL_NodeDirectorOption, HL_NodeDirectorMood]),
+    ("HUD & Messages", [HL_NodeMessage, HL_NodeObjective, None, HL_NodeHudText, HL_NodeHudHide]),
+    ("Overrides", [HL_NodeOverride]),
+    ("Script", [HL_NodeScriptCode, HL_NodeScriptValue]),
+]
+
+
+def _layout_menu(index, title, entries):
     def draw(self, context):
-        for c in classes:
-            op = self.layout.operator("node.add_node", text=c.bl_label, icon=c.bl_icon)
-            op.type, op.use_transform = c.bl_idname, True
-    return type(f"HL_MT_logic_{title.lower()}", (bpy.types.Menu,), {
-        "bl_idname": f"HL_MT_logic_{title.lower()}", "bl_label": title, "draw": draw})
+        for e in entries:
+            if e is None:
+                self.layout.separator()
+            elif isinstance(e, tuple):
+                self.layout.menu(e[1], text=e[2], icon=e[3])
+            else:
+                op = self.layout.operator("node.add_node", text=e.bl_label, icon=e.bl_icon)
+                op.type, op.use_transform = e.bl_idname, True
+    idname = f"HL_MT_logic_menu_{index}"
+    return type(idname, (bpy.types.Menu,), {"bl_idname": idname, "bl_label": title, "draw": draw})
 
 
-CATEGORY_MENUS = [_category_menu(t, c) for t, c in CATEGORIES]
+CATEGORY_MENUS = [_layout_menu(i, t, e) for i, (t, e) in enumerate(MENU_LAYOUT)]
 
 
 def _add_menu(self, context):
@@ -1898,6 +1895,9 @@ def _add_menu(self, context):
         return
     for m in CATEGORY_MENUS:
         self.layout.menu(m.bl_idname)
+    if "HL_MT_logic_examples" in dir(bpy.types):
+        self.layout.separator()
+        self.layout.menu("HL_MT_logic_examples", icon="HELP")
 
 
 # ---------------------------------------------------------------- export
@@ -2158,7 +2158,7 @@ class HL_OT_logic_refresh_node(bpy.types.Operator):
 CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_BoolSocket, HL_TextSocket, HL_VectorSocket,
            HL_ThingSocket, HL_AnySocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + tuple(SCRIPT_MENUS) + (
     HL_NodeScriptCall, HL_NodeScriptEvent, HL_OT_logic_pick_function, HL_OT_logic_pick_event) + BLOCK_CLASSES + (
-    HL_MT_logic_blocks,) + DIRECTOR_CLASSES + (HL_OT_logic_pick_option, HL_MT_logic_rules,
+    ) + DIRECTOR_CLASSES + (HL_OT_logic_pick_option,
     HL_OT_logic_new, HL_OT_logic_from_outputs, HL_OT_logic_refresh_node)
 
 
@@ -2166,11 +2166,9 @@ def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
     bpy.types.NODE_MT_add.append(_add_menu)
-    bpy.types.NODE_MT_add.append(_script_add_menu)
 
 
 def unregister():
-    bpy.types.NODE_MT_add.remove(_script_add_menu)
     bpy.types.NODE_MT_add.remove(_add_menu)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
