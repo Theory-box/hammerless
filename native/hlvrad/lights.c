@@ -84,7 +84,7 @@ static const char *ValueForKeyOrNull(const entity_t *e, const char *key) {
 }
 
 /* "r g b [brightness]" (or two of those, LDR then HDR) -> linear intensity */
-static int LightForString(const char *s, vec3_t intensity) {
+int LightForString(const char *s, vec3_t intensity) {
     double r = 0, g = 0, b = 0, scaler = 0, rh, gh, bh, sh;
     VectorClear(intensity);
     int n = sscanf(s, "%lf %lf %lf %lf %lf %lf %lf %lf", &r, &g, &b, &scaler, &rh, &gh, &bh, &sh);
@@ -416,7 +416,19 @@ static void ParseLightDirectional(const entity_t *e) {
 void CreateDirectLights(void) {
     numdlights = 0;
     activelights = gSkyLight = gAmbient = NULL;
-    /* TODO: surface lights (texlights) from the patches come first */
+    /* surfaces: a light per leaf patch of a light-emitting texture, by its share of the texture's area */
+    for (int i = 0; i < numpatches; i++) {
+        const patch_t *p = &patches[i];
+        if (p->child1 != -1) continue;
+        if (p->basearea < 1e-6) continue;
+        if ((p->baselight[0] + p->baselight[1] + p->baselight[2]) / 3 >= 0.1f) {
+            directlight_t *dl = AllocDLight(p->origin, 1);
+            dl->light.type = emit_surface;
+            VectorCopy(p->normal, dl->light.normal);
+            VectorScale(p->baselight, lightscale * p->area * p->scale[0] * p->scale[1] / p->basearea, dl->light.intensity);
+            VectorScale(dl->light.intensity, 100.0f * 100.0f, dl->light.intensity);     /* (DIRECT_SCALE) */
+        }
+    }
     for (int i = 0; i < num_entities; i++) {
         const entity_t *e = &entities[i];
         const char *name = ValueForKey(e, "classname");

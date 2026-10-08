@@ -76,8 +76,9 @@ static void MakePatchForFace(int fn, winding_t *w) {
     WindingBounds(w, p->face_mins, p->face_maxs);
     VectorCopy(p->face_mins, p->mins);
     VectorCopy(p->face_maxs, p->maxs);
-    /* light emitted by the texture (TODO: texlights), its reflectivity (kept under 1 so bouncing settles) */
+    /* light emitted by the texture, its reflectivity (kept under 1 so bouncing settles) */
     const dtexdata_t *td = (const dtexdata_t *)lumps[LUMP_TEXDATA].data + tx->texdata;
+    LightForTexture(TexDataName(tx->texdata), p->baselight);
     p->basearea = (float)(td->height * td->width);
     for (int k = 0; k < 3; k++) {
         p->reflectivity[k] = td->reflectivity[k] * 1.0f;
@@ -127,6 +128,7 @@ static void DispPatchCommon(patch_t *p, const vec3_t *pts, int n, float area, co
 static void DispBaseLight(patch_t *p) {
     const texinfo_t *tx = &texinfo[g_pFaces[p->face].texinfo];
     const dtexdata_t *td = (const dtexdata_t *)lumps[LUMP_TEXDATA].data + tx->texdata;
+    LightForTexture(TexDataName(tx->texdata), p->baselight);
     p->basearea = (float)(td->height * td->width);
     for (int k = 0; k < 3; k++) {
         p->reflectivity[k] = td->reflectivity[k] * 1.0f;

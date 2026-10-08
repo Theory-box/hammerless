@@ -29,7 +29,7 @@ double VectorNormalizeD(vec3_t v) {
 }
 
 int main(int argc, char **argv) {
-    const char *map = NULL;
+    const char *map = NULL, *designer_lights = NULL;
     Msg("Hammerless hlvrad\n");
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -38,9 +38,10 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-both")) g_bHDR = 1, g_bLDR = 1;
         else if (!_stricmp(a, "-game") && i + 1 < argc) g_gamedir = argv[++i];
         else if (!_stricmp(a, "-modeldir") && i + 1 < argc) g_modeldir = argv[++i];
+        else if (!_stricmp(a, "-lights") && i + 1 < argc) designer_lights = argv[++i];
         else if (!_stricmp(a, "-bounce") && i + 1 < argc) g_numbounce = atoi(argv[++i]);
         else if (!_stricmp(a, "-threads") ||
-                 !_stricmp(a, "-extrasky") || !_stricmp(a, "-lights") || !_stricmp(a, "-chop") ||
+                 !_stricmp(a, "-extrasky") || !_stricmp(a, "-chop") ||
                  !_stricmp(a, "-maxchop") || !_stricmp(a, "-dispchop")) {
             if (++i >= argc) Error("expected a value after '%s'", a);
         } else if (!_stricmp(a, "-smooth")) {
@@ -71,16 +72,37 @@ int main(int argc, char **argv) {
     ParseEntities();
     FindFacePatches();
     LoadDisplacements();
+    LoadTexLights(g_gamedir, path, designer_lights);
     MakePatches();
     PairEdges();
     SaveVertexNormals();
     SubdividePatches();
     AddDispsToClusterTable();
     CreateDirectLights();
+    if (getenv("SKYDBG")) {      /* (debugging: a point's cluster and whether each light's PVS has it) */
+        vec3_t p;
+        sscanf(getenv("SKYDBG"), "%f %f %f", &p[0], &p[1], &p[2]);
+        int c = ClusterFromPoint(p);
+        Msg("cluster %d\n", c);
+        for (directlight_t *dl = activelights; dl; dl = dl->next) Msg("light type %d cluster %d sees %d\n", dl->light.type, dl->light.cluster, PVSCheck(dl->pvs, c));
+    }
     AddBrushesForRayTrace();
     AddDispsForRayTrace();
     AddStaticPropsForRayTrace();
     RT_SetupAccelerationStructure();
+    if (getenv("RTTEST")) {       /* (debugging: trace packets of 4 rays, as vradhook does with vrad's tracer) */
+        FILE *rf = fopen(getenv("RTTEST"), "rb"), *of = fopen("raysout_ours.bin", "wb");
+        float pk[32];
+        int mask, hit[4];
+        float dist[4];
+        while (fread(pk, 4, 32, rf) == 32 && fread(&mask, 4, 1, rf) == 1) {
+            RT_Trace4Mask((const float(*)[4])pk, (const float(*)[4])(pk + 12), pk + 28, mask, hit, dist);
+            for (int i = 0; i < 4; i++) hit[i] = hit[i] == -1 ? -1 : RT_TriangleID(hit[i]);
+            fwrite(hit, 4, 4, of), fwrite(dist, 4, 4, of);
+        }
+        fclose(of), fclose(rf);
+        return 0;
+    }
     AllocFacelights();
     for (int i = 0; i < numfaces; i++) BuildFacelights(i);
     PrecompLightmapOffsets();

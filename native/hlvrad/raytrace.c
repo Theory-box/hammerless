@@ -134,13 +134,11 @@ static int Classify(int t, int axis, float split) {
     return PLANECHECK_STRADDLING;
 }
 
-static float BoxSurfaceArea(const float *mn, const float *mx) {
-    float d0 = mx[0] - mn[0], d1 = mx[1] - mn[1], d2 = mx[2] - mn[2];
-    return (float)(2.0 * ((d0 * d2) + (d0 * d1) + (d1 * d2)));
-}
-
-static float CostOfSplit(int axis, const int *list, int n, const float *mn, const float *mx, float *split, int *nl,
-                         int *nr, int *nb) {
+/* The surface area heuristic: 75 + 167 * (straddling + left * area(left)/area + right * area(right)/area).
+ * L4D2's is x87: the box sides and areas in double (two of the full box's sides rounded to float first,
+ * the left box's x side too), 1/area rounded to float, each area's terms in its own order. */
+static double CostOfSplit(int axis, const int *list, int n, const float *mn, const float *mx, float *split, int *nl,
+                          int *nr, int *nb) {
     *nl = *nr = *nb = 0;
     float min_coord = 1.0e23f, max_coord = -1.0e23f;
     for (int i = 0; i < n; i++) {
@@ -163,9 +161,17 @@ static float CostOfSplit(int axis, const int *list, int n, const float *mn, cons
     memcpy(rmin, mn, 12);
     lmax[axis] = *split;
     rmin[axis] = *split;
-    float sa_l = BoxSurfaceArea(mn, lmax), sa_r = BoxSurfaceArea(rmin, mx);
-    float isa = (float)(1.0 / BoxSurfaceArea(mn, mx));
-    return COST_OF_TRAVERSAL + COST_OF_INTERSECTION * (*nb + (sa_l * isa * *nl) + (sa_r * isa * *nr));
+    double d0 = (double)mx[0] - mn[0];
+    float t1 = mx[1] - mn[1], t2 = mx[2] - mn[2];
+    double S = ((double)t2 * d0 + d0 * t1) + (double)t2 * t1;
+    float oo = (float)(1.0 / (S * 2.0));
+    float ld0 = lmax[0] - mn[0];
+    double ld1 = (double)lmax[1] - mn[1], ld2 = (double)lmax[2] - mn[2];
+    double SL = (ld2 * ld0 + ld0 * ld1) + ld1 * ld2;
+    double rd0 = (double)mx[0] - rmin[0], rd1 = (double)mx[1] - rmin[1], rd2 = (double)mx[2] - rmin[2];
+    double SR = (rd0 * rd1 + rd2 * rd0) + rd1 * rd2;
+    double x = (double)*nb + (SL * 2.0 * oo) * *nl;
+    return (x + (SR * 2.0 * oo) * *nr) * (double)COST_OF_INTERSECTION + (double)COST_OF_TRAVERSAL;
 }
 
 static void MakeLeaf(int node, const int *list, int n) {
@@ -192,10 +198,10 @@ static void RefineNode(int node, const int *list, int n, const float *mn, const 
                     if (trial > mx[axis] || trial < mn[axis]) continue;
                 }
                 int nl, nr, nb;
-                float cost = CostOfSplit(axis, list, n, mn, mx, &trial, &nl, &nr, &nb);
-                if (cost < best_cost) {
+                double cost = CostOfSplit(axis, list, n, mn, mx, &trial, &nl, &nr, &nb);
+                if (best_cost > cost) {            /* (unrounded cost against the kept float) */
                     split_axis = axis;
-                    best_cost = cost;
+                    best_cost = (float)cost;
                     best_nl = nl;
                     best_nr = nr;
                     best_nb = nb;
@@ -251,6 +257,14 @@ void RT_SetupAccelerationStructure(void) {
     RefineNode(0, root, numtris, minbound, maxbound, 0);
     free(root);
     for (int i = 0; i < numtris; i++) IntersectionFormat(i);
+    if (getenv("RTDUMP")) {     /* (debugging: triangles, nodes, leaf lists) */
+        FILE *f = fopen(getenv("RTDUMP"), "wb");
+        fwrite(&numtris, 4, 1, f), fwrite(tri_verts, 36, numtris, f);
+        fwrite(&numkd, 4, 1, f), fwrite(kd, sizeof(kdnode_t), numkd, f);
+        fwrite(&numtrilist, 4, 1, f), fwrite(trilist, 4, numtrilist, f);
+        fwrite(tris, sizeof(rttri_t), numtris, f);
+        fclose(f);
+    }
 }
 
 /* ------------------------------------------------------------------ tracing 4 rays together (Valve's Trace4Rays) */
@@ -354,17 +368,17 @@ static void Trace4Masked(const float o[3][4], const float d[3][4], __m128 TMin, 
                 __m128 did = _mm_or_ps(_mm_cmpgt_ps(ddotn, eps), _mm_cmplt_ps(ddotn, neps));
                 __m128 odotn = _mm_add_ps(_mm_add_ps(_mm_mul_ps(org[0], nx), _mm_mul_ps(org[1], ny)), _mm_mul_ps(org[2], nz));
                 __m128 isect = _mm_div_ps(_mm_sub_ps(_mm_set1_ps(t->d), odotn), ddotn);
-                did = _mm_and_ps(did, _mm_cmpgt_ps(isect, zeros));
+                did = _mm_and_ps(did, _mm_cmpgt_ps(isect, eps));         /* (L4D2: 1e-10, not 0) */
                 did = _mm_and_ps(did, _mm_cmplt_ps(isect, hd));
                 if (!_mm_movemask_ps(did)) continue;
                 __m128 h1 = _mm_add_ps(org[t->c0], _mm_mul_ps(isect, dir[t->c0]));
                 __m128 h2 = _mm_add_ps(org[t->c1], _mm_mul_ps(isect, dir[t->c1]));
                 __m128 b0 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(_mm_set1_ps(t->e[0]), h1), _mm_mul_ps(_mm_set1_ps(t->e[1]), h2)),
                                        _mm_set1_ps(t->e[2]));
-                did = _mm_and_ps(did, _mm_cmpge_ps(b0, zeros));
+                did = _mm_and_ps(did, _mm_cmpge_ps(b0, eps));            /* (on an edge: a miss) */
                 __m128 b1 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(_mm_set1_ps(t->e[3]), h1), _mm_mul_ps(_mm_set1_ps(t->e[4]), h2)),
                                        _mm_set1_ps(t->e[5]));
-                did = _mm_and_ps(did, _mm_cmpge_ps(b1, zeros));
+                did = _mm_and_ps(did, _mm_cmpge_ps(b1, eps));
                 did = _mm_and_ps(did, _mm_cmple_ps(_mm_add_ps(b1, b0), ones));
                 if (!_mm_movemask_ps(did)) continue;
                 __m128i didi = _mm_castps_si128(did);
@@ -487,23 +501,43 @@ float TestLine_DoesHitSky(const vec3_t start, const vec3_t stop, int static_prop
 }
 
 /* ------------------------------------------------------------------ the world's triangles */
+/* A brush's sides as triangles: each side's plane as a huge square, cut by every other (non-bevel) side.
+ * L4D2 does this around a point inside the brush (the origin pushed onto any side it is behind, up to 4
+ * passes) for precision, then moves the result back. */
 static void AddBrush(int b) {
     const dbrush_t *brush = &dbrushes[b];
     if (!(brush->contents & MASK_OPAQUE)) return;
+    vec3_t c = {0, 0, 0};
+    for (int pass = 0, done = 0; pass < 4 && !done; pass++) {
+        done = 1;
+        for (int i = 0; i < brush->numsides; i++) {
+            const dplane_t *pl = &dplanes[dbrushsides[brush->firstside + i].planenum];
+            float d = ((pl->normal[1] * c[1] + pl->normal[0] * c[0]) + pl->normal[2] * c[2]) - pl->dist;
+            if (0 > d) {
+                for (int k = 0; k < 3; k++) c[k] -= pl->normal[k] * d;
+                done = 0;
+            }
+        }
+    }
+    vec3_t off = {-c[0], -c[1], -c[2]};
     for (int i = 0; i < brush->numsides; i++) {
         const dbrushside_t *side = &dbrushsides[brush->firstside + i];
         const dplane_t *plane = &dplanes[side->planenum];
         int tflags = side->texinfo >= 0 && side->texinfo < numtexinfo ? texinfo[side->texinfo].flags : 0;
         if ((tflags & SURF_SKY) || side->dispinfo) continue;
-        winding_t *w = BaseWindingForPlane(plane->normal, plane->dist);
+        float dist = plane->dist + ((plane->normal[1] * off[1] + plane->normal[0] * off[0]) + plane->normal[2] * off[2]);
+        winding_t *w = BaseWindingForPlane(plane->normal, dist);
         for (int j = 0; j < brush->numsides && w; j++) {
             if (i == j) continue;
             const dbrushside_t *other = &dbrushsides[brush->firstside + j];
             if (other->bevel) continue;
             const dplane_t *p2 = &dplanes[other->planenum ^ 1];
-            ChopWindingInPlace(&w, p2->normal, p2->dist, 0);
+            float d2 = ((p2->normal[1] * off[1] + p2->normal[0] * off[0]) + p2->normal[2] * off[2]) + p2->dist;
+            ChopWindingInPlace(&w, p2->normal, d2, 0);
         }
         if (!w) continue;
+        for (int j = 0; j < w->numpoints; j++)
+            for (int k = 0; k < 3; k++) w->p[j][k] = (w->p[j][k] + c[k]) + 0.0f;    /* (+0.0f: vrad's transform turns -0 into 0) */
         for (int j = 2; j < w->numpoints; j++) RT_AddTriangle(TRACE_ID_OPAQUE, w->p[0], w->p[j - 1], w->p[j]);
         FreeWinding(w);
     }
