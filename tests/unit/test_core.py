@@ -2197,7 +2197,8 @@ class TestCustomModels(unittest.TestCase):
         pts = [(0, 0, 0), (10, 0, 0), (0, 10, 0), (0, 0, 10)]
         text = collision_smd([(pts, [(0, 2, 1), (0, 3, 2), (0, 1, 3), (1, 2, 3)][::1])])
         rows = [l.split() for l in text.splitlines() if l.startswith("0 ") and len(l.split()) == 9]
-        centre = (2.5, 2.5, 2.5)
+        pts_all = [tuple(map(float, r[1:4])) for r in rows]                # (written turned for studiomdl)
+        centre = tuple(sum(p[k] for p in pts_all) / len(pts_all) for k in range(3))
         for i in range(0, len(rows), 3):
             p = [tuple(map(float, r[1:4])) for r in rows[i:i + 3]]
             n = tuple(map(float, rows[i][4:7]))
@@ -2207,6 +2208,43 @@ class TestCustomModels(unittest.TestCase):
             out = [p[0][k] - centre[k] for k in range(3)]
             self.assertGreater(sum(wound[k] * out[k] for k in range(3)), 0)      # counter-clockwise from outside
             self.assertGreater(sum(n[k] * out[k] for k in range(3)), 0)
+
+    def test_smd_turned_for_studiomdl(self):
+        # studiomdl turns what it reads 90 degrees about Z (measured); the SMD is written turned back
+        from hammerless.core.models import reference_smd
+        text = reference_smd([("m", (((40, 0, 0), (1, 0, 0), (0, 1)), ((0, 20, 0), (0, 1, 0), (0, 0)),
+                                      ((0, 0, 10), (0, 0, 1), (1, 0))))])
+        rows = [l.split() for l in text.splitlines() if l.startswith("0 ") and len(l.split()) == 9]
+        self.assertEqual([float(c) for c in rows[0][1:7]], [0.0, -40.0, 0.0, 0.0, -1.0, 0.0])
+        self.assertEqual([float(c) for c in rows[1][1:4]], [20.0, 0.0, 0.0])
+
+    def test_own_model_writer(self):
+        # our .mdl / .vvd / .dx90.vtx for a two-material box: consistent headers, shared checksum, all corners
+        import struct
+        from hammerless.core.mdlwrite import build
+        s = 8.0
+        quads = [((0, 0, 1), [(-s, -s, s), (s, -s, s), (s, s, s), (-s, s, s)], "top"),
+                 ((0, 0, -1), [(-s, s, -s), (s, s, -s), (s, -s, -s), (-s, -s, -s)], "side"),
+                 ((1, 0, 0), [(s, -s, -s), (s, s, -s), (s, s, s), (s, -s, s)], "side")]
+        uv = [(0, 0), (1, 0), (1, 1), (0, 1)]
+        tris = []
+        for n, c, mat in quads:
+            for t in ((0, 1, 2), (0, 2, 3)):
+                tris.append((mat, tuple((c[i], n, uv[i]) for i in t)))
+        f = build("hammerless/m/box", tris, "models/hammerless/m/", "metal", 5.0, 1234)
+        mdl, vvd, vtx = f[".mdl"], f[".vvd"], f[".dx90.vtx"]
+        self.assertEqual(struct.unpack_from("<4sii", mdl, 0), (b"IDST", 49, 1234))
+        self.assertEqual(struct.unpack_from("<i", mdl, 76)[0], len(mdl))                 # length
+        self.assertEqual(struct.unpack_from("<4sii", vvd, 0), (b"IDSV", 4, 1234))
+        self.assertEqual(struct.unpack_from("<i", vvd, 16)[0], 12)                       # 3 faces x 4 corners
+        self.assertEqual(struct.unpack_from("<ii", vtx, 0), (7, 24))
+        self.assertEqual(struct.unpack_from("<i", vtx, 16)[0], 1234)                     # checksum
+        self.assertEqual(struct.unpack_from("<i", mdl, 204)[0], 2)                       # two materials
+        self.assertIn(b"metal\0", mdl)
+        self.assertIn(b"models\\hammerless\\m\\\0", mdl)
+        # the box's hull and lighting centre
+        self.assertEqual(struct.unpack_from("<3f", mdl, 104), (-8.25, -8.25, -8.25))
+        self.assertEqual(struct.unpack_from("<3f", mdl, 92), (0.0, 0.0, 0.0))
 
     def test_base_texture_of_vmt(self):
         from hammerless.core.models import base_texture_of

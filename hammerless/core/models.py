@@ -48,8 +48,10 @@ def safe_name(text: str) -> str:
 # ------------------------------------------------------------------ SMD / QC text
 
 def _vertex_line(v: Vertex) -> str:
+    # studiomdl turns what it reads 90 degrees about Z, (x, y) -> (-y, x) (measured: the stored vertices of
+    # a compiled cube). Written turned the other way, (x, y) -> (y, -x), the model's own axes are Blender's
     (x, y, z), (nx, ny, nz), (u, w) = v
-    return f"0 {x:.6f} {y:.6f} {z:.6f} {nx:.6f} {ny:.6f} {nz:.6f} {u:.6f} {w:.6f}"
+    return f"0 {y:.6f} {-x:.6f} {z:.6f} {ny:.6f} {-nx:.6f} {nz:.6f} {u:.6f} {w:.6f}"
 
 
 SMD_HEADER = "version 1\nnodes\n0 \"root\" -1\nend\nskeleton\ntime 0\n0 0 0 0 0 0 0\nend\n"
