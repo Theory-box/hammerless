@@ -836,14 +836,8 @@ void EndBSPFile(const char *path) {
     }
     /* the pakfile: the default cubemap (vbsp makes it whenever the world has a sky) */
     {
-        char base[256];
-        const char *slash = strrchr(path, '/'), *bslash = strrchr(path, 92);   /* backslash */
-        const char *b = slash > bslash ? slash : bslash;
-        strncpy(base, b ? b + 1 : path, sizeof(base) - 1);
-        base[sizeof(base) - 1] = 0;
-        char *dot = strrchr(base, '.');
-        if (dot) *dot = 0;
-        if (ValueForKey(&entities[0], "skyname")[0]) AddDefaultCubemaps(base);
+        extern const char *g_mapbase;
+        if (ValueForKey(&entities[0], "skyname")[0]) AddDefaultCubemaps(g_mapbase);
         int paklen;
         unsigned char *pak = BuildPakLump(&paklen);
         SetLump(40, pak, paklen, 0);

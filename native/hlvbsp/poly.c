@@ -281,9 +281,10 @@ vec_t WindingArea(const winding_t *w) {
         VectorSubtract(w->p[i - 1], w->p[0], d1);
         VectorSubtract(w->p[i], w->p[0], d2);
         CrossProduct(d1, d2, cross);
-        total += VectorLength(cross);
+        /* (L4D2's vbsp sums y, z, then x - measured) */
+        total += sqrtf((cross[1] * cross[1] + cross[2] * cross[2]) + cross[0] * cross[0]);
     }
-    return total * 0.5;
+    return total * 0.5f;
 }
 
 void WindingCenter(const winding_t *w, vec3_t center) {

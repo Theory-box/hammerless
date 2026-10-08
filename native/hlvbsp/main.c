@@ -191,7 +191,10 @@ int main(int argc, char **argv) {
         const char *b = source, *s;
         for (s = source; *s; s++)
             if (*s == '/' || *s == 92) b = s + 1;          /* (92: backslash) */
-        g_mapbase = copystring(b);
+        /* (vbsp keeps the map's name in a 64-byte buffer: longer names are cut) */
+        static char base[64];
+        strncpy(base, b, sizeof(base) - 1);
+        g_mapbase = base;
     }
     sprintf(path, "%s.vmf", source);
     LoadMapFile(path);

@@ -477,6 +477,7 @@ static int BrushContents(mapbrush_t *b) {
         contents |= trans | CONTENTS_TRANSLUCENT;
         contents &= ~CONTENTS_SOLID;
     }
+    if (all & CONTENTS_LADDER) contents |= CONTENTS_LADDER;     /* (L4D2: a ladder side makes a ladder brush) */
     return contents;
 }
 
@@ -536,6 +537,7 @@ static void AddBrushBevels(mapbrush_t *b) {
                 s->texinfo = b->original_sides[0].texinfo;
                 s->contents = b->original_sides[0].contents;
                 s->bevel = 1;
+                side_textures[s - brushsides].material = -1;    /* (no texture: texinfo 0 if re-made) */
             }
             if (i != order) {
                 side_t t = b->original_sides[order];
@@ -590,6 +592,7 @@ static void AddBrushBevels(mapbrush_t *b) {
                     s2->texinfo = b->original_sides[0].texinfo;
                     s2->contents = b->original_sides[0].contents;
                     s2->bevel = 1;
+                    side_textures[s2 - brushsides].material = -1;
                     b->numsides++;
                 }
             }
@@ -939,7 +942,10 @@ static void load_entity(parser_t *p) {
             mapbrush_t *b = &mapbrushes[mapent->firstbrush + i];
             for (int j = 0; j < b->numsides; j++) {
                 side_t *s = &b->original_sides[j];
-                vec_t newdist = mapplanes[s->planenum].dist - DotProduct(mapplanes[s->planenum].normal, mapent->origin);
+                const float *pn = mapplanes[s->planenum].normal;     /* (in x87 double, rounded once - measured) */
+                vec_t newdist = (float)((double)mapplanes[s->planenum].dist -
+                                        ((double)pn[0] * mapent->origin[0] + (double)pn[1] * mapent->origin[1] +
+                                         (double)pn[2] * mapent->origin[2]));
                 vec3_t n;
                 VectorCopy(mapplanes[s->planenum].normal, n);
                 s->planenum = FindFloatPlane(n, newdist);

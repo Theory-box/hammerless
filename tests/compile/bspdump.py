@@ -216,6 +216,8 @@ def records(index: int, blob: bytes) -> list[str]:
                     r[48 + 6 * e + 2:48 + 6 * e + 5] = bytes(3)
             for c in range(4):
                 r[96 + 10 * c + 9] = 0
+                count = min(r[96 + 10 * c + 8], 4)           # neighbour slots past the count are unset
+                r[96 + 10 * c + 2 * count:96 + 10 * c + 8] = bytes(8 - 2 * count)
             out.append(r.hex())
         return out
     if index in RECORDS:

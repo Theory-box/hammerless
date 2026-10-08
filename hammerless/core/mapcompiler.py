@@ -172,6 +172,8 @@ def material_row(content, name: str, game_dir: str | None, surfaceprops: dict[st
             tool = _texture_info(content, g("%tooltexture"), game_dir)
             if tool:
                 width, height = tool[0], tool[1]
+            else:
+                width = height = 8          # (the error texture's size: measured on a "black" material)
         surfaceprop = _name(g("$surfaceprop"))
         surfaceprop2 = _name(g("$surfaceprop2"))
         detailtype = _name(g("%detailtype"))
