@@ -6,3 +6,4 @@ dist/
 *.blend[0-9]*
 demo/demo_level_generated.blend
 scripts/vscript_help.txt
+demo/hl_test_*.blend

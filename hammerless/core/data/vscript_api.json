@@ -1083,11 +1083,11 @@
 "on":null,
 "returns":"any",
 "params":[
-"target",
-"action",
-"value",
-"delay",
-"activator"
+"string",
+"string",
+"string",
+"float",
+"handle"
 ],
 "group":"Entities",
 "desc":"Sends an input to named entities (like an output wire, from script).",

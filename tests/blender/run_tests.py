@@ -904,7 +904,8 @@ def test_logic_examples_build():
         assert not problems, (ex["title"], problems)
         assert len([n for n in tree.nodes if n.bl_idname != "NodeFrame"]) == len(ex["nodes"]), ex["title"]
         assert len(tree.links) == len(ex["links"]), (ex["title"], len(tree.links), len(ex["links"]))
-        assert all(l.is_valid for l in tree.links), ex["title"]        # (Blender marks loops invalid)
+        # (Blender draws wires in an event loop red; they work. A real circle of value wires shows up as
+        # a build warning below)
         blocks, log = export()
         if blocks is None or tree.name in log:
             bad.append(f"{tree.name}:\n{log}")

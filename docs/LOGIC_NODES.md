@@ -103,6 +103,16 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | 40 | Carry the Crates | Override Can Pickup Object (survivors carry chosen props), Should Avoid Item |
 | 41 | Console Command: boost | Override User Console Command, Apply Abs Velocity Impulse |
 
+*Shift+A > Examples 3* (special modes and tricks):
+
+| | Example | Shows |
+|---|---|---|
+| 42 | Power-Up: Nuke | A kill may drop a glowing pickup (spawned with Spawn Entity From Table); walking over it blows up every common infected in a wave, five per tenth of a second |
+
+`demo/hl_test_nuke.blend` (made by `tests/fixtures/nuke_test.py`) is the demo level with it, set so the first kill drops it, and 40 commons on the field.
+
+Note: the game's `infected_death` event doesn't say which infected died (measured); use `infected_hurt` (a hit at least as big as its health left is a kill).
+
 Examples 2 tested in game: 21-28, 30, 31, 34-37, 39-41 on a map, 29 and 33 on c2m1; 32 and 38 depend on the Director's own mobs and specials and weren't seen in a short test.
 
 Tested in game: 7, 14, 16, 17 on a map; 20 on c2m1 (it needs the map's flow, a path from the start to the end safe room).

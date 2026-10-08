@@ -410,7 +410,13 @@ EXAMPLES = [
 
 def all_examples():
     from .logic_examples_2 import EXAMPLES_2
-    return EXAMPLES + EXAMPLES_2
+    from .logic_examples_3 import EXAMPLES_3
+    return EXAMPLES + EXAMPLES_2 + EXAMPLES_3
+
+
+def _first_of(n):   # where each set starts in all_examples()
+    from .logic_examples_2 import EXAMPLES_2
+    return [0, len(EXAMPLES), len(EXAMPLES) + len(EXAMPLES_2)][n]
 
 
 def _box(name, size, location, collection):
@@ -575,10 +581,11 @@ class HL_OT_logic_example(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _examples_menu(idname, label, first, last):
+def _examples_menu(idname, label, which):
     def draw(self, context):
         level = None
-        for i, ex in list(enumerate(all_examples()))[first:last]:
+        last = _first_of(which + 1) if which < 2 else None
+        for i, ex in list(enumerate(all_examples()))[_first_of(which):last]:
             if ex["level"] != level:
                 if level is not None:
                     self.layout.separator()
@@ -589,9 +596,10 @@ def _examples_menu(idname, label, first, last):
     return type(idname, (bpy.types.Menu,), {"bl_idname": idname, "bl_label": label, "draw": draw})
 
 
-HL_MT_logic_examples = _examples_menu("HL_MT_logic_examples", "Examples", 0, len(EXAMPLES))
-HL_MT_logic_examples_2 = _examples_menu("HL_MT_logic_examples_2", "Examples 2", len(EXAMPLES), None)
-CLASSES = (HL_OT_logic_example, HL_MT_logic_examples, HL_MT_logic_examples_2)
+HL_MT_logic_examples = _examples_menu("HL_MT_logic_examples", "Examples", 0)
+HL_MT_logic_examples_2 = _examples_menu("HL_MT_logic_examples_2", "Examples 2", 1)
+HL_MT_logic_examples_3 = _examples_menu("HL_MT_logic_examples_3", "Examples 3", 2)
+CLASSES = (HL_OT_logic_example, HL_MT_logic_examples, HL_MT_logic_examples_2, HL_MT_logic_examples_3)
 
 
 def register():

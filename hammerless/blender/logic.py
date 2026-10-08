@@ -1949,6 +1949,7 @@ def _add_menu(self, context):
         self.layout.separator()
         self.layout.menu("HL_MT_logic_examples", icon="HELP")
         self.layout.menu("HL_MT_logic_examples_2", icon="HELP")
+        self.layout.menu("HL_MT_logic_examples_3", icon="HELP")
 
 
 # ---------------------------------------------------------------- export

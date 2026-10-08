@@ -2138,6 +2138,19 @@ class TestOverrideAnswer(unittest.TestCase):
         # the logic entity comes first, so questions asked while the map's entities are made are answered
         self.assertEqual(ir.entities[0].keyvalues.get("targetname"), "hl_logic")
 
+    def test_script_result_feeds_other_nodes(self):
+        # a Script node's Result, wired into Set Variable, is what its code left in result
+        from hammerless.core.logic import LLink, LNode, compile_graph
+        ir = MapIR()
+        ir.settings.name = "m"
+        nodes = [LNode("Start", "MAP_START"), LNode("Code", "SCRIPT_CODE", {"code": "result = 7;"}),
+                 LNode("Keep", "SET_VAR", {"name": "n", "kind": "num"})]
+        links = [LLink("Start", "start", "Code", "run"), LLink("Code", "then", "Keep", "run"),
+                 LLink("Code", "result", "Keep", "value", True)]
+        self.assertEqual(compile_graph(nodes, links, ir), [])
+        script = ir.extra_scripts["scripts/vscripts/hammerless/logic_m.nut"]
+        self.assertIn('HL_VarSet("n", (("code" in ::HL_R) ? ::HL_R["code"] : null)', script)
+
     def test_questions_normally_answered_no(self):
         # Can Pickup Object and Should Avoid Item are "no" unless an answer says yes (Valve's Holdout
         # allows chosen props; mutations have bots avoid removed weapons)

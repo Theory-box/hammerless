@@ -365,7 +365,7 @@ class _Compiler:
             e = vs.event(s.get("event", ""))
             fld = next((x for x in (e or {}).get("fields", []) if x["name"] == sock), None)
             return vs.field_expr(sock, vs.field_kind(fld)) if fld else "null"
-        if k in BLOCK_VALUES or k in ("FOR_EACH",):
+        if k in BLOCK_VALUES or k in ("FOR_EACH", "SCRIPT_CODE"):
             return self.block_value(n, sock, slug)
         if k == "DIRECTOR_MOOD":
             self.director_query()
@@ -999,6 +999,8 @@ class _Compiler:
             if sock == "index":
                 return f'(("{slug}" in ::HL_I) ? ::HL_I["{slug}"].tofloat() : 0.0)'
             return f'(("{slug}" in ::HL_L) ? ::HL_L["{slug}"] : null)'
+        if k == "SCRIPT_CODE":                # what its code left in result, the last time it ran
+            return f'(("{slug}" in ::HL_R) ? ::HL_R["{slug}"] : null)'
         if k == "GET_VAR":
             self.helper("HL_Vars", HELPERS["HL_Vars"])
             kind = s.get("kind", vs.NUM)

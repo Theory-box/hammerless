@@ -68,6 +68,8 @@ GLOBAL_GROUPS = [
     (r"Debug", "Debug Drawing"),
 ]
 TYPE_ALIASES = {"<unknown>": "any", "function": "any", "variant": "any", "HSCRIPT": "handle"}
+# functions whose help lists parameter names instead of types (the game rejects a null delay)
+PARAM_TYPES = {"EntFire": ["string", "string", "string", "float", "handle"]}
 
 
 def dump():
@@ -162,7 +164,7 @@ def build():
         owner, name = full.split("::") if "::" in full else ("", full)
         if owner in SKIP_OWNERS or SKIP.match(name):
             continue
-        params = [_type(a) for a in args.split(",") if a.strip()]
+        params = PARAM_TYPES.get(full) or [_type(a) for a in args.split(",") if a.strip()]
         if owner:
             if owner not in OWNERS:
                 continue
