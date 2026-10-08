@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
     LoadBSPFile(path);
     MapArrays();
     /* light the HDR copy of the faces (made from the faces the first time) */
-    if (!lumps[LUMP_FACES_HDR].len) {
+    if (!lumps[LUMP_FACES_HDR].len && lumps[LUMP_FACES].len) {      /* (no faces: the lump stays as it was) */
         unsigned char *copy = xalloc(lumps[LUMP_FACES].len);
         memcpy(copy, lumps[LUMP_FACES].data, lumps[LUMP_FACES].len);
         SetLump(LUMP_FACES_HDR, copy, lumps[LUMP_FACES].len, lumps[LUMP_FACES].version);
@@ -53,6 +53,7 @@ int main(int argc, char **argv) {
     g_pFaces = (dface_t *)lumps[LUMP_FACES_HDR].data;
     MapVis();
     ParseEntities();
+    FindFacePatches();
     PairEdges();
     SaveVertexNormals();
     CreateDirectLights();

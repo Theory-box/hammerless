@@ -10,27 +10,48 @@
 texinfo_t *texinfo; int numtexinfo;
 unsigned char *dlightdata; int lightdatasize;
 
-/* the face's area as vrad's WindingArea measures it (a fan of triangles from the first corner) */
-static float FaceArea(const dface_t *f) {
-    float total = 0;
-    vec3_t p0, d1, d2, cross;
-    VectorCopy(dvertexes[EdgeVertex(f, 0)].point, p0);
-    for (int i = 2; i < f->numedges; i++) {
-        VectorSubtract(dvertexes[EdgeVertex(f, i - 1)].point, p0, d1);
-        VectorSubtract(dvertexes[EdgeVertex(f, i)].point, p0, d2);
-        cross[0] = d1[1] * d2[2] - d1[2] * d2[1];
-        cross[1] = d1[2] * d2[0] - d1[0] * d2[2];
-        cross[2] = d1[0] * d2[1] - d1[1] * d2[0];
-        total += 0.5f * sqrtf(DotProduct(cross, cross));
-    }
-    return total;
+vec3_t *face_offset;              /* per face: its brush entity's origin (faces are lit where they stand) */
+entity_t **face_entity;
+static unsigned char *face_has_patches;
+
+static const entity_t *EntityForModel(int model) {
+    if (model == 0) return num_entities ? &entities[0] : NULL;
+    char name[16];
+    snprintf(name, sizeof(name), "*%d", model);
+    for (int i = 0; i < num_entities; i++)
+        if (!strcmp(ValueForKey(&entities[i], "model"), name)) return &entities[i];
+    return NULL;
 }
 
-int FaceHasPatches(int facenum) {
-    const dface_t *f = &g_pFaces[facenum];
-    if (f->dispinfo != -1) return 1;
-    return FaceArea(f) > 0;
+/* vrad's MakePatches face test: a face of a model gets patches (and so lightmaps) unless it is a flat
+ * face whose polygon, nearly straight corners dropped, has no area. Displacements always do. */
+void FindFacePatches(void) {
+    const dmodel_t *models = (const dmodel_t *)lumps[LUMP_MODELS].data;
+    int nummodels = lumps[LUMP_MODELS].len / sizeof(dmodel_t);
+    face_offset = xalloc(sizeof(vec3_t) * (numfaces + 1));
+    face_entity = xalloc(sizeof(entity_t *) * (numfaces + 1));
+    face_has_patches = xalloc(numfaces + 1);
+    for (int m = 0; m < nummodels; m++) {
+        const entity_t *e = EntityForModel(m);
+        vec3_t origin = {0, 0, 0};
+        if (e) GetVectorForKey(e, "origin", origin);
+        for (int j = 0; j < models[m].numfaces; j++) {
+            int fn = models[m].firstface + j;
+            if (fn < 0 || fn >= numfaces) continue;
+            face_entity[fn] = (entity_t *)e;
+            VectorCopy(origin, face_offset[fn]);
+            if (g_pFaces[fn].dispinfo != -1) {
+                face_has_patches[fn] = 1;
+                continue;
+            }
+            winding_t *w = WindingFromFace(&g_pFaces[fn], origin);
+            face_has_patches[fn] = WindingArea(w) > 0;
+            FreeWinding(w);
+        }
+    }
 }
+
+int FaceHasPatches(int facenum) { return face_has_patches[facenum]; }
 
 void AssignLightStyles(void) {
     for (int i = 0; i < numfaces; i++) {

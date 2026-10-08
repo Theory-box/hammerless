@@ -184,16 +184,8 @@ static void ParseLightGeneric(const entity_t *e, directlight_t *dl) {
     }
 }
 
-/* 1 / (c + b x + a x^2) through three points */
-static int SolveInverseQuadratic(float x1, float y1, float x2, float y2, float x3, float y3, float *a, float *b, float *c) {
-    float det = (x1 - x2) * (x1 - x3) * (x2 - x3);
-    if (det == 0.0) return 0;
-    *a = (x3 * (-y1 + y2) + x2 * (y1 - y3) + x1 * (-y2 + y3)) / det;
-    *b = (x3 * x3 * (y1 - y2) + x1 * x1 * (y2 - y3) + x2 * x2 * (-y1 + y3)) / det;
-    *c = (x1 * x3 * (-x1 + x3) * y2 + x2 * x2 * (x3 * y1 - x1 * y3) + x2 * (-(x3 * x3 * y1) + x1 * x1 * y3)) / det;
-    return 1;
-}
-
+/* 1 / (c + b x + a x^2) through three points, as L4D2's build computes it (measured from the binary:
+ * times 1/det, the c terms summed in their own order, the blend counted in double precision). */
 static int SolveInverseQuadraticMonotonic(float x1, float y1, float x2, float y2, float x3, float y3, float *a, float *b,
                                           float *c) {
     float t;
@@ -202,11 +194,18 @@ static int SolveInverseQuadraticMonotonic(float x1, float y1, float x2, float y2
     if (x2 > x3) SWAP(x2, x3), SWAP(y2, y3);
     if (x1 > x2) SWAP(x1, x2), SWAP(y1, y2);
 #undef SWAP
-    for (float blend = 0.0; blend <= 1.0; blend += 0.05) {
-        float lerp = y1 + (y3 - y1) * (x2 - x1) / (x3 - x1);
-        float tempy2 = (1 - blend) * y2 + blend * lerp;
-        if (!SolveInverseQuadratic(x1, y1, x2, tempy2, x3, y3, a, b, c)) return 0;
-        float derivative = 2.0 * *a + *b;
+    float dy31 = y3 - y1, dx31 = x3 - x1;
+    float lerp = (x2 - x1) * dy31 / dx31 + y1;
+    float det = (x1 - x2) * (x1 - x3) * (x2 - x3);
+    for (double blend_d = 0.0; blend_d <= 1.0; blend_d += 0.05) {
+        float blend = (float)blend_d;
+        float tempy2 = (1.0f - blend) * y2 + lerp * blend;
+        if (det == 0.0f) return 0;
+        float rdet = 1.0f / det;
+        *a = ((tempy2 - y1) * x3 + (y1 - y3) * x2 + (y3 - tempy2) * x1) * rdet;
+        *b = ((y1 - tempy2) * (x3 * x3) + (tempy2 - y3) * (x1 * x1) + (x2 * x2) * dy31) * rdet;
+        *c = ((x3 * y1 - x1 * y3) * (x2 * x2) + x1 * x3 * dx31 * tempy2 + (x1 * x1 * y3 - x3 * x3 * y1) * x2) * rdet;
+        float derivative = *a * 2.0f + *b;
         if (y1 < y2 && y2 < y3) {
             if (derivative >= 0.0) return 1;
         } else if (y1 > y2 && y2 > y3) {

@@ -93,6 +93,16 @@ typedef struct {
     short area, pad;
 } dnode_t;
 
+typedef struct {
+    vec3_t mins, maxs, origin;
+    int headnode, firstface, numfaces;
+} dmodel_t;
+
+typedef struct {
+    int numpoints;
+    vec3_t *p;
+} winding_t;
+
 /* ------------------------------------------------------------------ lights */
 enum { emit_surface, emit_point, emit_spotlight, emit_skylight, emit_quakelight, emit_skyambient };
 
@@ -161,7 +171,16 @@ extern float smoothing_threshold;
 /* ------------------------------------------------------------------ steps */
 void PairEdges(void);
 void SaveVertexNormals(void);
+void FindFacePatches(void);
 int FaceHasPatches(int facenum);
+extern vec3_t *face_offset;
+
+/* winding.c */
+winding_t *AllocWinding(int points);
+void FreeWinding(winding_t *w);
+winding_t *WindingFromFace(const dface_t *f, const vec3_t origin);
+void RemoveColinearPoints(winding_t *w);
+float WindingArea(const winding_t *w);
 void AssignLightStyles(void);
 void PrecompLightmapOffsets(void);
 void CreateDirectLights(void);
