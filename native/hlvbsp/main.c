@@ -181,6 +181,12 @@ int main(int argc, char **argv) {
     SetLightStyles();
     BeginBSPFile();
     EmitInitialDispInfos();
+    {
+        extern const char *g_linpath;
+        static char linpath[1100];
+        sprintf(linpath, "%s.lin", source);
+        g_linpath = linpath;
+    }
     for (entity_num = 0; entity_num < num_entities; ++entity_num) {
         if (!entities[entity_num].numbrushes) continue;
         BeginModel();

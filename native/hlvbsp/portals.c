@@ -364,6 +364,105 @@ static void FindAreas_r(node_t *node) {
     FloodAreas_r(node, NULL);
 }
 
+const char *g_linpath;
+static int tree_leaked;
+
+static int Portal_AreaLeakFlood(portal_t *p) {
+    if (!Portal_EntityFlood(p)) return 0;
+    if ((p->nodes[0]->contents & CONTENTS_AREAPORTAL) || (p->nodes[1]->contents & CONTENTS_AREAPORTAL)) return 0;
+    return 1;
+}
+
+static void FloodAreaLeak_r(node_t *node, int dist) {
+    node->occupied = dist;
+    int s;
+    for (portal_t *p = node->portals; p; p = p->next[s]) {
+        s = (p->nodes[1] == node);
+        if (p->nodes[!s]->occupied) continue;
+        if (!Portal_AreaLeakFlood(p)) continue;
+        FloodAreaLeak_r(p->nodes[!s], dist + 1);
+    }
+}
+
+static void ClearOccupied_r(node_t *node) {
+    if (!node) return;
+    node->occupied = 0;
+    if (node->planenum != PLANENUM_LEAF) {
+        ClearOccupied_r(node->children[0]);
+        ClearOccupied_r(node->children[1]);
+    }
+}
+
+/* An areaportal that doesn't separate two areas: a leak line from one side of it around to the other. */
+static void AreaportalLeakFile(portal_t *start, portal_t *end, node_t *startnode) {
+    if (tree_leaked || !g_linpath) return;
+    tree_leaked = 1;
+    FILE *f = fopen(g_linpath, "w");
+    if (!f) Error("Couldn't open %s", g_linpath);
+    vec3_t mid;
+    WindingCenter(end->winding, mid);
+    fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+    for (int k = 0; k < 3; k++) mid[k] = 0.5f * (startnode->mins[k] + startnode->maxs[k]);
+    fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+    node_t *node = startnode;
+    while (node->occupied >= 1) {
+        portal_t *nextportal = NULL;
+        node_t *nextnode = NULL;
+        int s = 0, next = node->occupied;
+        for (portal_t *p = node->portals; p; p = p->next[!s]) {
+            s = (p->nodes[0] == node);
+            if (p->nodes[s]->occupied && p->nodes[s]->occupied < next) {
+                nextportal = p;
+                nextnode = p->nodes[s];
+                next = nextnode->occupied;
+            }
+        }
+        if (!nextnode) break;
+        node = nextnode;
+        WindingCenter(nextportal->winding, mid);
+        fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+    }
+    for (int k = 0; k < 3; k++) mid[k] = 0.5f * (node->mins[k] + node->maxs[k]);
+    fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+    WindingCenter(start->winding, mid);
+    fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+    fclose(f);
+    Warning("Wrote %s\n", g_linpath);
+    Msg("Areaportal leak ! File: %s ", g_linpath);
+}
+
+static void ReportAreaportalLeak(node_t *headnode, node_t *node) {
+    portal_t *p, *start = NULL;
+    int s = 0;
+    for (p = node->portals; p; p = p->next[s]) {
+        s = (p->nodes[1] == node);
+        if (!Portal_EntityFlood(p)) continue;
+        if (p->nodes[!s]->contents & CONTENTS_AREAPORTAL) continue;
+        start = p;
+        break;
+    }
+    if (!start) return;
+    s = start->nodes[0] == node;
+    ClearOccupied_r(headnode);
+    FloodAreaLeak_r(start->nodes[s], 2);
+    portal_t *best = NULL;
+    int bestdist = 0;
+    for (p = node->portals; p; p = p->next[s]) {
+        if (p == start) continue;       /* (vbsp steps on with the previous portal's side here) */
+        s = (p->nodes[1] == node);
+        if (p->nodes[!s]->occupied > bestdist) {
+            best = p;
+            bestdist = p->nodes[!s]->occupied;
+        }
+    }
+    if (best) {
+        s = (best->nodes[0] == node);
+        AreaportalLeakFile(start, best, best->nodes[s]);
+    }
+}
+
+static node_t *area_headnode;
+
 static void SetAreaPortalAreas_r(node_t *node) {
     if (node->planenum != PLANENUM_LEAF) {
         SetAreaPortalAreas_r(node->children[0]);
@@ -375,13 +474,17 @@ static void SetAreaPortalAreas_r(node_t *node) {
         bspbrush_t *b = AreaportalBrushForNode(node);
         entity_t *e = &entities[b->original->entitynum];
         node->area = e->portalareas[0];
-        if (!e->portalareas[1]) Warning("\nBrush %i: areaportal brush doesn't touch two areas\n", b->original->id);
+        if (!e->portalareas[1]) {
+            ReportAreaportalLeak(area_headnode, node);
+            Warning("\nBrush %i: areaportal brush doesn't touch two areas\n", b->original->id);
+        }
     }
 }
 
 void FloodAreas(tree_t *tree) {
     Msg("Processing areas...");
     FindAreas_r(tree->headnode);
+    area_headnode = tree->headnode;
     SetAreaPortalAreas_r(tree->headnode);
     Msg("done (0)\n");
 }
@@ -391,6 +494,176 @@ static void SetNodeAreaIndices_R(node_t *node) {
     SetNodeAreaIndices_R(node->children[0]);
     SetNodeAreaIndices_R(node->children[1]);
     node->area = node->children[0]->area == node->children[1]->area ? node->children[0]->area : -1;
+}
+
+/* ------------------------------------------------------------------ clip portal outlines */
+/* The game clips what it draws through an open areaportal to the outline of the portals between the
+ * two areas on the areaportal's plane: their points, reduced to a 2D convex hull (gift wrapping, as
+ * vbsp does it, in the plane's own axes). */
+typedef struct { float x, y; } v2_t;
+
+static float dist2(v2_t a, v2_t b) { return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y); }
+
+static int FindUniquePoints(const v2_t *pts, int n, int *map, int maxmap, float tol) {
+    float tol2 = tol * tol;
+    int unique = 0;
+    for (int i = 0; i < n; i++) {
+        int j;
+        for (j = 0; j < unique; j++)
+            if (dist2(pts[i], pts[map[j]]) < tol2) break;
+        if (j == unique) {
+            if (unique >= maxmap) Error("FindUniquePoints: overflowed unique point list (size %d).", maxmap);
+            map[unique++] = i;
+        }
+    }
+    return unique;
+}
+
+static float AngleOffset(float base, float test) {
+    while (test > base) test = (float)(test - 2 * M_PI);      /* (in double, then stored) */
+    return fmodf(base - test, (float)(2 * M_PI));
+}
+
+static int Convex2D(const v2_t *pts, int n, int *indices, int maxindices) {
+    int map[512];
+    if (n == 0) return 0;
+    n = FindUniquePoints(pts, n, map, 512, 0.1f);
+    int best = 0;
+    for (int i = 1; i < n; i++)
+        if (pts[map[i]].x < pts[map[best]].x || (pts[map[i]].x == pts[map[best]].x && pts[map[i]].y < pts[map[best]].y))
+            best = i;
+    indices[0] = map[best];
+    int count = 1;
+    v2_t edge = {0, 1};
+    for (;;) {
+        const v2_t *start = &pts[indices[count - 1]];
+        float edgeangle = atan2f(edge.y, edge.x);
+        int minidx = -1;
+        float minangle = 5000;
+        for (int i = 0; i < n; i++) {
+            v2_t to = {pts[map[i]].x - start->x, pts[map[i]].y - start->y};
+            float d2 = to.x * to.x + to.y * to.y;
+            if (d2 <= 0.1f) continue;
+            float angle = AngleOffset(edgeangle, atan2f(to.y, to.x));
+            if (fabsf(angle - minangle) < 0.00001f) {
+                float d2test = dist2(*start, pts[minidx]);
+                if (minidx != indices[0] && d2 > d2test) {
+                    minangle = angle;
+                    minidx = map[i];
+                }
+            } else if (angle < minangle) {
+                minangle = angle;
+                minidx = map[i];
+            }
+        }
+        if (minidx == -1 || minidx == indices[0] || count >= maxindices) break;
+        indices[count++] = minidx;
+        edge.x = pts[indices[count - 1]].x - pts[indices[count - 2]].x;
+        edge.y = pts[indices[count - 1]].y - pts[indices[count - 2]].y;
+    }
+    return count;
+}
+
+typedef struct { portal_t **p; int n, cap; } portallist_t;
+
+static void FindPortalsLeadingToArea_R(node_t *node, int src, int dst, plane_t *plane, portallist_t *out) {
+    if (node->planenum != PLANENUM_LEAF) {
+        FindPortalsLeadingToArea_R(node->children[0], src, dst, plane, out);
+        FindPortalsLeadingToArea_R(node->children[1], src, dst, plane, out);
+        return;
+    }
+    int s;
+    for (portal_t *p = node->portals; p; p = p->next[!s]) {
+        s = (p->nodes[0] == node);
+        if (!p->nodes[0]->occupied || !p->nodes[1]->occupied) continue;
+        if ((p->nodes[1]->area == dst && p->nodes[0]->area == src) || (p->nodes[0]->area == dst && p->nodes[1]->area == src)) {
+            plane_t *mp = &mapplanes[p->onnode->planenum];
+            float dot = fabsf(DotProduct(mp->normal, plane->normal));
+            if (fabsf(1 - dot) < 0.01f) {
+                vec3_t a, b, d;
+                VectorScale(plane->normal, plane->dist, a);
+                VectorScale(mp->normal, mp->dist, b);
+                VectorSubtract(a, b, d);
+                if (DotProduct(d, d) < 0.01f) {
+                    if (out->n == out->cap) {
+                        out->cap = out->cap ? out->cap * 2 : 16;
+                        out->p = realloc(out->p, sizeof(portal_t *) * out->cap);
+                    }
+                    out->p[out->n++] = p;
+                }
+            }
+        }
+    }
+}
+
+static void VectorAngles(const vec3_t forward, vec3_t angles) {
+    float yaw, pitch;
+    if (forward[1] == 0 && forward[0] == 0) {
+        yaw = 0;
+        pitch = forward[2] > 0 ? 270 : 90;
+    } else {
+        yaw = (float)((double)(atan2f(forward[1], forward[0]) * 180.0f) / M_PI);
+        if (yaw < 0) yaw += 360;
+        float tmp = sqrtf(forward[0] * forward[0] + forward[1] * forward[1]);
+        pitch = (float)((double)(atan2f(-forward[2], tmp) * 180.0f) / M_PI);
+        if (pitch < 0) pitch += 360;
+    }
+    angles[0] = pitch;
+    angles[1] = yaw;
+    angles[2] = 0;
+}
+
+static void SinCos(float r, float *s, float *c) {
+    *s = (float)sin(r);
+    *c = (float)cos(r);
+}
+
+static void AngleVectors(const vec3_t angles, vec3_t f, vec3_t r, vec3_t u) {
+    float sr, sp, sy, cr, cp, cy;
+    const float d2r = (float)((float)M_PI / 180.f);
+    SinCos(angles[1] * d2r, &sy, &cy);
+    SinCos(angles[0] * d2r, &sp, &cp);
+    SinCos(angles[2] * d2r, &sr, &cr);
+    f[0] = cp * cy; f[1] = cp * sy; f[2] = -sp;
+    r[0] = (-1 * sr * sp * cy + -1 * cr * -sy);
+    r[1] = (-1 * sr * sp * sy + -1 * cr * cy);
+    r[2] = -1 * sr * cp;
+    u[0] = (cr * sp * cy + -sr * -sy);
+    u[1] = (cr * sp * sy + -sr * cy);
+    u[2] = cr * cp;
+}
+
+static void EmitClipPortalGeometry(node_t *headnode, portal_t *portal, int src, dareaportal_t *dp) {
+    portallist_t list = {0};
+    FindPortalsLeadingToArea_R(headnode, src, dp->otherarea, &portal->plane, &list);
+    int npts = 0;
+    for (int i = 0; i < list.n; i++) npts += list.p[i]->winding->numpoints;
+    vec3_t *points = xalloc(sizeof(vec3_t) * (npts + 1));
+    v2_t *pts2 = xalloc(sizeof(v2_t) * (npts + 1));
+    int k = 0;
+    for (int i = 0; i < list.n; i++)
+        for (int j = 0; j < list.p[i]->winding->numpoints; j++, k++) VectorCopy(list.p[i]->winding->p[j], points[k]);
+    vec3_t angles, f, r, u;
+    VectorAngles(portal->plane.normal, angles);
+    AngleVectors(angles, f, r, u);
+    /* the matrix with forward, "left" (vbsp passes right) and up as its columns, times each point */
+    for (int i = 0; i < npts; i++) {
+        float *p = points[i];
+        pts2[i].x = f[1] * p[0] + r[1] * p[1] + u[1] * p[2] + 0.0f;
+        pts2[i].y = f[2] * p[0] + r[2] * p[1] + u[2] * p[2] + 0.0f;
+    }
+    int indices[512];
+    int n = Convex2D(pts2, npts, indices, 512);
+    dp->firstclip = (unsigned short)numclipportalverts;
+    dp->numclip = (unsigned short)n;
+    if (n >= 32) Warning("Warning: area portal has %d verts. Could be a vbsp bug.\n", n);
+    for (int i = 0; i < n; i++) {
+        VectorCopy(points[indices[i]], clipportalverts[numclipportalverts]);
+        numclipportalverts++;
+    }
+    free(points);
+    free(pts2);
+    free(list.p);
 }
 
 void EmitAreaPortals(node_t *headnode) {
@@ -404,7 +677,6 @@ void EmitAreaPortals(node_t *headnode) {
             entity_t *e = &entities[j];
             if (!e->areaportalnum) continue;
             if (e->portalareas[0] != src && e->portalareas[1] != src) continue;
-            /* the clip-portal geometry (vertices of the portals leading into the area): not yet */
             int iside = (e->portalareas[0] == src);
             portal_t *lead = e->portals_into_areas[0];
             if (lead && lead->nodes[0]->area == lead->nodes[1]->area) lead = e->portals_into_areas[1];
@@ -415,8 +687,7 @@ void EmitAreaPortals(node_t *headnode) {
             dp->otherarea = (unsigned short)e->portalareas[iside];
             dp->planenum = lead->onnode->planenum;
             if (lead->nodes[0]->area == dp->otherarea) dp->planenum = (dp->planenum & ~1) | (~dp->planenum & 1);
-            dp->firstclip = (unsigned short)numclipportalverts;
-            dp->numclip = 0;
+            EmitClipPortalGeometry(headnode, lead, src, dp);
         }
         dareas[src].numareaportals = numareaportals - dareas[src].firstareaportal;
     }

@@ -419,7 +419,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("VALVE", "Valve vbsp", "L4D2's own map compiler (vbsp.exe)"),
         ("HAMMERLESS", "Hammerless",
          "Hammerless's map compiler: the same map as vbsp. Maps with things it doesn't do yet (overlays, water, "
-         "areaportals, cubemaps, ...) and any failure use Valve's vbsp instead")])
+         "cubemaps, ...) and any failure use Valve's vbsp instead")])
     model_compiler: EnumProperty(name="Model Compiler", default="HAMMERLESS", items=[
         ("HAMMERLESS", "Hammerless", "Hammerless writes Custom Models' game files itself (no extra tools needed)"),
         ("STUDIOMDL", "Valve studiomdl", "L4D2's own model compiler (studiomdl.exe, from the Authoring Tools)")])
