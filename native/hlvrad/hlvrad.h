@@ -300,7 +300,10 @@ extern int g_bFast, g_bExtra;
 void ExportDirectLightsToWorldLights(void);
 void ComputePerLeafAmbientLighting(void);
 void ComputeDetailPropLighting(void);
+void ComputeStaticPropLighting(void);
+extern int g_bStaticPropLighting;
 int ClusterFromPoint(const vec3_t p);
+int PointLeafnum(const vec3_t p);
 
 /* ------------------------------------------------------------------ utilities */
 void Error(const char *fmt, ...);

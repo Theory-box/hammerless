@@ -395,6 +395,13 @@ static float Dot4(const float v[3][LANES], int i, const float *w) {
     return (v[0][i] * w[0] + v[1][i] * w[1]) + v[2][i] * w[2];
 }
 
+/* vrad's GatherSampleLightSSE options, as static prop lighting sets them (faces use none): fewer sky rays,
+ * a constant dot instead of the normals', and one static prop that casts no shadow */
+#define GATHERLFLAGS_FORCE_FAST 1
+#define GATHERLFLAGS_IGNORE_NORMALS 2
+int g_gatherFlags;
+int g_gatherSkipProp = -1;
+
 static void GatherSampleStandardLight4(lightout4_t *out, const directlight_t *dl, const points4_t *p) {
     float src[3][LANES], delta[3][LANES], dist[LANES], dist2[LANES], dot[LANES];
     int hard = dl->m_flEndFadeDistance > dl->m_flStartFadeDistance;
@@ -408,6 +415,7 @@ static void GatherSampleStandardLight4(lightout4_t *out, const directlight_t *dl
         for (int c = 0; c < 3; c++) delta[c][i] = delta[c][i] * r;
         dist[i] = sqrtf(dist2[i]);
         float d = (delta[0][i] * p->normals[0][0][i] + delta[1][i] * p->normals[0][1][i]) + delta[2][i] * p->normals[0][2][i];
+        if (g_gatherFlags & GATHERLFLAGS_IGNORE_NORMALS) d = CONSTANT_DOT;
         dot[i] = d > 0 ? d : 0;
     }
     if (hard) {
@@ -484,11 +492,12 @@ static void GatherSampleStandardLight4(lightout4_t *out, const directlight_t *dl
         }
     }
     float vis[LANES];
-    TestLine4(p->pos, (const float(*)[LANES])src, -1, vis);
+    TestLine4(p->pos, (const float(*)[LANES])src, g_gatherSkipProp, vis);
     for (int i = 0; i < LANES; i++) out->dot[0][i] = vis[i] * dot[i];
     for (int n = 1; n < p->normalCount; n++)
         for (int i = 0; i < LANES; i++) {
             float d = (p->normals[n][0][i] * delta[0][i] + p->normals[n][1][i] * delta[1][i]) + p->normals[n][2][i] * delta[2][i];
+            if (g_gatherFlags & GATHERLFLAGS_IGNORE_NORMALS) d = CONSTANT_DOT;
             out->dot[n][i] = d > 0 ? d : 0;
         }
 }
@@ -501,13 +510,14 @@ static void GatherSampleSkyLight4(lightout4_t *out, const directlight_t *dl, con
     for (int i = 0; i < LANES; i++) {
         float d = -((p->normals[0][0][i] * dl->light.normal[0] + p->normals[0][1][i] * dl->light.normal[1]) +
                     p->normals[0][2][i] * dl->light.normal[2]);
+        if (g_gatherFlags & GATHERLFLAGS_IGNORE_NORMALS) d = CONSTANT_DOT;
         dot[i] = d > 0 ? d : 0;
         if (dot[i] != 0) allzero = 0;
     }
     if (allzero) return;
     /* a sun with a spread angle: 30 rays (7 with -fast), all but the first jittered over a disc of that size */
     float extent = dl->has_sun_extent ? dl->sun_extent : g_SunAngularExtent;
-    int nsamples = extent > 0.0f ? (g_bFast ? 7 : 30) : 1;
+    int nsamples = extent > 0.0f ? (g_bFast || (g_gatherFlags & GATHERLFLAGS_FORCE_FAST) ? 7 : 30) : 1;
     float see[LANES] = {0}, frac[LANES], stop[3][LANES];
     float L = (float)MAX_TRACE_LENGTH;
     float jitter = (float)((double)extent * MAX_TRACE_LENGTH);
@@ -521,7 +531,7 @@ static void GatherSampleSkyLight4(lightout4_t *out, const directlight_t *dl, con
         }
         for (int c = 0; c < 3; c++)
             for (int i = 0; i < LANES; i++) stop[c][i] = p->pos[c][i] + delta[c];
-        TestLine_DoesHitSky4(p->pos, (const float(*)[LANES])stop, -1, frac);
+        TestLine_DoesHitSky4(p->pos, (const float(*)[LANES])stop, g_gatherSkipProp, frac);
         for (int i = 0; i < LANES; i++) see[i] += frac[i];
     }
     float scale = 1.0f / (float)nsamples;
@@ -535,6 +545,10 @@ static void GatherSampleSkyLight4(lightout4_t *out, const directlight_t *dl, con
         for (int i = 0; i < LANES; i++) {
             float d = -((p->normals[n][0][i] * dl->light.normal[0] + p->normals[n][1][i] * dl->light.normal[1]) +
                         p->normals[n][2][i] * dl->light.normal[2]);
+            if (g_gatherFlags & GATHERLFLAGS_IGNORE_NORMALS) {
+                out->dot[n][i] = CONSTANT_DOT;
+                continue;
+            }
             out->dot[n][i] = d * see[i];
         }
 }
@@ -543,10 +557,11 @@ static void GatherSampleSkyLight4(lightout4_t *out, const directlight_t *dl, con
  * starts at its second element) */
 static float Halton(int seed, int base) {
     float ret = 0.0f, fbase = (float)base, inv = (float)(1.0 / fbase);
+    float step = 1.0f / fbase;                 /* (each digit's weight: times 1/base, as Valve's) */
     while (seed) {
         int dig = seed % base;
         ret += (float)dig * inv;
-        inv /= fbase;
+        inv = inv * step;
         seed /= base;
     }
     return ret;
@@ -563,16 +578,22 @@ static void SkyDirection(int i, vec3_t out) {
     out[2] = z;
 }
 
+/* (for the static props' bounced light, which walks the same directions) */
+void SkyDirectionAt(int i, vec3_t out) { SkyDirection(i, out); }
+
 static void GatherSampleAmbientSky4(lightout4_t *out, const directlight_t *dl, const points4_t *p) {
     float sumdot[LANES] = {0}, ambient[NUM_BUMP_VECTS + 1][LANES] = {{0}}, possible[NUM_BUMP_VECTS + 1][LANES] = {{0}};
     float dots[NUM_BUMP_VECTS + 1][LANES];
     (void)dl;
-    for (int j = 0; j < NUMVERTEXNORMALS; j++) {
+    int nsky = g_bFast || (g_gatherFlags & GATHERLFLAGS_FORCE_FAST) ? NUMVERTEXNORMALS / 4 : NUMVERTEXNORMALS;
+    int ignore = g_gatherFlags & GATHERLFLAGS_IGNORE_NORMALS;
+    for (int j = 0; j < nsky; j++) {
         vec3_t anorm;
         SkyDirection(j, anorm);
         int valid[LANES], any = 0;
         for (int i = 0; i < LANES; i++) {
             dots[0][i] = -((p->normals[0][0][i] * anorm[0] + p->normals[0][1][i] * anorm[1]) + p->normals[0][2][i] * anorm[2]);
+            if (ignore) dots[0][i] = CONSTANT_DOT;
             valid[i] = dots[0][i] > EQUAL_EPSILON;
             any |= valid[i];
         }
@@ -585,6 +606,7 @@ static void GatherSampleAmbientSky4(lightout4_t *out, const directlight_t *dl, c
         for (int n = 1; n < p->normalCount; n++)
             for (int i = 0; i < LANES; i++) {
                 dots[n][i] = -((p->normals[n][0][i] * anorm[0] + p->normals[n][1][i] * anorm[1]) + p->normals[n][2][i] * anorm[2]);
+                if (ignore) dots[n][i] = CONSTANT_DOT;
                 int v2 = dots[n][i] > EQUAL_EPSILON;
                 if (!v2) dots[n][i] = 0;
                 possible[n][i] = (valid[i] && v2 ? 1.0f : 0.0f) + possible[n][i];
@@ -595,7 +617,7 @@ static void GatherSampleAmbientSky4(lightout4_t *out, const directlight_t *dl, c
             float dc = anorm[c] * -L;
             for (int i = 0; i < LANES; i++) stop[c][i] = dc + p->pos[c][i];
         }
-        TestLine_DoesHitSky4(p->pos, (const float(*)[LANES])stop, -1, frac);      /* (flEpsilon is 0 for faces) */
+        TestLine_DoesHitSky4(p->pos, (const float(*)[LANES])stop, g_gatherSkipProp, frac);      /* (flEpsilon is 0 here) */
         for (int n = 0; n < p->normalCount; n++)
             for (int i = 0; i < LANES; i++) ambient[n][i] = ambient[n][i] + frac[i] * dots[n][i];
     }

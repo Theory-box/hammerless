@@ -35,6 +35,17 @@ static int PointInLeaf(int node, const vec3_t p) {
     return PointInLeaf(n->children[1], p);
 }
 
+/* vrad's PointLeafnum: no tolerance, on the plane is in front */
+int PointLeafnum(const vec3_t p) {
+    int node = 0;
+    while (node >= 0) {
+        const dplane_t *pl = &dplanes[dnodes[node].planenum];
+        float d = pl->type < 3 ? p[pl->type] : (pl->normal[1] * p[1] + pl->normal[0] * p[0]) + pl->normal[2] * p[2];
+        d = d - pl->dist;
+        node = 0.0f > d ? dnodes[node].children[1] : dnodes[node].children[0];
+    }
+    return -1 - node;
+}
 int ClusterFromPoint(const vec3_t p) { return dleafs[PointInLeaf(0, p)].cluster; }
 
 /* ------------------------------------------------------------------ lights */

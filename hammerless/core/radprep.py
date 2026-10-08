@@ -1,14 +1,16 @@
 """What Hammerless's lighting compiler (hlvrad) reads from the game besides the map.
 
 hlvrad lights the map like vrad; static props cast shadows with their collision models (or, for a
-model without one, hulls around its meshes), so their model files are copied out of the game's VPKs (or loose files) into a folder it is given with -modeldir.
+model without one, hulls around its meshes) and, with -StaticPropLighting, get light at every vertex
+(from their meshes and .vtx layout), so their model files are copied out of the game's VPKs (or loose
+files) into a folder it is given with -modeldir.
 """
 from __future__ import annotations
 
 import os
 import struct
 
-MODEL_EXTENSIONS = (".mdl", ".phy", ".vvd")
+MODEL_EXTENSIONS = (".mdl", ".phy", ".vvd", ".dx90.vtx")
 
 
 def static_prop_models(bsp: bytes) -> list[str]:

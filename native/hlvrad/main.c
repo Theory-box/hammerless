@@ -50,6 +50,8 @@ int main(int argc, char **argv) {
             smoothing_threshold = (float)cos(atof(argv[i]) * (3.14159265358979323846 / 180.0));
         } else if (!_stricmp(a, "-fast")) {
             g_bFast = 1;
+        } else if (!_stricmp(a, "-StaticPropLighting")) {
+            g_bStaticPropLighting = 1;
         } else if (!_stricmp(a, "-noextra")) {
             g_bExtra = 0;
         } else if (!_stricmp(a, "-extra")) {
@@ -73,6 +75,18 @@ int main(int argc, char **argv) {
         SetLump(LUMP_FACES_HDR, copy, lumps[LUMP_FACES].len, lumps[LUMP_FACES].version);
     }
     g_pFaces = (dface_t *)lumps[LUMP_FACES_HDR].data;
+    /* the map's flags (lump 59) say whether static props have baked vertex light (bit 1 LDR, bit 2 HDR) */
+    {
+        unsigned int flags = 0;
+        if (lumps[59].len >= 4) memcpy(&flags, lumps[59].data, 4);
+        if (g_bStaticPropLighting) flags |= g_bHDR ? 2u : 1u;
+        else flags &= ~3u;
+        if (lumps[59].len >= 4 || flags) {
+            unsigned char *d = xalloc(4);
+            memcpy(d, &flags, 4);
+            SetLump(59, d, 4, lumps[59].version);
+        }
+    }
     MapVis();
     ParseEntities();
     FindFacePatches();
@@ -119,6 +133,7 @@ int main(int argc, char **argv) {
     ExportDirectLightsToWorldLights();
     ComputeDetailPropLighting();
     ComputePerLeafAmbientLighting();
+    ComputeStaticPropLighting();
     SetLump(LUMP_LIGHTING_HDR, dlightdata, lightdatasize, 1);
     WriteBSPFile(path);
     Msg("done\n");

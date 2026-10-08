@@ -494,6 +494,37 @@ static void ColorPointSample(const dface_t *f, const float luv[2], float scale, 
 
 static int g_dbgSurf, g_dbgHasLux;          /* (the last ray's hit, for AMBRAYS) */
 static float g_dbgFrac, g_dbgLux[2];
+float g_lastHitFrac;      /* (debugging: FindLightSurface's hit fraction) */
+/* the surface a ray (start + delta) meets, as vrad's CLightSurface::FindIntersection: -1 for none */
+int FindLightSurface(const vec3_t start, const vec3_t delta, int *hasluxel, float luxel[2]) {
+    lightsurf_t ls;
+    VectorCopy(start, ls.start);
+    VectorCopy(delta, ls.delta);
+    ls.surface = -1, ls.hitfrac = 1.0f, ls.hasluxel = 0;
+    rayenum++;
+    if (EnumerateNodesAlongRay_r(&ls, 0, 0.0f, 1.0f)) return -1;
+    *hasluxel = ls.hasluxel;
+    luxel[0] = ls.luxel[0], luxel[1] = ls.luxel[1];
+    g_lastHitFrac = ls.hitfrac;
+    return ls.surface;
+}
+
+/* the same with one surface finder kept across rays (as the static props' bounced light keeps vrad's
+ * CLightSurface for all of a vertex's rays): its nearest hit so far stays, so later rays find only nearer
+ * displacements and leaf faces (a node's face is taken at any distance), and a miss leaves the old luxel */
+static lightsurf_t keep;
+void LightSurfaceBegin(void) { keep.surface = -1, keep.hitfrac = 1.0f, keep.hasluxel = 0; }
+int FindLightSurfaceKept(const vec3_t start, const vec3_t delta, int *hasluxel, float luxel[2]) {
+    VectorCopy(start, keep.start);
+    VectorCopy(delta, keep.delta);
+    rayenum++;
+    if (EnumerateNodesAlongRay_r(&keep, 0, 0.0f, 1.0f)) return -1;
+    *hasluxel = keep.hasluxel;
+    luxel[0] = keep.luxel[0], luxel[1] = keep.luxel[1];
+    g_lastHitFrac = keep.hitfrac;
+    return keep.surface;
+}
+
 void CalcRayAmbientLighting(const vec3_t start, const vec3_t end, float tanTheta, vec3_t *colors, int nstyles) {
     lightsurf_t ls;
     VectorCopy(start, ls.start);
