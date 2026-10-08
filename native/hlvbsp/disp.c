@@ -206,6 +206,7 @@ typedef struct coredisp_s {
     float luxel[4][4][2];      /* [bump][point] */
     int luxel_u, luxel_v;
     vec3_t *verts;             /* positions */
+    vec3_t *flat;              /* positions on the flat quad */
     float (*vluxel)[2];        /* per vertex lightmap coordinate (bump 0) */
     edgeneighbor_t edge[4];
     cornerneighbors_t corner[4];
@@ -295,6 +296,7 @@ static void GenerateDispSurf(coredisp_t *d, const vec3_t *field, const float *di
             VectorScale(segint, (float)j, t);
             VectorAdd(end0, t, flat);
             vec_t *v = d->verts[ndx];
+            if (d->flat) VectorCopy(flat, d->flat[ndx]);
             VectorCopy(flat, v);
             /* (+ subdivision position, zero here) */
             v[0] += 0.0f; v[1] += 0.0f; v[2] += 0.0f;
@@ -1054,4 +1056,127 @@ int DispTesselate(int disp, unsigned short **indices) {
     Tesselate_R(&t, cores[disp].pi->root, 0);
     *indices = t.indices;
     return t.n;
+}
+
+
+/* ------------------------------------------------------------------ a point on the surface (detail props) */
+static int CalcBarycentricCooefs(const vec3_t v0, const vec3_t v1, const vec3_t v2, const vec3_t pt, float *c) {
+    vec3_t s0, s1, x;
+    VectorSubtract(v1, v0, s0);
+    VectorSubtract(v2, v0, s1);
+    CrossProduct(s0, s1, x);
+    float total = VectorLength(x) * 0.5f;
+    float oo = total ? 1.0f / total : 0.0f;
+    VectorSubtract(v1, pt, s0); VectorSubtract(v2, pt, s1); CrossProduct(s0, s1, x);
+    c[0] = VectorLength(x) * 0.5f * oo;
+    VectorSubtract(v2, pt, s0); VectorSubtract(v0, pt, s1); CrossProduct(s0, s1, x);
+    c[1] = VectorLength(x) * 0.5f * oo;
+    VectorSubtract(v0, pt, s0); VectorSubtract(v1, pt, s1); CrossProduct(s0, s1, x);
+    c[2] = VectorLength(x) * 0.5f * oo;
+    float t = c[0] + c[1] + c[2];
+    return fabsf(1.0f - t) < 1e-3;
+}
+
+static void Lerp3(const vec3_t a, const vec3_t b, float t, vec3_t out) {
+    for (int k = 0; k < 3; k++) out[k] = a[k] + (b[k] - a[k]) * t;
+}
+
+/* One of the triangles of a quad of the grid: idx = its three vertices; nflip picks the normal's order. */
+typedef struct { const coredisp_t *d; const float *alphas; } surfctx_t;
+
+static void tri_normal(const vec3_t a, const vec3_t b, const vec3_t o, int swap, vec3_t n) {
+    vec3_t eu, ev;
+    VectorSubtract(a, o, eu);
+    VectorSubtract(b, o, ev);
+    if (swap) CrossProduct(ev, eu, n);
+    else CrossProduct(eu, ev, n);
+    VectorNormalize(n);
+}
+
+/* kind: 0 TLtoBR_1, 1 TLtoBR_2, 2 BLtoTR_1, 3 BLtoTR_2 (vbsp's four triangle cases) */
+static void UVToSurfTri(surfctx_t *c, int kind, const vec3_t hit, int su, int nu, int sv, int nv, vec3_t pt, vec3_t normal,
+                        float *alpha, int backup) {
+    int w = c->d->pi->side, idx[3];
+    switch (kind) {
+    case 0: idx[0] = nv * w + su; idx[1] = nv * w + nu; idx[2] = sv * w + nu; break;
+    case 1: idx[0] = sv * w + su; idx[1] = nv * w + su; idx[2] = sv * w + nu; break;
+    case 2: idx[0] = sv * w + su; idx[1] = nv * w + su; idx[2] = nv * w + nu; break;
+    default: idx[0] = sv * w + su; idx[1] = nv * w + nu; idx[2] = sv * w + nu; break;
+    }
+    const float *f[3], *v[3];
+    float a[3];
+    for (int i = 0; i < 3; i++) {
+        f[i] = c->d->flat[idx[i]];
+        v[i] = c->d->verts[idx[i]];
+        a[i] = c->alphas[idx[i]];
+    }
+    /* the normal of each case (vbsp's edge choices) */
+    vec3_t n;
+    switch (kind) {
+    case 0: tri_normal(v[0], v[2], v[1], 0, n); break;          /* (v0-v1) x (v2-v1) */
+    case 1: tri_normal(v[2], v[1], v[0], 0, n); break;          /* (v2-v0) x (v1-v0) */
+    case 2: tri_normal(v[2], v[0], v[1], 1, n); break;          /* (v0-v1) x (v2-v1) */
+    default: tri_normal(v[0], v[1], v[2], 1, n); break;         /* (v1-v2) x (v0-v2) */
+    }
+    /* the edge vertex used along a snapped row or column */
+    int far = (kind == 1 || kind == 3) && su == nu ? 1 : 2;
+    if (su == nu || sv == nv) {
+        if (su == nu && sv == nv) {
+            VectorCopy(v[0], pt);
+            *alpha = a[0];
+        } else {
+            if (su != nu) far = 2;           /* (the snapped-v cases all use the third vertex) */
+            vec3_t d1, d2;
+            VectorSubtract(hit, f[0], d1);
+            VectorSubtract(f[far], f[0], d2);
+            float frac = VectorLength(d1) / VectorLength(d2);
+            vec3_t e;
+            VectorSubtract(v[far], v[0], e);
+            for (int k = 0; k < 3; k++) pt[k] = v[0][k] + frac * e[k];
+            *alpha = a[0] + frac * (a[far] - a[0]);
+        }
+        if (kind == 2 && su == nu) tri_normal(v[2], v[0], v[1], 0, n);     /* (BLtoTR_1: u snapped: eu x ev) */
+        VectorCopy(n, normal);
+        return;
+    }
+    float cf[3];
+    if (CalcBarycentricCooefs(f[0], f[1], f[2], hit, cf)) {
+        for (int k = 0; k < 3; k++) pt[k] = (v[0][k] * cf[0]) + (v[1][k] * cf[1]) + (v[2][k] * cf[2]);
+        *alpha = (a[0] * cf[0]) + (a[1] * cf[1]) + (a[2] * cf[2]);
+        VectorCopy(n, normal);
+    } else if (!backup) {
+        int other = kind == 0 ? 1 : kind == 1 ? 0 : kind == 2 ? 3 : 2;
+        UVToSurfTri(c, other, hit, su, nu, sv, nv, pt, normal, alpha, 1);
+    }
+}
+
+/* Where (u, v) in [0,1] lands on displacement i's surface, its triangle's normal and the blend alpha. */
+void DispPositionOnSurface(int i, float u, float v, vec3_t pt, vec3_t normal, float *alpha) {
+    static coredisp_t d;
+    static int built = -1;
+    if (built != i) {
+        free(d.verts); free(d.vluxel); free(d.flat);
+        memset(&d, 0, sizeof(d));
+        int n = GetPowerInfo(mapdisps[i].power)->maxverts;
+        d.flat = xalloc(sizeof(vec3_t) * n);
+        MapToCore(&mapdisps[i], &d, NULL, NULL);
+        built = i;
+    }
+    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) return;
+    surfctx_t c = {&d, mapdisps[i].alphas};
+    /* the point on the flat quad */
+    vec3_t p0, p1, hit;
+    Lerp3(d.points[0], d.points[1], v, p0);
+    Lerp3(d.points[3], d.points[2], v, p1);
+    Lerp3(p0, p1, u, hit);
+    int w = d.pi->side;
+    float fu = u * ((float)w - 1.000001f), fv = v * ((float)w - 1.000001f);
+    int su = (int)fu, sv = (int)fv;
+    int odd = ((sv * w) + su) % 2 == 1;
+    int nu = su + 1, nv = sv + 1;
+    if (nu == w) --nu;
+    if (nv == w) --nv;
+    float fracu = fu - (float)su, fracv = fv - (float)sv;
+    if (odd) UVToSurfTri(&c, (fracu + fracv) >= (1.0f + 0.00001f) ? 0 : 1, hit, su, nu, sv, nv, pt, normal, alpha, 0);
+    else UVToSurfTri(&c, fracu < fracv ? 2 : 3, hit, su, nu, sv, nv, pt, normal, alpha, 0);
 }

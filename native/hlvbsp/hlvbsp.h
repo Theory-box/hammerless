@@ -202,6 +202,7 @@ typedef struct {
     int contents, flags;
     int width, height;
     float reflectivity[3];
+    char detailtype[128];                     /* %detailtype ("" = none) */
     char surfaceprop[64], surfaceprop2[64];   /* $surfaceprop / $surfaceprop2 names ("" = none) */
     int found;
 } material_t;

@@ -73,7 +73,7 @@ def material_row(content, name: str, game_dir: str | None, surfaceprops: dict[st
     contents = flags = 0
     width = height = 0
     refl = (0.0, 0.0, 0.0)
-    surfaceprop = surfaceprop2 = "-"
+    surfaceprop = surfaceprop2 = detailtype = "-"
     if p:
         g = p.get
         shader = g("shader", "")
@@ -158,9 +158,10 @@ def material_row(content, name: str, game_dir: str | None, surfaceprops: dict[st
             width, height, refl = info
         surfaceprop = _name(g("$surfaceprop"))
         surfaceprop2 = _name(g("$surfaceprop2"))
+        detailtype = _name(g("%detailtype"))
     clean = name.replace("\t", " ").replace("\n", " ")
     return (f"{clean}\t{contents}\t{flags}\t{width}\t{height}\t{refl[0]!r}\t{refl[1]!r}\t{refl[2]!r}"
-            f"\t{surfaceprop}\t{found}\t{surfaceprop2}")
+            f"\t{surfaceprop}\t{found}\t{surfaceprop2}\t{detailtype}")
 
 
 def _name(v: str | None) -> str:
@@ -265,9 +266,39 @@ def vmf_static_prop_models(vmf_text: str) -> list[str]:
     return list(seen.values())
 
 
-def write_prop_table(path: str, vmf_path: str, content, game_dir: str | None) -> int:
+def detail_vbsp_name(vmf_text: str) -> str:
+    """The detail kinds file the map names (worldspawn detailvbsp), as vbsp picks it."""
+    m = re.search(r'"detailvbsp"\s+"([^"]*)"', vmf_text)
+    return m.group(1) if m and m.group(1) else "detail.vbsp"
+
+
+def detail_models(detail_text: str, vmf_text: str) -> list[str]:
+    """Models detail props may use: the detail kinds' "model" keys and prop_detail entities."""
+    from .vmf import parse
+    names = re.findall(r'"model"\s+"([^"]+)"', detail_text)
+    for b in parse(vmf_text):
+        if b.name.lower() == "entity" and (b.get("classname") or "") in ("prop_detail", "detail_prop") and b.get("model"):
+            names.append(b.get("model"))
+    return names
+
+
+def write_detail_file(path: str, vmf_path: str, content, game_dir: str | None) -> str:
+    """The game's detail kinds (detail.vbsp, or the map's own choice) for hlvbsp; returns its text."""
     with open(vmf_path, encoding="utf-8", errors="replace") as f:
-        models = vmf_static_prop_models(f.read())
+        name = detail_vbsp_name(f.read())
+    data = _model_bytes(content, name, game_dir) or b""
+    with open(path, "wb") as f:
+        f.write(data)
+    return data.decode("latin-1")
+
+
+def write_prop_table(path: str, vmf_path: str, content, game_dir: str | None, detail_text: str = "") -> int:
+    with open(vmf_path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    seen: dict[str, str] = {}
+    for model in vmf_static_prop_models(text) + detail_models(detail_text, text):
+        seen.setdefault(model.lower().replace("\\", "/"), model)
+    models = list(seen.values())
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         for model in models:
             f.write("\n".join(prop_model_record(content, model, game_dir)) + "\n")
@@ -290,11 +321,10 @@ UNSUPPORTED_CLASSES = {
     "info_overlay": "overlays", "info_overlay_transition": "water overlays",
     "func_occluder": "occluders", "func_viscluster": "vis clusters", "env_cubemap": "cubemaps",
     "sky_camera": "3D skyboxes", "func_instance": "instances", "info_no_dynamic_shadow": "shadow blockers",
-    "prop_detail": "detail props",
 }
 
 
-def unsupported(vmf_text: str, material_table: str, content, game_dir: str | None) -> list[str]:
+def unsupported(vmf_text: str, material_table: str) -> list[str]:
     """Reasons hlvbsp can't compile this map exactly like vbsp yet (empty: it can)."""
     from .vmf import parse
     why: list[str] = []
@@ -302,10 +332,7 @@ def unsupported(vmf_text: str, material_table: str, content, game_dir: str | Non
     def add(reason: str) -> None:
         if reason not in why:
             why.append(reason)
-    blocks = parse(vmf_text)
-    has_disp = "dispinfo" in vmf_text
-    world = next((b for b in blocks if b.name.lower() == "world"), None)
-    for b in blocks:
+    for b in parse(vmf_text):
         if b.name.lower() == "entity":
             cls = (b.get("classname") or "").lower()
             if cls in UNSUPPORTED_CLASSES:
@@ -315,10 +342,4 @@ def unsupported(vmf_text: str, material_table: str, content, game_dir: str | Non
             parts = line.rstrip("\n").split("\t")
             if len(parts) > 1 and int(parts[1]) & (CONTENTS_WATER | CONTENTS_SLIME):
                 add("water")
-    # detail props scattered on displacements by their materials' %detailtype
-    if has_disp and world is not None and (world.get("detailmaterial") or world.get("detailvbsp")):
-        for name in vmf_materials(vmf_text):
-            if read_vmt(content, name.lower().replace("\\", "/"), game_dir).get("%detailtype"):
-                add("detail props")
-                break
     return why

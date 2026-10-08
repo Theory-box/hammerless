@@ -195,10 +195,11 @@ void LoadMaterials(const char *path) {
         material_t *m = &materials[nummaterials];
         memset(m, 0, sizeof(*m));
         strncpy(m->name, line, sizeof(m->name) - 1);
-        if (sscanf(tab + 1, "%i %i %i %i %f %f %f %63s %i %63s", &m->contents, &m->flags, &m->width, &m->height,
+        if (sscanf(tab + 1, "%i %i %i %i %f %f %f %63s %i %63s %127s", &m->contents, &m->flags, &m->width, &m->height,
                    &m->reflectivity[0], &m->reflectivity[1], &m->reflectivity[2], m->surfaceprop, &m->found,
-                   m->surfaceprop2) < 9)
+                   m->surfaceprop2, m->detailtype) < 9)
             m->found = 1;
+        if (!strcmp(m->detailtype, "-")) m->detailtype[0] = 0;
         if (!strcmp(m->surfaceprop, "-")) m->surfaceprop[0] = 0;
         if (!strcmp(m->surfaceprop2, "-")) m->surfaceprop2[0] = 0;
         unsigned h = name_hash(m->name);
@@ -280,6 +281,12 @@ int FindOrCreateTexData(int texref) {
 }
 
 int MaterialSurfaceProp(int texdata);
+const char *MaterialDetailType(int texdata) {
+    const char *name = texdata_strings + texdata_string_table[texdatas[texdata].name_id];
+    int m = LookupMaterial(name);
+    return m >= 0 ? materials[m].detailtype : "";
+}
+
 const char *MaterialSurfacePropName(int texdata) {
     const char *name = texdata_strings + texdata_string_table[texdatas[texdata].name_id];
     int m = LookupMaterial(name);

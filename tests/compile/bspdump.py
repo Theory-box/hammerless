@@ -133,6 +133,31 @@ def _static_props_v9(b: bytes) -> list[str]:
     return out
 
 
+def _detail_props_v4(b: bytes) -> list[str]:
+    """Detail props: model dictionary, sprite dictionary, 52-byte records (padding masked; a model's
+    unused scale too, which vbsp leaves unset)."""
+    out = []
+    n = struct.unpack_from("<i", b, 0)[0]
+    at = 4
+    out += ["  model " + b[at + 128 * i:at + 128 * i + 128].split(b"\0")[0].decode("latin-1") for i in range(n)]
+    at += 128 * n
+    ns = struct.unpack_from("<i", b, at)[0]
+    at += 4
+    out += ["  sprite " + " ".join(repr(x) for x in struct.unpack_from("<8f", b, at + 32 * i)) for i in range(ns)]
+    at += 32 * ns
+    no = struct.unpack_from("<i", b, at)[0]
+    at += 4
+    for i in range(no):
+        p = bytearray(b[at + 52 * i:at + 52 * i + 52])
+        p[41:44] = bytes(3)                 # padding after the orientation
+        p[45:48] = bytes(3)                 # and after the type
+        if p[44] == 0:                      # a model: no scale
+            p[48:52] = bytes(4)
+        o = struct.unpack_from("<6f", p, 0)
+        out.append("  detail " + " ".join(f"{x!r}" for x in o) + " " + p[24:52].hex())
+    return out
+
+
 def records(index: int, blob: bytes) -> list[str]:
     """One text line per record of lump `index`."""
     if not blob:
@@ -159,6 +184,8 @@ def records(index: int, blob: bytes) -> list[str]:
             data = blob[off - first:off - first + length]
             if gid == b"prps" and ver == 9:
                 out += _static_props_v9(data)
+            elif gid == b"prpd" and ver == 4:
+                out += _detail_props_v4(data)
             else:
                 out.append("  data " + data.hex())
         return out

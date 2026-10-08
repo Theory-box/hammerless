@@ -702,6 +702,9 @@ static unsigned char *pack_primitives(int *len) {
 
 void EmitPhysCollision(void);
 void EmitStaticProps(void);
+void EmitDetailObjects(void);
+extern unsigned char *g_dprp;
+extern int g_dprp_len;
 extern unsigned char *g_sprp;
 extern int g_sprp_len;
 
@@ -716,6 +719,7 @@ void EndBSPFile(const char *path) {
     EmitPhysCollision();
     leafmindist = xalloc(sizeof(unsigned short) * (numleafs + 1));
     EmitStaticProps();
+    EmitDetailObjects();
     ComputeBoundsNoSkybox();
     UnparseEntities();
     CompactTexinfos();
@@ -792,7 +796,9 @@ void EndBSPFile(const char *path) {
     static unsigned char empty12[12];
     unsigned char *sprp = g_sprp ? g_sprp : empty12;
     int sprp_len = g_sprp ? g_sprp_len : 12;
-    int gamelen = 4 + 2 * 16 + sprp_len + 12;
+    unsigned char *dprp = g_dprp ? g_dprp : empty12;
+    int dprp_len = g_dprp ? g_dprp_len : 12;
+    int gamelen = 4 + 2 * 16 + sprp_len + dprp_len;
     unsigned char *game = xalloc(gamelen);
     int count = 2;
     memcpy(game, &count, 4);
@@ -805,9 +811,9 @@ void EndBSPFile(const char *path) {
     ver = 4;
     memcpy(game + 24, &flags, 2);
     memcpy(game + 26, &ver, 2);
-    int dprp_len = 12;
     memcpy(game + 32, &dprp_len, 4);
     memcpy(game + 36, sprp, sprp_len);
+    memcpy(game + 36 + sprp_len, dprp, dprp_len);
     SetLump(35, game, gamelen, 0);
     {
         int offset = 1036;

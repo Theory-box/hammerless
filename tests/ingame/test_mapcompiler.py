@@ -37,8 +37,12 @@ def main(argv):
         results.append(ok)
         print(f"{'PASS' if ok else 'FAIL'} {name}: {note}", flush=True)
 
+    from hammerless.core import compile as cc
     with Bench() as b:
-        out = b.build(BLEND, MAP, prep=PREP)
+        # a full compile every run: an unchanged map would only get its entities redone (Valve's vbsp -onlyents)
+        out = os.path.join(os.path.dirname(b.game), "hammerless_bench_build")
+        cc.clear_build(None, os.path.join(out, MAP), MAP)
+        out = b.build(BLEND, MAP, prep=PREP, out_dir=out)
         base = os.path.join(out, MAP)
         tables = os.path.exists(base + ".hlvbsp_materials.txt")
         check("build used the Hammerless map compiler", tables, "material table written" if tables else "no table")
@@ -52,7 +56,6 @@ def main(argv):
         b.console("nb_blind 0", "director_start", "god 0", "sv_cheats 0", wait=0.3)
 
     # the same .vmf through Valve's vbsp
-    from hammerless.core import compile as cc
     tools = cc.Tools(cc.find_game_root())
     work = os.path.join(out, "valve_compare")
     os.makedirs(work, exist_ok=True)

@@ -35,14 +35,16 @@ typedef struct {
     int *counts;
     float **verts;
     void *collide;
-    int built;
+    int built, checked;
 } propmodel_t;
 
 static propmodel_t *models;
 static int nummodels_, maxmodels;
 
 static void LoadPropTable(void) {
-    if (!g_props_file) return;
+    static int loaded;
+    if (loaded || !g_props_file) return;
+    loaded = 1;
     FILE *f = fopen(g_props_file, "rb");
     if (!f) return;
     static char line[1 << 20];
@@ -130,6 +132,25 @@ static void *GetCollisionModel(const char *name) {
     }
     Warning("Error loading studio model \"%s\"!\n", name);
     return NULL;
+}
+
+/* Can the model be a static (or detail) prop? vbsp's checks, reported once per model like vbsp. */
+int PropModelValid(const char *name, const char *what) {
+    LoadPropTable();
+    for (int i = 0; i < nummodels_; i++) {
+        propmodel_t *m = &models[i];
+        if (!names_equal(m->name, name)) continue;
+        if (m->status == 0) return 1;
+        if (!m->checked) {
+            m->checked = 1;
+            if (m->status == 2) Warning("Error! To use model \"%s\"\n      with %s, it must be compiled with $staticprop!\n", name, what);
+            if (m->status == 3) Warning("Error! %s using model \"%s\", which must be used on a dynamic entity (i.e. prop_physics). Deleted.\n", what, name);
+            Warning("Error loading studio model \"%s\"!\n", name);
+        }
+        return 0;
+    }
+    Warning("Error loading studio model \"%s\"!\n", name);
+    return 0;
 }
 
 /* Does the leaf (the half-spaces of the nodes above it) overlap the hull? */
