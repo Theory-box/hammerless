@@ -86,6 +86,205 @@ static void MakePatchForFace(int fn, winding_t *w) {
     if (p->baselight[0] || p->baselight[1] || p->baselight[2]) tx->flags |= SURF_LIGHT;
 }
 
+/* -- displacements (CVRADDispColl): a patch over the 4 corners, then triangles halved along the grid
+ * (each child keeps grid vertices as corners) until no grid level is left, then at edge midpoints, until
+ * their edges are under dispchop luxels */
+float dispchop = 8.0f;
+
+static float Length(const vec3_t v) { return sqrtf((v[0] * v[0] + v[2] * v[2]) + v[1] * v[1]); }   /* (L4D2's order) */
+static void Cross(const vec3_t a, const vec3_t b, vec3_t c) {
+    c[0] = a[1] * b[2] - a[2] * b[1];
+    c[1] = a[2] * b[0] - a[0] * b[2];
+    c[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+static void DispPatchCommon(patch_t *p, const vec3_t *pts, int n, float area, const vec3_t normal) {
+    p->scale[0] = p->scale[1] = 1.0f;
+    p->chop = dispchop;
+    p->sky = 0;
+    p->winding = AllocWinding(n);
+    p->winding->numpoints = n;
+    vec3_t center = {0, 0, 0};
+    for (int i = 0; i < n; i++) {
+        VectorCopy(pts[i], p->winding->p[i]);
+        VectorAdd(pts[i], center, center);
+    }
+    VectorScale(center, n == 4 ? 1.0f / 4.0f : 1.0f / 3.0f, p->origin);
+    VectorCopy(normal, p->normal);
+    VectorCopy(normal, p->plane_normal);
+    p->plane_dist = DotProduct(normal, pts[0]);
+    p->area = area;
+    /* (the box starts at FLT_MIN, not -FLT_MAX: as vrad) */
+    for (int k = 0; k < 3; k++) p->mins[k] = FLT_MAX, p->maxs[k] = FLT_MIN;
+    for (int i = 0; i < n; i++)
+        for (int k = 0; k < 3; k++) {
+            p->mins[k] = p->mins[k] < pts[i][k] ? p->mins[k] : pts[i][k];
+            p->maxs[k] = p->maxs[k] > pts[i][k] ? p->maxs[k] : pts[i][k];
+        }
+    p->needs_bump = texinfo[g_pFaces[p->face].texinfo].flags & SURF_BUMPLIGHT ? 1 : 0;
+}
+
+static void DispBaseLight(patch_t *p) {
+    const texinfo_t *tx = &texinfo[g_pFaces[p->face].texinfo];
+    const dtexdata_t *td = (const dtexdata_t *)lumps[LUMP_TEXDATA].data + tx->texdata;
+    p->basearea = (float)(td->height * td->width);
+    for (int k = 0; k < 3; k++) {
+        p->reflectivity[k] = td->reflectivity[k] * 1.0f;
+        if (p->reflectivity[k] > 0.99) p->reflectivity[k] = 0.99f;
+    }
+}
+
+static void CreateDispParentPatch(const dispsurf_t *d) {
+    int n = (1 << d->power) + 1;
+    vec3_t pts[4];
+    VectorCopy(d->verts[0], pts[0]);
+    VectorCopy(d->verts[n * (n - 1)], pts[1]);
+    VectorCopy(d->verts[n * n - 1], pts[2]);
+    VectorCopy(d->verts[n - 1], pts[3]);
+    int i = NewPatch();
+    patch_t *p = &patches[i];
+    memset(p, 0, sizeof(*p));
+    p->next = face_patches[d->face];
+    face_patches[d->face] = i;
+    p->face = d->face;
+    p->child1 = p->child2 = p->parent = p->next_cluster_child = p->next_parent = -1;
+    vec3_t e0, e1, normal;
+    VectorSubtract(pts[1], pts[0], e0);
+    VectorSubtract(pts[3], pts[0], e1);
+    Cross(e1, e0, normal);
+    float area = VectorNormalize(normal);
+    DispPatchCommon(p, pts, 4, area, normal);
+    VectorCopy(p->mins, p->face_mins);
+    VectorCopy(p->maxs, p->face_maxs);
+    DispBaseLight(p);
+}
+
+static int InitDispPatch(int parent, int child, const vec3_t *pts, const int *indices) {
+    int i = NewPatch();
+    patch_t *p = &patches[i], *par = &patches[parent];
+    memset(p, 0, sizeof(*p));
+    p->next = -1;
+    p->face = par->face;
+    if (child == 0) par->child1 = i;
+    else par->child2 = i;
+    p->child1 = p->child2 = p->next_cluster_child = p->next_parent = -1;
+    p->parent = parent;
+    vec3_t e0, e1, normal;
+    VectorSubtract(pts[1], pts[0], e0);
+    VectorSubtract(pts[2], pts[0], e1);
+    Cross(e1, e0, normal);
+    float area = VectorNormalize(normal);
+    area *= 0.5f;
+    DispPatchCommon(p, pts, 3, area, normal);
+    for (int k = 0; k < 3; k++) p->indices[k] = (short)indices[k];
+    VectorCopy(par->face_mins, p->face_mins);
+    VectorCopy(par->face_maxs, p->face_maxs);
+    VectorCopy(par->baselight, p->baselight);
+    p->basearea = par->basearea;
+    VectorCopy(par->reflectivity, p->reflectivity);
+    return i;
+}
+
+/* small enough (longest edge under dispchop luxels, or a sliver)? */
+static int DispPatchSmall(const dispsurf_t *d, const vec3_t *e, int nedges, const vec3_t a, const vec3_t b, int tri) {
+    float maxlen = d->sample_width, minedge = maxlen * dispchop;
+    float longest = 0.0f;
+    for (int k = 0; k < nedges; k++)
+        if (longest < Length(e[k])) longest = Length(e[k]);
+    if (longest < minedge) return 1;
+    float minarea = (dispchop * maxlen) * (dispchop * maxlen);
+    if (tri) minarea *= 0.5f;
+    vec3_t n;
+    Cross(a, b, n);
+    double area = VectorNormalizeD(n);      /* (x87: compared unrounded) */
+    if (tri) area *= 0.5f;
+    return minarea > area;
+}
+
+static int LongestEdge(const vec3_t *e, int nedges) {
+    float longest = 0.0f;
+    int best = -1;
+    for (int k = 0; k < nedges; k++)
+        if (longest < Length(e[k])) longest = Length(e[k]), best = k;
+    return best;
+}
+
+static void CreateDispChildPatchesSub(const dispsurf_t *d, int parent) {
+    const winding_t *w = patches[parent].winding;
+    if (w->numpoints != 3) return;
+    vec3_t e[3];
+    /* (L4D2: the same edges as above, though the cases below split p0-p1, p1-p2, p0-p2) */
+    VectorSubtract(w->p[1], w->p[0], e[0]);
+    VectorSubtract(w->p[2], w->p[0], e[1]);
+    VectorSubtract(w->p[2], w->p[1], e[2]);
+    if (DispPatchSmall(d, e, 3, e[1], e[0], 1)) return;
+    int longest = LongestEdge(e, 3);
+    vec3_t pts[2][3], mid;
+    const float *p0 = w->p[0], *p1 = w->p[1], *p2 = w->p[2];
+    if (longest == 0) {
+        for (int k = 0; k < 3; k++) mid[k] = (p0[k] + p1[k]) * 0.5f;
+        VectorCopy(p0, pts[0][0]), VectorCopy(mid, pts[0][1]), VectorCopy(p2, pts[0][2]);
+        VectorCopy(mid, pts[1][0]), VectorCopy(p1, pts[1][1]), VectorCopy(p2, pts[1][2]);
+    } else if (longest == 1) {
+        for (int k = 0; k < 3; k++) mid[k] = (p1[k] + p2[k]) * 0.5f;
+        VectorCopy(p0, pts[0][0]), VectorCopy(p1, pts[0][1]), VectorCopy(mid, pts[0][2]);
+        VectorCopy(mid, pts[1][0]), VectorCopy(p2, pts[1][1]), VectorCopy(p0, pts[1][2]);
+    } else {
+        for (int k = 0; k < 3; k++) mid[k] = (p0[k] + p2[k]) * 0.5f;
+        VectorCopy(p0, pts[0][0]), VectorCopy(p1, pts[0][1]), VectorCopy(mid, pts[0][2]);
+        VectorCopy(mid, pts[1][0]), VectorCopy(p1, pts[1][1]), VectorCopy(p2, pts[1][2]);
+    }
+    static const int none[3] = {-1, -1, -1};
+    int c0 = InitDispPatch(parent, 0, (const vec3_t *)pts[0], none);
+    int c1 = InitDispPatch(parent, 1, (const vec3_t *)pts[1], none);
+    CreateDispChildPatchesSub(d, c0);
+    CreateDispChildPatchesSub(d, c1);
+}
+
+static void CreateDispChildPatches(const dispsurf_t *d, int parent, int level) {
+    const winding_t *w = patches[parent].winding;
+    int n = (1 << d->power) + 1;
+    if (w->numpoints == 4) {
+        vec3_t e[4];
+        VectorSubtract(w->p[1], w->p[0], e[0]);
+        VectorSubtract(w->p[2], w->p[1], e[1]);
+        VectorSubtract(w->p[3], w->p[2], e[2]);
+        VectorSubtract(w->p[3], w->p[0], e[3]);
+        if (DispPatchSmall(d, e, 4, e[3], e[0], 0)) return;
+        int idx[2][3] = {{n * n - 1, 0, n * (n - 1)}, {0, n * n - 1, n - 1}};
+        int c[2];
+        for (int t = 0; t < 2; t++) {
+            vec3_t pts[3];
+            for (int k = 0; k < 3; k++) VectorCopy(d->verts[idx[t][k]], pts[k]);
+            c[t] = InitDispPatch(parent, t, (const vec3_t *)pts, idx[t]);
+        }
+        CreateDispChildPatches(d, c[0], 0);
+        CreateDispChildPatches(d, c[1], 0);
+        return;
+    }
+    if (w->numpoints != 3) return;
+    vec3_t e[3];
+    VectorSubtract(w->p[1], w->p[0], e[0]);
+    VectorSubtract(w->p[2], w->p[0], e[1]);
+    VectorSubtract(w->p[2], w->p[1], e[2]);
+    if (DispPatchSmall(d, e, 3, e[1], e[0], 1)) return;
+    if (level >= d->power * 2) {
+        CreateDispChildPatchesSub(d, parent);
+        return;
+    }
+    const int *pi = patches[parent].indices;
+    int mid = (pi[1] + pi[0]) / 2;
+    int idx[2][3] = {{pi[2], pi[0], mid}, {pi[1], pi[2], mid}};
+    int c[2];
+    for (int t = 0; t < 2; t++) {
+        vec3_t pts[3];
+        for (int k = 0; k < 3; k++) VectorCopy(d->verts[idx[t][k]], pts[k]);
+        c[t] = InitDispPatch(parent, t, (const vec3_t *)pts, idx[t]);
+    }
+    CreateDispChildPatches(d, c[0], level + 1);
+    CreateDispChildPatches(d, c[1], level + 1);
+}
+
 void MakePatches(void) {
     const dmodel_t *models = (const dmodel_t *)lumps[LUMP_MODELS].data;
     int nummodels = lumps[LUMP_MODELS].len / sizeof(dmodel_t);
@@ -100,7 +299,8 @@ void MakePatches(void) {
             MakePatchForFace(fn, w);
         }
     }
-    /* TODO: displacement patches */
+    for (int i = 0; i < numdispsurfs; i++)
+        if (dispsurfs[i].face >= 0) CreateDispParentPatch(&dispsurfs[i]);
 }
 
 /* ------------------------------------------------------------------ subdividing */
@@ -122,7 +322,7 @@ static int CreateChildPatch(int parent, winding_t *w, float area, const vec3_t c
     child->winding = w;
     child->area = area;
     VectorCopy(center, child->origin);
-    GetPhongNormal(child->face, child->origin, child->normal);
+    GetPhongNormalScalar(child->face, child->origin, child->normal);
     WindingBounds(w, child->mins, child->maxs);
     if (child->baselight[0] || child->baselight[1] || child->baselight[2]) return c;
     /* near the face's edges, chop finer */
@@ -190,8 +390,9 @@ void SubdividePatches(void) {
     for (int i = 0; i < before; i++) {
         patches[i].parent = -1;
         if (PreventSubdivision(&patches[i])) continue;
-        if (g_pFaces[patches[i].face].dispinfo == -1) SubdividePatch(i);
-        /* TODO: displacement patches */
+        int di = g_pFaces[patches[i].face].dispinfo;
+        if (di == -1) SubdividePatch(i);
+        else CreateDispChildPatches(&dispsurfs[di], i, 0);
     }
     for (int i = 0; i < numfaces; i++) face_patches[i] = -1;
     for (int i = 0; i < numpatches; i++) {
@@ -215,6 +416,27 @@ void SubdividePatches(void) {
         }
     }
     Msg("%i patches after subdivision\n", numpatches);
+}
+
+/* per cluster: the displacement faces with a patch in it (they aren't in the leaves' face lists) */
+static int **cluster_disps, *ncluster_disps;
+
+void AddDispsToClusterTable(void) {
+    cluster_disps = xalloc(sizeof(int *) * (numclusters + 1));
+    ncluster_disps = xalloc(sizeof(int) * (numclusters + 1));
+    for (int f = 0; f < numfaces; f++) {
+        if (g_pFaces[f].dispinfo == -1) continue;
+        for (int i = face_patches[f]; i != -1; i = patches[i].next) {
+            int c = patches[i].cluster;
+            if (c == -1) continue;
+            int k;
+            for (k = 0; k < ncluster_disps[c]; k++)
+                if (cluster_disps[c][k] == f) break;
+            if (k < ncluster_disps[c]) continue;
+            cluster_disps[c] = realloc(cluster_disps[c], sizeof(int) * (ncluster_disps[c] + 1));
+            cluster_disps[c][ncluster_disps[c]++] = f;
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ direct light onto patches */
@@ -288,15 +510,17 @@ static float FormFactorPolyToDiff(const patch_t *poly, const patch_t *diff) {
         VectorScale(g, a, g);
         ff += DotProduct(g, diff->normal);
     }
-    ff *= 0.5f / poly->area;
-    return ff;
+    return (float)((0.5 / (double)poly->area) * ff);
 }
 
+/* (L4D2's is x87: the dots and the unrounded length in double, rounded to float at the end) */
 static float FormFactorDiffToDiff(const patch_t *d1, const patch_t *d2) {
     vec3_t delta;
     VectorSubtract(d1->origin, d2->origin, delta);
-    float len = VectorNormalize(delta);
-    return -DotProduct(delta, d1->normal) * DotProduct(delta, d2->normal) / (len * len);
+    double len = VectorNormalizeD(delta);
+    double dot1 = ((double)delta[0] * d1->normal[0] + (double)delta[1] * d1->normal[1]) + (double)delta[2] * d1->normal[2];
+    double dot2 = ((double)delta[0] * d2->normal[0] + (double)delta[1] * d2->normal[1]) + (double)delta[2] * d2->normal[2];
+    return (float)-((dot2 * dot1) / (len * len));
 }
 
 typedef struct { int patch; float transfer; } transfer_t;
@@ -310,7 +534,7 @@ static void MakeTransfer(int i1, int i2, transfer_t *all) {
     if (scale <= 0) return;
     vec3_t d;
     VectorSubtract(p1->origin, p2->origin, d);
-    double threshold = (PI * 0.04) * DotProduct(d, d);
+    float threshold = (float)((PI * 0.04) * DotProduct(d, d));
     if (threshold < p2->area) {
         scale = FormFactorPolyToDiff(p2, p1);
         if (scale <= 0.0) return;
@@ -439,12 +663,23 @@ void MakeAllScales(void) {
     test_hit = xalloc(sizeof(int) * MAX_PATCHES);
     test_dist = xalloc(sizeof(float) * MAX_PATCHES);
     test_len = xalloc(sizeof(float) * MAX_PATCHES);
-    unsigned char *pvs = xalloc(VisRowBytes() + 1), *face_tested = xalloc(numfaces + 1);
+    unsigned char *pvs = xalloc(VisRowBytes() + 1), *face_tested = xalloc(numfaces + 1), *disp_tested = xalloc(numfaces + 1);
+    if (getenv("HLPATCHES")) {      /* (debugging: origin, normal, plane dist, area, face, cluster, children) */
+        FILE *pf = fopen(getenv("HLPATCHES"), "wb");
+        for (int i = 0; i < numpatches; i++) {
+            patch_t *p = &patches[i];
+            fwrite(p->origin, 12, 1, pf), fwrite(p->normal, 12, 1, pf), fwrite(&p->plane_dist, 4, 1, pf), fwrite(&p->area, 4, 1, pf);
+            fwrite(&p->face, 4, 1, pf), fwrite(&p->cluster, 4, 1, pf), fwrite(&p->child1, 4, 1, pf), fwrite(&p->child2, 4, 1, pf);
+        }
+        fclose(pf);
+    }
+    FILE *dumpf = getenv("HLTRANSFERS") ? fopen(getenv("HLTRANSFERS"), "wb") : NULL;   /* (debugging: the lists as MakeScales gets them) */
     for (int c = 0; c < numclusters; c++) {
         GetClusterPVS(c, pvs);
         for (int i = cluster_children[c]; i != -1; i = patches[i].next_cluster_child) {
             patch_t *p = &patches[i];
             memset(face_tested, 0, numfaces);
+            memset(disp_tested, 0, numfaces);
             ntests = 0;
             for (int j = 0; j < numclusters; j++) {
                 if (!(pvs[j >> 3] & (1 << (j & 7)))) continue;
@@ -458,22 +693,57 @@ void MakeAllScales(void) {
                         TestPatchToFace(i, l);
                     }
                 }
-                /* TODO: displacements in this cluster */
+                for (int k = 0; k < ncluster_disps[j]; k++) {
+                    int l = cluster_disps[j][k];
+                    if (disp_tested[l]) continue;
+                    disp_tested[l] = 1;
+                    if (p->face == l) continue;
+                    TestPatchToFace(i, l);
+                }
             }
             FinishStream(&stream);
             p->numtransfers = 0;
             for (int t = 0; t < ntests; t++)
                 if (test_hit[t] == -1 || test_dist[t] >= test_len[t]) MakeTransfer(test_shooter[t], test_receiver[t], all);
+            if (dumpf) fwrite(&i, 4, 1, dumpf), fwrite(&p->numtransfers, 4, 1, dumpf), fwrite(all, 8, p->numtransfers, dumpf);
             MakeScales(i, all);
             total_transfer += p->numtransfers;
             if (p->numtransfers > max_transfer) max_transfer = p->numtransfers;
         }
     }
+    if (dumpf) fclose(dumpf);
     Msg("transfers %d, max %d\n", total_transfer, max_transfer);
-    free(all), free(test_shooter), free(test_receiver), free(test_hit), free(test_dist), free(test_len), free(pvs), free(face_tested);
+    free(all), free(test_shooter), free(test_receiver), free(test_hit), free(test_dist), free(test_len), free(pvs), free(face_tested), free(disp_tested);
 }
 
 /* ------------------------------------------------------------------ bouncing */
+/* a displacement's texture axes for its bump normals: turned into the lightmap's axes when they differ */
+void PreGetBumpNormalsForDisp(const texinfo_t *tx, vec3_t u, vec3_t v, vec3_t normal) {
+    vec3_t tu, tv, lu, lv;
+    for (int k = 0; k < 3; k++) {
+        tu[k] = tx->textureVecsTexelsPerWorldUnits[0][k], tv[k] = tx->textureVecsTexelsPerWorldUnits[1][k];
+        lu[k] = tx->lightmapVecsLuxelsPerWorldUnits[0][k], lv[k] = tx->lightmapVecsLuxelsPerWorldUnits[1][k];
+    }
+    VectorNormalize(tu);
+    VectorNormalize(tv);
+    VectorNormalize(lu);
+    VectorNormalize(lv);
+    if (fabs(DotProduct(tu, lu)) < 0.999f || fabs(DotProduct(tv, lv)) < 0.999f) {
+        /* columns: (light u, light v, normal) times (tex u, tex v, normal) */
+        float a[3][3], b[3][3], m[3][3];
+        for (int k = 0; k < 3; k++) {
+            a[k][0] = lu[k], a[k][1] = lv[k], a[k][2] = normal[k];
+            b[k][0] = tu[k], b[k][1] = tv[k], b[k][2] = normal[k];
+        }
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++) m[r][c] = a[r][0] * b[0][c] + a[r][1] * b[1][c] + a[r][2] * b[2][c];
+        for (int k = 0; k < 3; k++) u[k] = m[k][0], v[k] = m[k][1], normal[k] = m[k][2];
+        return;
+    }
+    VectorCopy(tu, u);
+    VectorCopy(tv, v);
+}
+
 static vec3_t *emitlight;
 static vec3_t (*addlight)[4];
 
@@ -482,10 +752,17 @@ static void GatherLight(int j) {
     const transfer_t *t = p->transfers;
     if (p->needs_bump) {
         vec3_t normals[4], sum[4] = {{0}};
-        GetPhongNormal(p->face, p->origin, normals[0]);
         const texinfo_t *tx = &texinfo[g_pFaces[p->face].texinfo];
-        GetBumpNormals(tx->textureVecsTexelsPerWorldUnits[0], tx->textureVecsTexelsPerWorldUnits[1], p->normal, normals[0],
-                       &normals[1]);
+        if (g_pFaces[p->face].dispinfo != -1) {
+            vec3_t u, v;
+            VectorCopy(p->normal, normals[0]);
+            PreGetBumpNormalsForDisp(tx, u, v, normals[0]);
+            GetBumpNormals(u, v, normals[0], normals[0], &normals[1]);
+        } else {
+            GetPhongNormalScalar(p->face, p->origin, normals[0]);
+            GetBumpNormals(tx->textureVecsTexelsPerWorldUnits[0], tx->textureVecsTexelsPerWorldUnits[1], p->normal, normals[0],
+                           &normals[1]);
+        }
         VectorCopy(p->normal, normals[0]);          /* (the base lightmap uses the flat normal) */
         for (int k = 0; k < p->numtransfers; k++, t++) {
             const patch_t *p2 = &patches[t->patch];

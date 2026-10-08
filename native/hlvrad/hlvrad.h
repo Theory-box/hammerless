@@ -184,6 +184,8 @@ typedef struct {
     float *alpha;
     vec3_t *normals;                   /* per vertex, smoothed across neighbours */
     float sample_radius2;              /* how far a luxel gathers samples */
+    float sample_width;                /* a luxel's size in world units */
+    float patch_radius2;               /* how far a luxel gathers bounced light from patches */
 } dispsurf_t;
 extern dispsurf_t *dispsurfs;
 extern int numdispsurfs;
@@ -221,6 +223,8 @@ typedef struct {
     vec3_t baselight, reflectivity, samplelight, directlight;
     float samplearea;
     vec3_t totallight[4];              /* per bump normal */
+    int indices[3];                    /* (displacement patches: the vertices of their corners, -1 below the grid) */
+    unsigned short iteration_key;
     int numtransfers;
     void *transfers;
 } patch_t;
@@ -231,6 +235,9 @@ void SubdividePatches(void);
 void AddSampleToPatch(int facenum, const vec3_t pos, float area, const vec3_t light);
 void FinishPatchLights(int facenum);
 void MakeAllScales(void);
+void AddDispsToClusterTable(void);
+void PreGetBumpNormalsForDisp(const texinfo_t *tx, vec3_t u, vec3_t v, vec3_t normal);
+extern float dispchop;
 void BounceLight(void);
 
 /* entities.c */
@@ -274,6 +281,7 @@ void AllocFacelights(void);
 void BuildFacelights(int facenum);
 void FinalLightFace(int facenum);
 void GetPhongNormal(int facenum, const vec3_t spot, vec3_t phongnormal);
+void GetPhongNormalScalar(int facenum, const vec3_t spot, vec3_t phongnormal);
 void GetBumpNormals(const float *sVect, const float *tVect, const vec3_t flatNormal, const vec3_t phongNormal,
                     vec3_t bumpNormals[3]);
 extern vec3_t *face_centroids;
@@ -291,5 +299,6 @@ void Error(const char *fmt, ...);
 void Msg(const char *fmt, ...);
 void *xalloc(size_t n);
 vec_t VectorNormalize(vec3_t v);
+double VectorNormalizeD(vec3_t v);
 
 #endif

@@ -126,6 +126,13 @@ static void CalcSampleRadius2(dispsurf_t *d, const dface_t *face) {
     float r = (float)(sqrt(w * w + w * w) * 2.2f);
     if (r > 512.0f) r = 512.0f;
     d->sample_radius2 = r * r;
+    d->sample_width = w;
+    float pr = w * dispchop * 2.2f;            /* (bounced light: dispchop luxels per patch) */
+    if (pr > 1500.0f) {
+        pr = 1500.0f;
+        Msg("Warning: Patch Sample Radius Clamped!\n");
+    }
+    d->patch_radius2 = pr * pr;
 }
 
 /* ------------------------------------------------------------------ smoothing across neighbours (disp_vrad.cpp) */

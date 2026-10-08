@@ -18,6 +18,16 @@ vec_t VectorNormalize(vec3_t v) {
     return radius;
 }
 
+/* the same, returning the length unrounded (as x87 code gets it) */
+double VectorNormalizeD(vec3_t v) {
+    double r = sqrt((double)v[0] * v[0] + (double)v[1] * v[1] + (double)v[2] * v[2]);
+    float iradius = 1.f / ((float)r + FLT_EPSILON);
+    v[0] *= iradius;
+    v[1] *= iradius;
+    v[2] *= iradius;
+    return r;
+}
+
 int main(int argc, char **argv) {
     const char *map = NULL;
     Msg("Hammerless hlvrad\n");
@@ -60,12 +70,13 @@ int main(int argc, char **argv) {
     MapVis();
     ParseEntities();
     FindFacePatches();
+    LoadDisplacements();
     MakePatches();
     PairEdges();
     SaveVertexNormals();
     SubdividePatches();
+    AddDispsToClusterTable();
     CreateDirectLights();
-    LoadDisplacements();
     AddBrushesForRayTrace();
     AddDispsForRayTrace();
     AddStaticPropsForRayTrace();
