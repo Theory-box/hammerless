@@ -28,7 +28,8 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-both")) g_bHDR = 1, g_bLDR = 1;
         else if (!_stricmp(a, "-game") && i + 1 < argc) g_gamedir = argv[++i];
         else if (!_stricmp(a, "-modeldir") && i + 1 < argc) g_modeldir = argv[++i];
-        else if (!_stricmp(a, "-threads") || !_stricmp(a, "-bounce") ||
+        else if (!_stricmp(a, "-bounce") && i + 1 < argc) g_numbounce = atoi(argv[++i]);
+        else if (!_stricmp(a, "-threads") ||
                  !_stricmp(a, "-extrasky") || !_stricmp(a, "-lights") || !_stricmp(a, "-chop") ||
                  !_stricmp(a, "-maxchop") || !_stricmp(a, "-dispchop")) {
             if (++i >= argc) Error("expected a value after '%s'", a);
@@ -59,8 +60,10 @@ int main(int argc, char **argv) {
     MapVis();
     ParseEntities();
     FindFacePatches();
+    MakePatches();
     PairEdges();
     SaveVertexNormals();
+    SubdividePatches();
     CreateDirectLights();
     LoadDisplacements();
     AddBrushesForRayTrace();
@@ -70,6 +73,10 @@ int main(int argc, char **argv) {
     AllocFacelights();
     for (int i = 0; i < numfaces; i++) BuildFacelights(i);
     PrecompLightmapOffsets();
+    if (g_numbounce > 0) {
+        MakeAllScales();
+        BounceLight();
+    }
     for (int i = 0; i < numfaces; i++) FinalLightFace(i);
     ExportDirectLightsToWorldLights();
     SetLump(LUMP_LIGHTING_HDR, dlightdata, lightdatasize, 1);

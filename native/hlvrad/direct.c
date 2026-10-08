@@ -666,6 +666,13 @@ void BuildFacelights(int facenum) {
                     for (int k = 0; k < 3; k++) fl->light[style][b][group + i][k] += fxdot[b][i] * dl->light.intensity[k];
         }
     }
+    /* the samples' direct light (style 0) onto the face's patches, for bouncing */
+    int k0;
+    for (k0 = 0; k0 < MAXLIGHTMAPS; k0++)
+        if (f->styles[k0] == 0) break;
+    if (k0 >= MAXLIGHTMAPS) return;
+    for (int i = 0; i < fl->numsamples; i++) AddSampleToPatch(facenum, fl->sample[i].pos, fl->sample[i].area, fl->light[k0][0][i]);
+    FinishPatchLights(facenum);
 }
 
 /* ------------------------------------------------------------------ luxels from samples (radial) */
@@ -897,6 +904,86 @@ static int DispSampleRadial(radial_t *rad, int j, vec3_t *light, int bumpCount) 
     return ok;
 }
 
+/* -- bounced light: each leaf patch of the face and its neighbours spreads its light over the luxels
+ * within 1.42 patch sizes, weighted 2 - distance^2 (in patch sizes) */
+static void AddBouncedToRadial(radial_t *rad, const vec3_t pnt, const float *cmins, const float *cmaxs, const vec3_t *light,
+                               int hasBump, int neighbourBump) {
+    float coord[2];
+    WorldToLuxelSpace(&rad->l, pnt, coord);
+    float dists = cmaxs[0] - cmins[0], distt = cmaxs[1] - cmins[1];
+    dists = (float)(1.0 > dists ? 1.0 : (double)dists);
+    distt = (float)(1.0 > distt ? 1.0 : (double)distt);
+    int s_min = (int)(coord[0] - dists * 1.42), t_min = (int)(coord[1] - distt * 1.42);
+    int s_max = (int)(coord[0] + dists * 1.42 + 1.0), t_max = (int)(coord[1] + distt * 1.42 + 1.0);
+    if (s_min < 0) s_min = 0;
+    if (t_min < 0) t_min = 0;
+    if (s_max > rad->w) s_max = rad->w;
+    if (t_max > rad->h) t_max = rad->h;
+    float ootdist = 1.0f / distt;
+    for (int s = s_min; s < s_max; s++) {
+        float ds = (coord[0] - (float)s) / dists;
+        float ds2 = ds * ds;
+        for (int t = t_min; t < t_max; t++) {
+            float dt = (coord[1] - (float)t) * ootdist;
+            float r = 2.0f - (dt * dt + ds2);
+            if (!(r > 0.0f)) continue;
+            int i = s + t * rad->w;
+            if (hasBump) {
+                if (neighbourBump) {
+                    for (int b = 0; b < NUM_BUMP_VECTS + 1; b++)
+                        for (int k = 0; k < 3; k++) rad->light[b][i][k] += light[b][k] * r;
+                } else {
+                    for (int k = 0; k < 3; k++) rad->light[0][i][k] += light[0][k] * r;
+                    for (int b = 1; b < NUM_BUMP_VECTS + 1; b++)
+                        for (int k = 0; k < 3; k++) rad->light[b][i][k] += light[0][k] * (r * OO_SQRT_3);
+                }
+            } else {
+                for (int k = 0; k < 3; k++) rad->light[0][i][k] += light[0][k] * r;
+            }
+            rad->weight[i] += r;
+        }
+    }
+}
+
+static void PatchLightmapCoordRange(radial_t *rad, const patch_t *p, float *mins, float *maxs) {
+    mins[0] = mins[1] = 1E30f;
+    maxs[0] = maxs[1] = -1E30f;
+    for (int i = 0; i < p->winding->numpoints; i++) {
+        float c[2];
+        WorldToLuxelSpace(&rad->l, p->winding->p[i], c);
+        for (int k = 0; k < 2; k++) {
+            mins[k] = mins[k] < c[k] ? mins[k] : c[k];
+            maxs[k] = maxs[k] > c[k] ? maxs[k] : c[k];
+        }
+    }
+}
+
+static void AddFacePatchesToRadial(radial_t *rad, int face, int bump) {
+    for (int i = face_patches[face]; i != -1; i = patches[i].next) {
+        const patch_t *p = &patches[i];
+        if (p->child1 != -1) continue;
+        float mins[2], maxs[2];
+        PatchLightmapCoordRange(rad, p, mins, maxs);
+        if (g_pFaces[face].dispinfo != -1) {
+            vec3_t origin;                     /* (a displacement patch's centre on its base face) */
+            WindingCenter(p->winding, origin);
+            AddBouncedToRadial(rad, origin, mins, maxs, (const vec3_t *)p->totallight, bump, bump);
+        } else {
+            AddBouncedToRadial(rad, p->origin, mins, maxs, (const vec3_t *)p->totallight, bump, bump);
+        }
+    }
+}
+
+static radial_t *BuildPatchRadial(int facenum) {
+    int bump = texinfo[g_pFaces[facenum].texinfo].flags & SURF_BUMPLIGHT ? 1 : 0;
+    radial_t *rad = AllocateRadial(facenum);
+    AddFacePatchesToRadial(rad, facenum, bump);
+    int nn;
+    const int *n = FaceNeighbours(facenum, &nn);
+    for (int j = 0; j < nn; j++) AddFacePatchesToRadial(rad, n[j], bump);   /* (with this face's bump flag, as vrad) */
+    return rad;
+}
+
 static int SampleRadial(radial_t *rad, const vec3_t pnt, vec3_t *light, int bumpCount) {
     float coord[2];
     WorldToLuxelSpace(&rad->l, pnt, coord);
@@ -959,12 +1046,18 @@ void FinalLightFace(int facenum) {
     for (int k = 0; k < nstyles; k++) {
         int isdisp = f->dispinfo != -1;
         radial_t *rad = isdisp ? BuildDispLuxelRadial(facenum, k) : BuildLuxelRadial(facenum, k);
+        radial_t *prad = g_numbounce > 0 && k == 0 && !isdisp ? BuildPatchRadial(facenum) : NULL;   /* TODO: displacements */
         unsigned char *pdata[NUM_BUMP_VECTS + 1];
         for (int b = 0; b < bumpCount; b++) pdata[b] = dlightdata + f->lightofs + (k * bumpCount + b) * fl->numluxels * 4;
         int avgCount = 0;
         for (int j = 0; j < fl->numluxels; j++) {
             vec3_t lb[NUM_BUMP_VECTS + 1];
             int ok = isdisp ? DispSampleRadial(rad, j, lb, bumpCount) : SampleRadial(rad, fl->luxel[j], lb, bumpCount);
+            if (prad) {
+                vec3_t v[NUM_BUMP_VECTS + 1];
+                SampleRadial(prad, fl->luxel[j], v, bumpCount);
+                for (int b = 0; b < bumpCount; b++) VectorAdd(lb[b], v[b], lb[b]);
+            }
             if (fl->numsamples == 0) {
                 for (int b = 0; b < bumpCount; b++) lb[b][0] = 255, lb[b][1] = lb[b][2] = 0;
                 ok = 0;
@@ -982,6 +1075,7 @@ void FinalLightFace(int facenum) {
             }
         }
         FreeRadial(rad);
+        if (prad) FreeRadial(prad);
         /* the median colour, stored before lightofs in reverse style order */
         unsigned char *avg = dlightdata + f->lightofs - 4 * (k + 1);
         vec3_t median = {0, 0, 0};

@@ -209,6 +209,30 @@ float TestLine(const vec3_t start, const vec3_t stop, int static_prop_to_skip);
 float TestLine_DoesHitSky(const vec3_t start, const vec3_t stop, int static_prop_to_skip);
 void AddBrushesForRayTrace(void);
 
+void RT_Trace4Mask(const float o[3][4], const float d[3][4], const float tmax[4], int mask, int hit[4], float hitdist[4]);
+
+/* bounce.c */
+typedef struct {
+    winding_t *winding;
+    vec3_t mins, maxs, face_mins, face_maxs, origin, normal, plane_normal;
+    float plane_dist, area, scale[2], luxscale, chop, basearea;
+    int sky, needs_bump, face, cluster;
+    int parent, child1, child2, next, next_parent, next_cluster_child;
+    vec3_t baselight, reflectivity, samplelight, directlight;
+    float samplearea;
+    vec3_t totallight[4];              /* per bump normal */
+    int numtransfers;
+    void *transfers;
+} patch_t;
+extern patch_t *patches;
+extern int numpatches, *face_patches, g_numbounce;
+void MakePatches(void);
+void SubdividePatches(void);
+void AddSampleToPatch(int facenum, const vec3_t pos, float area, const vec3_t light);
+void FinishPatchLights(int facenum);
+void MakeAllScales(void);
+void BounceLight(void);
+
 /* entities.c */
 void ParseEntities(void);
 const char *ValueForKey(const entity_t *e, const char *key);

@@ -419,6 +419,11 @@ void RT_Trace4(const float o[3][4], const float d[3][4], const float tmin[4], co
     }
 }
 
+/* 4 unit rays with the same direction signs (mask), from 0 to tmax (vrad's ray stream) */
+void RT_Trace4Mask(const float o[3][4], const float d[3][4], const float tmax[4], int mask, int hit[4], float hitdist[4]) {
+    Trace4Masked(o, d, _mm_setzero_ps(), _mm_loadu_ps(tmax), mask, hit, hitdist, -1);
+}
+
 int RT_TriangleID(int tri) { return tris[tri].id; }
 
 /* SSE's reciprocal estimate refined once (Valve's ReciprocalSIMD) */
