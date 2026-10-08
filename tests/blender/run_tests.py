@@ -855,6 +855,48 @@ def test_logic_value_wires():
                                                     for e in entities(blocks, "logic_script"))
 
 
+def test_logic_loops():
+    # Blender marks wires that loop back invalid: a loop of event wires still works (a timer that
+    # stops itself), a circle of value wires is left out with a warning
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    tree = bpy.data.node_groups.new("Map Logic", "HL_LogicTree")
+    timer, delay = tree.nodes.new("HL_NodeTimer"), tree.nodes.new("HL_NodeDelay")
+    tree.links.new(timer.outputs["On Tick"], delay.inputs["In"])
+    tree.links.new(delay.outputs["Out"], timer.inputs["Stop"])
+    m1, m2 = tree.nodes.new("HL_NodeMath"), tree.nodes.new("HL_NodeMath")
+    tree.links.new(m1.outputs["Value"], m2.inputs["A"])
+    tree.links.new(m2.outputs["Value"], m1.inputs["A"])
+    assert not all(l.is_valid for l in tree.links)
+    blocks, log = export()
+    assert blocks, log
+    sends = [v for r in entities(blocks, "logic_relay") for c in r.blocks("connections")
+             for k, v in c.items if not isinstance(v, type(c)) and k == "OnTrigger"]
+    assert any(",Disable," in v for v in sends), sends
+    assert "circle of value wires" in log, log
+
+
+def test_logic_examples_build():
+    # every example graph builds, and compiles into the map with nothing to warn about
+    from hammerless.blender.logic_examples import EXAMPLES, build_example
+    bad = []
+    for i, ex in enumerate(EXAMPLES):
+        reset_scene()
+        add_box("floor", (40, 40, 0.5), (0, 0, -0.25))
+        bpy.ops.object.empty_add(location=(2, 0, 0.1))
+        sp = bpy.context.object
+        sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
+        bpy.context.scene.cursor.location = (-10, -10, 0)
+        tree = build_example(bpy.context, i)
+        assert len([n for n in tree.nodes if n.bl_idname != "NodeFrame"]) == len(ex["nodes"]), ex["title"]
+        assert len(tree.links) == len(ex["links"]), (ex["title"], len(tree.links), len(ex["links"]))
+        assert all(l.is_valid for l in tree.links), ex["title"]        # (Blender marks loops invalid)
+        blocks, log = export()
+        if blocks is None or tree.name in log:
+            bad.append(f"{tree.name}:\n{log}")
+    assert not bad, "\n".join(bad)
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

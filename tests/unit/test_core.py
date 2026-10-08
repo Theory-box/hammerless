@@ -2117,5 +2117,34 @@ class TestLightmap(unittest.TestCase):
         self.assertTrue((data.uvs[:, 1] >= 0.5 / h - 1e-6).all() and (data.uvs[:, 1] <= 1 - 0.5 / h + 1e-6).all())
 
 
+class TestOverrideAnswer(unittest.TestCase):
+    def test_answer_node_answers_from_what_was_asked(self):
+        # Override (damage) -> Asked -> Answer, Allow worked out from the attacker by a Script Value
+        from hammerless.core.logic import LLink, LNode, compile_graph, hook_function
+        ir = MapIR()
+        ir.settings.name = "m"
+        ir.entities.append(Entity("info_player_start", (0, 0, 0), (0, 0, 0), {}))
+        nodes = [LNode("Ask", "OVERRIDE", {"hook": "AllowTakeDamage"}),
+                 LNode("Ff", "SCRIPT_VALUE", {"expr": "a == null"}),
+                 LNode("Ans", "OVERRIDE_ANSWER", {"hook": "AllowTakeDamage"})]
+        links = [LLink("Ask", "asked", "Ans", "run"), LLink("Ask", "attacker", "Ff", "a", True),
+                 LLink("Ff", "result", "Ans", "answer", True)]
+        self.assertEqual(compile_graph(nodes, links, ir), [])
+        script = ir.extra_scripts["scripts/vscripts/hammerless/logic_m.nut"]
+        self.assertIn('::HL_Ans.answer <- (function(a, b, c, d) { return a == null; })((("attacker" in ::HL_Ctx', script)
+        hook = hook_function("AllowTakeDamage", ir.logic_hooks["AllowTakeDamage"])
+        self.assertIn("::HL_Ans <- {};\n    HL_S_ans();", hook)
+        self.assertIn('if ("answer" in ::HL_Ans) answer = answer && ::HL_Ans.answer;', hook)
+        # the logic entity comes first, so questions asked while the map's entities are made are answered
+        self.assertEqual(ir.entities[0].keyvalues.get("targetname"), "hl_logic")
+
+    def test_answer_node_needs_a_question_with_an_answer(self):
+        from hammerless.core.logic import LLink, LNode, compile_graph
+        ir = MapIR()
+        ir.settings.name = "m"
+        problems = compile_graph([LNode("Ans", "OVERRIDE_ANSWER", {"hook": "InterceptChat"})], [], ir)
+        self.assertTrue(any("takes an answer" in p for p in problems), problems)
+
+
 if __name__ == "__main__":
     unittest.main()

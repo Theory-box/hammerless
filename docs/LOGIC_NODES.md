@@ -17,32 +17,34 @@ Map logic (events, timers, buttons, gates, spawns, Director changes) is built as
 | **Grey** | Numbers, worked out live in the game |
 | **Pink** | True / false |
 
-## Nodes
+## Nodes (Shift+A)
 
-| Group | Nodes |
+The Add menu has one place per purpose:
+
+| Menu | Nodes |
 |---|---|
-| **Events** | Map Start, Game Event, Volume (a trigger box), Button, Timer |
-| **Values** | Path Progress (furthest / average / last survivor, 0 to 1), Random Value, Math, Compare, Boolean Math, Infected Count, Value |
+| **Events** | Map Start, Volume (a trigger box), Button, Timer, Game Event. **All Game Events**: any of the game's 381 events (player hurt, item picked up, tank killed...), with its details as values (user ids already turned into players, entity ids into entities). |
+| **Flow** | When (fires when a condition becomes true), If, Sequence, Delay, Once, Gate, Branch, Counter, Random, For Each (survivors, infected, players, commons, entities by class or name, a list) |
+| **Values** | Value, Math, Compare, Boolean Math, Random Value, Path Progress (furthest / average / last survivor, 0 to 1), Infected Count; Set / Get Variable (for the map or per player, kept across maps if you like), Format Text, Compare Values; Make / Break Vector, Vector Math; Make Table, Get Field |
 | **Scene** | Object Info (picks a scene object to hand to other nodes), Entity Events (an object's own events, e.g. a door opening), Collision (solid for players and/or the nav) |
-| **Flow** | When (fires when a condition becomes true), If, Sequence, Delay, Once, Gate, Branch, Counter, Random |
-| **Actions** | Move Over Time (Mover), Show / Hide Object, Horde, Crescendo, Spawn Zombie (a spot, or the game picks; *Only If Fewer Than*), Play Sound, Teleport Survivors, Show Message |
-| **Director** | Director, Director Settings |
-| **Objectives** | Objective |
+| **Actions** | Move Over Time (Mover), Show / Hide Object, Horde, Crescendo, Spawn Zombie (a spot, or the game picks; *Only If Fewer Than*), Play Sound, Teleport Survivors. **All Game Functions**: all 419 of the game's script functions, grouped (Player, Director, Nav Mesh, Entity, Find Entities, Spawning, Sound...) or found with *Search...* |
+| **Director** | Director, Director Settings, Director Setting (any of the ~140 Director settings, changed while playing), Director Mood (the Director's intensity, 0 calm to 1 furious, and warnings 60 s and 20 s before a mob) |
+| **HUD & Messages** | Show Message, Objective, HUD Text, HUD Hide |
+| **Overrides** | Override, Answer |
+| **Script** | Script and Script Value (your own Squirrel code) |
+| **Examples** | 20 ready-made graphs to learn from (below) |
 
-## The game's own scripting (Add menu, bottom)
+Game functions that only work something out (Get Health, Find By Name...) just give a Result; actions (Give Item, Stagger...) run when an event wire arrives and then fire *Then*. Wire colours for script values: teal **text**, purple **vector**, pink **entity / player / nav area**, dark grey **any value**.
 
-Everything L4D2's script language (VScript) can do is available as nodes.
+Script nodes (game functions, If, For Each, Set Variable, Script...) chain straight into each other: an event's player flows into the next node, and mix with the other nodes both ways. Inside a For Each, use script nodes for each item: an entity-wiring node fires a moment later, after the loop has moved on.
 
-| Menu | What's in it |
-|---|---|
-| **Game Functions** | All 419 of the game's script functions, grouped (Player, Director, Nav Mesh, Entity, Find Entities, Entity Properties, Spawning, Sound, HUD...) or found with *Search...*. Value functions (Get Health, Find By Name...) just give a Result; actions (Give Item, Stagger...) run when an event wire arrives and then fire *Then*. |
-| **Game Events** | Any of the game's 381 events (player hurt, item picked up, tank killed...). Its details come out as values: user ids already turned into players, entity ids into entities. |
-| **Script Blocks** | For Each (survivors, infected, players, commons, entities by class or name, a list), Set / Get Variable (for the map or per player, kept across maps if you like), Make Table / Get Field, Format Text, Make / Break Vector, Vector Math, Compare Values, Script and Script Value (your own Squirrel code). |
-| **Director, HUD & Overrides** | Director Setting (any of the ~140 Director settings, changed while playing), Director Mood (the Director's intensity, 0 calm to 1 furious, and warnings 60 s and 20 s before a mob), HUD Text / HUD Hide, Override. |
+**Loops.** Blender draws a wire red when it goes back to a node earlier in the chain (a Timer whose own tick ends up stopping it). For event wires that is fine and works. A circle of value wires (a value worked out from itself) can't be, so it is left out and the build warns.
 
-Wire colours added for these: teal **text**, purple **vector**, pink **entity / player / nav area**, dark grey **any value**.
+### Overrides
 
-Script nodes chain straight into each other (an event's player flows into the next node), and mix with the other nodes both ways. Inside a For Each, use script nodes for each item: an entity-wiring node fires a moment later, after the loop has moved on.
+The game asks the map before it does some things: allow this damage? turn this weapon spawn into something else? An **Override** node picks the question; *Asked* runs your nodes when the game asks, and its other outputs are what was asked (the attacker, the weapon's class...). A fixed answer can be typed on the Override itself. To work the answer out from what was asked, end the Asked wires with an **Answer** node (set to the same question): its Allow / Answer (and New Damage, for damage) goes back to the game. With If nodes, different Answers can answer different cases.
+
+Overrides about the map's own entities (weapon spawns...) are asked as the map loads; Hammerless creates its logic first so they are answered too.
 
 ### Overrides and the HUD need Hammerless's game mode
 
@@ -50,10 +52,32 @@ The game only asks the map before doing things (Override nodes) and only shows a
 
 ## Examples
 
-**A Tank somewhere between 20% and 100% of the way:**
-Path Progress ≥ Random Value (0.2 to 1.0) → **When** → **Spawn Zombie** (Tank).
+*Shift+A > Examples* adds a ready-made graph, from simple to hard, to learn from. Each comes with notes on what it does and how, numbered frames in the order things happen, and any objects it needs (a button, a gate, a room) in its own collection at the 3D cursor. They are ordinary graphs: they work in your map as they are; delete them when you don't want them.
 
-**A gate that opens when a button is pressed:** *Add > Events > Gate + Button* is a ready-made example. Or: Button → *On Press* → Mover (*Go*).
+| | Example | Shows |
+|---|---|---|
+| 1 | Hello Message | Map Start, Delay, Show Message |
+| 2 | Horde After the Safe Room | Game Event, Horde's On Finished |
+| 3 | Button Opens a Gate | Button and Move turning plain meshes into map parts |
+| 4 | Tank in a Room | Volume, Spawn Zombie |
+| 5 | A Random Special Every Minute | Timer, Random |
+| 6 | A Tank Somewhere Along the Way | Path Progress, Random Value, Compare, When |
+| 7 | Pills for a Gas Can | Game event details, If, Compare Values, Give Item, Client Print |
+| 8 | Low Health Warning | Boolean Math, a value function (Is Survivor) |
+| 9 | Headshot Rewards | Per-player variables |
+| 10 | Alarm Button Crescendo | Objective, a hold-to-use Button, Crescendo |
+| 11 | Kill Counter on the HUD | HUD Text that updates itself |
+| 12 | Countdown to a Horde | A stopped Timer, a countdown variable, When |
+| 13 | The Director Eases Off | Director Mood, Director Setting set / reset |
+| 14 | No Friendly Fire | Override, Script Value, Answer |
+| 15 | Tanks Hit Twice as Hard | Answer's New Damage |
+| 16 | Pistols Become Magnums | Override on weapon spawns |
+| 17 | !heal Chat Command | Chat event, per-player flags, game functions in a chain |
+| 18 | Wave Arena | For Each survivor, HUD, a Timer stopped by When |
+| 19 | Score Kept Across Chapters | Keep Across Maps |
+| 20 | Ambush Ahead, Out of Sight | Nav areas around the leader, flow, visibility, Make Table, ZSpawn |
+
+Tested in game: 7, 14, 16, 17 on a map; 20 on c2m1 (it needs the map's flow, a path from the start to the end safe room).
 
 ## Movers (gates, lifts, sliding doors)
 

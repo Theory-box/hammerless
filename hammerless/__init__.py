@@ -25,12 +25,13 @@ except ImportError:
 
 
 def register():
-    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, watchdog, visview, sound
+    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound
     watchdog.register()
     props.register()
     for c in presets.CLASSES:
         bpy.utils.register_class(c)
     logic.register()
+    logic_examples.register()
     spawn.register()
     lightview.register()          # (first: its draw goes under the nav view and problem markers)
     visview.register()
@@ -42,7 +43,7 @@ def register():
 
 
 def unregister():
-    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, watchdog, visview, sound
+    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound
     ui.unregister()
     ops.unregister()
     lightview.unregister()
@@ -51,6 +52,7 @@ def unregister():
     navview.unregister()
     problems.unregister()
     spawn.unregister()
+    logic_examples.unregister()
     logic.unregister()
     for c in reversed(presets.CLASSES):
         bpy.utils.unregister_class(c)

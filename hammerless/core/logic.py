@@ -107,7 +107,7 @@ def _base(source: str) -> str:
     return re.sub(r" \(part \d+\)$", "", source)
 
 
-BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE")
+BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER")
 BLOCK_VALUES = ("GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
                 "CHECK", "SCRIPT_VALUE")
 VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
@@ -978,6 +978,18 @@ class _Compiler:
             body = (f"{args}    local result = null;\n{code}\n"
                     f'    ::HL_R["{slug}"] <- result;\n@@then@@')
             self.script_action(nid, fn, body, ["then"], take)
+        elif k == "OVERRIDE_ANSWER":
+            # what an Override's Asked chain answers (a wire can't loop back into the Override itself)
+            from .director_options import HOOKS_BY_NAME
+            hook = HOOKS_BY_NAME.get(s.get("hook", ""))
+            if hook is None or not (hook[3] or hook[0] == "AllowTakeDamage"):
+                self.problems.append(f"Logic node '{nid}': pick an override that takes an answer")
+                return
+            line = '    if (!("HL_Ans" in getroottable())) ::HL_Ans <- {};\n'      # (reached outside a question)
+            line += f"    ::HL_Ans.answer <- {self.typed_in(n, 'answer', hook[3])};\n" if hook[3] else ""
+            if hook[0] == "AllowTakeDamage" and (nid, "damage") in self.data_links:
+                line += f"    ::HL_Ans.damage <- {self.typed_in(n, 'damage', vs.NUM)};\n"
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
 
     def block_value(self, n: LNode, sock: str, slug: str) -> str:
         """Building blocks that work something out."""
@@ -1212,7 +1224,9 @@ class _Compiler:
         if script is None:
             script = Entity("logic_script", (0.0, 0.0, 0.0), (0, 0, 0), {
                 "targetname": LOGIC_SCRIPT, "vscripts": f"hammerless/logic_{self.ir.settings.name}"}, [], LOGIC_SCRIPT)
-            self.ir.entities.append(script)
+            # first in the map: entities run their scripts as they're created, in order, and the game asks
+            # Override questions (weapon spawns...) as the other entities are made
+            self.ir.entities.insert(0, script)
         if thinks:
             script.keyvalues = {**script.keyvalues, "thinkfunction": "HL_Think"}
 
@@ -1234,7 +1248,14 @@ def hook_function(hook: str, rows: list) -> str:
         default = "false"
     body = ctx + f"    local answer = {default};\n"
     for code, answer, damage in rows:
-        body += (code + "\n") if code else ""
+        if code:        # its Asked chain; an Answer node in it leaves the answer in ::HL_Ans
+            body += "    ::HL_Ans <- {};\n" + code + "\n"
+            if hook == "AllowTakeDamage":
+                body += '    if ("damage" in ::HL_Ans) dt.DamageDone = ::HL_Ans.damage;\n'
+            if answer_kind == "bool":
+                body += '    if ("answer" in ::HL_Ans) answer = answer && ::HL_Ans.answer;\n'
+            elif answer_kind:
+                body += '    if ("answer" in ::HL_Ans) { local a = ::HL_Ans.answer; if (a != null && a != "") answer = a; }\n'
         if damage is not None:
             body += f"    dt.DamageDone = {damage};\n"
         if answer is not None:

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Logic examples (Shift+A > Examples):** 20 ready-made graphs, from a hello message to an ambush that picks hidden nav areas ahead of the survivors. Each has notes on what it does and how, numbered frames, and any objects it needs (button, gate, room) at the 3D cursor.
+- **Logic editor menus:** one place per purpose (Events, Flow, Values, Scene, Actions, Director, HUD & Messages, Overrides, Script); the game's full function and event lists sit under Actions and Events.
+- **Answer node:** works an Override's answer out from what the game asked (Blender doesn't allow wires from an Override back into itself). With If nodes, different answers for different cases.
+- **Fixes:**
+  - Overrides on the map's own weapon spawns (Convert / Allow Weapon Spawn) were only asked for spawns created after Hammerless's logic, so most were left as they were (measured). The logic is now created first.
+  - Event wires that loop back (a Timer whose tick ends up stopping it) were dropped because Blender draws them red. They now work; a circle of value wires is still left out, with a warning.
+  - **If** now runs inside script chains, so an event's details (the player, the item...) are still there after it.
+  - A game function giving a value from nothing (no player yet, a removed entity) gives nothing instead of a script error.
+  - The infected death event's `infected_id` is an entity, not a player.
+
 ## 0.6.0 (test release, 2026-10-07)
 
 - **Light Compiler: Cycles (optional, Build & Play).** vrad still lays out the lighting, then Blender's Cycles bakes the lightmaps with the same lights and units vrad uses, on the GPU when there is one, and writes them into the map. Prop and character lighting and switchable lights stay vrad's.

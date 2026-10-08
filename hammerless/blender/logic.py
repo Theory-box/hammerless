@@ -1790,7 +1790,8 @@ def _rebuild_override(self, context=None):
 
 class HL_NodeOverride(_Block, bpy.types.Node):
     """The game asks the map before it does something (allow this damage? turn this weapon spawn into
-    something else?): Asked runs your nodes, then the answer goes back. Needs scripted mode: Build & Play
+    something else?): Asked runs your nodes, then the answer goes back. Type a fixed answer here, or work
+    it out from what was asked with an Answer node at the end of Asked. Needs scripted mode: Build & Play
     starts the map in Hammerless's own co-op mode for it"""
     bl_idname, bl_label, bl_icon = "HL_NodeOverride", "Override", "QUESTION"
     kind = "OVERRIDE"
@@ -1815,6 +1816,39 @@ class HL_NodeOverride(_Block, bpy.types.Node):
         return {"hook": self.hook}
 
 
+def _rebuild_answer(self, context=None):
+    from ..core.director_options import HOOKS_BY_NAME
+    self.inputs.clear()
+    self.outputs.clear()
+    self.ev_in("run", "Run")
+    hook = HOOKS_BY_NAME.get(self.hook)
+    if hook is not None and hook[3]:
+        s = _data_socket(self.inputs, hook[3], "answer", "Allow" if hook[3] == "bool" else "Answer")
+        if hook[3] == "bool":
+            s.value = self.hook != "ShouldAvoidItem"
+    if self.hook == "AllowTakeDamage":
+        _data_socket(self.inputs, "num", "damage", "New Damage")
+    self.ev_out("then", "Then")
+    self.label = f"Answer: {self.hook}"
+
+
+class HL_NodeOverrideAnswer(_Block, bpy.types.Node):
+    """The answer to an Override's question, worked out from what the game asked: put it at the end of
+    the Override's Asked wires (with If nodes, different answers in different cases)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeOverrideAnswer", "Answer", "CHECKMARK"
+    kind = "OVERRIDE_ANSWER"
+    hook: EnumProperty(name="Override", items=_hook_items, update=_rebuild_answer)
+
+    def make_sockets(self):
+        _rebuild_answer(self)
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "hook", text="")
+
+    def settings(self):
+        return {"hook": self.hook}
+
+
 class HL_NodeDirectorMood(_Block, bpy.types.Node):
     """How intense the AI Director thinks the game is right now (Anger, 0 calm to 1 furious, updated
     twice a second), and warnings before its next mob"""
@@ -1833,7 +1867,8 @@ class HL_NodeDirectorMood(_Block, bpy.types.Node):
         self.ev_out("mob20", "20 s Before a Mob")
 
 
-DIRECTOR_CLASSES = (HL_NodeDirectorOption, HL_NodeDirectorMood, HL_NodeHudText, HL_NodeHudHide, HL_NodeOverride)
+DIRECTOR_CLASSES = (HL_NodeDirectorOption, HL_NodeDirectorMood, HL_NodeHudText, HL_NodeHudHide, HL_NodeOverride,
+                    HL_NodeOverrideAnswer)
 
 
 CATEGORIES = [
@@ -1868,7 +1903,7 @@ MENU_LAYOUT = [
                  HL_NodeTeleport, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
     ("Director", [HL_NodeDirector, HL_NodeDirectorSettings, HL_NodeDirectorOption, HL_NodeDirectorMood]),
     ("HUD & Messages", [HL_NodeMessage, HL_NodeObjective, None, HL_NodeHudText, HL_NodeHudHide]),
-    ("Overrides", [HL_NodeOverride]),
+    ("Overrides", [HL_NodeOverride, HL_NodeOverrideAnswer]),
     ("Script", [HL_NodeScriptCode, HL_NodeScriptValue]),
 ]
 
@@ -1917,7 +1952,9 @@ def _sources(sock, seen=None):
     seen = seen if seen is not None else set()
     out = []
     for link in sock.links:
-        if link.is_muted or not link.is_valid:
+        # (Blender draws a wire that loops back to an earlier node red, "invalid": loops of event wires
+        # are normal map logic, like a timer that stops itself, and work; _compiled_links drops value loops)
+        if link.is_muted:
             continue
         node, from_sock = link.from_node, link.from_socket
         key = (node.name, from_sock.identifier)
@@ -1956,7 +1993,42 @@ def _compiled_links(tree, report):
                     continue
                 links.append(LLink(src.name, out.identifier, node.name, inp.identifier,
                                    data=out.bl_idname in DATA_SOCKETS))
-    return links
+    return _without_value_loops(tree, links, report)
+
+
+def _without_value_loops(tree, links, report):
+    """A value worked out from itself (value wires in a circle) can't be: those wires are left out.
+    Only nodes that are pure values (no event sockets) work their outputs out from their inputs: an
+    Override's or an action's outputs are what the game asked or what it did, so wires back into them
+    are no circle."""
+    def pure(name):
+        n = tree.nodes.get(name)
+        return n is not None and not any(s.bl_idname == "HL_EventSocket" for s in (*n.inputs, *n.outputs))
+    feeds: dict[str, set] = {}
+    for l in links:
+        if l.data and pure(l.from_node) and pure(l.to_node):
+            feeds.setdefault(l.from_node, set()).add(l.to_node)
+
+    def reaches(a, b):
+        todo, seen = [a], set()
+        while todo:
+            n = todo.pop()
+            if n == b:
+                return True
+            if n not in seen:
+                seen.add(n)
+                todo += feeds.get(n, ())
+        return False
+    keep = []
+    for l in links:
+        if l.data and l.from_node in feeds and reaches(l.to_node, l.from_node):
+            a, b = tree.nodes.get(l.from_node), tree.nodes.get(l.to_node)
+            report.warnings.append(f"{tree.name}: the value wire from '{a.label or a.name}' to '{b.label or b.name}' "
+                                   f"is part of a circle of value wires (a value worked out from itself), so it "
+                                   f"does nothing")
+            continue
+        keep.append(l)
+    return keep
 
 
 def _check_nodes(context, tree, report) -> None:
