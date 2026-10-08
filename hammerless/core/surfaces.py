@@ -89,3 +89,36 @@ def write_patch_material(game_dir: str, patch_path: str, base_material: str, sur
     with open(full, "w", encoding="utf-8") as f:
         f.write(patch_vmt(base_material, surfaceprop))
     return full
+
+
+DEFAULT_DENSITY = 2000.0          # kg/m3: Source's "default" surface
+
+
+def surface_density(content, name: str) -> float:
+    """A surface property's density (kg/m3), following its base surfaces; the game's default if unknown."""
+    if content is None:
+        return DEFAULT_DENSITY
+    manifest = content.read("scripts/surfaceproperties_manifest.txt")
+    files = re.findall(r'"file"\s+"([^"]+)"', manifest.decode("utf-8", "replace")) if manifest else []
+    raw: dict[str, tuple[str | None, str | None]] = {}
+    for f in files:
+        data = content.read(f)
+        if data:
+            for block in parse(data.decode("utf-8", "replace")):
+                raw[block.name.lower()] = (block.get("base"), block.get("density"))
+    name = (name or "default").lower()
+    for _ in range(8):
+        base, density = raw.get(name, (None, None))
+        if density is not None:
+            try:
+                return float(density)
+            except ValueError:
+                break
+        if not base:
+            break
+        name = base.lower()
+    base, density = raw.get("default", (None, None))
+    try:
+        return float(density) if density is not None else DEFAULT_DENSITY
+    except ValueError:
+        return DEFAULT_DENSITY

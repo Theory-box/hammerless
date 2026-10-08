@@ -415,6 +415,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("HAMMERLESS", "Hammerless (faster)",
          "Hammerless's visibility compiler: the same results as vvis, about 3 times faster. If it ever fails, "
          "Valve's vvis runs instead")])
+    model_compiler: EnumProperty(name="Model Compiler", default="HAMMERLESS", items=[
+        ("HAMMERLESS", "Hammerless", "Hammerless writes Custom Models' game files itself (no extra tools needed)"),
+        ("STUDIOMDL", "Valve studiomdl", "L4D2's own model compiler (studiomdl.exe, from the Authoring Tools)")])
     light_tool: EnumProperty(name="Light Compiler", default="VALVE", items=[
         ("VALVE", "Valve vrad", "L4D2's own lighting compiler (vrad.exe)"),
         ("CYCLES", "Cycles",

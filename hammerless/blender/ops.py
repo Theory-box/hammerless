@@ -219,13 +219,21 @@ def _write_mode_addon(gamedir: str, rep: Report) -> None:
                             "close Left 4 Dead 2 and Build & Play again (the game reads game modes when it starts)")
 
 
+def context_scene_setting(name: str, default):
+    try:
+        return getattr(bpy.context.scene.hammerless, name)
+    except Exception:
+        return default
+
+
 def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None:
     """The map's Custom Models: compiled with the game's studiomdl into models/hammerless/<map>/ (only the
     ones that changed since the last build), and their materials."""
     import hashlib
     from ..core import models as m
     studiomdl = os.path.join(root, "bin", "studiomdl.exe")
-    if not os.path.exists(studiomdl):
+    own = context_scene_setting("model_compiler", "HAMMERLESS") == "HAMMERLESS"
+    if not own and not os.path.exists(studiomdl):
         rep.errors.append("Custom Models need studiomdl.exe from the Left 4 Dead 2 Authoring Tools (Steam > Library > "
                           "Tools): it isn't in the game's bin folder")
         return
@@ -233,11 +241,23 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
     built = 0
     for name, spec in ir.models.items():
         sig = hashlib.sha1((m.reference_smd(spec.triangles) + m.collision_smd(spec.collision)
-                            + m.qc_text(spec)).encode()).hexdigest()
+                            + m.qc_text(spec) + ("own" if own else "studiomdl")).encode()).hexdigest()
         folder = os.path.join(work, "models", name.split("/")[-1])
         stamp = os.path.join(folder, "built.sha1")
         have = all(os.path.exists(os.path.join(gamedir, *f.split("/"))) for f in m.model_files(name)[:3])
         if have and os.path.exists(stamp) and open(stamp).read() == sig:
+            continue
+        if own:
+            try:
+                from ..core.surfaces import surface_density
+                os.makedirs(folder, exist_ok=True)
+                m.write_model_files(gamedir, spec, surface_density(game_content(root), spec.surfaceprop))
+            except Exception as ex:
+                rep.errors.append(f"Custom Model '{name.split('/')[-1]}': {ex}")
+                continue
+            with open(stamp, "w") as f:
+                f.write(sig)
+            built += 1
             continue
         res = m.compile_model(studiomdl, gamedir, spec, folder)
         if not res.ok:

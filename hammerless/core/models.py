@@ -172,5 +172,52 @@ def compile_model(studiomdl: str, game_dir: str, spec: ModelSpec, work_dir: str)
     return ModelResult(ok, files, log)
 
 
+def write_model_files(game_dir: str, spec: ModelSpec, density: float = 2000.0) -> list[str]:
+    """Hammerless's own model files for spec (no studiomdl): .mdl, .vvd, .dx90.vtx and, with collision,
+    .phy. Mass: spec.mass, else the collision's volume times the surface's density (as studiomdl does)."""
+    import zlib
+    from . import mdlwrite, phywrite
+    pieces = [_outward(pts, tris) for pts, tris in spec.collision]
+    volume_m3 = sum(phywrite._solid([phywrite._ivp(p) for p in pts], tris)[0] for pts, tris in pieces)
+    mass = spec.mass if spec.mass > 0 else max(volume_m3 * density, 0.01)
+    physics = spec.kind == PHYSICS
+    keyvalues = ('mdlkeyvalue\n{\nprop_data {\n"base" "%s"  }\n}\n' % spec.physics_class) if physics else ""
+    checksum = zlib.crc32(repr((spec.name, spec.triangles, pieces)).encode()) & 0x7FFFFFFF
+    files = mdlwrite.build(spec.name, spec.triangles, spec.materials_dir, spec.surfaceprop, mass, checksum,
+                           static=not physics, keyvalues=keyvalues)
+    if pieces:
+        files[".phy"] = phywrite.build_phy(pieces, checksum, "model", spec.surfaceprop, mass)
+    written = []
+    base = os.path.join(game_dir, "models", *spec.name.split("/"))
+    os.makedirs(os.path.dirname(base), exist_ok=True)
+    for ext, data in files.items():
+        with open(base + ext, "wb") as f:
+            f.write(data)
+        written.append(f"models/{spec.name}{ext}")
+    stale = base + ".phy"
+    if not pieces and os.path.exists(stale):           # (collision turned off since the last build)
+        os.remove(stale)
+    return written
+
+
+def _outward(points, tris):
+    """A convex piece with every triangle wound counter-clockwise seen from outside, unused points dropped."""
+    used = sorted({i for t in tris for i in t})
+    where = {i: k for k, i in enumerate(used)}
+    pts = [tuple(points[i]) for i in used]
+    c = [sum(p[k] for p in pts) / len(pts) for k in range(3)]
+    out = []
+    for t in tris:
+        a, b, d = (pts[where[i]] for i in t)
+        u = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+        v = (d[0] - a[0], d[1] - a[1], d[2] - a[2])
+        n = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+        tri = tuple(where[i] for i in t)
+        if n[0] * (a[0] - c[0]) + n[1] * (a[1] - c[1]) + n[2] * (a[2] - c[2]) < 0:
+            tri = (tri[0], tri[2], tri[1])
+        out.append(tri)
+    return pts, out
+
+
 def studiomdl_errors(log: str) -> list[str]:
     return [l.strip() for l in log.splitlines() if l.strip().startswith("ERROR")]

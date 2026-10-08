@@ -99,7 +99,7 @@ def _meshes(triangles):
 
 
 def build(name: str, triangles, materials_dir: str, surfaceprop: str, mass: float, checksum: int,
-          static: bool = True) -> dict[str, bytes]:
+          static: bool = True, keyvalues: str = "") -> dict[str, bytes]:
     """The .mdl, .vvd and .dx90.vtx of a one-bone prop. name: 'hammerless/<map>/<model>' (no .mdl)."""
     meshes = _meshes(triangles)
     all_verts = [v for _m, verts, _t in meshes for v in verts]
@@ -108,7 +108,7 @@ def build(name: str, triangles, materials_dir: str, surfaceprop: str, mass: floa
     lo = [min(v[0][i] for v in all_verts) for i in range(3)]
     hi = [max(v[0][i] for v in all_verts) for i in range(3)]
     return {".vvd": _vvd(meshes, checksum), ".dx90.vtx": _vtx(meshes, checksum),
-            ".mdl": _mdl(name, meshes, materials_dir, surfaceprop, mass, checksum, lo, hi, static)}
+            ".mdl": _mdl(name, meshes, materials_dir, surfaceprop, mass, checksum, lo, hi, static, keyvalues)}
 
 
 def _vvd(meshes, checksum) -> bytes:
@@ -159,7 +159,7 @@ def _vtx(meshes, checksum) -> bytes:
     return bytes(out)
 
 
-def _mdl(name, meshes, materials_dir, surfaceprop, mass, checksum, lo, hi, static) -> bytes:
+def _mdl(name, meshes, materials_dir, surfaceprop, mass, checksum, lo, hi, static, keyvalues="") -> bytes:
     nmesh = len(meshes)
     out = bytearray(408)
     S = _Strings()
@@ -174,7 +174,7 @@ def _mdl(name, meshes, materials_dir, surfaceprop, mass, checksum, lo, hi, stati
                      1.1984590855718125e-05, 1.1984590855718125e-05, 1.1984590855718125e-05,
                      1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
                      0.0, 0.0, 0.0, 0.0, BONE_USED_BY_HITBOX | BONE_USED_BY_VERTEX_LOD0, 0, 0, 0, 0, 1)
-    S.ref("static_prop", bone, bone)
+    S.ref("static_prop" if static else "root", bone, bone)          # (studiomdl's names)
     S.ref(surfaceprop, bone + 176, bone)                                    # surfacepropidx
 
     hitboxset = len(out)
@@ -244,6 +244,11 @@ def _mdl(name, meshes, materials_dir, surfaceprop, mass, checksum, lo, hi, stati
 
     keyvalue = len(out)                        # the string table: "" first, then the surface property
     out += b"\0"
+    kv_at, kv_size = keyvalue, 0
+    if keyvalues:                              # e.g. a physics prop's prop_data: "mdlkeyvalue { ... }"
+        kv_at = len(out)
+        out += keyvalues.encode("latin-1") + b"\0"
+        kv_size = len(keyvalues) + 1
     surf = len(out)
     out += surfaceprop.encode("latin-1") + b"\0"
     S.write(out, {"": keyvalue, surfaceprop: surf})
@@ -267,7 +272,7 @@ def _mdl(name, meshes, materials_dir, surfaceprop, mass, checksum, lo, hi, stati
         struct.pack_into("<i", out, at, v)
     for at in (264, 272, 280, 288, 296, 304, 324, 388):          # flex, ik, mouth, pose, iklock, flexui: none
         struct.pack_into("<i", out, at, mesh0)                     # (studiomdl points them at the meshes)
-    struct.pack_into("<iii", out, 308, surf, keyvalue, 0)          # surfacepropindex, keyvalueindex, keyvaluesize
+    struct.pack_into("<iii", out, 308, surf, kv_at, kv_size)       # surfacepropindex, keyvalueindex, keyvaluesize
     struct.pack_into("<fi", out, 328, mass, 1)                     # mass, contents (solid)
     struct.pack_into("<i", out, 340, texture)                      # includemodelindex
     struct.pack_into("<i", out, 348, keyvalue)                     # szanimblocknameindex

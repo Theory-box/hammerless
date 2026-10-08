@@ -2246,6 +2246,49 @@ class TestCustomModels(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<3f", mdl, 104), (-8.25, -8.25, -8.25))
         self.assertEqual(struct.unpack_from("<3f", mdl, 92), (0.0, 0.0, 0.0))
 
+    def test_own_collision_writer(self):
+        # our .phy: read back by the reader as the same pieces, the layout studiomdl uses for a cube
+        import struct
+        from hammerless.core.phywrite import build_phy
+        from hammerless.core.phy import read_phy_pieces
+        s = 16.0
+        pts = [(x, y, z) for x in (-s, s) for y in (-s, s) for z in (-s, s)]
+        idx = {p: i for i, p in enumerate(pts)}
+        faces = [[(-s, -s, -s), (-s, s, -s), (s, s, -s), (s, -s, -s)], [(-s, -s, s), (s, -s, s), (s, s, s), (-s, s, s)],
+                 [(-s, -s, -s), (s, -s, -s), (s, -s, s), (-s, -s, s)], [(s, -s, -s), (s, s, -s), (s, s, s), (s, -s, s)],
+                 [(s, s, -s), (-s, s, -s), (-s, s, s), (s, s, s)], [(-s, s, -s), (-s, -s, -s), (-s, -s, s), (-s, s, s)]]
+        tris = []
+        for f in faces:
+            q = [idx[v] for v in f]
+            tris += [(q[0], q[1], q[2]), (q[0], q[2], q[3])]
+        moved = [(x + 100, y, z) for x, y, z in pts]
+        data = build_phy([(pts, tris), (moved, tris)], 77, "m", "wood", 20.0)
+        self.assertEqual(struct.unpack_from("<iiii", data, 0), (16, 0, 1, 77))
+        pieces = read_phy_pieces(data)
+        self.assertEqual(len(pieces), 2)
+        got = sorted(tuple(round(c, 3) for c in p) for piece in pieces for p in piece[0])
+        want = sorted(tuple(float(c) for c in p) for p in pts + moved)
+        self.assertEqual(got, want)
+        # one cube alone is the same size as studiomdl's (691 bytes), with its sphere and box sizes
+        one = build_phy([(pts, tris)], 1, "cube_phys", "wood_crate", 20.0)
+        self.assertEqual(len(one) - len(b'"name" "cube_phys"') + len(b'"name" "cube_phys"'), 691)
+        node = 20 + 28 + 384
+        self.assertEqual(struct.unpack_from("<4B", one, node + 24), (145, 145, 145, 0))
+        self.assertIn(b'"volume" "32768.0', one)
+
+    def test_surface_density(self):
+        from hammerless.core.surfaces import surface_density
+
+        class Content:
+            files = {"scripts/surfaceproperties_manifest.txt": b'surfaceproperties_manifest { "file" "scripts/s.txt" }',
+                     "scripts/s.txt": b'"default" { "density" "2000" } "wood" { "density" "700" } "wood_crate" { "base" "wood" }'}
+
+            def read(self, path):
+                return self.files.get(path)
+        self.assertEqual(surface_density(Content(), "wood_crate"), 700.0)
+        self.assertEqual(surface_density(Content(), "nothing"), 2000.0)
+        self.assertEqual(surface_density(None, "wood"), 2000.0)
+
     def test_base_texture_of_vmt(self):
         from hammerless.core.models import base_texture_of
         self.assertEqual(base_texture_of('"LightmappedGeneric"\n{\n\t"$basetexture" "Wood\\WoodWall003a"\n}'),

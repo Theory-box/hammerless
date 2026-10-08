@@ -105,6 +105,7 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         col.prop(s, "generate_nav", text="Rebuild Nav Next Time")
         col.prop(s, "vis_tool")
         col.prop(s, "light_tool")
+        col.prop(s, "model_compiler")
         if s.light_tool == "CYCLES":
             row = col.row(align=True)
             row.prop(s, "cycles_samples")
