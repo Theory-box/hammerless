@@ -4,6 +4,7 @@
  *   hlvbsp [-game <dir>] -materials <file> <map>     (reads <map>.vmf, writes <map>.bsp and <map>.prt)
  */
 #include "hlvbsp.h"
+#include "disp.h"
 
 int entity_num;
 int verbose;
@@ -166,6 +167,7 @@ int main(int argc, char **argv) {
     SetModelNumbers();
     SetLightStyles();
     BeginBSPFile();
+    EmitInitialDispInfos();
     for (entity_num = 0; entity_num < num_entities; ++entity_num) {
         if (!entities[entity_num].numbrushes) continue;
         BeginModel();

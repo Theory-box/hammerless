@@ -47,22 +47,15 @@ void CrossProduct(const vec3_t a, const vec3_t b, vec3_t c) {
     c[2] = a[0] * b[1] - a[1] * b[0];
 }
 
-/* The game libraries' normalize: a hardware reciprocal square root refined by one Newton step
- * (rsqrtss, then x * (3 - a x x) * 0.5), so results match vbsp's on the same CPU. */
+/* The game libraries' normalize (vbsp is built without the SSE reciprocal square root): the length,
+ * then each component times 1 / (length + FLT_EPSILON). */
 vec_t VectorNormalize(vec3_t v) {
-    float sqrlen = v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + 1.0e-10f;
-    __m128 xx = _mm_set_ss(sqrlen);
-    __m128 xr = _mm_rsqrt_ss(xx);
-    __m128 xt = _mm_mul_ss(xr, xr);
-    xt = _mm_mul_ss(xt, xx);
-    xt = _mm_sub_ss(_mm_set_ss(3.f), xt);
-    xt = _mm_mul_ss(xt, _mm_set_ss(0.5f));
-    xr = _mm_mul_ss(xr, xt);
-    float inv = _mm_cvtss_f32(xr);
-    v[0] *= inv;
-    v[1] *= inv;
-    v[2] *= inv;
-    return sqrlen * inv;
+    float radius = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    float iradius = 1.f / (radius + FLT_EPSILON);
+    v[0] *= iradius;
+    v[1] *= iradius;
+    v[2] *= iradius;
+    return radius;
 }
 
 vec_t VectorLength(const vec3_t v) {

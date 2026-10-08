@@ -112,6 +112,20 @@ def records(index: int, blob: bytes) -> list[str]:
             out.append("  text: " + blob[at:at + keysize].decode("latin-1").replace("\n", " | "))
             at += keysize
         return out
+    if index == 26:
+        # dispinfo: 176-byte records; vbsp leaves its padding bytes uninitialised, so they're masked
+        out = []
+        for k in range(len(blob) // 176):
+            r = bytearray(blob[176 * k:176 * k + 176])
+            r[38:40] = bytes(2)
+            for e in range(8):
+                r[48 + 6 * e + 5] = 0
+                if r[48 + 6 * e:48 + 6 * e + 2] == bytes([255, 255]):          # no neighbour: the rest is unset
+                    r[48 + 6 * e + 2:48 + 6 * e + 5] = bytes(3)
+            for c in range(4):
+                r[96 + 10 * c + 9] = 0
+            out.append(r.hex())
+        return out
     if index in RECORDS:
         fmt, names = RECORDS[index]
         size = struct.calcsize(fmt)

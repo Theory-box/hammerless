@@ -2,6 +2,7 @@
  * mapping (texinfo / texdata) and the material table the Python side wrote for us. */
 #include <ctype.h>
 #include "hlvbsp.h"
+#include "disp.h"
 
 plane_t mapplanes[MAX_MAP_PLANES];
 int nummapplanes;
@@ -53,6 +54,7 @@ static void AddPlaneToHash(plane_t *p) {
 
 /* Planes come in pairs (n, d) and (-n, -d); an axial pair keeps the positive-facing one first. */
 static int CreateNewFloatPlane(const vec3_t normal, vec_t dist) {
+    if (getenv("HLVBSP_DEBUG_PLANES")) printf("PLANE %d: %.17g %.17g %.17g %.17g\n", nummapplanes, normal[0], normal[1], normal[2], dist);
     if (VectorLength(normal) < 0.5) Error("FloatPlane: bad normal");
     if (nummapplanes + 2 > MAX_MAP_PLANES) Error("MAX_MAP_PLANES");
     plane_t *p = &mapplanes[nummapplanes];
@@ -116,9 +118,11 @@ static int PlaneFromPoints(const vec3_t p0, const vec3_t p1, const vec3_t p2) {
     vec_t dist = DotProduct(p0, normal);
     if (SnapVector(normal)) {
         /* re-derive the distance through the centre of the three points */
-        vec3_t p3;
-        for (int k = 0; k < 3; k++) p3[k] = (p0[k] + p1[k] + p2[k]) / 3.0f;
+        vec3_t p3;     /* (the game's vector divide multiplies by the reciprocal) */
+        float third = 1.0f / 3.0f;
+        for (int k = 0; k < 3; k++) p3[k] = (p0[k] + p1[k] + p2[k]) * third;
         dist = DotProduct(normal, p3);
+        if (getenv("HLVBSP_DEBUG_PLANES")) printf("  snap p3 %.17g %.17g %.17g -> %.17g (p0 %.17g %.17g %.17g)\n", p3[0], p3[1], p3[2], dist, p0[0], p0[1], p0[2]);
     }
     if (fabsf(dist - RoundInt(dist)) < RENDER_DIST_EPSILON) dist = RoundInt(dist);
     return FindFloatPlane(normal, dist);
@@ -278,6 +282,15 @@ int texdata_surfaceprop(int texdata) {
     const char *name = texdata_strings + texdata_string_table[texdatas[texdata].name_id];
     int m = LookupMaterial(name);
     return m >= 0 ? materials[m].surfaceprop : -1;
+}
+
+int AppendTexinfo(const texinfo_t *t) {
+    if (numtexinfo == max_texinfo) {
+        max_texinfo = max_texinfo ? max_texinfo * 2 : 256;
+        texinfos = realloc(texinfos, sizeof(texinfo_t) * max_texinfo);
+    }
+    texinfos[numtexinfo] = *t;
+    return numtexinfo++;
 }
 
 static int FindOrCreateTexInfo(const texinfo_t *t) {
@@ -506,6 +519,46 @@ typedef struct {
     int base_contents, base_flags;
 } loadent_t;
 
+/* A side's displacement: power, start, and per-vertex rows (normals, distances, offsets, alphas, tags). */
+static void load_dispinfo(parser_t *p, side_t *side) {
+    mapdisp_t *md = NewMapDisp();
+    side->disp = nummapdisps;
+    char key[4096], block[64];
+    while (next_token(p)) {
+        if (!p->quoted && !strcmp(p->token, "}")) break;
+        strcpy(key, p->token);
+        if (!next_token(p)) break;
+        if (!p->quoted && !strcmp(p->token, "{")) {
+            strncpy(block, key, sizeof(block) - 1);
+            block[sizeof(block) - 1] = 0;
+            int cols = (1 << md->power) + 1;
+            char k2[4096];
+            while (next_token(p)) {
+                if (!p->quoted && !strcmp(p->token, "}")) break;
+                strcpy(k2, p->token);
+                if (!next_token(p)) break;
+                if (!p->quoted && !strcmp(p->token, "{")) { skip_block(p); continue; }
+                if (_strnicmp(k2, "row", 3)) continue;
+                if (!_stricmp(block, "normals")) ParseDispRow(k2, p->token, &md->normals[0][0], cols, 3);
+                else if (!_stricmp(block, "distances")) ParseDispRow(k2, p->token, md->dists, cols, 1);
+                else if (!_stricmp(block, "offsets")) ParseDispRow(k2, p->token, &md->offsets[0][0], cols, 3);
+                else if (!_stricmp(block, "alphas")) ParseDispRow(k2, p->token, md->alphas, cols, 1);
+                else if (!_stricmp(block, "triangle_tags")) ParseDispTriTags(k2, p->token, md);
+            }
+            continue;
+        }
+        const char *v = p->token;
+        if (!_stricmp(key, "power")) md->power = atoi(v);
+        else if (!_stricmp(key, "startposition")) {
+            double a = 0, b = 0, c = 0;
+            sscanf(v, "[%lf %lf %lf]", &a, &b, &c);
+            md->startpos[0] = (float)a; md->startpos[1] = (float)b; md->startpos[2] = (float)c;
+        } else if (!_stricmp(key, "flags")) md->flags = atoi(v);
+        else if (!_stricmp(key, "mintess")) md->mintess = atoi(v);
+        else if (!_stricmp(key, "smooth")) md->smooth = (float)atof(v);
+    }
+}
+
 /* A brush side: plane points, material, axes, lightmap scale. */
 static void load_side(parser_t *p, mapbrush_t *b, loadent_t *le, int *side_index) {
     ensure_sides(1);
@@ -523,8 +576,8 @@ static void load_side(parser_t *p, mapbrush_t *b, loadent_t *le, int *side_index
         strcpy(key, p->token);
         if (!next_token(p)) break;
         if (!p->quoted && !strcmp(p->token, "{")) {
-            /* dispinfo and friends: not yet */
-            skip_block(p);
+            if (!_stricmp(key, "dispinfo")) load_dispinfo(p, side);
+            else skip_block(p);
             continue;
         }
         const char *v = p->token;
@@ -650,6 +703,34 @@ static void load_solid(parser_t *p, loadent_t *le) {
         sprintf(string, "%i %i %i", (int)origin[0], (int)origin[1], (int)origin[2]);
         SetKeyValue(&entities[b->entitynum], "origin", string);
         VectorCopy(origin, entities[b->entitynum].origin);
+        b->numsides = 0;
+        return;
+    }
+    int hasdisp = 0;
+    for (int i = 0; i < b->numsides; i++)
+        if (b->original_sides[i].disp) hasdisp = 1;
+    if (hasdisp) {
+        /* the displacement keeps the side's face; the brush itself is dropped */
+        if (b->entitynum != 0)
+            Error("Error: displacement found on a(n) %s entity - not supported (entity %d, brush %d)",
+                  ValueForKey(&entities[b->entitynum], "classname"), b->entitynum, b->brushnum);
+        for (int i = 0; i < b->numsides; i++) {
+            side_t *s = &b->original_sides[i];
+            if (!s->disp) continue;
+            if (s->winding->numpoints != 4)
+                Error("Trying to create a non-quad displacement! (entity %d, brush %d)", b->entitynum, b->brushnum);
+            mapdisp_t *md = &mapdisps[s->disp - 1];
+            memset(&md->face, 0, sizeof(md->face));
+            md->face.originalface = s;
+            md->face.texinfo = s->texinfo;
+            md->face.dispinfo = -1;
+            md->face.planenum = s->planenum;
+            md->face.numpoints = s->winding->numpoints;
+            md->face.w = CopyWinding(s->winding);
+            md->face.contents = b->contents;
+            md->entitynum = b->entitynum;
+            md->brushsideid = s->id;
+        }
         b->numsides = 0;
         return;
     }

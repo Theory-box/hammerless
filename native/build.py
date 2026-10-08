@@ -22,7 +22,7 @@ TARGETS = {
     "hlvvis": ([], "hlvvis.exe", "hlvvis.c"),
     "hlvbsp": ([], "hlvbsp.exe", ["hlvbsp/main.c", "hlvbsp/poly.c", "hlvbsp/map.c", "hlvbsp/brush.c", "hlvbsp/csg.c",
                                   "hlvbsp/portals.c", "hlvbsp/faces.c", "hlvbsp/detail.c", "hlvbsp/write.c",
-                                  "hlvbsp/phys.c"]),
+                                  "hlvbsp/phys.c", "hlvbsp/disp.c"]),
 }
 
 for name in sys.argv[1:] or list(TARGETS):

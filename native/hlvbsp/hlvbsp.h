@@ -171,7 +171,7 @@ typedef struct side_s {
     int id;
     unsigned smoothing;
     int material;            /* the side's material (for messages and dispinfo) */
-    struct mapdisp_s *disp;
+    int disp;                /* index into mapdisps + 1; 0 = not a displacement */
 } side_t;
 
 typedef struct {

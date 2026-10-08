@@ -1,6 +1,7 @@
 /* Emitting the tree into the BSP's arrays, the portal file for vis, and the .bsp file itself in the
  * layout L4D2's vbsp writes (version 21, lumps in vbsp's order, 4-byte aligned). */
 #include "hlvbsp.h"
+#include "disp.h"
 
 dvertex_t *dvertexes; int numvertexes;
 dedge_t *dedges; int numedges;
@@ -244,6 +245,11 @@ void WriteBSP(node_t *headnode, face_t *leaffaces) {
     for (face_t *f = leaffaces; f; f = f->next) EmitFace(f, 0);
     dmodels[nummodels].headnode = EmitDrawNode_r(headnode);
     if (nummodels == 0) EmitAreaPortals(headnode);
+    for (int i = 0; i < nummapdisps; i++) {
+        if (mapdisps[i].entitynum != entity_num) continue;
+        EmitDispFaceVertexes(&mapdisps[i].face);
+        EmitFace(&mapdisps[i].face, 0);
+    }
 }
 
 /* ------------------------------------------------------------------ entities */
@@ -296,11 +302,25 @@ static void AddNodeToBounds(int node, vec3_t mins, vec3_t maxs) {
     if (dleafs[leaf].contents & CONTENTS_SOLID) return;
     for (int i = 0; i < dleafs[leaf].numleaffaces; ++i) {
         int face = dleaffaces[dleafs[leaf].firstleafface + i];
-        if (texinfos[dfaces[face].texinfo].flags & (SURF_SKY | SURF_NODRAW)) continue;
+        if (texinfos[dfaces[face].texinfo].flags & SURF_NODRAW) continue;    /* (L4D2's vbsp counts sky faces) */
         for (int j = 0; j < dfaces[face].numedges; ++j) {
             int edge = abs(dsurfedges[dfaces[face].firstedge + j]);
             AddPointToBounds(dvertexes[dedges[edge].v[0]].point, mins, maxs);
             AddPointToBounds(dvertexes[dedges[edge].v[1]].point, mins, maxs);
+        }
+    }
+}
+
+static int IsBoxInsideWorld(int node, const vec3_t mins, const vec3_t maxs) {
+    for (;;) {
+        if (node < 0) return !(dleafs[-1 - node].contents & CONTENTS_SOLID);
+        dnode_t *n = &dnodes[node];
+        int side = BoxOnPlaneSide(mins, maxs, &mapplanes[n->planenum]);
+        if (side == 1) node = n->children[0];
+        else if (side == 2) node = n->children[1];
+        else {
+            if (IsBoxInsideWorld(n->children[0], mins, maxs)) return 1;
+            node = n->children[1];
         }
     }
 }
@@ -310,6 +330,15 @@ void ComputeBoundsNoSkybox(void) {
     vec3_t mins, maxs;
     ClearBounds(mins, maxs);
     AddNodeToBounds(dmodels[0].headnode, mins, maxs);
+    for (int i = 0; i < nummapdisps; ++i) {
+        vec3_t dmin, dmax;
+        DispBounds(i, dmin, dmax);
+        if (getenv("HLVBSP_DEBUG_BOUNDS")) printf("disp %d box %g %g %g  %g %g %g inside %d\n", i, dmin[0], dmin[1], dmin[2], dmax[0], dmax[1], dmax[2], IsBoxInsideWorld(dmodels[0].headnode, dmin, dmax));
+        if (IsBoxInsideWorld(dmodels[0].headnode, dmin, dmax)) {
+            AddPointToBounds(dmin, mins, maxs);
+            AddPointToBounds(dmax, mins, maxs);
+        }
+    }
     for (int i = 0; i < num_entities; ++i) {
         if (!strcmp(ValueForKey(&entities[i], "classname"), "worldspawn")) {
             char s[64];
@@ -428,7 +457,7 @@ static void CalcFaceExtents(dface_t *s) {
         maxs[i] = (float)ceil(maxs[i]);
         s->lm_mins[i] = (int)mins[i];
         s->lm_size[i] = (int)(maxs[i] - mins[i]);
-        if (s->lm_size[i] > 32 + 1) {
+        if (s->lm_size[i] > (s->dispinfo == -1 ? 32 : 125) + 1) {
             Error("Bad surface extents - surface is too big to have a lightmap\n\tmaterial %s",
                   texdata_strings + texdata_string_table[texdatas[tex->texdata].name_id]);
         }
@@ -677,6 +706,7 @@ void EndBSPFile(const char *path) {
     EmitBrushes();
     SaveVertexNormals();
     UpdateAllFaceLightmapExtents();
+    EmitDispLMAlphaAndNeighbors();
     EmitPhysCollision();
     leafmindist = xalloc(sizeof(unsigned short) * (numleafs + 1));
     ComputeBoundsNoSkybox();
@@ -728,6 +758,10 @@ void EndBSPFile(const char *path) {
     SetLump(30, vertnormals, 12 * numvertnormals, 0);
     SetLump(31, vertnormalindices, 2 * numvertnormalindices, 0);
     SetLump(46, leafmindist, 2 * numleafs, 0);
+    SetLump(26, g_dispinfo, (int)sizeof(ddispinfo_t) * nummapdisps, 0);
+    SetLump(33, g_dispverts, 20 * g_numdispverts, 0);
+    SetLump(48, g_disptris, 2 * g_numdisptris, 0);
+    SetLump(34, g_lmsamples, g_numlmsamples, 0);
     SetLump(62, NULL, 0, 16);
     /* game lumps: no static props and no detail props yet (sprp v9, dprp v4: three zero counts) */
     static unsigned char game[60];

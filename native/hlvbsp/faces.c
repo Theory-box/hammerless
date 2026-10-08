@@ -130,6 +130,8 @@ static void EmitFaceVertexes(face_t **list, face_t *f) {
     FaceFromSuperverts(list, f, 0);
 }
 
+void EmitDispFaceVertexes(face_t *f) { EmitFaceVertexes(NULL, f); }
+
 static void EmitNodeFaceVertexes_r(node_t *node) {
     if (node->planenum == PLANENUM_LEAF) return;
     for (face_t *f = node->faces; f; f = f->next) EmitFaceVertexes(&node->faces, f);
