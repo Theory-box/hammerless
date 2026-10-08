@@ -58,6 +58,7 @@ int main(int argc, char **argv) {
     CreateDirectLights();
     AssignLightStyles();
     PrecompLightmapOffsets();
+    ExportDirectLightsToWorldLights();
     SetLump(LUMP_LIGHTING_HDR, dlightdata, lightdatasize, 1);
     WriteBSPFile(path);
     Msg("done\n");

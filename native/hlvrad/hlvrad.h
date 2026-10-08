@@ -87,12 +87,44 @@ typedef struct {
 } dleaf_t;
 
 typedef struct {
+    int planenum, children[2];
+    short mins[3], maxs[3];
+    unsigned short firstface, numfaces;
+    short area, pad;
+} dnode_t;
+
+/* ------------------------------------------------------------------ lights */
+enum { emit_surface, emit_point, emit_spotlight, emit_skylight, emit_quakelight, emit_skyambient };
+
+typedef struct {
+    vec3_t origin, intensity, normal, shadow_cast_offset;
+    int cluster, type, style;
+    float stopdot, stopdot2, exponent, radius, constant_attn, linear_attn, quadratic_attn;
+    int flags;
+} dworldlight_t;
+
+typedef struct directlight_s {
+    int index;
+    dworldlight_t light;
+    unsigned char *pvs;               /* clusters it can reach */
+    int facenum;
+    float m_flStartFadeDistance, m_flEndFadeDistance, m_flCapDist;
+    float sun_extent;                 /* sin of the sun's spread angle (SunSpreadAngle) */
+    int directional;                  /* a light_directional */
+    struct directlight_s *next;
+} directlight_t;
+
+extern directlight_t *activelights, *gSkyLight, *gAmbient;
+extern int numdlights;
+
+typedef struct {
     int numpairs;
     char **keys, **values;
 } entity_t;
 
 extern dplane_t *dplanes; extern int numplanes;
 extern dleaf_t *dleafs; extern int numleafs;
+extern dnode_t *dnodes; extern int numnodes;
 extern unsigned short *dleaffaces; extern int numleaffaces;
 extern int numclusters;
 extern entity_t *entities; extern int num_entities;
@@ -133,6 +165,8 @@ int FaceHasPatches(int facenum);
 void AssignLightStyles(void);
 void PrecompLightmapOffsets(void);
 void CreateDirectLights(void);
+void ExportDirectLightsToWorldLights(void);
+int ClusterFromPoint(const vec3_t p);
 
 /* ------------------------------------------------------------------ utilities */
 void Error(const char *fmt, ...);

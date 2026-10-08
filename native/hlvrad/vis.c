@@ -2,6 +2,7 @@
 #include "hlvrad.h"
 
 dleaf_t *dleafs; int numleafs;
+dnode_t *dnodes; int numnodes;
 unsigned short *dleaffaces; int numleaffaces;
 int numclusters;
 static const unsigned char *visdata;
@@ -9,6 +10,7 @@ static int visdatasize;
 
 void MapVis(void) {
     dleafs = (dleaf_t *)lumps[LUMP_LEAFS].data; numleafs = lumps[LUMP_LEAFS].len / sizeof(dleaf_t);
+    dnodes = (dnode_t *)lumps[LUMP_NODES].data; numnodes = lumps[LUMP_NODES].len / sizeof(dnode_t);
     dleaffaces = (unsigned short *)lumps[LUMP_LEAFFACES].data; numleaffaces = lumps[LUMP_LEAFFACES].len / 2;
     visdata = lumps[LUMP_VISIBILITY].data;
     visdatasize = lumps[LUMP_VISIBILITY].len;
