@@ -2,6 +2,7 @@
 
 - hammerless/core/_hlnav.dll from native/hlnav.c (nav sampling, flood fill, nav visibility)
 - hammerless/core/hlvvis.exe from native/hlvvis.c (the visibility compiler, a drop-in for vvis)
+- hammerless/core/hlvbsp.exe from native/hlvbsp/*.c (the map compiler, a drop-in for vbsp)
 
 Floating point must behave exactly like the reference: no fused multiply-add (-ffp-contract=off), no
 fast-math, and a baseline CPU (SSE2) so the binaries run anywhere.
@@ -19,12 +20,16 @@ FLAGS = ["-O2", "-ffp-contract=off", "-fno-fast-math", "-target", "x86_64-window
 TARGETS = {
     "hlnav": (["-shared"], "_hlnav.dll", "hlnav.c"),
     "hlvvis": ([], "hlvvis.exe", "hlvvis.c"),
+    "hlvbsp": ([], "hlvbsp.exe", ["hlvbsp/main.c", "hlvbsp/poly.c", "hlvbsp/map.c", "hlvbsp/brush.c", "hlvbsp/csg.c",
+                                  "hlvbsp/portals.c", "hlvbsp/faces.c", "hlvbsp/detail.c", "hlvbsp/write.c",
+                                  "hlvbsp/phys.c"]),
 }
 
 for name in sys.argv[1:] or list(TARGETS):
     extra, out_name, src = TARGETS[name]
     out = os.path.abspath(os.path.join(CORE, out_name))
-    cmd = [sys.executable, "-m", "ziglang", "cc", *extra, *FLAGS, "-o", out, os.path.join(HERE, src)]
+    srcs = src if isinstance(src, list) else [src]
+    cmd = [sys.executable, "-m", "ziglang", "cc", *extra, *FLAGS, "-o", out, *(os.path.join(HERE, s) for s in srcs)]
     print(" ".join(cmd))
     subprocess.run(cmd, check=True)
     stem = out[:-4]
