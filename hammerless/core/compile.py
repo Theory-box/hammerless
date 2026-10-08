@@ -26,6 +26,7 @@ class CompileOptions:
     extra_vvis: str = ""
     extra_vrad: str = ""
     vis_tool: str = "VALVE"     # VALVE: L4D2's vvis.exe / HAMMERLESS: hlvvis.exe (same results, faster)
+    map_tool: str = "VALVE"     # VALVE: L4D2's vbsp.exe / HAMMERLESS: hlvbsp.exe (same map)
     light_tool: str = "VALVE"   # VALVE: vrad's lightmaps / CYCLES: Blender bakes them after vrad (bake_handler)
     cycles_samples: int = 1024
     cycles_stitch: bool = True     # make neighbouring faces' lightmaps agree along shared edges
@@ -59,7 +60,7 @@ def _opts_rest(text: str) -> str:
     """Compile options without the visibility and lighting levels: those are tracked apart (a more
     complete vis serves a lesser one; lighting can be added to a map compiled without it). Which vis
     compiler ran doesn't count: both give the same map."""
-    text = re.sub(r", vis_tool='\w+'", "", text)
+    text = re.sub(r", (vis|map)_tool='\w+'", "", text)
     return re.sub(r"(vis|rad)='\w+'", r"\1='*'", text)
 
 
@@ -69,6 +70,39 @@ HLVVIS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvvis.exe")
 def use_hlvvis(opts: "CompileOptions") -> bool:
     """Our vis compiler runs when chosen, present, and not given vvis options it doesn't know."""
     return opts.vis_tool == "HAMMERLESS" and os.path.exists(HLVVIS) and not opts.extra_vvis.split()
+
+
+HLVBSP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvbsp.exe")
+HLVBSP_TABLES = (".hlvbsp_materials.txt", ".hlvbsp_surfaceprops.txt", ".hlvbsp_props.txt")
+
+
+def use_hlvbsp(opts: "CompileOptions") -> bool:
+    """Our map compiler runs when chosen, present, and not given vbsp options it doesn't know."""
+    return opts.map_tool == "HAMMERLESS" and os.path.exists(HLVBSP) and not opts.extra_vbsp.split()
+
+
+def hlvbsp_command(tools: "Tools", base: str) -> list[str]:
+    mat, surf, props = (base + ext for ext in HLVBSP_TABLES)
+    return [HLVBSP, "-game", tools.gamedir, "-materials", mat, "-surfaceprops", surf, "-props", props, base]
+
+
+_CONTENT: dict = {}
+
+
+def prepare_hlvbsp(tools: "Tools", vmf_path: str, base: str) -> list[str]:
+    """Write what hlvbsp reads from the game's files (materials, surface properties, prop models).
+    Returns the reasons it can't compile this map yet (then Valve's vbsp does)."""
+    from .mapcompiler import unsupported, write_material_table, write_prop_table, write_surfaceprops
+    from .vpk import GameContent
+    if tools.root not in _CONTENT:
+        _CONTENT[tools.root] = GameContent(tools.root)
+    content = _CONTENT[tools.root]
+    mat, surf, props = (base + ext for ext in HLVBSP_TABLES)
+    write_material_table(mat, vmf_path, content, tools.gamedir)
+    write_surfaceprops(surf, content)
+    write_prop_table(props, vmf_path, content, tools.gamedir)
+    with open(vmf_path, encoding="utf-8", errors="replace") as f:
+        return unsupported(f.read(), mat, content, tools.gamedir)
 
 
 def _opts_vis(text: str) -> str | None:
@@ -349,8 +383,13 @@ class CompileJob:
         self._opts = opts
         vvis, vrad = opts.vvis_args(), opts.vrad_args()
         game = ["-game", tools.gamedir]
-        self.steps: list[tuple[str, list[str]]] = [
-            ("vbsp", [tools.exe("vbsp")] + opts.vbsp_args() + game + [self.base])]
+        valve_vbsp = [tools.exe("vbsp")] + opts.vbsp_args() + game + [self.base]
+        self._valve_vbsp = None             # Valve's vbsp, run instead when ours can't (or fails)
+        if use_hlvbsp(opts):
+            self.steps: list[tuple[str, list[str]]] = [("vbsp", hlvbsp_command(tools, self.base))]
+            self._valve_vbsp = valve_vbsp
+        else:
+            self.steps = [("vbsp", valve_vbsp)]
         self._valve_vvis = None             # Valve's vvis, run instead if ours fails
         self._stopping = False
         if vvis is not None:
@@ -466,7 +505,19 @@ class CompileJob:
                 if name == "vvis" and os.path.exists(self.base + ".viscost"):
                     os.remove(self.base + ".viscost")    # Hammerless vis writes a new one; Valve's vvis none
                 t0 = time.time()
+                if name == "vbsp" and cmd[0] == HLVBSP:
+                    why = []
+                    try:
+                        why = prepare_hlvbsp(self.tools, self.vmf, self.base)
+                    except Exception as ex:          # never let the tables stop a build
+                        why = [f"couldn't read the game's files ({ex})"]
+                    if why:
+                        self._q.put("Hammerless map compiler doesn't do " + ", ".join(why) + " yet: running Valve's vbsp")
+                        cmd = self._valve_vbsp
                 code, out = self._exec(cmd)
+                if code != 0 and name == "vbsp" and cmd[0] == HLVBSP and self._valve_vbsp and not self._stopping:
+                    self._q.put(f"!! Hammerless map compiler failed (exit code {code}): running Valve's vbsp instead")
+                    code, out = self._exec(self._valve_vbsp)
                 if code != 0 and name == "vvis" and cmd[0] == HLVVIS and self._valve_vvis and not self._stopping:
                     # ours only replaces the map at the very end, so the map and portals are untouched
                     self._q.put("Hammerless vis doesn't do fog-distance (radial) visibility yet: running Valve's vvis"
@@ -847,7 +898,7 @@ def clear_build(tools: Tools | None, work_base: str, map_name: str) -> list[str]
     """Delete the compiled map (which holds the baked lighting) and what records how it was built:
     the next build compiles and bakes from scratch. Returns files that couldn't be deleted."""
     paths = [work_base + ext for ext in (".bsp", ".stamp", ".built.vmf", ".built.opts", ".built.prt", ".prt", ".lin",
-                                         ".analysis.bsp", ".viscost")]
+                                         ".analysis.bsp", ".viscost") + HLVBSP_TABLES]
     if tools is not None:
         paths.append(os.path.join(tools.maps_dir, map_name + ".bsp"))
     return _remove(paths)

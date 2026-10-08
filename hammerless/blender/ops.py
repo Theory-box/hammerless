@@ -46,15 +46,16 @@ BUILD_PROGRESS = {"vis": ""}      # the running build's latest "vis 42%, about 3
 
 def compile_options(s) -> "cc.CompileOptions | str":
     if s.compile_preset != "CUSTOM":
-        if s.vis_tool == "VALVE" and s.light_tool == "VALVE":
+        if s.vis_tool == "VALVE" and s.light_tool == "VALVE" and s.map_tool == "VALVE":
             return s.compile_preset
         import dataclasses
         return dataclasses.replace(cc.PRESETS[s.compile_preset], vis_tool=s.vis_tool, light_tool=s.light_tool,
-                                   **_cycles_options(s))
+                                   map_tool=s.map_tool, **_cycles_options(s))
     return cc.CompileOptions(vis=s.vis_mode, rad=s.rad_mode, hdr=s.hdr_mode,
                              static_prop_lighting=s.static_prop_lighting,
                              extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad,
-                             vis_tool=s.vis_tool, light_tool=s.light_tool, **_cycles_options(s))
+                             vis_tool=s.vis_tool, light_tool=s.light_tool, map_tool=s.map_tool,
+                             **_cycles_options(s))
 
 
 def _cycles_options(s) -> dict:

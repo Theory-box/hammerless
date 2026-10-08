@@ -372,6 +372,7 @@ void MakeTreePortals(tree_t *tree);
 int FloodEntities(tree_t *tree);
 void FillOutside(node_t *headnode);
 void FloodAreas(tree_t *tree);
+void LeakFile(tree_t *tree, const char *path);
 void MarkVisibleSides(tree_t *tree, int start, int end, int detail_screen);
 int VisibleContents(int contents);
 int Portal_VisFlood(portal_t *p);

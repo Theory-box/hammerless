@@ -74,6 +74,14 @@ map compiler...) should get its own regression script built the same way.
 Entity names in a built map: an object `Example 21 button` becomes `hl_example_21_button`; a node's entity is
 `hl_<slug of "Example 21: Two-Step Gate">_<node id>` (Volumes, Timers, relays: named after the node).
 
+## Map compiler: `test_mapcompiler.py`
+
+`python tests/ingame/test_mapcompiler.py` builds the demo level with Map Compiler set to Hammerless (hlvbsp) as
+`hl_test_mapc`, checks it in the game (a dropped physics crate lands on the floor), then compiles the same
+.vmf with Valve's vbsp and compares the two maps with `tests/compile/bspdump.py` (all lumps but the
+displacement physics, which differs between vbsp's own runs). Offline comparisons of any .vmf:
+`python tests/compile/bspdump.py valve.bsp ours.bsp --diff`.
+
 ## Custom models: `test_models.py`
 
 `python tests/ingame/test_models.py --shots <folder>` builds the demo level with a few Custom Model objects

@@ -283,3 +283,43 @@ def write_material_table(path: str, vmf_path: str, content, game_dir: str | None
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(rows) + "\n")
     return len(rows)
+
+
+# what hlvbsp doesn't do yet: maps with these are compiled by Valve's vbsp
+UNSUPPORTED_CLASSES = {
+    "info_overlay": "overlays", "info_overlay_transition": "water overlays",
+    "func_areaportal": "areaportals", "func_areaportalwindow": "areaportals",
+    "func_occluder": "occluders", "func_viscluster": "vis clusters", "env_cubemap": "cubemaps",
+    "sky_camera": "3D skyboxes", "func_instance": "instances", "info_no_dynamic_shadow": "shadow blockers",
+    "prop_detail": "detail props",
+}
+
+
+def unsupported(vmf_text: str, material_table: str, content, game_dir: str | None) -> list[str]:
+    """Reasons hlvbsp can't compile this map exactly like vbsp yet (empty: it can)."""
+    from .vmf import parse
+    why: list[str] = []
+
+    def add(reason: str) -> None:
+        if reason not in why:
+            why.append(reason)
+    blocks = parse(vmf_text)
+    has_disp = "dispinfo" in vmf_text
+    world = next((b for b in blocks if b.name.lower() == "world"), None)
+    for b in blocks:
+        if b.name.lower() == "entity":
+            cls = (b.get("classname") or "").lower()
+            if cls in UNSUPPORTED_CLASSES:
+                add(UNSUPPORTED_CLASSES[cls])
+    with open(material_table, encoding="utf-8") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) > 1 and int(parts[1]) & (CONTENTS_WATER | CONTENTS_SLIME):
+                add("water")
+    # detail props scattered on displacements by their materials' %detailtype
+    if has_disp and world is not None and (world.get("detailmaterial") or world.get("detailvbsp")):
+        for name in vmf_materials(vmf_text):
+            if read_vmt(content, name.lower().replace("\\", "/"), game_dir).get("%detailtype"):
+                add("detail props")
+                break
+    return why

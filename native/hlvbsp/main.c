@@ -97,6 +97,9 @@ static void ProcessWorldModel(void) {
         else {
             Warning("**** leaked ****\n");
             leaked = 1;
+            char lin[1100];
+            sprintf(lin, "%s.lin", source);
+            LeakFile(tree, lin);
         }
         MarkVisibleSides(tree, brush_start, brush_end, NO_DETAIL);
         if (leaked) break;

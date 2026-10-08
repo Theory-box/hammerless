@@ -502,3 +502,36 @@ void MarkVisibleSides(tree_t *tree, int start, int end, int detail_screen) {
     }
     MarkVisibleSides_r(tree->headnode);
 }
+
+/* The leak trace (.lin): from the outside, through the portals, to the entity that was reached,
+ * stepping each time to the neighbour the flood reached one step earlier. */
+void LeakFile(tree_t *tree, const char *path) {
+    if (!tree->outside_node.occupied) return;
+    FILE *f = fopen(path, "w");
+    if (!f) Error("Couldn't open %s", path);
+    node_t *node = &tree->outside_node;
+    vec3_t mid;
+    while (node->occupied > 1) {
+        portal_t *nextportal = NULL;
+        node_t *nextnode = NULL;
+        int s = 0, next = node->occupied;
+        for (portal_t *p = node->portals; p; p = p->next[!s]) {
+            s = (p->nodes[0] == node);
+            if (p->nodes[s]->occupied && p->nodes[s]->occupied < next) {
+                nextportal = p;
+                nextnode = p->nodes[s];
+                next = nextnode->occupied;
+            }
+        }
+        if (!nextnode) break;
+        node = nextnode;
+        WindingCenter(nextportal->winding, mid);
+        fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+    }
+    vec3_t origin = {0, 0, 0};
+    if (node->occupant) GetVectorForKey(node->occupant, "origin", origin);
+    fprintf(f, "%f %f %f\n", origin[0], origin[1], origin[2]);
+    fclose(f);
+    Msg("Entity %s (%.2f %.2f %.2f) leaked!\n", node->occupant ? ValueForKey(node->occupant, "classname") : "?",
+        origin[0], origin[1], origin[2]);
+}
