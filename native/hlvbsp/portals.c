@@ -774,6 +774,13 @@ void MarkVisibleSides(tree_t *tree, int start, int end, int detail_screen) {
     MarkVisibleSides_r(tree->headnode);
 }
 
+/* The variant for a list of brushes (the occluders). */
+void MarkVisibleSidesList(tree_t *tree, mapbrush_t **brushes, int count) {
+    for (int i = 0; i < count; ++i)
+        for (int j = 0; j < brushes[i]->numsides; j++) brushes[i]->original_sides[j].visible = 0;
+    MarkVisibleSides_r(tree->headnode);
+}
+
 /* The leak trace (.lin): from the outside, through the portals, to the entity that was reached,
  * stepping each time to the neighbour the flood reached one step earlier. */
 void LeakFile(tree_t *tree, const char *path) {

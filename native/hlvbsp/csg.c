@@ -73,7 +73,7 @@ static bspbrush_t *ClipBrushToBox(bspbrush_t *brush, const vec3_t clipmins, cons
     return brush;
 }
 
-static bspbrush_t *CreateClippedBrush(mapbrush_t *mb, const vec3_t clipmins, const vec3_t clipmaxs) {
+bspbrush_t *CreateClippedBrush(mapbrush_t *mb, const vec3_t clipmins, const vec3_t clipmaxs) {
     int n = mb->numsides;
     if (!n) return NULL;
     for (int j = 0; j < 3; j++)
@@ -91,7 +91,7 @@ static bspbrush_t *CreateClippedBrush(mapbrush_t *mb, const vec3_t clipmins, con
     return ClipBrushToBox(nb, clipmins, clipmaxs);
 }
 
-static void ComputeBoundingPlanes(const vec3_t clipmins, const vec3_t clipmaxs) {
+void ComputeBoundingPlanes(const vec3_t clipmins, const vec3_t clipmaxs) {
     vec3_t normal;
     for (int i = 0; i < 2; i++) {
         VectorClear(normal);

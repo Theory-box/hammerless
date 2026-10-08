@@ -351,7 +351,6 @@ def write_material_table(path: str, vmf_path: str, content, game_dir: str | None
 # what hlvbsp doesn't do yet: maps with these are compiled by Valve's vbsp
 UNSUPPORTED_CLASSES = {
     "info_overlay_transition": "water overlays",
-    "func_occluder": "occluders",
     "sky_camera": "3D skyboxes", "func_instance": "instances",
 }
 

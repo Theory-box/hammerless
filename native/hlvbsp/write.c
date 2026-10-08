@@ -765,8 +765,11 @@ void EndBSPFile(const char *path) {
     SetLump(0, entdata, entdatasize, 0);
     SetLump(15, NULL, 0, 1);
     SetLump(54, NULL, 0, 1);
-    static int occlusion[3] = {0, 0, 0};
-    SetLump(9, occlusion, 12, 2);
+    {
+        extern unsigned char *Occluder_Lump(int *len);
+        unsigned char *occ = Occluder_Lump(&len);
+        SetLump(9, occ, len, 2);
+    }
     static int mapflags = 0;
     SetLump(59, &mapflags, 4, 0);
     SetLump(41, clipportalverts, 12 * numclipportalverts, 0);

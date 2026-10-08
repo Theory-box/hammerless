@@ -108,6 +108,10 @@ static void ProcessWorldModel(void) {
     FloodAreas(tree);
     RemoveAreaPortalBrushes_R(tree->headnode);
     MakeFaces(tree->headnode);
+    {
+        extern void AssignOccluderAreas(tree_t *tree);
+        AssignOccluderAreas(tree);
+    }
     face_t *leaffaces = MergeDetailTree(tree, brush_start, brush_end);
     Msg("FixTjuncs...\n");
     leaffaces = FixTjuncs(tree->headnode, leaffaces);
@@ -204,6 +208,10 @@ int main(int argc, char **argv) {
         MarkNoDynamicShadowSides();
     }
     EmitInitialDispInfos();
+    {
+        extern void EmitOccluderBrushes(void);
+        EmitOccluderBrushes();      /* (their brushes are taken out of the models below) */
+    }
     {
         extern const char *g_linpath;
         static char linpath[1100];
