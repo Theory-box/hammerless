@@ -41,6 +41,37 @@ char *copystring(const char *s) {
     return c;
 }
 
+/* printf's "%f" the way vbsp's (old MSVC) runtime writes it: an exact tie at the 6th decimal rounds
+   away from zero, where ours rounds to even (10442.3828125 -> "10442.382813", not "...812").
+   Returns one of a few rotating buffers, so several can sit in one printf. */
+const char *FmtF(double v) {
+    static char bufs[8][384];
+    static int next;
+    char *out = bufs[next++ & 7], exact[384];
+    snprintf(exact, sizeof(exact), "%.40f", v);      /* exact for any float (and for these doubles) */
+    char *dot = strchr(exact, '.');
+    if (!dot || dot[7] != '5' || strspn(dot + 8, "0") != strlen(dot + 8)) {
+        snprintf(out, 384, "%f", v);
+        return out;
+    }
+    /* a tie: cut after 6 decimals and add one unit in the last place */
+    dot[7] = 0;
+    int i = (int)strlen(exact) - 1;
+    for (; i >= 0; i--) {
+        if (exact[i] == '.' || exact[i] == '-') continue;
+        if (exact[i] < '9') {
+            exact[i]++;
+            break;
+        }
+        exact[i] = '0';
+    }
+    if (i < 0) {      /* carried past the first digit: 9.9999995 -> 10.000000 */
+        int neg = exact[0] == '-';
+        snprintf(out, 384, "%s1%s", neg ? "-" : "", exact + neg);
+    } else strcpy(out, exact);
+    return out;
+}
+
 void CrossProduct(const vec3_t a, const vec3_t b, vec3_t c) {
     c[0] = a[1] * b[2] - a[2] * b[1];
     c[1] = a[2] * b[0] - a[0] * b[2];
@@ -108,14 +139,21 @@ winding_t *ReverseWinding(const winding_t *w) {
 
 /* A huge square on the plane, 4 x the world's half-size along two in-plane axes. */
 /* mathlib's VectorNormalize (x87): the squares summed in double, the length rounded to float, then
-   times 1/(length + FLT_EPSILON). (Plane normals use a float inline version instead.) */
+   times 1/(length + FLT_EPSILON). Planes, windings, bevels and t-junction edges use it. */
 vec_t VectorNormalizeX87(vec3_t v) {
-    float len = (float)sqrt((double)v[0] * v[0] + (double)v[1] * v[1] + (double)v[2] * v[2]);
+    return (float)VectorNormalizeX87d(v);
+}
+
+/* The same, returning the length as it stays on the x87 stack (unrounded): callers that keep
+   computing in x87 (SubdivideFace) see this one. */
+double VectorNormalizeX87d(vec3_t v) {
+    double dlen = sqrt((double)v[0] * v[0] + (double)v[1] * v[1] + (double)v[2] * v[2]);
+    float len = (float)dlen;
     float oo = 1.0f / (len + FLT_EPSILON);
     v[0] *= oo;
     v[1] *= oo;
     v[2] *= oo;
-    return len;
+    return dlen;
 }
 
 winding_t *BaseWindingForPlane(const vec3_t normal, vec_t dist) {
@@ -158,7 +196,8 @@ static void classify(const winding_t *in, const vec3_t normal, vec_t dist, vec_t
     int i;
     counts[0] = counts[1] = counts[2] = 0;
     for (i = 0; i < in->numpoints; i++) {
-        vec_t dot = DotProduct(in->p[i], normal);
+        /* (vbsp's order: y, x, then z - measured) */
+        vec_t dot = (in->p[i][1] * normal[1] + in->p[i][0] * normal[0]) + in->p[i][2] * normal[2];
         dot -= dist;
         dists[i] = dot;
         if (dot > epsilon) sides[i] = SIDE_FRONT;

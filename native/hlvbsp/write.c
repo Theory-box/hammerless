@@ -887,7 +887,7 @@ static int num_visclusters, num_visportals;
 
 static void WriteFloat(FILE *f, vec_t v) {
     if (fabs(v - RoundInt(v)) < 0.001) fprintf(f, "%i ", (int)RoundInt(v));
-    else fprintf(f, "%f ", v);
+    else fprintf(f, "%s ", FmtF(v));
 }
 
 static void BuildVisLeafList_r(node_t *node, node_t ***leaves, int *n, int *cap) {

@@ -143,7 +143,7 @@ static void tb_int(textbuf_t *t, const char *k, int v) {
 }
 static void tb_float(textbuf_t *t, const char *k, float v) {
     char tmp[1100];
-    sprintf(tmp, "\"%s\" \"%f\"\n", k, v);
+    sprintf(tmp, "\"%s\" \"%s\"\n", k, FmtF(v));
     tb_text(t, tmp);
 }
 static void tb_string(textbuf_t *t, const char *k, const char *v) {
@@ -632,7 +632,8 @@ void EmitPhysCollision(void) {
                 tb_string(t, "surfaceprop", "water");
                 tb_float(t, "damping", 0.01f);
                 tb_int(t, "contents", e->contents);
-                sprintf(tmp, "\"surfaceplane\" \"%f %f %f %f \"\n", e->normal[0], e->normal[1], e->normal[2], e->dist);
+                sprintf(tmp, "\"surfaceplane\" \"%s %s %s %s \"\n", FmtF(e->normal[0]), FmtF(e->normal[1]), FmtF(e->normal[2]),
+                        FmtF(e->dist));
                 tb_text(t, tmp);
                 tb_text(t, "\"currentvelocity\" \"0.000000 0.000000 0.000000 \"\n");
                 tb_text(t, "}\n");

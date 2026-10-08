@@ -167,11 +167,11 @@ static void TestEdge(vec_t start, vec_t end, int p1, int p2, int startvert) {
         vec3_t p, delta, exact, off;
         VectorCopy(dvertexes[j].point, p);
         VectorSubtract(p, edge_start, delta);
-        vec_t dist = DotProduct(delta, edge_dir);
+        vec_t dist = (delta[1] * edge_dir[1] + delta[0] * edge_dir[0]) + delta[2] * edge_dir[2];   /* (vbsp's order) */
         if (dist <= start || dist >= end) continue;
         VectorMA(edge_start, dist, edge_dir, exact);
         VectorSubtract(p, exact, off);
-        vec_t error = VectorLength(off);
+        vec_t error = sqrtf((off[1] * off[1] + off[2] * off[2]) + off[0] * off[0]);
         if (error > OFF_EPSILON) continue;
         TestEdge(start, dist, p1, j, k + 1);
         TestEdge(dist, end, j, p2, k + 1);
@@ -224,7 +224,7 @@ static void FixFaceEdges(face_t **list, face_t *f) {
         VectorCopy(dvertexes[p2].point, e2);
         FindEdgeVerts(edge_start, e2);
         VectorSubtract(e2, edge_start, edge_dir);
-        vec_t len = VectorNormalize(edge_dir);
+        vec_t len = VectorNormalizeX87(edge_dir);     /* (x87, like vbsp) */
         start[i] = numsuperverts;
         TestEdge(0, len, p1, p2, 0);
         count[i] = numsuperverts - start[i];
@@ -447,13 +447,14 @@ static void SubdivideFace(face_t **list, face_t *f) {
             VectorCopy(tex->lmvecs[axis], temp);
             winding_t *w = f->w;
             for (int i = 0; i < w->numpoints; i++) {
-                vec_t v = DotProduct(w->p[i], temp);
+                vec_t v = (w->p[i][1] * temp[1] + w->p[i][0] * temp[0]) + w->p[i][2] * temp[2];   /* (vbsp's order) */
                 if (v < mins) mins = v;
                 if (v > maxs) maxs = v;
             }
             if (maxs - mins <= g_maxLightmapDimension) break;
-            vec_t luxels_per_unit = VectorNormalize(temp);
-            vec_t dist = (mins + g_maxLightmapDimension - 1) / luxels_per_unit;
+            double luxels_per_unit = VectorNormalizeX87d(temp);
+            /* (x87: ((32 + mins) - 1) / the unrounded length, rounded once - measured) */
+            vec_t dist = (float)(((double)g_maxLightmapDimension + mins - 1.0) / luxels_per_unit);
             winding_t *frontw, *backw;
             ClipWindingEpsilon(w, temp, dist, ON_EPSILON, &frontw, &backw);
             if (!frontw || !backw) Error("SubdivideFace: didn't split the polygon");

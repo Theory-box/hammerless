@@ -378,8 +378,8 @@ static int MapToCore(mapdisp_t *md, coredisp_t *d, dface_t *face, int *swapped_t
         vec3_t v;
         VectorScale(md->normals[j], md->dists[j], v);
         VectorAdd(v, md->offsets[j], v);
-        float dist = VectorLength(v);
-        VectorNormalize(v);
+        float dist = sqrtf((v[1] * v[1] + v[2] * v[2]) + v[0] * v[0]);
+        VectorNormalizeX87(v);     /* (the length as VectorLength, the direction by mathlib's x87 normalize) */
         VectorCopy(v, field[j]);
         dists[j] = dist;
     }
@@ -924,8 +924,8 @@ void EmitInitialDispInfos(void) {
             vec3_t v;
             VectorScale(md->normals[j], md->dists[j], v);
             VectorAdd(v, md->offsets[j], v);
-            float dist = VectorLength(v);
-            VectorNormalize(v);
+            float dist = sqrtf((v[1] * v[1] + v[2] * v[2]) + v[0] * v[0]);     /* (vbsp's order) */
+            VectorNormalizeX87(v);
             VectorCopy(v, ov[j].vec);
             ov[j].dist = dist;
             ov[j].alpha = md->alphas[j];

@@ -357,6 +357,15 @@ def m_skybox(m):
     m.ent("light", "3256 3256 200", '"_light" "255 255 255 100"')
 
 
+def m_grass_water(m):
+    """L4D2 places no grass under water (in a map with water) or inside a func_detail_blocker."""
+    m.solids = m.room((0, 0, -64), (1600, 1024, 256))
+    _terrain(m, 100, 100, 512)
+    m.solids.append(m.box((100, 100, -32), (400, 612, 20), mats=[W, N, N, N, N, N]))
+    m.player_and_light("1300 800 64", "800 512 200")
+    m.ent("func_detail_blocker", None, "", [m.box((700, 200, -40), (900, 400, 80), "TOOLS/TOOLSTRIGGER")])
+
+
 def m_ladders(m):
     L, N = "TOOLS/TOOLSINVISIBLELADDER", "TOOLS/TOOLSNODRAW"
     m.solids = m.room((0, 0, 0), (1024, 512, 256))
@@ -377,7 +386,7 @@ MAPS = {
     "water_cubemap": m_water_cubemap, "cubemaps": m_cubemaps, "blend_on_brushes": m_blend_on_brushes,
     "blend_cubemap": lambda m: m_blend_on_brushes(m, True), "no_dynamic_shadow": m_no_dynamic_shadow,
     "viscluster": m_viscluster, "occluders": m_occluders, "skybox": m_skybox,
-    "ladders": m_ladders,
+    "ladders": m_ladders, "grass_water": m_grass_water,
 }
 
 

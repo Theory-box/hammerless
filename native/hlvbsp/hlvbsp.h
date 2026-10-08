@@ -129,6 +129,7 @@ void FreeWinding(winding_t *w);
 winding_t *CopyWinding(const winding_t *w);
 winding_t *ReverseWinding(const winding_t *w);
 vec_t VectorNormalizeX87(vec3_t v);
+double VectorNormalizeX87d(vec3_t v);
 winding_t *BaseWindingForPlane(const vec3_t normal, vec_t dist);
 void ClipWindingEpsilon(const winding_t *in, const vec3_t normal, vec_t dist, vec_t epsilon, winding_t **front, winding_t **back);
 void ClipWindingEpsilonOffset(winding_t *in, const vec3_t normal, vec_t dist, vec_t epsilon, winding_t **front, winding_t **back, const vec3_t offset);
@@ -321,6 +322,7 @@ void Warning(const char *fmt, ...);
 void Msg(const char *fmt, ...);
 void *xalloc(size_t n);
 char *copystring(const char *s);
+const char *FmtF(double v);
 
 /* map.c */
 int FindFloatPlane(vec3_t normal, vec_t dist);

@@ -422,6 +422,35 @@ static void NormalizeX87(vec3_t v) {
     v[0] *= oo; v[1] *= oo; v[2] *= oo;
 }
 
+/* func_detail_blocker entities (L4D2): no detail props inside their brushes' boxes */
+static entity_t **blockers;
+static int numblockers;
+
+static int InsideBlocker(const vec3_t pt) {
+    for (int i = 0; i < numblockers; i++) {
+        for (int j = 0; j < blockers[i]->numbrushes; j++) {
+            const mapbrush_t *b = &mapbrushes[blockers[i]->firstbrush + j];
+            if (pt[0] > b->maxs[0] || b->mins[0] > pt[0] || pt[1] > b->maxs[1] || b->mins[1] > pt[1] ||
+                pt[2] > b->maxs[2] || b->mins[2] > pt[2])
+                continue;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The leaf a point is in, walking the written tree (vbsp's arithmetic: y, x, then z) */
+static int PointLeafnum(const vec3_t p) {
+    int n = 0;
+    do {
+        const dnode_t *node = &dnodes[n];
+        const plane_t *pl = &mapplanes[node->planenum];
+        float d = (pl->normal[1] * p[1] + pl->normal[0] * p[0]) + pl->normal[2] * p[2];
+        n = pl->dist > d ? node->children[1] : node->children[0];
+    } while (n >= 0);
+    return -1 - n;
+}
+
 static void PlaceDetail(const detailmodel_t *m, const vec3_t pt, const vec3_t normal) {
     float cosangle = normal[2];
     if (cosangle < m->maxcos) return;
@@ -429,6 +458,12 @@ static void PlaceDetail(const detailmodel_t *m, const vec3_t pt, const vec3_t no
         float prob = (cosangle - m->maxcos) / (m->mincos - m->maxcos);
         float t = rand01();
         if (t > prob) return;
+    }
+    if (InsideBlocker(pt)) return;
+    /* (L4D2: none under water, when the map has any) */
+    if (g_has_water) {
+        int leaf = PointLeafnum(pt);
+        if (leaf >= 0 && (dleafs[leaf].contents & (CONTENTS_WATER | CONTENTS_SLIME))) return;
     }
     vec3_t angles;
     if (m->flags & 1) {
@@ -626,6 +661,12 @@ int g_dprp_len;
 
 void EmitDetailObjects(void) {
     LoadDetailObjects();
+    numblockers = 0;
+    for (int i = 0; i < num_entities; i++)
+        if (!strcmp(ValueForKey(&entities[i], "classname"), "func_detail_blocker")) {
+            blockers = realloc(blockers, sizeof(entity_t *) * (numblockers + 1));
+            blockers[numblockers++] = &entities[i];
+        }
     for (int j = 0; j < numfaces; ++j) {
         dface_t *face = &dfaces[j];
         const char *type = MaterialDetailType(texinfos[face->texinfo].texdata);

@@ -401,9 +401,9 @@ static void AreaportalLeakFile(portal_t *start, portal_t *end, node_t *startnode
     if (!f) Error("Couldn't open %s", g_linpath);
     vec3_t mid;
     WindingCenter(end->winding, mid);
-    fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+    fprintf(f, "%s %s %s\n", FmtF(mid[0]), FmtF(mid[1]), FmtF(mid[2]));
     for (int k = 0; k < 3; k++) mid[k] = 0.5f * (startnode->mins[k] + startnode->maxs[k]);
-    fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+    fprintf(f, "%s %s %s\n", FmtF(mid[0]), FmtF(mid[1]), FmtF(mid[2]));
     node_t *node = startnode;
     while (node->occupied >= 1) {
         portal_t *nextportal = NULL;
@@ -420,12 +420,12 @@ static void AreaportalLeakFile(portal_t *start, portal_t *end, node_t *startnode
         if (!nextnode) break;
         node = nextnode;
         WindingCenter(nextportal->winding, mid);
-        fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+        fprintf(f, "%s %s %s\n", FmtF(mid[0]), FmtF(mid[1]), FmtF(mid[2]));
     }
     for (int k = 0; k < 3; k++) mid[k] = 0.5f * (node->mins[k] + node->maxs[k]);
-    fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+    fprintf(f, "%s %s %s\n", FmtF(mid[0]), FmtF(mid[1]), FmtF(mid[2]));
     WindingCenter(start->winding, mid);
-    fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+    fprintf(f, "%s %s %s\n", FmtF(mid[0]), FmtF(mid[1]), FmtF(mid[2]));
     fclose(f);
     Warning("Wrote %s\n", g_linpath);
     Msg("Areaportal leak ! File: %s ", g_linpath);
@@ -804,11 +804,11 @@ void LeakFile(tree_t *tree, const char *path) {
         if (!nextnode) break;
         node = nextnode;
         WindingCenter(nextportal->winding, mid);
-        fprintf(f, "%f %f %f\n", mid[0], mid[1], mid[2]);
+        fprintf(f, "%s %s %s\n", FmtF(mid[0]), FmtF(mid[1]), FmtF(mid[2]));
     }
     vec3_t origin = {0, 0, 0};
     if (node->occupant) GetVectorForKey(node->occupant, "origin", origin);
-    fprintf(f, "%f %f %f\n", origin[0], origin[1], origin[2]);
+    fprintf(f, "%s %s %s\n", FmtF(origin[0]), FmtF(origin[1]), FmtF(origin[2]));
     fclose(f);
     Msg("Entity %s (%.2f %.2f %.2f) leaked!\n", node->occupant ? ValueForKey(node->occupant, "classname") : "?",
         origin[0], origin[1], origin[2]);

@@ -963,7 +963,6 @@ static void load_entity(parser_t *p) {
     }
     if (!strcmp(cls, "func_ladder")) {
         /* L4D2 keeps the ladder as a brush model (func_simpleladder) facing its ladder sides' normal */
-        char buf[128];
         SetKeyValue(mapent, "team", "0");
         SetKeyValue(mapent, "normal.x", "0");
         SetKeyValue(mapent, "normal.y", "0");
@@ -976,9 +975,9 @@ static void load_entity(parser_t *p) {
                 if (sd->contents & 0x800) SetKeyValue(mapent, "team", "1");             /* CONTENTS_TEAM1 */
                 else if (sd->contents & 0x1000) SetKeyValue(mapent, "team", "2");       /* CONTENTS_TEAM2 */
                 const float *n = mapplanes[sd->planenum].normal;
-                sprintf(buf, "%f", n[0]); SetKeyValue(mapent, "normal.x", buf);
-                sprintf(buf, "%f", n[1]); SetKeyValue(mapent, "normal.y", buf);
-                sprintf(buf, "%f", n[2]); SetKeyValue(mapent, "normal.z", buf);
+                SetKeyValue(mapent, "normal.x", FmtF(n[0]));
+                SetKeyValue(mapent, "normal.y", FmtF(n[1]));
+                SetKeyValue(mapent, "normal.z", FmtF(n[2]));
             }
         }
         SetKeyValue(mapent, "classname", "func_simpleladder");
