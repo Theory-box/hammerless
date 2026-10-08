@@ -303,7 +303,8 @@ EXAMPLES_2 = [
     dict(title="Everyone Is a Charger", level="Overrides",
          about="Override Convert Zombie Class is asked what each special infected about to spawn "
                "should be (1 Smoker, 2 Boomer, 3 Hunter, 4 Spitter, 5 Jockey, 6 Charger): every "
-               "special becomes a Charger. Should Play Boss Music gets a fixed answer typed on the "
+               "special the Director sends becomes a Charger (Spawn Zombie nodes and script spawns "
+               "aren't asked: they spawn what they say). Should Play Boss Music gets a fixed answer typed on the "
                "Override itself: Allow off, so no Tank or Witch music.",
          nodes=[N("ask", "HL_NodeOverride", 0, 0, hook="ConvertZombieClass"),
                 N("charger", "HL_NodeScriptValue", 1, 1, label="Specials become Chargers",
@@ -329,21 +330,23 @@ EXAMPLES_2 = [
                 ("spawns.asked", "allow.run"), ("spawns.classname", "no_sniper.a"), ("no_sniper.result", "allow.answer")],
          steps=[("Starting items", ["items", "pick", "answer"]), ("No sniper spawns", ["spawns", "no_sniper", "allow"])]),
 
-    dict(title="Hands Off the Propane", level="Overrides",
-         about="Can Pickup Object is asked when a survivor tries to pick up a physics object: "
-               "propane tanks are refused. Should Avoid Item is asked by the survivor bots about "
-               "items: they leave propane tanks alone.",
+    dict(title="Carry the Crates", level="Overrides",
+         objects={"crate": ("ENTITY:prop_physics", (0.0, 0.0, 0.3), {"model": "models/props_junk/wood_crate001a.mdl"})},
+         about="Survivors normally can't pick up physics objects. Can Pickup Object is asked when one "
+               "tries (Use on it): answering yes lets them carry wooden crates. Should Avoid Item is "
+               "asked by the survivor bots about items: they leave propane tanks alone. For these "
+               "two questions the game's own answer is no, and any yes wins.",
          nodes=[N("pickup", "HL_NodeOverride", 0, 0, hook="CanPickupObject"),
-                N("not_propane", "HL_NodeScriptValue", 1, 1, label="Not a propane tank",
-                  expr='a == null || (a.GetClassname() != "weapon_propanetank" && a.GetModelName().find("propane") == null)'),
+                N("is_crate", "HL_NodeScriptValue", 1, 1, label="A wooden crate",
+                  expr='a != null && a.GetModelName().find("wood_crate") != null'),
                 N("allow", "HL_NodeOverrideAnswer", 2, 0, hook="CanPickupObject"),
                 N("bots", "HL_NodeOverride", 0, 3, hook="ShouldAvoidItem"),
-                N("is_propane", "HL_NodeScriptValue", 1, 4, label="Is a propane tank", expr='a == "weapon_propanetank"'),
+                N("is_propane", "HL_NodeScriptValue", 1, 4, label="A propane tank", expr='a == "weapon_propanetank"'),
                 N("avoid", "HL_NodeOverrideAnswer", 2, 3, hook="ShouldAvoidItem")],
-         links=[("pickup.asked", "allow.run"), ("pickup.object", "not_propane.a"), ("not_propane.result", "allow.answer"),
+         links=[("pickup.asked", "allow.run"), ("pickup.object", "is_crate.a"), ("is_crate.result", "allow.answer"),
                 ("bots.asked", "avoid.run"), ("bots.classname", "is_propane.a"), ("is_propane.result", "avoid.answer")],
-         steps=[("Survivors can't pick it up", ["pickup", "not_propane", "allow"]),
-                ("Bots leave it alone", ["bots", "is_propane", "avoid"])]),
+         steps=[("Crates can be carried", ["pickup", "is_crate", "allow"]),
+                ("Bots leave propane alone", ["bots", "is_propane", "avoid"])]),
 
     dict(title="Console Command: boost", level="Overrides",
          about="Override User Console Command runs when a player types scripted_user_func in the "

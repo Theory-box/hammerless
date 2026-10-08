@@ -1073,7 +1073,9 @@ class _Compiler:
                 code = "\n".join(self.script_conts.get((nid, "asked"), []))
                 answer = None
                 typed = n.consts.get("answer")
-                changes = (typed is False) if answer_kind == "bool" else bool(typed)   # typed values that change anything
+                from .director_options import NO_BY_DEFAULT
+                # typed values that change anything (the game's own answer needs no code)
+                changes = (typed is (hook in NO_BY_DEFAULT)) if answer_kind == "bool" else bool(typed)
                 if answer_kind and ((nid, "answer") in self.data_links or changes):
                     answer = self.typed_in(n, "answer", answer_kind)
                 damage = self.typed_in(n, "damage", vs.NUM) if (nid, "damage") in self.data_links else None
@@ -1103,7 +1105,9 @@ class _Compiler:
         thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens or ir.logic_diropts)
         parts = [f"// Hammerless logic graphs for {ir.settings.name}\n",
                  "::HL_Ctx <- {};   // the event being handled, its fields\n::HL_R <- {};     // what action nodes returned\n"
-                 "::HL_L <- {};     // For Each: the current item\n::HL_I <- {};     // and its number\n"]
+                 "::HL_L <- {};     // For Each: the current item\n::HL_I <- {};     // and its number\n"
+                 "::HL_Scope <- this;   // this script's scope: Override questions are answered in it\n"
+                 f'::HL_Map <- "{ir.settings.name}";   // and only on this map (globals outlive the map)\n']
         if ir.logic_counts:
             parts.append("HL_Count <- { tank = 0, witch = 0, smoker = 0, boomer = 0, hunter = 0, spitter = 0, "
                          "jockey = 0, charger = 0 };\n"
@@ -1111,21 +1115,45 @@ class _Compiler:
                          "[4] = \"spitter\", [5] = \"jockey\", [6] = \"charger\" };\n")
         if ir.logic_retry:
             check = "(limit > 0 && HL_Count[what] >= limit)" if ir.logic_counts else "false"
-            # The Director Spawns switches set the Director's own limit for a type to 0, and the
-            # game's spawn call obeys that too: lift the limit just for our spawn, then put it back
+            # The game's spawn call obeys the Director's limits (one Tank at a time unless a script
+            # says otherwise; the Director Spawns switches set a type's limit to 0): lift them just for
+            # our spawn, on the table the Director reads first (measured: a second Tank only spawns
+            # with TankLimit there), then put them back
             parts.append("HL_LimitKeys <- { [1] = \"SmokerLimit\", [2] = \"BoomerLimit\", [3] = \"HunterLimit\", "
                          "[4] = \"SpitterLimit\", [5] = \"JockeyLimit\", [6] = \"ChargerLimit\", [7] = \"WitchLimit\", "
                          "[8] = \"TankLimit\" };\n"
-                         "function HL_DirectorOptions() {\n"
-                         "    try { return ::DirectorScript.MapScript.LocalScript.DirectorOptions; } catch (e) { return null; }\n"
+                         "function HL_DirectorOptions() {   // the table the Director reads first\n"
+                         "    try {\n"
+                         "        local m = ::DirectorScript.MapScript;\n"
+                         "        if (m.ChallengeScript.rawin(\"DirectorOptions\")) return m.ChallengeScript.DirectorOptions;\n"
+                         "        if (m.LocalScript.rawin(\"DirectorOptions\")) return m.LocalScript.DirectorOptions;\n"
+                         "        if (!m.rawin(\"DirectorOptions\")) m.DirectorOptions <- {};\n"
+                         "        return m.DirectorOptions;\n"
+                         "    } catch (e) { return null; }\n"
                          "}\n"
                          "function HL_ZSpawn(type) {\n"
                          "    local o = HL_DirectorOptions(), keys = [HL_LimitKeys[type]], saved = {};\n"
                          "    if (type <= 6) keys.append(\"MaxSpecials\");\n"
-                         "    if (o) foreach (k in keys) if (k in o) { saved[k] <- o[k]; o[k] = 32; }\n"
+                         "    if (o) foreach (k in keys) { saved[k] <- o.rawin(k) ? o[k] : null; o[k] <- 32; }\n"
                          "    local ok = ZSpawn({ type = type });\n"
-                         "    foreach (k, v in saved) o[k] = v;\n"
+                         "    if (!ok) { local at = HL_HiddenSpot(); if (at) ok = ZSpawn({ type = type, pos = at }); }\n"
+                         "    foreach (k, v in saved) { if (v == null) delete o[k]; else o[k] = v; }\n"
                          "    return ok;\n"
+                         "}\n"
+                         # the game only places a Tank by itself while none is alive (measured): for a second
+                         # one, a spot like the Director's own, near the survivors and out of their sight
+                         "function HL_HiddenSpot() {\n"
+                         "    local p = Director.GetHighestFlowSurvivor();\n"
+                         "    if (!p) { local e = null; while (e = Entities.FindByClassname(e, \"player\")) "
+                         "if (e.IsSurvivor() && !e.IsDead()) { p = e; break; } }\n"
+                         "    if (!p) return null;\n"
+                         "    local t = {}, spots = [], at = p.GetOrigin();\n"
+                         "    NavMesh.GetNavAreasInRadius(at, 1500.0, t);\n"
+                         "    foreach (a in t) {\n"
+                         "        local d = (a.GetCenter() - at).Length();\n"
+                         "        if (d > 600 && !a.IsPotentiallyVisibleToTeam(2) && !a.IsUnderwater()) spots.append(a);\n"
+                         "    }\n"
+                         "    return spots.len() ? spots[RandomInt(0, spots.len() - 1)].FindRandomSpot() : null;\n"
                          "}\n"
                          "HL_Pending <- [];\n"
                          "function HL_TrySpawn(type, what, limit) {\n"
@@ -1244,9 +1272,10 @@ def hook_function(hook: str, rows: list) -> str:
     else:
         params = ", ".join(a for a, _k in args)
         ctx = "    ::HL_Ctx <- { " + ", ".join(f"{a} = {a}" for a, _k in args) + " };\n"
-    default = {"bool": "true", "text": '""', "num": args[0][0] if args else "0"}.get(answer_kind, "null")
-    if hook == "ShouldAvoidItem":
-        default = "false"
+    from .director_options import NO_BY_DEFAULT
+    no = hook in NO_BY_DEFAULT          # normally no: any yes wins; otherwise any no wins
+    default = {"bool": "false" if no else "true", "text": '""', "num": args[0][0] if args else "0"}.get(answer_kind, "null")
+    join = "||" if no else "&&"
     body = ctx + f"    local answer = {default};\n"
     for code, answer, damage in rows:
         if code:        # its Asked chain; an Answer node in it leaves the answer in ::HL_Ans
@@ -1254,13 +1283,13 @@ def hook_function(hook: str, rows: list) -> str:
             if hook == "AllowTakeDamage":
                 body += '    if ("damage" in ::HL_Ans) dt.DamageDone = ::HL_Ans.damage;\n'
             if answer_kind == "bool":
-                body += '    if ("answer" in ::HL_Ans) answer = answer && ::HL_Ans.answer;\n'
+                body += f'    if ("answer" in ::HL_Ans) answer = answer {join} ::HL_Ans.answer;\n'
             elif answer_kind:
                 body += '    if ("answer" in ::HL_Ans) { local a = ::HL_Ans.answer; if (a != null && a != "") answer = a; }\n'
         if damage is not None:
             body += f"    dt.DamageDone = {damage};\n"
         if answer is not None:
-            body += (f"    answer = answer && ({answer});\n" if answer_kind == "bool"
+            body += (f"    answer = answer {join} ({answer});\n" if answer_kind == "bool"
                      else f"    {{ local a = {answer}; if (a != null && a != \"\") answer = a; }}\n")
     if answer_kind == "num":
         body += "    return answer.tointeger();\n"

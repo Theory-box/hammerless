@@ -150,6 +150,9 @@ BY_KEY = {o[0]: o for o in OPTIONS}
 
 # Hooks: (name, where it lives, arguments [(name, kind)], answer kind or None, description).
 # "mode": a function in the map's mode script; "options": a function in the Director options.
+# yes/no questions whose normal answer is no (Valve: Holdout lets players carry chosen props, mutations have bots
+# avoid removed weapons): any Override answering yes wins
+NO_BY_DEFAULT = ("ShouldAvoidItem", "CanPickupObject")
 HOOKS = [
     ("AllowTakeDamage", "mode", [("attacker", "thing"), ("victim", "thing"), ("inflictor", "thing"), ("damage", "num"),
                                  ("damage_type", "num"), ("weapon", "thing"), ("position", "vec")], "bool",
@@ -162,10 +165,12 @@ HOOKS = [
      "A weapon spawn may become something else: answer with the new class name (empty = unchanged)."),
     ("ConvertZombieClass", "options", [("zombie_type", "num")], "num",
      "A special is about to spawn: answer with the type it should be instead (1 smoker ... 6 charger, 8 tank)."),
-    ("ShouldAvoidItem", "options", [("classname", "text")], "bool", "Bots ask whether to leave an item alone."),
+    ("ShouldAvoidItem", "options", [("classname", "text")], "bool",
+     "Bots ask whether to leave an item alone: answer true and they won't take it."),
     ("GetDefaultItem", "options", [("slot", "num")], "text",
      "What survivors start with: answer with an item name for slot 0, 1, 2... (empty = no more)."),
-    ("CanPickupObject", "mode", [("object", "thing")], "bool", "A survivor tries to pick up a physics object."),
+    ("CanPickupObject", "mode", [("object", "thing")], "bool",
+     "A survivor tries to pick up a physics object: answer true to let them carry it (normally they can't)."),
     ("ShouldPlayBossMusic", "options", [("music", "num")], "bool", "The Tank or Witch music is about to play."),
 ]
 HOOKS_BY_NAME = {h[0]: h for h in HOOKS}

@@ -32,19 +32,19 @@ The Add menu has one place per purpose:
 | **HUD & Messages** | Show Message, Objective, HUD Text, HUD Hide |
 | **Overrides** | Override, Answer |
 | **Script** | Script and Script Value (your own Squirrel code) |
-| **Examples** | 20 ready-made graphs to learn from (below) |
+| **Examples**, **Examples 2** | 41 ready-made graphs to learn from (below) |
 
 Game functions that only work something out (Get Health, Find By Name...) just give a Result; actions (Give Item, Stagger...) run when an event wire arrives and then fire *Then*. Wire colours for script values: teal **text**, purple **vector**, pink **entity / player / nav area**, dark grey **any value**.
 
 Script nodes (game functions, If, For Each, Set Variable, Script...) chain straight into each other: an event's player flows into the next node, and mix with the other nodes both ways. Inside a For Each, use script nodes for each item: an entity-wiring node fires a moment later, after the loop has moved on.
 
-**Loops.** Blender draws a wire red when it goes back to a node earlier in the chain (a Timer whose own tick ends up stopping it). For event wires that is fine and works. A circle of value wires (a value worked out from itself) can't be, so it is left out and the build warns.
+**Several wires into one input** all work (three buttons into one Counter). **Loops.** Blender draws a wire red when it goes back to a node earlier in the chain (a Timer whose own tick ends up stopping it). For event wires that is fine and works. A circle of value wires (a value worked out from itself) can't be, so it is left out and the build warns.
 
 ### Overrides
 
 The game asks the map before it does some things: allow this damage? turn this weapon spawn into something else? An **Override** node picks the question; *Asked* runs your nodes when the game asks, and its other outputs are what was asked (the attacker, the weapon's class...). A fixed answer can be typed on the Override itself. To work the answer out from what was asked, end the Asked wires with an **Answer** node (set to the same question): its Allow / Answer (and New Damage, for damage) goes back to the game. With If nodes, different Answers can answer different cases.
 
-Overrides about the map's own entities (weapon spawns...) are asked as the map loads; Hammerless creates its logic first so they are answered too.
+Overrides about the map's own entities (weapon spawns...) are asked as the map loads; Hammerless creates its logic first so they are answered too. Most questions are "yes" unless an answer says no; **Can Pickup Object** (normally survivors can't carry physics props) and **Should Avoid Item** are "no" unless an answer says yes. **Convert Zombie Class** is only asked about the Director's own specials.
 
 ### Overrides and the HUD need Hammerless's game mode
 
@@ -76,6 +76,34 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | 18 | Wave Arena | For Each survivor, HUD, a Timer stopped by When |
 | 19 | Score Kept Across Chapters | Keep Across Maps |
 | 20 | Ambush Ahead, Out of Sight | Nav areas around the leader, flow, visibility, Make Table, ZSpawn |
+
+*Shift+A > Examples 2* has 21 more, chosen so that between the two sets every node is used somewhere:
+
+| | Example | Shows |
+|---|---|---|
+| 21 | Two-Step Gate | Sequence, Play Sound, Move's On Arrived |
+| 22 | Lever Lift | Branch (Toggle, Then Test), Move Go Back / On Back |
+| 23 | Three Fuses | Counter, Button Lock / Unlock |
+| 24 | Power First | Gate, Objective's On Started / On Completed, a hold-to-use Button |
+| 25 | Alarm While Inside | Volume On Leave / On Everyone Left, Delay Cancel, a sound from an object |
+| 26 | Secret Wall | Show / Hide Object, Collision |
+| 27 | Teleporter | Volume On All Survivors Inside, Teleport Survivors |
+| 28 | Witch Guards the Gate | Spawn Zombie at a spot, On Killed |
+| 29 | Never More Than Two Tanks | Infected Count, Value, Spawn's Only If Fewer Than, a random Timer |
+| 30 | Quiet Until You Leave | Director Settings, the Director node's own inputs |
+| 31 | Door Triggers a Horde | Entity Events (a door's On Open), Once |
+| 32 | Mob Warning | Director Mood's mob warnings, Show Message until Hide, HUD Text blinking at its own position |
+| 33 | Bring Back Stragglers | For Each survivor, Vector Math, Break / Make Vector, Set Origin |
+| 34 | Special Kill Feed | Get Field (a name by number from a list), Script |
+| 35 | Clear the Commons | For Each common infected, Kill |
+| 36 | Gas Can Counter | For Each entity of a class, a Timer with a random time |
+| 37 | !tank Chat Command | Override Intercept Chat, For Each player |
+| 38 | Everyone Is a Charger | Override Convert Zombie Class, Should Play Boss Music (a typed answer) |
+| 39 | Shotgun Start, No Snipers | Override Get Default Item, Allow Weapon Spawn |
+| 40 | Carry the Crates | Override Can Pickup Object (survivors carry chosen props), Should Avoid Item |
+| 41 | Console Command: boost | Override User Console Command, Apply Abs Velocity Impulse |
+
+Examples 2 tested in game: 21-28, 30, 31, 34-37, 39-41 on a map, 29 and 33 on c2m1; 32 and 38 depend on the Director's own mobs and specials and weren't seen in a short test.
 
 Tested in game: 7, 14, 16, 17 on a map; 20 on c2m1 (it needs the map's flow, a path from the start to the end safe room).
 

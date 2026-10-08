@@ -3,9 +3,15 @@
 ## Unreleased
 
 - **Logic examples (Shift+A > Examples):** 20 ready-made graphs, from a hello message to an ambush that picks hidden nav areas ahead of the survivors. Each has notes on what it does and how, numbered frames, and any objects it needs (button, gate, room) at the 3D cursor.
+- **Logic examples 2 (Shift+A > Examples 2):** 21 more (21-41), chosen so that between the two sets every node and every Override is used: map parts (sequences, lifts, fuses, power, teleporters, secret walls), zombies and the Director, scripting (vectors, lists, For Each) and all the Override questions.
+- **Branch: Toggle, Then Test** (flips the value, then fires If True / If False: a lever with one wire).
 - **Logic editor menus:** one place per purpose (Events, Flow, Values, Scene, Actions, Director, HUD & Messages, Overrides, Script); the game's full function and event lists sit under Actions and Events.
 - **Answer node:** works an Override's answer out from what the game asked (Blender doesn't allow wires from an Override back into itself). With If nodes, different answers for different cases.
 - **Fixes:**
+  - Override questions were answered outside the logic script's own scope: an Asked chain that reached a node like Spawn Zombie (or the debug log) failed with a script error (measured). And because the game keeps scripts' globals from map to map, a previous map's answers could answer the next map's questions. Now only the current map's logic answers, in its own scope.
+  - **Can Pickup Object** answered yes by default, which would have let survivors carry every physics prop; the game's own answer is no (Valve's Holdout uses it to allow chosen props). For it and **Should Avoid Item** any yes now wins (before, their answers could never become yes).
+  - **Spawn Zombie** (Where empty) could never give a second Tank: the game only places a Tank by itself while none is alive (measured, whatever the Tank limit). Hammerless now picks a spot like the Director's own (near the leading survivor, 600-1500 units away, out of sight) when the game won't. The Director's limits it lifts for the spawn are now changed on the table the Director actually reads.
+  - An event input took only one wire: wiring a second event into it (three buttons into one Counter) silently replaced the first. Event inputs now take any number, also in graphs saved before.
   - Overrides on the map's own weapon spawns (Convert / Allow Weapon Spawn) were only asked for spawns created after Hammerless's logic, so most were left as they were (measured). The logic is now created first.
   - Event wires that loop back (a Timer whose tick ends up stopping it) were dropped because Blender draws them red. They now work; a circle of value wires is still left out, with a warning.
   - **If** now runs inside script chains, so an event's details (the player, the item...) are still there after it.

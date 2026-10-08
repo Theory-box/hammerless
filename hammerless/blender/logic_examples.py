@@ -442,11 +442,12 @@ def _objects(context, number, example):
     context.scene.collection.children.link(coll)
     base = context.scene.cursor.location.copy()
     made = {}
-    for key, (shape, offset) in wanted.items():
+    for key, (shape, offset, *extra) in wanted.items():
         name, where = f"Example {number:02d} {key}", base + type(base)(offset)
-        if shape.startswith("ENTITY:"):
+        if shape.startswith("ENTITY:"):             # (shape, offset, keyvalues)
             from .ops import make_entity_object
-            obj = make_entity_object(context, shape.split(":", 1)[1], where, collection=coll, name=name)
+            obj = make_entity_object(context, shape.split(":", 1)[1], where, collection=coll, name=name,
+                                     keyvalues=extra[0] if extra else None)
         elif shape == "SPOT":
             obj = bpy.data.objects.new(name, None)
             obj.empty_display_type, obj.empty_display_size = "SINGLE_ARROW", 0.5

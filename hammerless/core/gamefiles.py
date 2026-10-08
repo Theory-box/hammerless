@@ -295,11 +295,13 @@ def mode_files(ir: MapIR) -> dict[str, str]:
     for hook in sorted(ir.logic_hooks):
         _n, where, args, answer, _about = HOOKS_BY_NAME[hook]
         params = "dt" if hook == "AllowTakeDamage" else ", ".join(a for a, _k in args)
-        fallback = {"AllowTakeDamage": "true", "ShouldAvoidItem": "false", "ConvertWeaponSpawn": "0",
+        fallback = {"AllowTakeDamage": "true", "ShouldAvoidItem": "false", "CanPickupObject": "false", "ConvertWeaponSpawn": "0",
                     "GetDefaultItem": "0", "ConvertZombieClass": args[0][0] if args else "0"}.get(hook, "true")
-        call = f"::HL_Hook_{hook}({params})"
-        body = (f'return ("HL_Hook_{hook}" in getroottable()) ? {call} : {fallback};' if answer
-                else f'if ("HL_Hook_{hook}" in getroottable()) {call};')
+        # only this map's logic answers (the game keeps scripts' globals from map to map), and in the
+        # logic script's own scope, where the nodes' functions and helpers live
+        ready = f'("HL_Map" in getroottable()) && ::HL_Map == "{name}" && ("HL_Hook_{hook}" in getroottable())'
+        call = f'::HL_Hook_{hook}.call(::HL_Scope{", " + params if params else ""})'
+        body = f'return ({ready}) ? {call} : {fallback};' if answer else f'if ({ready}) {call};'
         (mode if where == "mode" else options).append(f"function {hook}({params}) {{ {body} }}")
     text = f"// Hammerless: {name}'s rules for its scripted mode (the logic graph's Override nodes)\n"
     text += "".join(m + "\n" for m in mode)

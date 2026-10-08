@@ -2138,6 +2138,23 @@ class TestOverrideAnswer(unittest.TestCase):
         # the logic entity comes first, so questions asked while the map's entities are made are answered
         self.assertEqual(ir.entities[0].keyvalues.get("targetname"), "hl_logic")
 
+    def test_questions_normally_answered_no(self):
+        # Can Pickup Object and Should Avoid Item are "no" unless an answer says yes (Valve's Holdout
+        # allows chosen props; mutations have bots avoid removed weapons)
+        from hammerless.core.logic import hook_function
+        from hammerless.core.ir import MapIR
+        from hammerless.core import gamefiles
+        hook = hook_function("CanPickupObject", [("    HL_S_x();", None, None)])
+        self.assertIn("local answer = false;", hook)
+        self.assertIn('answer = answer || ::HL_Ans.answer;', hook)
+        self.assertIn("local answer = true;", hook_function("AllowWeaponSpawn", []))
+        ir = MapIR()
+        ir.settings.name = "m"
+        ir.scripted_mode, ir.logic_hooks = True, {"CanPickupObject": []}
+        mode = gamefiles.mode_files(ir)["scripts/vscripts/m_hammerless.nut"]
+        self.assertIn('::HL_Map == "m"', mode)                  # only this map's logic answers
+        self.assertIn("::HL_Hook_CanPickupObject.call(::HL_Scope, object) : false", mode)
+
     def test_answer_node_needs_a_question_with_an_answer(self):
         from hammerless.core.logic import LLink, LNode, compile_graph
         ir = MapIR()

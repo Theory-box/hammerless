@@ -1784,7 +1784,7 @@ def _hook_items(self, context):
 
 
 def _rebuild_override(self, context=None):
-    from ..core.director_options import HOOKS_BY_NAME
+    from ..core.director_options import HOOKS_BY_NAME, NO_BY_DEFAULT
     self.inputs.clear()
     self.outputs.clear()
     hook = HOOKS_BY_NAME.get(self.hook)
@@ -1797,7 +1797,7 @@ def _rebuild_override(self, context=None):
     if answer:
         s = _data_socket(self.inputs, answer, "answer", "Allow" if answer == "bool" else "Answer")
         if answer == "bool":
-            s.value = self.hook != "ShouldAvoidItem"
+            s.value = self.hook not in NO_BY_DEFAULT
     if self.hook == "AllowTakeDamage":
         _data_socket(self.inputs, "num", "damage", "New Damage")
     self.label = f"Override: {self.hook}"
@@ -1832,7 +1832,7 @@ class HL_NodeOverride(_Block, bpy.types.Node):
 
 
 def _rebuild_answer(self, context=None):
-    from ..core.director_options import HOOKS_BY_NAME
+    from ..core.director_options import HOOKS_BY_NAME, NO_BY_DEFAULT
     self.inputs.clear()
     self.outputs.clear()
     self.ev_in("run", "Run")
@@ -1840,7 +1840,7 @@ def _rebuild_answer(self, context=None):
     if hook is not None and hook[3]:
         s = _data_socket(self.inputs, hook[3], "answer", "Allow" if hook[3] == "bool" else "Answer")
         if hook[3] == "bool":
-            s.value = self.hook != "ShouldAvoidItem"
+            s.value = self.hook not in NO_BY_DEFAULT
     if self.hook == "AllowTakeDamage":
         _data_socket(self.inputs, "num", "damage", "New Damage")
     self.ev_out("then", "Then")
