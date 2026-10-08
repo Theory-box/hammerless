@@ -877,17 +877,31 @@ def test_logic_loops():
 
 
 def test_logic_examples_build():
-    # every example graph builds, and compiles into the map with nothing to warn about
-    from hammerless.blender.logic_examples import EXAMPLES, build_example
+    # every example graph builds, and compiles into the map with nothing to warn about. Entity event
+    # nodes need the game's entity definitions: copied from the real game when it's installed
+    import shutil
+    from hammerless.blender.logic_examples import all_examples, build_example
+    from hammerless.core.compile import find_game_root
+    real = find_game_root()
+    has_fgd = bool(real) and os.path.exists(os.path.join(real, "bin", "left4dead2.fgd"))
+    if has_fgd:
+        os.makedirs(os.path.join(FAKE_GAME, "bin"), exist_ok=True)
+        for f in ("base.fgd", "left4dead2.fgd"):
+            shutil.copy(os.path.join(real, "bin", f), os.path.join(FAKE_GAME, "bin", f))
     bad = []
-    for i, ex in enumerate(EXAMPLES):
+    for i, ex in enumerate(all_examples()):
+        if not has_fgd and any(n["type"] in ("HL_NodeObject", "HL_NodeDirector") for n in ex["nodes"]):
+            print(f"SKIP example {i + 1} (no game entity definitions here)")
+            continue
         reset_scene()
         add_box("floor", (40, 40, 0.5), (0, 0, -0.25))
         bpy.ops.object.empty_add(location=(2, 0, 0.1))
         sp = bpy.context.object
         sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
         bpy.context.scene.cursor.location = (-10, -10, 0)
-        tree = build_example(bpy.context, i)
+        problems = []
+        tree = build_example(bpy.context, i, problems)
+        assert not problems, (ex["title"], problems)
         assert len([n for n in tree.nodes if n.bl_idname != "NodeFrame"]) == len(ex["nodes"]), ex["title"]
         assert len(tree.links) == len(ex["links"]), (ex["title"], len(tree.links), len(ex["links"]))
         assert all(l.is_valid for l in tree.links), ex["title"]        # (Blender marks loops invalid)

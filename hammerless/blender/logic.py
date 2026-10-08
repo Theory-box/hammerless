@@ -121,6 +121,19 @@ class HL_BoolSocket(bpy.types.NodeSocket):
         return BOOL_COLOR
 
 
+EVENT_LINK_LIMIT = 4095      # Blender's default for an input is one wire: a second one replaced the first
+
+
+def _event_inputs_take_many(*_args):
+    """Graphs saved before event inputs took several wires."""
+    for tree in bpy.data.node_groups:
+        if tree.bl_idname == TREE:
+            for node in tree.nodes:
+                for sock in node.inputs:
+                    if sock.bl_idname == "HL_EventSocket" and sock.link_limit != EVENT_LINK_LIMIT:
+                        sock.link_limit = EVENT_LINK_LIMIT
+
+
 class _Node:
     kind = ""
     category = "Flow"
@@ -140,6 +153,7 @@ class _Node:
     def ev_in(self, ident, label, takes_value=False, tip=""):
         s = self.inputs.new("HL_EventSocket", label, identifier=ident)
         s.takes_value, s.tip = takes_value, tip
+        s.link_limit = EVENT_LINK_LIMIT        # any number of events can fire one input
         return s
 
     def ev_out(self, ident, label, tip=""):
@@ -530,6 +544,7 @@ class HL_NodeBranch(_Node, bpy.types.Node):
         self.ev_in("set_true", "Set True")
         self.ev_in("set_false", "Set False")
         self.ev_in("toggle", "Toggle")
+        self.ev_in("toggle_test", "Toggle, Then Test")
         self.ev_out("true", "If True")
         self.ev_out("false", "If False")
 
@@ -1933,6 +1948,7 @@ def _add_menu(self, context):
     if "HL_MT_logic_examples" in dir(bpy.types):
         self.layout.separator()
         self.layout.menu("HL_MT_logic_examples", icon="HELP")
+        self.layout.menu("HL_MT_logic_examples_2", icon="HELP")
 
 
 # ---------------------------------------------------------------- export
@@ -2234,13 +2250,21 @@ CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_Boo
     HL_OT_logic_new, HL_OT_logic_from_outputs, HL_OT_logic_refresh_node)
 
 
+@bpy.app.handlers.persistent
+def _on_load(*_args):
+    _event_inputs_take_many()
+
+
 def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
     bpy.types.NODE_MT_add.append(_add_menu)
+    bpy.app.handlers.load_post.append(_on_load)
 
 
 def unregister():
+    if _on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_on_load)
     bpy.types.NODE_MT_add.remove(_add_menu)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

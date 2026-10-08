@@ -670,6 +670,7 @@ class _Compiler:
             take("set_true", name, "SetValue", "1")
             take("set_false", name, "SetValue", "0")
             take("toggle", name, "Toggle")
+            take("toggle_test", name, "ToggleTest")
             fire("true", e, "OnTrue")
             fire("false", e, "OnFalse")
         elif k == "COUNTER":

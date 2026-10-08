@@ -1,4 +1,4 @@
-"""Ready-made logic graphs to learn from: Add > Examples in the logic editor.
+"""Ready-made logic graphs to learn from: Add > Examples (and Examples 2, logic_examples_2) in the logic editor.
 
 Each example becomes a new graph (with notes on what it does and how), plus any objects it needs
 (a button, a gate, a room) in its own collection at the 3D cursor. They are ordinary graphs: they
@@ -408,6 +408,11 @@ EXAMPLES = [
 
 # ---------------------------------------------------------------- building
 
+def all_examples():
+    from .logic_examples_2 import EXAMPLES_2
+    return EXAMPLES + EXAMPLES_2
+
+
 def _box(name, size, location, collection):
     mesh = bpy.data.meshes.new(name)
     bm = bmesh.new()
@@ -422,7 +427,11 @@ def _box(name, size, location, collection):
     return obj
 
 
-OBJECT_SHAPES = {"BUTTON": (0.3, 0.3, 0.3), "GATE": (3.0, 0.25, 3.0), "ROOM": (4.0, 4.0, 3.0)}
+# plain meshes (metres); "SPOT" is an empty (a position), "ENTITY:<class>" a game entity
+OBJECT_SHAPES = {"BUTTON": (0.3, 0.3, 0.3), "GATE": (3.0, 0.25, 3.0), "ROOM": (4.0, 4.0, 3.0),
+                 "PAD": (3.0, 3.0, 1.0), "PLATFORM": (2.5, 2.5, 0.3), "WALL": (3.0, 0.3, 3.0),
+                 "HEDGE": (3.0, 0.6, 2.5)}
+SEE_THROUGH = ("ROOM", "PAD")      # volumes
 
 
 def _objects(context, number, example):
@@ -434,27 +443,29 @@ def _objects(context, number, example):
     base = context.scene.cursor.location.copy()
     made = {}
     for key, (shape, offset) in wanted.items():
-        obj = _box(f"Example {number:02d} {key}", OBJECT_SHAPES[shape], base + type(base)(offset), coll)
-        if shape == "ROOM":
-            obj.display_type = "WIRE"          # a volume: see through it
+        name, where = f"Example {number:02d} {key}", base + type(base)(offset)
+        if shape.startswith("ENTITY:"):
+            from .ops import make_entity_object
+            obj = make_entity_object(context, shape.split(":", 1)[1], where, collection=coll, name=name)
+        elif shape == "SPOT":
+            obj = bpy.data.objects.new(name, None)
+            obj.empty_display_type, obj.empty_display_size = "SINGLE_ARROW", 0.5
+            obj.location = where
+            coll.objects.link(obj)
+        else:
+            obj = _box(name, OBJECT_SHAPES[shape], where, coll)
+            if shape in SEE_THROUGH:
+                obj.display_type = "WIRE"
         made[key] = obj
     return made
 
 
-def _set_socket(node, ident, value, objects):
-    sock = next((s for s in node.inputs if s.identifier == ident), None)
-    if sock is None:
-        raise KeyError(f"{node.name}: no input '{ident}'")
-    if isinstance(value, str) and value.startswith("@"):
-        value = objects[value[1:]]
-    sock.value = value
+def _value(v, objects):
+    return objects[v[1:]] if isinstance(v, str) and v.startswith("@") else v
 
 
 def _socket(node, ident, outputs):
-    sock = next((s for s in (node.outputs if outputs else node.inputs) if s.identifier == ident), None)
-    if sock is None:
-        raise KeyError(f"{node.name}: no {'output' if outputs else 'input'} '{ident}'")
-    return sock
+    return next((s for s in (node.outputs if outputs else node.inputs) if s.identifier == ident), None)
 
 
 def _place(node, x, y):
@@ -479,9 +490,11 @@ def _note(tree, name, lines, x, y, width):
     return frame
 
 
-def build_example(context, index: int):
-    """Make example number index (0-based): its graph, notes and objects. Returns the tree."""
-    ex = EXAMPLES[index]
+def build_example(context, index: int, problems: list | None = None):
+    """Make example number index (0-based): its graph, notes and objects. Returns the tree. Sockets
+    that aren't there (an entity's events need the game's definitions) go into problems."""
+    problems = problems if problems is not None else []
+    ex = all_examples()[index]
     number = index + 1
     title = f"Example {number:02d}: {ex['title']}"
     objects = _objects(context, number, ex)
@@ -492,15 +505,24 @@ def build_example(context, index: int):
         node = tree.nodes.new(spec["type"])
         node.name = spec["id"]
         for k, v in spec["props"].items():
-            setattr(node, k, v)
+            setattr(node, k, _value(v, objects))
         if spec["label"]:
             node.label = spec["label"]
         for ident, v in spec["sockets"].items():
-            _set_socket(node, ident, v, objects)
+            sock = _socket(node, ident, False)
+            if sock is None:
+                problems.append(f"'{node.name}' has no input '{ident}'")
+                continue
+            sock.value = _value(v, objects)
         nodes[spec["id"]] = node
     for a, b in ex["links"]:
         (an, ao), (bn, bi) = a.split("."), b.split(".")
-        tree.links.new(_socket(nodes[an], ao, True), _socket(nodes[bn], bi, False))
+        out, inp = _socket(nodes[an], ao, True), _socket(nodes[bn], bi, False)
+        if out is None or inp is None:
+            problems.append(f"no wire from '{an}' {ao} to '{bn}' {bi}: its node has no such socket (entity "
+                            f"events need the game's definitions: set the L4D2 folder, then connect it)")
+            continue
+        tree.links.new(out, inp)
     # steps: a frame around each group of nodes, numbered in the order things happen
     for i, (label, ids) in enumerate(ex.get("steps", []), 1):
         frame = tree.nodes.new("NodeFrame")
@@ -534,26 +556,28 @@ class HL_OT_logic_example(bpy.types.Operator):
 
     @classmethod
     def description(cls, context, properties):
-        if 0 <= properties.index < len(EXAMPLES):
-            return EXAMPLES[properties.index]["about"]
+        examples = all_examples()
+        if 0 <= properties.index < len(examples):
+            return examples[properties.index]["about"]
         return cls.bl_description
 
     def execute(self, context):
-        if not 0 <= self.index < len(EXAMPLES):
+        if not 0 <= self.index < len(all_examples()):
             return {"CANCELLED"}
-        tree = build_example(context, self.index)
+        problems = []
+        tree = build_example(context, self.index, problems)
         _show_tree(context, tree)
-        self.report({"INFO"}, f"Added '{tree.name}'")
+        if problems:
+            self.report({"WARNING"}, f"Added '{tree.name}', but: " + "; ".join(problems))
+        else:
+            self.report({"INFO"}, f"Added '{tree.name}'")
         return {"FINISHED"}
 
 
-class HL_MT_logic_examples(bpy.types.Menu):
-    bl_idname = "HL_MT_logic_examples"
-    bl_label = "Examples"
-
+def _examples_menu(idname, label, first, last):
     def draw(self, context):
         level = None
-        for i, ex in enumerate(EXAMPLES):
+        for i, ex in list(enumerate(all_examples()))[first:last]:
             if ex["level"] != level:
                 if level is not None:
                     self.layout.separator()
@@ -561,9 +585,12 @@ class HL_MT_logic_examples(bpy.types.Menu):
                 self.layout.label(text=level)
             op = self.layout.operator(HL_OT_logic_example.bl_idname, text=f"{i + 1:2d}. {ex['title']}")
             op.index = i
+    return type(idname, (bpy.types.Menu,), {"bl_idname": idname, "bl_label": label, "draw": draw})
 
 
-CLASSES = (HL_OT_logic_example, HL_MT_logic_examples)
+HL_MT_logic_examples = _examples_menu("HL_MT_logic_examples", "Examples", 0, len(EXAMPLES))
+HL_MT_logic_examples_2 = _examples_menu("HL_MT_logic_examples_2", "Examples 2", len(EXAMPLES), None)
+CLASSES = (HL_OT_logic_example, HL_MT_logic_examples, HL_MT_logic_examples_2)
 
 
 def register():
