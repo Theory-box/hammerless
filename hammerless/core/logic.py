@@ -107,6 +107,77 @@ def _base(source: str) -> str:
     return re.sub(r" \(part \d+\)$", "", source)
 
 
+BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE")
+BLOCK_VALUES = ("GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
+                "CHECK", "SCRIPT_VALUE")
+VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
+
+
+def parse_fields(text: str) -> list[tuple[str, str]]:
+    """Make Table's fields: 'type: num, pos: vec' -> [(name, kind)] (kind defaults to any)."""
+    out = []
+    for part in (text or "").split(","):
+        if not part.strip():
+            continue
+        name, _, kind = part.partition(":")
+        name = re.sub(r"[^A-Za-z0-9_]", "", name.strip())
+        kind = kind.strip().lower() or "any"
+        if name:
+            out.append((name, kind if kind in VALUE_KINDS else "any"))
+    return out
+
+
+# shared script helpers (written once into the map script when a node needs them)
+HELPERS = {
+    "HL_Players": (
+        "::HL_Players <- function(which) {   // 0 everyone, 1 survivors, 2 infected players (alive)\n"
+        "    local out = [], p = null;\n"
+        "    while (p = Entities.FindByClassname(p, \"player\")) {\n"
+        "        if (which == 1 && !p.IsSurvivor()) continue;\n"
+        "        if (which == 2 && (p.IsSurvivor() || p.IsDead())) continue;\n"
+        "        out.append(p);\n    }\n    return out;\n}"),
+    "HL_Find": (
+        "::HL_Find <- function(what, byClass) {\n"
+        "    local out = [], e = null;\n"
+        "    if (byClass) while (e = Entities.FindByClassname(e, what)) out.append(e);\n"
+        "    else while (e = Entities.FindByName(e, what)) out.append(e);\n    return out;\n}"),
+    "HL_Items": (
+        "::HL_Items <- function(list) {   // a list or a table's values\n"
+        "    local out = [];\n    if (list == null) return out;\n"
+        "    if (typeof list == \"array\") return list;\n"
+        "    if (typeof list == \"table\") foreach (k, v in list) out.append(v);\n    return out;\n}"),
+    "HL_Vars": (
+        "::HL_Var <- {};\n::HL_PVar <- {};\n"
+        "if (\"RestoreTable\" in getroottable()) RestoreTable(\"hl_vars\", ::HL_Var);   // kept across map changes\n"
+        "::HL_VarGet <- function(name, d) { return (name in ::HL_Var && ::HL_Var[name] != null) ? ::HL_Var[name] : d; }\n"
+        "::HL_VarSet <- function(name, v, keep) {\n    ::HL_Var[name] <- v;\n"
+        "    if (keep) { local t = {}; foreach (k, x in ::HL_Var) t[k] <- x; SaveTable(\"hl_vars\", t); }\n}\n"
+        "::HL_PKey <- function(p) { return (p == null) ? \"\" : (\"GetPlayerUserId\" in p ? p.GetPlayerUserId() : p.GetEntityIndex()).tostring(); }\n"
+        "::HL_PVarGet <- function(p, name, d) {\n    local k = ::HL_PKey(p);\n"
+        "    return (k in ::HL_PVar && name in ::HL_PVar[k] && ::HL_PVar[k][name] != null) ? ::HL_PVar[k][name] : d;\n}\n"
+        "::HL_PVarSet <- function(p, name, v) {\n    local k = ::HL_PKey(p);\n"
+        "    if (!(k in ::HL_PVar)) ::HL_PVar[k] <- {};\n    ::HL_PVar[k][name] <- v;\n}"),
+    "HL_Field": (
+        "::HL_Field <- function(t, key) {   // a table's field, or a list's item (0, 1, ...)\n"
+        "    if (t == null) return null;\n"
+        "    if (typeof t == \"array\") { local i = key.tointeger(); return (i >= 0 && i < t.len()) ? t[i] : null; }\n"
+        "    try { return (key in t) ? t[key] : null; } catch (e) { return null; }\n}\n"
+        "::HL_Count_ <- function(t) { return (t == null) ? 0.0 : t.len().tofloat(); }"),
+    "HL_Str": (
+        "::HL_Str <- function(v) {   // any value as readable text\n"
+        "    if (v == null) return \"\";\n"
+        "    if (typeof v == \"float\") return (v == v.tointeger()) ? v.tointeger().tostring() : v.tostring();\n"
+        "    if (typeof v == \"instance\") {\n"
+        "        try { if (v.IsPlayer()) return v.GetPlayerName(); } catch (e) {}\n"
+        "        try { local n = v.GetName(); return n != \"\" ? n : v.GetClassname(); } catch (e) {}\n"
+        "        try { return v.x + \" \" + v.y + \" \" + v.z; } catch (e) {}\n    }\n"
+        "    return v.tostring();\n}"),
+    "HL_IsSet": (
+        "::HL_IsSet <- function(v) {   // there, and still in the game if it's an entity\n"
+        "    if (v == null) return false;\n    try { return v.IsValid(); } catch (e) { return true; }\n}"),
+}
+
+
 class _Compiler:
     def __init__(self, ir: MapIR, problems: list[str], graph: str = "", log: bool = False):
         self.log = log
@@ -132,6 +203,7 @@ class _Compiler:
         self.script_takes: dict[tuple[str, str], str] = {}  # (node, input) -> function to call
         self.script_conts: dict[tuple[str, str], list[str]] = {}   # (node, output) -> code it runs
         self.script_events: dict[str, list[str]] = {}       # game event -> event nodes
+        self.script_sources: set[tuple[str, str]] = set()   # (node, output) whose wires run as script
 
     # -- names and entities
     def fn_name(self, base: str) -> str:
@@ -268,6 +340,8 @@ class _Compiler:
             e = vs.event(s.get("event", ""))
             fld = next((x for x in (e or {}).get("fields", []) if x["name"] == sock), None)
             return vs.field_expr(sock, vs.field_kind(fld)) if fld else "null"
+        if k in BLOCK_VALUES or k in ("FOR_EACH",):
+            return self.block_value(n, sock, slug)
         if k == "VALUE":
             return self.expr_in(n, "value") if sock == "value" else "0.0"
         if k == "PROGRESS":
@@ -356,10 +430,13 @@ class _Compiler:
                 target = "t"
             call = vs.call_expr(f, target, args)
             body = guard + (f'    ::HL_R["{slug}"] <- {call};\n' if f["returns"] != "void" else f"    {call};\n")
-            self.script_fns[nid] = (fn, body)
-            self.script_takes[(nid, "run")] = fn
-            take("run", *self.script_call(fn))
+            self.script_action(nid, fn, body + "@@then@@", ["then"], take)
             return
+        if k in BLOCK_ACTIONS:
+            self.block_action(n, slug, take)
+            return
+        if k in BLOCK_VALUES:
+            return                          # values: expressions where they're used
         if k == "SCRIPT_EVENT":
             e = vs.event(s.get("event", ""))
             if e is None:
@@ -749,14 +826,134 @@ class _Compiler:
 
     def _script_source(self, nid: str, sock: str) -> bool:
         n = self.nodes.get(nid)
-        return n is not None and ((n.kind == "SCRIPT_CALL" and sock == "then" and nid in self.script_fns)
-                                  or (n.kind == "SCRIPT_EVENT" and sock == "happened"))
+        return (nid, sock) in self.script_sources or (n is not None and n.kind == "SCRIPT_EVENT" and sock == "happened")
+
+    def script_action(self, nid: str, fn: str, body: str, outputs: list[str], take) -> None:
+        """A node that runs as a script function: its event input calls it, and @@output@@ in the body is
+        where each event output's wires go."""
+        self.script_fns[nid] = (fn, body)
+        self.script_takes[(nid, "run")] = fn
+        self.script_sources |= {(nid, o) for o in outputs}
+        take("run", *self.script_call(fn))
+
+    def helper(self, name: str, code: str) -> None:
+        """A shared script function, written once."""
+        if name not in self.defined and name not in self.ir.__dict__.setdefault("_logic_helpers", set()):
+            self.defined.add(name)
+            self.ir._logic_helpers.add(name)
+            self.functions.insert(0, code)
+
+    def block_action(self, n: LNode, slug: str, take) -> None:
+        """Building blocks that do something (For Each, Set Variable, Script)."""
+        s, k, nid = n.settings, n.kind, n.id
+        fn = self.fn_name(f"HL_S_{slug}")
+        if k == "FOR_EACH":
+            self.helper("HL_Players", HELPERS["HL_Players"])
+            self.helper("HL_Find", HELPERS["HL_Find"])
+            what = s.get("what", "SURVIVORS")
+            match = self.typed_in(n, "match", vs.TEXT)
+            gather = {"SURVIVORS": "HL_Players(1)", "SPECIALS": "HL_Players(2)", "PLAYERS": "HL_Players(0)",
+                      "COMMONS": 'HL_Find("infected", true)', "CLASS": f"HL_Find({match}, true)",
+                      "NAME": f"HL_Find({match}, false)"}.get(what)
+            if gather is None:                      # a list or table wired in
+                gather = f"HL_Items({self.typed_in(n, 'list', vs.ANY)})"
+                self.helper("HL_Items", HELPERS["HL_Items"])
+            body = (f"    local i = 0;\n    foreach (v in {gather}) {{\n"
+                    f'        ::HL_L["{slug}"] <- v; ::HL_I["{slug}"] <- i;\n@@each@@\n        i++;\n    }}\n@@done@@')
+            self.script_action(nid, fn, body, ["each", "done"], take)
+        elif k == "SET_VAR":
+            self.helper("HL_Vars", HELPERS["HL_Vars"])
+            name = vs.literal(vs.TEXT, s.get("name") or "value")
+            value = self.typed_in(n, "value", s.get("kind", vs.ANY))
+            if s.get("op") == "ADD":
+                old = (f"HL_PVarGet({self.typed_in(n, 'player', vs.THING)}, {name}, 0.0)" if s.get("scope") == "PLAYER"
+                       else f"HL_VarGet({name}, 0.0)")
+                value = f"({old} + ({value}))"
+            if s.get("scope") == "PLAYER":
+                line = f"    HL_PVarSet({self.typed_in(n, 'player', vs.THING)}, {name}, {value});\n"
+            else:
+                line = f"    HL_VarSet({name}, {value}, {'true' if s.get('keep') else 'false'});\n"
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
+        elif k == "SCRIPT_CODE":
+            args = "".join(f"    local {x} = {self.typed_in(n, x, vs.ANY)};\n" for x in "abcd")
+            code = "\n".join("    " + line for line in (s.get("code") or "").splitlines())
+            body = (f"{args}    local result = null;\n{code}\n"
+                    f'    ::HL_R["{slug}"] <- result;\n@@then@@')
+            self.script_action(nid, fn, body, ["then"], take)
+
+    def block_value(self, n: LNode, sock: str, slug: str) -> str:
+        """Building blocks that work something out."""
+        s, k = n.settings, n.kind
+        if k == "FOR_EACH":
+            if sock == "index":
+                return f'(("{slug}" in ::HL_I) ? ::HL_I["{slug}"].tofloat() : 0.0)'
+            return f'(("{slug}" in ::HL_L) ? ::HL_L["{slug}"] : null)'
+        if k == "GET_VAR":
+            self.helper("HL_Vars", HELPERS["HL_Vars"])
+            kind = s.get("kind", vs.NUM)
+            default = {vs.NUM: "0.0", vs.BOOL: "false", vs.TEXT: '""'}.get(kind, "null")
+            name = vs.literal(vs.TEXT, s.get("name") or "value")
+            if s.get("scope") == "PLAYER":
+                return f"HL_PVarGet({self.typed_in(n, 'player', vs.THING)}, {name}, {default})"
+            return f"HL_VarGet({name}, {default})"
+        if k == "MAKE_TABLE":
+            rows = [(name, kind) for name, kind in parse_fields(s.get("fields", ""))]
+            def field(name, kind):
+                if kind == "int":                  # a whole number (the game wants one for e.g. ZSpawn's type)
+                    return f'({self.typed_in(n, "f_" + name, vs.NUM)}).tointeger()'
+                return self.typed_in(n, "f_" + name, kind)
+            body = ", ".join(f'["{name}"] = {field(name, kind)}' for name, kind in rows)
+            return f"{{ {body} }}"
+        if k == "GET_FIELD":
+            self.helper("HL_Field", HELPERS["HL_Field"])
+            table = self.typed_in(n, "table", vs.ANY)
+            if sock == "count":
+                return f"HL_Count_({table})"
+            return f"HL_Field({table}, {self.typed_in(n, 'key', vs.TEXT)})"
+        if k == "FORMAT_TEXT":
+            self.helper("HL_Str", HELPERS["HL_Str"])
+            import re as _re
+            parts = []
+            for piece in _re.split(r"(\{[abcd]\})", s.get("template") or ""):
+                if _re.fullmatch(r"\{[abcd]\}", piece):
+                    parts.append(f"HL_Str({self.typed_in(n, piece[1], vs.ANY)})")
+                elif piece:
+                    parts.append(vs.literal(vs.TEXT, piece))
+            return "(" + (" + ".join(parts) if parts else '""') + ")"
+        if k == "MAKE_VECTOR":
+            return (f"Vector({self.typed_in(n, 'x', vs.NUM)}, {self.typed_in(n, 'y', vs.NUM)}, "
+                    f"{self.typed_in(n, 'z', vs.NUM)})")
+        if k == "BREAK_VECTOR":
+            v = self.typed_in(n, "vector", vs.VEC)
+            return f"(({v}).{sock if sock in ('x', 'y', 'z') else 'x'}).tofloat()"
+        if k == "VECTOR_MATH":
+            a, b = self.typed_in(n, "a", vs.VEC), self.typed_in(n, "b", vs.VEC)
+            f = self.typed_in(n, "scale", vs.NUM)
+            op = s.get("op", "ADD")
+            if sock == "value":
+                return {"DISTANCE": f"(({a}) - ({b})).Length()", "LENGTH": f"({a}).Length()",
+                        "DOT": f"({a}).Dot({b})"}.get(op, "0.0")
+            return {"ADD": f"(({a}) + ({b}))", "SUBTRACT": f"(({a}) - ({b}))", "SCALE": f"(({a}) * ({f}))",
+                    "NORMALIZE": f"(function(v) {{ local l = v.Length(); return l > 0 ? v * (1.0 / l) : v; }})({a})",
+                    "CROSS": f"({a}).Cross({b})"}.get(op, a)
+        if k == "CHECK":
+            self.helper("HL_IsSet", HELPERS["HL_IsSet"])
+            a, b = self.typed_in(n, "a", vs.ANY), self.typed_in(n, "b", vs.ANY)
+            op = s.get("op", "IS_SET")
+            return {"IS_SET": f"HL_IsSet({a})", "NOT_SET": f"!HL_IsSet({a})", "EQUAL": f"(({a}) == ({b}))",
+                    "NOT_EQUAL": f"(({a}) != ({b}))"}.get(op, f"HL_IsSet({a})")
+        if k == "SCRIPT_VALUE":
+            args = ", ".join(self.typed_in(n, x, vs.ANY) for x in "abcd")
+            expr = (s.get("expr") or "null").strip().rstrip(";")
+            return f"(function(a, b, c, d) {{ return {expr}; }})({args})"
+        return "null"
 
     def render_script_nodes(self):
-        """Script nodes' functions, now that their wires (what Then runs) are known."""
+        """Script nodes' functions, now that their wires (what each event output runs) are known."""
+        import re as _re
         for nid, (fn, body) in self.script_fns.items():
-            then = "\n".join(self.script_conts.get((nid, "then"), []))
-            self.functions.append(f"::{fn} <- function() {{\n{body}{then}\n}}")   # root: callable from anywhere
+            body = _re.sub(r"@@(\w+)@@", lambda m: "\n".join(self.script_conts.get((nid, m.group(1)), [])), body)
+            self.functions.append(f"::{fn} <- function() {{\n{body}\n}}")   # root: callable from anywhere
         for ev, nids in self.script_events.items():
             code = "\n".join(line for nid in nids for line in self.script_conts.get((nid, "happened"), []))
             if code:
@@ -781,7 +978,8 @@ class _Compiler:
             return
         thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens)
         parts = [f"// Hammerless logic graphs for {ir.settings.name}\n",
-                 "::HL_Ctx <- {};   // the event being handled, its fields\n::HL_R <- {};     // what action nodes returned\n"]
+                 "::HL_Ctx <- {};   // the event being handled, its fields\n::HL_R <- {};     // what action nodes returned\n"
+                 "::HL_L <- {};     // For Each: the current item\n::HL_I <- {};     // and its number\n"]
         if ir.logic_counts:
             parts.append("HL_Count <- { tank = 0, witch = 0, smoker = 0, boomer = 0, hunter = 0, spitter = 0, "
                          "jockey = 0, charger = 0 };\n"

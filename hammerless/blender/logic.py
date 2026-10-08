@@ -1335,6 +1335,306 @@ def _script_add_menu(self, context):
     self.layout.separator()
     self.layout.menu("HL_MT_logic_game_functions", icon="SCRIPT")
     self.layout.menu("HL_MT_logic_game_events", icon="LIGHT")
+    self.layout.menu("HL_MT_logic_blocks", icon="LOOP_FORWARDS")
+
+
+# ---------------------------------------------------------------- Script blocks: loops, variables, tables, text, vectors
+
+VALUE_KIND_ITEMS = [("num", "Number", ""), ("bool", "True/False", ""), ("text", "Text", ""), ("vec", "Vector", ""),
+                    ("thing", "Entity / Player", ""), ("any", "Anything", "")]
+
+
+def _rebuild(self, context=None):
+    self.inputs.clear()
+    self.outputs.clear()
+    self.make_sockets()
+
+
+def _ensure(self, context=None):
+    """Rebuild sockets when a setting changes which sockets the node has (links to kept sockets are lost
+    only if the socket goes away)."""
+    _rebuild(self)
+
+
+class _Block(_Node):
+    category = "Script"
+
+    def init(self, context):
+        self.use_custom_color = True
+        self.color = CATEGORY_COLORS["Script"]
+        self.make_sockets()
+
+    def data_in(self, kind, ident, label):
+        return _data_socket(self.inputs, kind, ident, label)
+
+    def data_out(self, kind, ident, label):
+        return _data_socket(self.outputs, kind, ident, label)
+
+
+class HL_NodeForEach(_Block, bpy.types.Node):
+    """Runs Each once for every survivor, infected, entity or list item (Item is the current one), then Done"""
+    bl_idname, bl_label, bl_icon = "HL_NodeForEach", "For Each", "LOOP_FORWARDS"
+    kind = "FOR_EACH"
+    what: EnumProperty(name="For Each", default="SURVIVORS", update=_ensure, items=[
+        ("SURVIVORS", "Survivor", "Every survivor (bots too)"),
+        ("SPECIALS", "Infected Player", "Every living special infected / Tank"),
+        ("PLAYERS", "Player", "Everyone"),
+        ("COMMONS", "Common Infected", "Every common infected"),
+        ("CLASS", "Entity of Class", "Every entity of a class (prop_physics, weapon_*...)"),
+        ("NAME", "Entity Named", "Every entity with a name (* is a wildcard)"),
+        ("LIST", "Item in a List", "Every item of a list or table wired in")])
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        if self.what in ("CLASS", "NAME"):
+            self.data_in("text", "match", "Class" if self.what == "CLASS" else "Name")
+        if self.what == "LIST":
+            self.data_in("any", "list", "List")
+        self.ev_out("each", "Each")
+        self.ev_out("done", "Done")
+        self.data_out("any" if self.what == "LIST" else "thing", "item", "Item")
+        self.data_out("num", "index", "Number")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "what", text="")
+
+    def settings(self):
+        return {"what": self.what}
+
+
+SCOPE_ITEMS = [("MAP", "Map", "One value for the whole map"), ("PLAYER", "Per Player", "A value for each player")]
+
+
+class HL_NodeSetVariable(_Block, bpy.types.Node):
+    """Stores a value under a name (for the map, or for one player), for Get Variable to read later"""
+    bl_idname, bl_label, bl_icon = "HL_NodeSetVariable", "Set Variable", "PROPERTIES"
+    kind = "SET_VAR"
+    var_name: StringProperty(name="Name", default="score")
+    scope: EnumProperty(name="For", items=SCOPE_ITEMS, default="MAP", update=_ensure)
+    value_kind: EnumProperty(name="Value", items=VALUE_KIND_ITEMS, default="num", update=_ensure)
+    op: EnumProperty(name="Do", default="SET", items=[("SET", "Set", "Replace the value"),
+                                                     ("ADD", "Add", "Add to the number already stored")])
+    keep: BoolProperty(name="Keep Across Maps", default=False,
+                       description="Remember the value in the next chapter of the campaign (map variables)")
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        if self.scope == "PLAYER":
+            self.data_in("thing", "player", "Player")
+        self.data_in(self.value_kind, "value", "Value")
+        self.ev_out("then", "Then")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "var_name", text="")
+        row = layout.row(align=True)
+        row.prop(self, "op", text="")
+        row.prop(self, "scope", text="")
+        layout.prop(self, "value_kind", text="")
+        if self.scope == "MAP":
+            layout.prop(self, "keep")
+
+    def settings(self):
+        return {"name": self.var_name, "scope": self.scope, "op": self.op, "keep": self.keep, "kind": self.value_kind}
+
+
+class HL_NodeGetVariable(_Block, bpy.types.Node):
+    """Reads a value Set Variable stored (Number 0 / empty until something is stored)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeGetVariable", "Get Variable", "PROPERTIES"
+    kind = "GET_VAR"
+    var_name: StringProperty(name="Name", default="score")
+    scope: EnumProperty(name="For", items=SCOPE_ITEMS, default="MAP", update=_ensure)
+    value_kind: EnumProperty(name="Value", items=VALUE_KIND_ITEMS, default="num", update=_ensure)
+
+    def make_sockets(self):
+        if self.scope == "PLAYER":
+            self.data_in("thing", "player", "Player")
+        self.data_out(self.value_kind, "result", "Value")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "var_name", text="")
+        row = layout.row(align=True)
+        row.prop(self, "scope", text="")
+        row.prop(self, "value_kind", text="")
+
+    def settings(self):
+        return {"name": self.var_name, "scope": self.scope, "kind": self.value_kind}
+
+
+class HL_NodeMakeTable(_Block, bpy.types.Node):
+    """Builds a table of named values (what Spawn Zombie, Trace Line, Spawn Entity... take).
+    Fields: name: kind, ... (kinds: num, int, bool, text, vec, thing, any)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeMakeTable", "Make Table", "PRESET"
+    kind = "MAKE_TABLE"
+    fields: StringProperty(name="Fields", default="type: int, pos: vec", update=_ensure,
+                           description="name: kind, ... (kinds: num, int, bool, text, vec, thing, any)")
+
+    def make_sockets(self):
+        from ..core.logic import parse_fields
+        for name, kind in parse_fields(self.fields):
+            self.data_in("num" if kind == "int" else kind, "f_" + name, name)
+        self.data_out("any", "table", "Table")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "fields", text="")
+
+    def settings(self):
+        return {"fields": self.fields}
+
+
+class HL_NodeGetField(_Block, bpy.types.Node):
+    """A table's field by name, or a list's item by number (0 = the first); Count = how many"""
+    bl_idname, bl_label, bl_icon = "HL_NodeGetField", "Get Field", "VIEWZOOM"
+    kind = "GET_FIELD"
+
+    def make_sockets(self):
+        self.data_in("any", "table", "Table / List")
+        self.data_in("text", "key", "Field / Number")
+        self.data_out("any", "value", "Value")
+        self.data_out("num", "count", "Count")
+
+
+class HL_NodeFormatText(_Block, bpy.types.Node):
+    """Text with values put in: {a} {b} {c} {d} are replaced by the inputs (players by their names)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeFormatText", "Format Text", "FONT_DATA"
+    kind = "FORMAT_TEXT"
+    template: StringProperty(name="Text", default="{a} has {b}")
+
+    def make_sockets(self):
+        for x in "abcd":
+            self.data_in("any", x, x.upper())
+        self.data_out("text", "result", "Text")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "template", text="")
+
+    def settings(self):
+        return {"template": self.template}
+
+
+class HL_NodeMakeVector(_Block, bpy.types.Node):
+    """A vector from X, Y, Z (Hammer units)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeMakeVector", "Make Vector", "EMPTY_ARROWS"
+    kind = "MAKE_VECTOR"
+
+    def make_sockets(self):
+        for x in "xyz":
+            self.data_in("num", x, x.upper())
+        self.data_out("vec", "result", "Vector")
+
+
+class HL_NodeBreakVector(_Block, bpy.types.Node):
+    """A vector's X, Y and Z"""
+    bl_idname, bl_label, bl_icon = "HL_NodeBreakVector", "Break Vector", "EMPTY_ARROWS"
+    kind = "BREAK_VECTOR"
+
+    def make_sockets(self):
+        self.data_in("vec", "vector", "Vector")
+        for x in "xyz":
+            self.data_out("num", x, x.upper())
+
+
+class HL_NodeVectorMath(_Block, bpy.types.Node):
+    """Maths on vectors: add, subtract, scale, distance, length, normalize, dot, cross"""
+    bl_idname, bl_label, bl_icon = "HL_NodeVectorMath", "Vector Math", "ORIENTATION_GLOBAL"
+    kind = "VECTOR_MATH"
+    op: EnumProperty(name="Operation", default="ADD", items=[
+        ("ADD", "Add", ""), ("SUBTRACT", "Subtract", ""), ("SCALE", "Scale (A x Scale)", ""),
+        ("DISTANCE", "Distance (A to B)", ""), ("LENGTH", "Length (A)", ""), ("NORMALIZE", "Normalize (A)", ""),
+        ("DOT", "Dot", ""), ("CROSS", "Cross", "")])
+
+    def make_sockets(self):
+        self.data_in("vec", "a", "A")
+        self.data_in("vec", "b", "B")
+        self.data_in("num", "scale", "Scale")
+        self.data_out("vec", "vector", "Vector")
+        self.data_out("num", "value", "Value")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "op", text="")
+
+    def settings(self):
+        return {"op": self.op}
+
+
+class HL_NodeCheck(_Block, bpy.types.Node):
+    """True/false about any value: is it set (an entity still in the game), equal, not equal"""
+    bl_idname, bl_label, bl_icon = "HL_NodeCheck", "Compare Values", "QUESTION"
+    kind = "CHECK"
+    op: EnumProperty(name="Check", default="IS_SET", items=[
+        ("IS_SET", "A Is Set", "A has a value (an entity: still in the game)"),
+        ("NOT_SET", "A Is Not Set", ""), ("EQUAL", "A = B", ""), ("NOT_EQUAL", "A ≠ B", "")])
+
+    def make_sockets(self):
+        self.data_in("any", "a", "A")
+        self.data_in("any", "b", "B")
+        self.bool_out("result", "Result")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "op", text="")
+
+    def settings(self):
+        return {"op": self.op}
+
+
+def _code_text(node) -> str:
+    return node.text.as_string() if node.text is not None else node.code
+
+
+class HL_NodeScriptCode(_Block, bpy.types.Node):
+    """Your own Squirrel (L4D2 VScript): inputs arrive as a, b, c, d; set result for the Result output"""
+    bl_idname, bl_label, bl_icon = "HL_NodeScriptCode", "Script", "CONSOLE"
+    kind = "SCRIPT_CODE"
+    code: StringProperty(name="Code", default='result = "hello " + a;')
+    text: PointerProperty(type=bpy.types.Text, name="Text",
+                          description="Use a text block (Blender's Text Editor) for longer code")
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        for x in "abcd":
+            self.data_in("any", x, x)
+        self.ev_out("then", "Then")
+        self.data_out("any", "result", "Result")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "text", text="")
+        if self.text is None:
+            layout.prop(self, "code", text="")
+
+    def settings(self):
+        return {"code": _code_text(self)}
+
+
+class HL_NodeScriptValue(_Block, bpy.types.Node):
+    """A Squirrel expression worked out from a, b, c, d (e.g. a * 2 + b)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeScriptValue", "Script Value", "CONSOLE"
+    kind = "SCRIPT_VALUE"
+    expr: StringProperty(name="Expression", default="a + b")
+
+    def make_sockets(self):
+        for x in "abcd":
+            self.data_in("any", x, x)
+        self.data_out("any", "result", "Result")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "expr", text="")
+
+    def settings(self):
+        return {"expr": self.expr}
+
+
+BLOCK_CLASSES = (HL_NodeForEach, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeMakeTable, HL_NodeGetField,
+                 HL_NodeFormatText, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, HL_NodeCheck,
+                 HL_NodeScriptCode, HL_NodeScriptValue)
+
+
+class HL_MT_logic_blocks(bpy.types.Menu):
+    bl_idname = "HL_MT_logic_blocks"
+    bl_label = "Script Blocks"
+
+    def draw(self, context):
+        for c in BLOCK_CLASSES:
+            op = self.layout.operator("node.add_node", text=c.bl_label, icon=c.bl_icon)
+            op.type, op.use_transform = c.bl_idname, True
 
 
 CATEGORIES = [
@@ -1628,7 +1928,8 @@ class HL_OT_logic_refresh_node(bpy.types.Operator):
 
 CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_BoolSocket, HL_TextSocket, HL_VectorSocket,
            HL_ThingSocket, HL_AnySocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + tuple(SCRIPT_MENUS) + (
-    HL_NodeScriptCall, HL_NodeScriptEvent, HL_OT_logic_pick_function, HL_OT_logic_pick_event,
+    HL_NodeScriptCall, HL_NodeScriptEvent, HL_OT_logic_pick_function, HL_OT_logic_pick_event) + BLOCK_CLASSES + (
+    HL_MT_logic_blocks,
     HL_OT_logic_new, HL_OT_logic_from_outputs, HL_OT_logic_refresh_node)
 
 

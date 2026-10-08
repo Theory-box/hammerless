@@ -863,6 +863,56 @@ class TestScriptNodes(unittest.TestCase):
         self.assertIn(("RunScriptCode", "HL_S_stagger()"), [(o.input, o.parameter) for o in relay.outputs])
 
 
+class TestScriptBlocks(unittest.TestCase):
+    """For Each, variables, tables, text, vectors and raw script nodes."""
+
+    def compile(self, nodes, links):
+        from hammerless.core.logic import compile_graph
+        ir = MapIR()
+        self.assertEqual(compile_graph(nodes, links, ir), [])
+        return ir, next(v for k, v in ir.extra_scripts.items() if "logic_" in k)
+
+    def test_for_each_survivor(self):
+        from hammerless.core.logic import LLink, LNode
+        nodes = [LNode("Start", "MAP_START"), LNode("Each", "FOR_EACH", {"what": "SURVIVORS"}),
+                 LNode("Give", "SCRIPT_CALL", {"fn": "player:GiveItem"}, consts={"p0": "pain_pills"}),
+                 LNode("Count", "SET_VAR", {"name": "given", "scope": "PLAYER", "op": "ADD"}, consts={"value": 1.0}),
+                 LNode("Msg", "FORMAT_TEXT", {"template": "{a} has {b} pills"}),
+                 LNode("Got", "GET_VAR", {"name": "given", "scope": "PLAYER", "kind": "num"}),
+                 LNode("Show", "SCRIPT_CALL", {"fn": "ShowMessage"})]
+        links = [LLink("Start", "start", "Each", "run"), LLink("Each", "each", "Give", "run"),
+                 LLink("Each", "item", "Give", "target", data=True), LLink("Give", "then", "Count", "run"),
+                 LLink("Each", "item", "Count", "player", data=True), LLink("Count", "then", "Show", "run"),
+                 LLink("Each", "item", "Msg", "a", data=True), LLink("Got", "result", "Msg", "b", data=True),
+                 LLink("Each", "item", "Got", "player", data=True), LLink("Msg", "result", "Show", "p0", data=True)]
+        ir, script = self.compile(nodes, links)
+        self.assertIn("foreach (v in HL_Players(1))", script)
+        self.assertRegex(script, r'::HL_L\["each"\] <- v;[^\n]*\n\s*HL_S_give\(\);')
+        self.assertIn('HL_PVarSet((("each" in ::HL_L)', script)
+        self.assertIn('HL_Str((("each" in ::HL_L)', script)
+        self.assertIn('" has "', script)
+        self.assertEqual(script.count("::HL_Players <- function"), 1)
+        logic_auto = next(e for e in ir.entities if e.classname == "logic_auto")
+        self.assertIn("HL_S_each()", [o.parameter for o in logic_auto.outputs])
+
+    def test_table_into_zspawn_and_script_node(self):
+        from hammerless.core.logic import LLink, LNode
+        nodes = [LNode("Start", "MAP_START"),
+                 LNode("Spawn", "MAKE_TABLE", {"fields": "type: int, pos: vec"}, consts={"f_type": 8.0,
+                                                                                         "f_pos": (10, 20, 30)}),
+                 LNode("Z", "SCRIPT_CALL", {"fn": "ZSpawn"}),
+                 LNode("Code", "SCRIPT_CODE", {"code": "result = a ? \"spawned\" : \"no room\";"}),
+                 LNode("Ok", "CHECK", {"op": "IS_SET"})]
+        links = [LLink("Start", "start", "Z", "run"), LLink("Spawn", "table", "Z", "p0", data=True),
+                 LLink("Z", "then", "Code", "run"), LLink("Z", "result", "Code", "a", data=True),
+                 LLink("Code", "result", "Ok", "a", data=True)]
+        _ir, script = self.compile(nodes, links)
+        self.assertIn('ZSpawn({ ["type"] = (8.0).tointeger(), ["pos"] = Vector(10, 20, 30) })', script)
+        self.assertIn('local a = (("z" in ::HL_R) ? ::HL_R["z"] : null);', script)
+        self.assertIn('result = a ? "spawned" : "no room";', script)
+        self.assertIn('::HL_R["code"] <- result;', script)
+
+
 class TestPathProgressSpawns(unittest.TestCase):
     def test_at_least_one_tank(self):
         from hammerless.core.logic import LLink, LNode, compile_graph
