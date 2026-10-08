@@ -27,7 +27,8 @@ class CompileOptions:
     extra_vrad: str = ""
     vis_tool: str = "VALVE"     # VALVE: L4D2's vvis.exe / HAMMERLESS: hlvvis.exe (same results, faster)
     map_tool: str = "HAMMERLESS"  # HAMMERLESS: hlvbsp.exe (same map as vbsp) / VALVE: L4D2's vbsp.exe
-    light_tool: str = "VALVE"   # VALVE: vrad's lightmaps / CYCLES: Blender bakes them after vrad (bake_handler)
+    light_tool: str = "VALVE"   # VALVE: vrad's lightmaps / HAMMERLESS: hlvrad.exe (vrad's lighting) /
+                                # CYCLES: Blender bakes them after vrad (bake_handler)
     cycles_samples: int = 1024
     cycles_stitch: bool = True     # make neighbouring faces' lightmaps agree along shared edges
     cycles_denoise: bool = False   # measured: OpenImageDenoise smears the packed bake (7.7% off vs 1.3% raw)
@@ -58,9 +59,10 @@ VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
 
 def _opts_rest(text: str) -> str:
     """Compile options without the visibility and lighting levels: those are tracked apart (a more
-    complete vis serves a lesser one; lighting can be added to a map compiled without it). Which vis
-    compiler ran doesn't count: both give the same map."""
+    complete vis serves a lesser one; lighting can be added to a map compiled without it). Which map,
+    vis or light compiler ran (Valve's or ours) doesn't count: they give the same map."""
     text = re.sub(r", (vis|map)_tool='\w+'", "", text)
+    text = text.replace("light_tool='HAMMERLESS'", "light_tool='VALVE'")
     return re.sub(r"(vis|rad)='\w+'", r"\1='*'", text)
 
 
@@ -70,6 +72,43 @@ HLVVIS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvvis.exe")
 def use_hlvvis(opts: "CompileOptions") -> bool:
     """Our vis compiler runs when chosen, present, and not given vvis options it doesn't know."""
     return opts.vis_tool == "HAMMERLESS" and os.path.exists(HLVVIS) and not opts.extra_vvis.split()
+
+
+HLVRAD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvrad.exe")
+
+
+def hlvrad_unsupported(opts: "CompileOptions") -> list[str]:
+    """What our light compiler doesn't do yet (then Valve's vrad lights the map)."""
+    why = []
+    if opts.hdr != "HDR":
+        why.append("LDR lighting")
+    if opts.rad == "FAST":
+        why.append("fast lighting")
+    if opts.rad == "FINAL":
+        why.append("final-quality lighting")
+    if opts.static_prop_lighting:
+        why.append("static prop lighting with -StaticPropPolys")
+    if opts.extra_vrad.split():
+        why.append("extra vrad options")
+    if not os.path.exists(HLVRAD):
+        why.append("(hlvrad.exe is missing)")
+    return why
+
+
+def use_hlvrad(opts: "CompileOptions") -> bool:
+    """Our light compiler runs when chosen and it does what's asked."""
+    return opts.light_tool == "HAMMERLESS" and opts.rad != "SKIP" and not hlvrad_unsupported(opts)
+
+
+def prepare_hlvrad(tools: "Tools", base: str) -> str:
+    """Copy the map's prop models out of the game for hlvrad (prop shadows and detail props); returns the folder."""
+    from .radprep import export_prop_models
+    from .vpk import GameContent
+    if tools.root not in _CONTENT:
+        _CONTENT[tools.root] = GameContent(tools.root)
+    folder = base + ".hlvrad_models"
+    export_prop_models(base + ".bsp", _CONTENT[tools.root], folder)
+    return folder
 
 
 HLVBSP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvbsp.exe")
@@ -404,8 +443,15 @@ class CompileJob:
                 self._valve_vvis = valve
             else:
                 self.steps.append(("vvis", valve))
+        self._valve_vrad = None             # Valve's vrad, run instead if ours can't (or fails)
         if vrad is not None:
-            self.steps.append(("vrad", [tools.exe("vrad")] + vrad + game + [self.base]))
+            valve = [tools.exe("vrad")] + vrad + game + [self.base]
+            if use_hlvrad(opts):
+                self.steps.append(("vrad", [HLVRAD] + vrad + game + ["-modeldir", self.base + ".hlvrad_models",
+                                                                     self.base]))
+                self._valve_vrad = valve
+            else:
+                self.steps.append(("vrad", valve))
         self.plan = "full"            # what a smart build decided (buildplan.plan); see _choose_steps
         self.log: list[str] = []
         self.done = False
@@ -519,7 +565,20 @@ class CompileJob:
                     if why:
                         self._q.put("Hammerless map compiler doesn't do " + ", ".join(why) + " yet: running Valve's vbsp")
                         cmd = self._valve_vbsp
+                if name == "vrad" and cmd[0] == HLVRAD:
+                    try:
+                        prepare_hlvrad(self.tools, self.base)
+                    except Exception as ex:          # never let the model copy stop a build
+                        self._q.put(f"Hammerless light compiler couldn't read the game's models ({ex}): running Valve's vrad")
+                        cmd = self._valve_vrad
+                elif name == "vrad" and self._opts.light_tool == "HAMMERLESS":
+                    self._q.put("Hammerless light compiler doesn't do " + ", ".join(hlvrad_unsupported(self._opts))
+                                + " yet: running Valve's vrad")
                 code, out = self._exec(cmd)
+                if code != 0 and name == "vrad" and cmd[0] == HLVRAD and self._valve_vrad and not self._stopping:
+                    # ours writes the map only when it has finished, so it's untouched
+                    self._q.put(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead")
+                    code, out = self._exec(self._valve_vrad)
                 if code != 0 and name == "vbsp" and cmd[0] == HLVBSP and self._valve_vbsp and not self._stopping:
                     self._q.put(f"!! Hammerless map compiler failed (exit code {code}): running Valve's vbsp instead")
                     code, out = self._exec(self._valve_vbsp)
@@ -906,6 +965,7 @@ def clear_build(tools: Tools | None, work_base: str, map_name: str) -> list[str]
                                          ".analysis.bsp", ".viscost") + HLVBSP_TABLES]
     if tools is not None:
         paths.append(os.path.join(tools.maps_dir, map_name + ".bsp"))
+    shutil.rmtree(work_base + ".hlvrad_models", ignore_errors=True)    # (models copied for hlvrad)
     return _remove(paths)
 
 
