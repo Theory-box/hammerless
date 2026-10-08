@@ -11,6 +11,7 @@ texinfo_t *texinfo; int numtexinfo;
 unsigned char *dlightdata; int lightdatasize;
 
 vec3_t *face_offset;              /* per face: its brush entity's origin (faces are lit where they stand) */
+vec3_t *face_centroids;           /* per face: the centre of its polygon (corners averaged), without the offset */
 entity_t **face_entity;
 static unsigned char *face_has_patches;
 
@@ -31,6 +32,7 @@ void FindFacePatches(void) {
     face_offset = xalloc(sizeof(vec3_t) * (numfaces + 1));
     face_entity = xalloc(sizeof(entity_t *) * (numfaces + 1));
     face_has_patches = xalloc(numfaces + 1);
+    face_centroids = xalloc(sizeof(vec3_t) * (numfaces + 1));
     for (int m = 0; m < nummodels; m++) {
         const entity_t *e = EntityForModel(m);
         vec3_t origin = {0, 0, 0};
@@ -46,6 +48,11 @@ void FindFacePatches(void) {
             }
             winding_t *w = WindingFromFace(&g_pFaces[fn], origin);
             face_has_patches[fn] = WindingArea(w) > 0;
+            if (face_has_patches[fn]) {
+                vec3_t c;
+                WindingCenter(w, c);
+                VectorSubtract(c, origin, face_centroids[fn]);
+            }
             FreeWinding(w);
         }
     }
@@ -80,4 +87,8 @@ void PrecompLightmapOffsets(void) {
         lightdatasize += luxels * 4 * nstyles * maps;
     }
     dlightdata = xalloc(lightdatasize + 1);
+}
+
+float face_entity_minlight(int facenum) {
+    return face_entity[facenum] ? FloatForKey(face_entity[facenum], "_minlight") : 0.0f;
 }

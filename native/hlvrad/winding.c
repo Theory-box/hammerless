@@ -147,3 +147,113 @@ void ChopWindingInPlace(winding_t **inout, const vec3_t normal, vec_t dist, vec_
     free(dists);
     free(sides);
 }
+
+winding_t *CopyWinding(const winding_t *w) {
+    winding_t *c = AllocWinding(w->numpoints);
+    c->numpoints = w->numpoints;
+    memcpy(c->p, w->p, sizeof(vec3_t) * w->numpoints);
+    return c;
+}
+
+/* split by the plane into the front and back parts (NULL for a side with nothing) */
+void ClipWindingEpsilon(const winding_t *in, const vec3_t normal, vec_t dist, vec_t epsilon, winding_t **front,
+                        winding_t **back) {
+    int n = in->numpoints, counts[3] = {0, 0, 0};
+    float *dists = xalloc(sizeof(float) * (n + 1));
+    int *sides = xalloc(sizeof(int) * (n + 1));
+    for (int i = 0; i < n; i++) {
+        float dot = DotProduct(in->p[i], normal);
+        dot -= dist;
+        dists[i] = dot;
+        sides[i] = dot > epsilon ? SIDE_FRONT : dot < -epsilon ? SIDE_BACK : SIDE_ON;
+        counts[sides[i]]++;
+    }
+    sides[n] = sides[0];
+    dists[n] = dists[0];
+    *front = *back = NULL;
+    if (!counts[0]) *back = CopyWinding(in);
+    else if (!counts[1]) *front = CopyWinding(in);
+    else {
+        winding_t *f = AllocWinding(n + 4), *b = AllocWinding(n + 4);
+        for (int i = 0; i < n; i++) {
+            const float *p1 = in->p[i];
+            if (sides[i] == SIDE_ON) {
+                VectorCopy(p1, f->p[f->numpoints]);
+                f->numpoints++;
+                VectorCopy(p1, b->p[b->numpoints]);
+                b->numpoints++;
+                continue;
+            }
+            if (sides[i] == SIDE_FRONT) {
+                VectorCopy(p1, f->p[f->numpoints]);
+                f->numpoints++;
+            }
+            if (sides[i] == SIDE_BACK) {
+                VectorCopy(p1, b->p[b->numpoints]);
+                b->numpoints++;
+            }
+            if (sides[i + 1] == SIDE_ON || sides[i + 1] == sides[i]) continue;
+            const float *p2 = in->p[(i + 1) % n];
+            float dot = dists[i] / (dists[i] - dists[i + 1]);
+            vec3_t mid;
+            for (int j = 0; j < 3; j++) {
+                if (normal[j] == 1) mid[j] = dist;
+                else if (normal[j] == -1) mid[j] = -dist;
+                else mid[j] = p1[j] + dot * (p2[j] - p1[j]);
+            }
+            VectorCopy(mid, f->p[f->numpoints]);
+            f->numpoints++;
+            VectorCopy(mid, b->p[b->numpoints]);
+            b->numpoints++;
+        }
+        *front = f;
+        *back = b;
+    }
+    free(dists);
+    free(sides);
+}
+
+void WindingBounds(const winding_t *w, vec3_t mins, vec3_t maxs) {
+    mins[0] = mins[1] = mins[2] = 99999;
+    maxs[0] = maxs[1] = maxs[2] = -99999;
+    for (int i = 0; i < w->numpoints; i++)
+        for (int j = 0; j < 3; j++) {
+            float v = w->p[i][j];
+            if (v < mins[j]) mins[j] = v;
+            if (v > maxs[j]) maxs[j] = v;
+        }
+}
+
+void WindingCenter(const winding_t *w, vec3_t center) {
+    VectorClear(center);
+    for (int i = 0; i < w->numpoints; i++) VectorAdd(w->p[i], center, center);
+    float scale = (float)(1.0 / w->numpoints);
+    VectorScale(center, scale, center);
+}
+
+/* the area, and the centre of the area (each fan triangle's corners weighted by its area / 3; as L4D2's
+ * build computes it - measured) */
+float WindingAreaAndBalancePoint(const winding_t *w, vec3_t center) {
+    VectorClear(center);
+    if (!w) return 0.0f;
+    float total = 0;
+    for (int i = 2; i < w->numpoints; i++) {
+        vec3_t d1, d2, cross;
+        VectorSubtract(w->p[i - 1], w->p[0], d1);
+        VectorSubtract(w->p[i], w->p[0], d2);
+        cross[0] = d1[1] * d2[2] - d1[2] * d2[1];
+        cross[1] = d1[2] * d2[0] - d1[0] * d2[2];
+        cross[2] = d1[0] * d2[1] - d1[1] * d2[0];
+        float area = sqrtf((cross[1] * cross[1] + cross[2] * cross[2]) + cross[0] * cross[0]);
+        total += area;
+        float third = area * 0.33333334f;          /* (L4D2's build: times a float third, not / 3.0) */
+        for (int k = 0; k < 3; k++) center[k] += third * w->p[i - 1][k];
+        for (int k = 0; k < 3; k++) center[k] += third * w->p[i][k];
+        for (int k = 0; k < 3; k++) center[k] += third * w->p[0][k];
+    }
+    if (total) {
+        float s = (float)(1.0 / total);
+        VectorScale(center, s, center);
+    }
+    return (float)(total * 0.5);
+}

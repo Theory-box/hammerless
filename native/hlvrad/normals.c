@@ -148,3 +148,10 @@ void SaveVertexNormals(void) {
     SetLump(LUMP_VERTNORMALS, normals, numnormals * 12, 0);
     SetLump(LUMP_VERTNORMALINDICES, indices, numindices * 2, 0);
 }
+
+const float *FaceCornerNormal(int facenum, int corner) { return faceneighbor[facenum].normal[corner]; }
+
+const int *FaceNeighbours(int facenum, int *count) {
+    *count = faceneighbor[facenum].numneighbors;
+    return faceneighbor[facenum].neighbor;
+}

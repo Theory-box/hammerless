@@ -57,8 +57,12 @@ int main(int argc, char **argv) {
     PairEdges();
     SaveVertexNormals();
     CreateDirectLights();
-    AssignLightStyles();
+    AddBrushesForRayTrace();
+    RT_SetupAccelerationStructure();
+    AllocFacelights();
+    for (int i = 0; i < numfaces; i++) BuildFacelights(i);
     PrecompLightmapOffsets();
+    for (int i = 0; i < numfaces; i++) FinalLightFace(i);
     ExportDirectLightsToWorldLights();
     SetLump(LUMP_LIGHTING_HDR, dlightdata, lightdatasize, 1);
     WriteBSPFile(path);

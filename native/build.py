@@ -25,7 +25,7 @@ TARGETS = {
     "hlvbsp": (["32bit"], "hlvbsp.exe", ["hlvbsp/main.c", "hlvbsp/poly.c", "hlvbsp/map.c", "hlvbsp/brush.c", "hlvbsp/csg.c",
                                   "hlvbsp/portals.c", "hlvbsp/faces.c", "hlvbsp/detail.c", "hlvbsp/write.c",
                                   "hlvbsp/phys.c", "hlvbsp/disp.c", "hlvbsp/pak.c", "hlvbsp/staticprop.c", "hlvbsp/detail_props.c", "hlvbsp/overlay.c", "hlvbsp/water.c", "hlvbsp/cubemap.c", "hlvbsp/occluder.c"]),
-    "hlvrad": (["32bit"], "hlvrad.exe", ["hlvrad/main.c", "hlvrad/bspio.c", "hlvrad/normals.c", "hlvrad/layout.c", "hlvrad/vis.c", "hlvrad/entities.c", "hlvrad/lights.c", "hlvrad/winding.c", "hlvrad/raytrace.c", "hlvrad/anorms.c"]),
+    "hlvrad": (["32bit"], "hlvrad.exe", ["hlvrad/main.c", "hlvrad/bspio.c", "hlvrad/normals.c", "hlvrad/layout.c", "hlvrad/vis.c", "hlvrad/entities.c", "hlvrad/lights.c", "hlvrad/winding.c", "hlvrad/raytrace.c", "hlvrad/anorms.c", "hlvrad/direct.c"]),
 }
 
 for name in sys.argv[1:] or list(TARGETS):

@@ -177,7 +177,10 @@ void SetLeafFlags(int leaf, int flags);
 /* raytrace.c */
 void RT_AddTriangle(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2);
 void RT_SetupAccelerationStructure(void);
-int RT_TraceRay(const vec3_t o, const vec3_t dir, float tmax, int skip_id, float *hitdist);
+void RT_Trace4(const float o[3][4], const float d[3][4], const float tmin[4], const float tmax[4], int skip_id, int hit[4],
+               float hitdist[4]);
+void TestLine4(const float start[3][4], const float stop[3][4], int static_prop_to_skip, float vis[4]);
+void TestLine_DoesHitSky4(const float start[3][4], const float stop[3][4], int static_prop_to_skip, float frac[4]);
 int RT_TriangleID(int tri);
 float TestLine(const vec3_t start, const vec3_t stop, int static_prop_to_skip);
 float TestLine_DoesHitSky(const vec3_t start, const vec3_t stop, int static_prop_to_skip);
@@ -208,6 +211,26 @@ void RemoveColinearPoints(winding_t *w);
 float WindingArea(const winding_t *w);
 winding_t *BaseWindingForPlane(const vec3_t normal, vec_t dist);
 void ChopWindingInPlace(winding_t **inout, const vec3_t normal, vec_t dist, vec_t epsilon);
+winding_t *CopyWinding(const winding_t *w);
+void ClipWindingEpsilon(const winding_t *in, const vec3_t normal, vec_t dist, vec_t epsilon, winding_t **front,
+                        winding_t **back);
+void WindingBounds(const winding_t *w, vec3_t mins, vec3_t maxs);
+void WindingCenter(const winding_t *w, vec3_t center);
+float WindingAreaAndBalancePoint(const winding_t *w, vec3_t center);
+
+/* normals.c */
+const float *FaceCornerNormal(int facenum, int corner);
+const int *FaceNeighbours(int facenum, int *count);
+
+/* direct.c */
+void AllocFacelights(void);
+void BuildFacelights(int facenum);
+void FinalLightFace(int facenum);
+void GetPhongNormal(int facenum, const vec3_t spot, vec3_t phongnormal);
+void GetBumpNormals(const float *sVect, const float *tVect, const vec3_t flatNormal, const vec3_t phongNormal,
+                    vec3_t bumpNormals[3]);
+extern vec3_t *face_centroids;
+float face_entity_minlight(int facenum);
 void AssignLightStyles(void);
 void PrecompLightmapOffsets(void);
 void CreateDirectLights(void);

@@ -3,10 +3,11 @@
  * Triangles: the sides of every opaque world brush (made from the brush's planes, so hidden sides count
  * too), the world's sky faces (marked sky), displacements and static props (to come). A ray stops at the
  * nearest triangle. The triangle test is Valve's to the float operation (plane distance, then two edge
- * equations scaled to 1 at the opposite corner, with L4D2's build multiplying by reciprocals), so hits
- * and misses at shadow edges come out the same; the acceleration structure is our own (a bounding
- * volume hierarchy), which finds the same nearest triangle. */
-#include <xmmintrin.h>
+ * equations scaled to 1 at the opposite corner, with L4D2's build multiplying by reciprocals), and so are
+ * the kd-tree and its 4-ray traversal (a ray can register a hit in any leaf its packet visits), so hits and
+ * misses exactly at shadow edges come out the same. */
+#include <float.h>
+#include <emmintrin.h>
 #include "hlvrad.h"
 
 typedef struct {
@@ -16,17 +17,9 @@ typedef struct {
     int id;
 } rttri_t;
 
-typedef struct {
-    float mins[3], maxs[3];
-    int left, count;           /* leaf: count > 0, triangles start at left; else children left, left + 1 */
-} bvhnode_t;
-
 static rttri_t *tris;
 static float (*tri_verts)[9];
 static int numtris, maxtris;
-static bvhnode_t *nodes;
-static int numnodes_rt;
-static int *tri_index;
 
 void RT_AddTriangle(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2) {
     if (numtris == maxtris) {
@@ -81,190 +74,349 @@ static void IntersectionFormat(int i) {
     EdgeEquation(p2, p3, t->c0, t->c1, p1, t->e + 3);
 }
 
-/* ------------------------------------------------------------------ the hierarchy (binned SAH) */
-static float *centroid;
+/* ------------------------------------------------------------------ the kd-tree (Valve's build) */
+/* Surface area heuristic: try the middle and (every 1 + n/10th triangle's) vertices on each axis as split
+ * planes; split when the estimated cost beats intersecting everything (costs 75 per step, 167 per triangle);
+ * an empty side "grows" to the triangles. Kept to Valve's operations, since which leaves a ray visits decides
+ * the rare hits exactly on an edge. */
+#define KDNODE_STATE_LEAF 3
+#define COST_OF_TRAVERSAL 75
+#define COST_OF_INTERSECTION 167
+#define MAX_TREE_DEPTH 21
+#define PLANECHECK_POSITIVE 1
+#define PLANECHECK_NEGATIVE -1
+#define PLANECHECK_STRADDLING 0
+#define MAILBOX_HASH_SIZE 256
+#define MAX_NODE_STACK_LEN (40 * MAX_TREE_DEPTH)
 
-static void NodeBounds(bvhnode_t *n, int first, int count) {
-    for (int k = 0; k < 3; k++) n->mins[k] = 1e30f, n->maxs[k] = -1e30f;
-    for (int i = first; i < first + count; i++) {
-        const float *v = tri_verts[tri_index[i]];
-        for (int j = 0; j < 9; j++) {
-            int k = j % 3;
-            if (v[j] < n->mins[k]) n->mins[k] = v[j];
-            if (v[j] > n->maxs[k]) n->maxs[k] = v[j];
-        }
+typedef struct {
+    int children;              /* leaf: 3 + (first index << 2); else split axis + (left child << 2) */
+    union {
+        float split;
+        int count;
+    };
+} kdnode_t;
+
+static kdnode_t *kd;
+static int numkd, maxkd;
+static int *trilist;
+static int numtrilist, maxtrilist;
+static signed char *tmp0, *tmp1;
+static float minbound[3], maxbound[3];
+
+static int AddNode(void) {
+    if (numkd == maxkd) {
+        maxkd = maxkd ? maxkd * 2 : 1024;
+        kd = realloc(kd, sizeof(kdnode_t) * maxkd);
     }
+    memset(&kd[numkd], 0, sizeof(kdnode_t));
+    return numkd++;
 }
 
-static float Area(const float *mins, const float *maxs) {
-    float dx = maxs[0] - mins[0], dy = maxs[1] - mins[1], dz = maxs[2] - mins[2];
-    return dx * dy + dy * dz + dz * dx;
+static void AddTriIndex(int t) {
+    if (numtrilist == maxtrilist) {
+        maxtrilist = maxtrilist ? maxtrilist * 2 : 4096;
+        trilist = realloc(trilist, sizeof(int) * maxtrilist);
+    }
+    trilist[numtrilist++] = t;
 }
 
-#define BINS 16
-static void Build(int ni, int first, int count) {
-    bvhnode_t *n = &nodes[ni];
-    NodeBounds(n, first, count);
-    if (count <= 4) {
-        n->left = first;
-        n->count = count;
+static int Classify(int t, int axis, float split) {
+    float minc = tri_verts[t][axis], maxc = minc;
+    for (int v = 1; v < 3; v++) {
+        float c = tri_verts[t][3 * v + axis];
+        if (c < minc) minc = c;
+        if (c > maxc) maxc = c;
+    }
+    if (minc >= split) return PLANECHECK_POSITIVE;
+    if (maxc <= split) return PLANECHECK_NEGATIVE;
+    if (minc == maxc) return PLANECHECK_POSITIVE;
+    return PLANECHECK_STRADDLING;
+}
+
+static float BoxSurfaceArea(const float *mn, const float *mx) {
+    float d0 = mx[0] - mn[0], d1 = mx[1] - mn[1], d2 = mx[2] - mn[2];
+    return (float)(2.0 * ((d0 * d2) + (d0 * d1) + (d1 * d2)));
+}
+
+static float CostOfSplit(int axis, const int *list, int n, const float *mn, const float *mx, float *split, int *nl,
+                         int *nr, int *nb) {
+    *nl = *nr = *nb = 0;
+    float min_coord = 1.0e23f, max_coord = -1.0e23f;
+    for (int i = 0; i < n; i++) {
+        int t = list[i];
+        for (int v = 0; v < 3; v++) {
+            float c = tri_verts[t][3 * v + axis];
+            if (c < min_coord) min_coord = c;
+            if (c > max_coord) max_coord = c;
+        }
+        int cl = Classify(t, axis, *split);
+        tmp0[t] = (signed char)cl;
+        if (cl == PLANECHECK_NEGATIVE) (*nl)++;
+        else if (cl == PLANECHECK_POSITIVE) (*nr)++;
+        else (*nb)++;
+    }
+    if (*nl && !*nb && !*nr) *split = max_coord;
+    if (*nr && !*nb && !*nl) *split = min_coord;
+    float lmax[3], rmin[3];
+    memcpy(lmax, mx, 12);
+    memcpy(rmin, mn, 12);
+    lmax[axis] = *split;
+    rmin[axis] = *split;
+    float sa_l = BoxSurfaceArea(mn, lmax), sa_r = BoxSurfaceArea(rmin, mx);
+    float isa = (float)(1.0 / BoxSurfaceArea(mn, mx));
+    return COST_OF_TRAVERSAL + COST_OF_INTERSECTION * (*nb + (sa_l * isa * *nl) + (sa_r * isa * *nr));
+}
+
+static void MakeLeaf(int node, const int *list, int n) {
+    kd[node].children = KDNODE_STATE_LEAF + (numtrilist << 2);
+    kd[node].count = n;
+    for (int i = 0; i < n; i++) AddTriIndex(list[i]);
+}
+
+static void RefineNode(int node, const int *list, int n, const float *mn, const float *mx, int depth) {
+    if (n < 3) {
+        MakeLeaf(node, list, n);
         return;
     }
-    float cmin[3] = {1e30f, 1e30f, 1e30f}, cmax[3] = {-1e30f, -1e30f, -1e30f};
-    for (int i = first; i < first + count; i++)
-        for (int k = 0; k < 3; k++) {
-            float c = centroid[3 * tri_index[i] + k];
-            if (c < cmin[k]) cmin[k] = c;
-            if (c > cmax[k]) cmax[k] = c;
-        }
-    int best_axis = -1, best_split = 0;
-    float best_cost = Area(n->mins, n->maxs) * count;
+    float best_cost = 1.0e23f, best_split = 0;
+    int best_nl = 0, best_nr = 0, best_nb = 0, split_axis = 0;
+    int skip = 1 + n / 10;
     for (int axis = 0; axis < 3; axis++) {
-        float ext = cmax[axis] - cmin[axis];
-        if (ext <= 0) continue;
-        int bcount[BINS] = {0};
-        float bmin[BINS][3], bmax[BINS][3];
-        for (int b = 0; b < BINS; b++)
-            for (int k = 0; k < 3; k++) bmin[b][k] = 1e30f, bmax[b][k] = -1e30f;
-        for (int i = first; i < first + count; i++) {
-            int t = tri_index[i];
-            int b = (int)((centroid[3 * t + axis] - cmin[axis]) / ext * BINS);
-            if (b >= BINS) b = BINS - 1;
-            bcount[b]++;
-            for (int j = 0; j < 9; j++) {
-                int k = j % 3;
-                if (tri_verts[t][j] < bmin[b][k]) bmin[b][k] = tri_verts[t][j];
-                if (tri_verts[t][j] > bmax[b][k]) bmax[b][k] = tri_verts[t][j];
-            }
-        }
-        for (int s = 1; s < BINS; s++) {
-            float lmin[3] = {1e30f, 1e30f, 1e30f}, lmax[3] = {-1e30f, -1e30f, -1e30f};
-            float rmin[3] = {1e30f, 1e30f, 1e30f}, rmax[3] = {-1e30f, -1e30f, -1e30f};
-            int lc = 0, rc = 0;
-            for (int b = 0; b < BINS; b++) {
-                if (!bcount[b]) continue;
-                float *mn = b < s ? lmin : rmin, *mx = b < s ? lmax : rmax;
-                for (int k = 0; k < 3; k++) {
-                    if (bmin[b][k] < mn[k]) mn[k] = bmin[b][k];
-                    if (bmax[b][k] > mx[k]) mx[k] = bmax[b][k];
+        for (int ts = -1; ts < n; ts += skip) {
+            for (int tv = 0; tv < 3; tv++) {
+                float trial;
+                if (ts == -1) trial = (float)(0.5 * (mn[axis] + mx[axis]));
+                else {
+                    trial = tri_verts[list[ts]][3 * tv + axis];
+                    if (trial > mx[axis] || trial < mn[axis]) continue;
                 }
-                if (b < s) lc += bcount[b];
-                else rc += bcount[b];
-            }
-            if (!lc || !rc) continue;
-            float cost = Area(lmin, lmax) * lc + Area(rmin, rmax) * rc;
-            if (cost < best_cost) {
-                best_cost = cost;
-                best_axis = axis;
-                best_split = s;
+                int nl, nr, nb;
+                float cost = CostOfSplit(axis, list, n, mn, mx, &trial, &nl, &nr, &nb);
+                if (cost < best_cost) {
+                    split_axis = axis;
+                    best_cost = cost;
+                    best_nl = nl;
+                    best_nr = nr;
+                    best_nb = nb;
+                    best_split = trial;
+                    for (int i = 0; i < n; i++) tmp1[list[i]] = tmp0[list[i]];
+                }
+                if (ts == -1) break;
             }
         }
     }
-    if (best_axis < 0) {
-        n->left = first;
-        n->count = count;
+    float no_split = (float)(COST_OF_INTERSECTION * n);
+    if (no_split <= best_cost || depth > MAX_TREE_DEPTH) {
+        MakeLeaf(node, list, n);
         return;
     }
-    float ext = cmax[best_axis] - cmin[best_axis];
-    int i = first, j = first + count - 1;
-    while (i <= j) {
-        int t = tri_index[i];
-        int b = (int)((centroid[3 * t + best_axis] - cmin[best_axis]) / ext * BINS);
-        if (b >= BINS) b = BINS - 1;
-        if (b < best_split) i++;
-        else {
-            tri_index[i] = tri_index[j];
-            tri_index[j--] = t;
-        }
+    int *nlist = xalloc(sizeof(int) * (n + 1));
+    float lmax[3], rmin[3];
+    memcpy(lmax, mx, 12);
+    memcpy(rmin, mn, 12);
+    lmax[split_axis] = best_split;
+    rmin[split_axis] = best_split;
+    int nlo = 0, nbo = 0, nro = 0;
+    for (int i = 0; i < n; i++) {
+        int t = list[i];
+        if (tmp1[t] == PLANECHECK_NEGATIVE) nlist[nlo++] = t;
+        else if (tmp1[t] == PLANECHECK_POSITIVE) nlist[n - ++nro] = t;
+        else nlist[best_nl + nbo++] = t;
     }
-    int lc = i - first;
-    int l = numnodes_rt;
-    numnodes_rt += 2;
-    n = &nodes[ni];
-    n->left = l;
-    n->count = 0;
-    Build(l, first, lc);
-    Build(l + 1, i, count - lc);
+    int left = AddNode();
+    AddNode();
+    kd[node].children = split_axis + (left << 2);
+    kd[node].split = best_split;
+    if (n < 20 && (best_nl == 0 || best_nr == 0)) depth += 100;
+    RefineNode(left, nlist, best_nl + best_nb, mn, lmax, depth + 1);
+    RefineNode(left + 1, nlist + best_nl, best_nr + best_nb, rmin, mx, depth + 1);
+    free(nlist);
 }
 
 void RT_SetupAccelerationStructure(void) {
-    for (int i = 0; i < numtris; i++) IntersectionFormat(i);
-    tri_index = xalloc(sizeof(int) * (numtris + 1));
-    centroid = xalloc(sizeof(float) * 3 * (numtris + 1));
-    for (int i = 0; i < numtris; i++) {
-        tri_index[i] = i;
-        for (int k = 0; k < 3; k++)
-            centroid[3 * i + k] = (tri_verts[i][k] + tri_verts[i][3 + k] + tri_verts[i][6 + k]) * (1.0f / 3.0f);
-    }
-    nodes = xalloc(sizeof(bvhnode_t) * (2 * numtris + 2));
-    numnodes_rt = 1;
-    if (numtris) Build(0, 0, numtris);
-    free(centroid);
-}
-
-/* ------------------------------------------------------------------ tracing */
-static int RayBox(const bvhnode_t *n, const float *o, const float *inv, float tmax) {
-    float t0 = 0, t1 = tmax;
-    for (int k = 0; k < 3; k++) {
-        float a = (n->mins[k] - o[k]) * inv[k], b = (n->maxs[k] - o[k]) * inv[k];
-        if (a > b) {
-            float t = a;
-            a = b;
-            b = t;
-        }
-        if (a > t0) t0 = a;
-        if (b < t1) t1 = b;
-        if (t0 > t1 * 1.0000001f + 1e-4f) return 0;    /* (generous: the box test must not miss) */
-    }
-    return 1;
-}
-
-/* the nearest triangle along the ray (dir unit length), other than those with id skip_id; -1 if none.
- * As Valve's: a hit needs |dir.N| > 1e-10, 0 < t < the best so far, and both edge values >= 0 with their
- * sum <= 1. */
-int RT_TraceRay(const vec3_t o, const vec3_t dir, float tmax, int skip_id, float *hitdist) {
-    float best = 1.0e23f;
-    int hit = -1;
-    if (!numtris) {
-        *hitdist = best;
-        return -1;
-    }
-    float inv[3];
-    for (int k = 0; k < 3; k++) inv[k] = dir[k] != 0 ? 1.0f / dir[k] : (dir[k] < 0 || signbit(dir[k]) ? -1e30f : 1e30f);
-    int stack[128], sp = 0;
-    stack[sp++] = 0;
-    while (sp) {
-        const bvhnode_t *n = &nodes[stack[--sp]];
-        float limit = best < tmax ? best : tmax;
-        if (!RayBox(n, o, inv, limit * 1.001f + 1.0f)) continue;
-        if (n->count) {
-            for (int i = n->left; i < n->left + n->count; i++) {
-                int ti = tri_index[i];
-                const rttri_t *t = &tris[ti];
-                if (t->id == skip_id) continue;
-                float ddotn = (dir[0] * t->nx + dir[1] * t->ny) + dir[2] * t->nz;
-                if (!(ddotn > 1.0e-10f || ddotn < -1.0e-10f)) continue;
-                float numer = t->d - ((o[0] * t->nx + o[1] * t->ny) + o[2] * t->nz);
-                float isect = numer / ddotn;
-                if (!(isect > 0.0f) || !(isect < best)) continue;
-                float h1 = o[t->c0] + isect * dir[t->c0];
-                float h2 = o[t->c1] + isect * dir[t->c1];
-                float b0 = (t->e[0] * h1 + t->e[1] * h2) + t->e[2];
-                if (!(b0 >= 0.0f)) continue;
-                float b1 = (t->e[3] * h1 + t->e[4] * h2) + t->e[5];
-                if (!(b1 >= 0.0f)) continue;
-                if (!(b1 + b0 <= 1.0f)) continue;
-                best = isect;
-                hit = ti;
+    AddNode();
+    int *root = xalloc(sizeof(int) * (numtris + 1));
+    for (int t = 0; t < numtris; t++) root[t] = t;
+    for (int c = 0; c < 3; c++) minbound[c] = 1.0e23f, maxbound[c] = -1.0e23f;
+    for (int t = 0; t < numtris; t++)
+        for (int v = 0; v < 3; v++)
+            for (int c = 0; c < 3; c++) {
+                float x = tri_verts[t][3 * v + c];
+                if (x < minbound[c]) minbound[c] = x;
+                if (x > maxbound[c]) maxbound[c] = x;
             }
-        } else {
-            if (sp + 2 > 128) Error("ray tracer: stack overflow");
-            stack[sp++] = n->left + 1;
-            stack[sp++] = n->left;
-        }
+    tmp0 = xalloc(numtris + 1);
+    tmp1 = xalloc(numtris + 1);
+    RefineNode(0, root, numtris, minbound, maxbound, 0);
+    free(root);
+    for (int i = 0; i < numtris; i++) IntersectionFormat(i);
+}
+
+/* ------------------------------------------------------------------ tracing 4 rays together (Valve's Trace4Rays) */
+static __m128 ReciprocalSaturate4(__m128 a) {
+    __m128 zero = _mm_cmpeq_ps(a, _mm_setzero_ps());
+    a = _mm_or_ps(a, _mm_and_ps(_mm_set1_ps(FLT_EPSILON), zero));
+    __m128 r = _mm_rcp_ps(a);
+    return _mm_sub_ps(_mm_add_ps(r, r), _mm_mul_ps(a, _mm_mul_ps(r, r)));
+}
+
+static int SignBit(float f) {
+    unsigned u;
+    memcpy(&u, &f, 4);
+    return (u >> 31) & 1;
+}
+
+/* bit c set when all 4 directions are negative along c; -1 when the signs are mixed */
+static int DirectionSignMask(const float d[3][4]) {
+    int ret = 0;
+    for (int c = 0; c < 3; c++) {
+        int neg = 0;
+        for (int i = 0; i < 4; i++) neg += SignBit(d[c][i]);
+        if (neg == 4) ret |= 1 << c;
+        else if (neg) return -1;
     }
-    *hitdist = best;
-    return hit;
+    return ret;
+}
+
+typedef struct {
+    int node;
+    __m128 tmin, tmax;
+} kdvisit_t;
+
+static void Trace4Masked(const float o[3][4], const float d[3][4], __m128 TMin, __m128 TMax, int mask, int hit[4],
+                         float hitdist[4], int skip_id) {
+    for (int i = 0; i < 4; i++) hit[i] = -1, hitdist[i] = 1.0e23f;
+    if (!numtris) return;
+    __m128 org[3], dir[3], inv[3];
+    for (int c = 0; c < 3; c++) {
+        org[c] = _mm_loadu_ps(o[c]);
+        dir[c] = _mm_loadu_ps(d[c]);
+        inv[c] = ReciprocalSaturate4(dir[c]);
+    }
+    __m128 hd = _mm_set1_ps(1.0e23f);
+    __m128i hid = _mm_set1_epi32(-1);
+    for (int c = 0; c < 3; c++) {
+        __m128 a = _mm_mul_ps(_mm_sub_ps(_mm_set1_ps(minbound[c]), org[c]), inv[c]);
+        __m128 b = _mm_mul_ps(_mm_sub_ps(_mm_set1_ps(maxbound[c]), org[c]), inv[c]);
+        TMin = _mm_max_ps(TMin, _mm_min_ps(a, b));
+        TMax = _mm_min_ps(TMax, _mm_max_ps(a, b));
+    }
+    __m128 active = _mm_cmple_ps(TMin, TMax);
+    if (!_mm_movemask_ps(active)) goto done;
+    int mailbox[MAILBOX_HASH_SIZE];
+    memset(mailbox, 0xff, sizeof(mailbox));
+    int front[3], back[3];
+    for (int c = 0; c < 3; c++) {
+        if (mask & (1 << c)) back[c] = 0, front[c] = 1;
+        else back[c] = 1, front[c] = 0;
+    }
+    kdvisit_t stack[MAX_NODE_STACK_LEN];
+    int sp = MAX_NODE_STACK_LEN, cur = 0;
+    const __m128 zeros = _mm_setzero_ps(), ones = _mm_set1_ps(1.0f);
+    const __m128 eps = _mm_set1_ps(1.0e-10f), neps = _mm_set1_ps(-1.0e-10f);
+    for (;;) {
+        while ((kd[cur].children & 3) != KDNODE_STATE_LEAF) {
+            int axis = kd[cur].children & 3, fchild = kd[cur].children >> 2;
+            __m128 dist = _mm_mul_ps(_mm_sub_ps(_mm_set1_ps(kd[cur].split), org[axis]), inv[axis]);
+            active = _mm_cmple_ps(TMin, TMax);
+            __m128 hits_front = _mm_and_ps(active, _mm_cmpge_ps(dist, TMin));
+            if (!_mm_movemask_ps(hits_front)) {
+                cur = fchild + back[axis];
+                TMin = _mm_max_ps(TMin, dist);
+            } else {
+                __m128 hits_back = _mm_and_ps(active, _mm_cmple_ps(dist, TMax));
+                if (!_mm_movemask_ps(hits_back)) {
+                    cur = fchild + front[axis];
+                    TMax = _mm_min_ps(TMax, dist);
+                } else {
+                    if (sp <= 0) Error("ray tracer: node stack overflow");
+                    --sp;
+                    stack[sp].node = fchild + back[axis];
+                    stack[sp].tmin = _mm_max_ps(TMin, dist);
+                    stack[sp].tmax = TMax;
+                    cur = fchild + front[axis];
+                    TMax = _mm_min_ps(TMax, dist);
+                }
+            }
+        }
+        int ntris = kd[cur].count;
+        if (ntris) {
+            const int *tl = trilist + (kd[cur].children >> 2);
+            for (int k = 0; k < ntris; k++) {
+                int tnum = tl[k];
+                int slot = tnum & (MAILBOX_HASH_SIZE - 1);
+                const rttri_t *t = &tris[tnum];
+                if (mailbox[slot] == tnum || t->id == skip_id) continue;
+                mailbox[slot] = tnum;
+                __m128 nx = _mm_set1_ps(t->nx), ny = _mm_set1_ps(t->ny), nz = _mm_set1_ps(t->nz);
+                __m128 ddotn = _mm_add_ps(_mm_add_ps(_mm_mul_ps(dir[0], nx), _mm_mul_ps(dir[1], ny)), _mm_mul_ps(dir[2], nz));
+                __m128 did = _mm_or_ps(_mm_cmpgt_ps(ddotn, eps), _mm_cmplt_ps(ddotn, neps));
+                __m128 odotn = _mm_add_ps(_mm_add_ps(_mm_mul_ps(org[0], nx), _mm_mul_ps(org[1], ny)), _mm_mul_ps(org[2], nz));
+                __m128 isect = _mm_div_ps(_mm_sub_ps(_mm_set1_ps(t->d), odotn), ddotn);
+                did = _mm_and_ps(did, _mm_cmpgt_ps(isect, zeros));
+                did = _mm_and_ps(did, _mm_cmplt_ps(isect, hd));
+                if (!_mm_movemask_ps(did)) continue;
+                __m128 h1 = _mm_add_ps(org[t->c0], _mm_mul_ps(isect, dir[t->c0]));
+                __m128 h2 = _mm_add_ps(org[t->c1], _mm_mul_ps(isect, dir[t->c1]));
+                __m128 b0 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(_mm_set1_ps(t->e[0]), h1), _mm_mul_ps(_mm_set1_ps(t->e[1]), h2)),
+                                       _mm_set1_ps(t->e[2]));
+                did = _mm_and_ps(did, _mm_cmpge_ps(b0, zeros));
+                __m128 b1 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(_mm_set1_ps(t->e[3]), h1), _mm_mul_ps(_mm_set1_ps(t->e[4]), h2)),
+                                       _mm_set1_ps(t->e[5]));
+                did = _mm_and_ps(did, _mm_cmpge_ps(b1, zeros));
+                did = _mm_and_ps(did, _mm_cmple_ps(_mm_add_ps(b1, b0), ones));
+                if (!_mm_movemask_ps(did)) continue;
+                __m128i didi = _mm_castps_si128(did);
+                hid = _mm_or_si128(_mm_and_si128(_mm_set1_epi32(tnum), didi), _mm_andnot_si128(didi, hid));
+                hd = _mm_or_ps(_mm_and_ps(isect, did), _mm_andnot_ps(did, hd));
+            }
+            if (!_mm_movemask_ps(_mm_cmple_ps(TMax, hd))) goto done;      /* every ray has hit something nearer */
+        }
+        if (sp == MAX_NODE_STACK_LEN) goto done;
+        cur = stack[sp].node;
+        TMin = stack[sp].tmin;
+        TMax = stack[sp].tmax;
+        sp++;
+    }
+done:
+    _mm_storeu_si128((__m128i *)hit, hid);
+    _mm_storeu_ps(hitdist, hd);
+}
+
+/* 4 rays: same-signed directions are traced together; mixed ones in groups, as Valve's tracer does */
+void RT_Trace4(const float o[3][4], const float d[3][4], const float tmin[4], const float tmax[4], int skip_id, int hit[4],
+               float hitdist[4]) {
+    int mask = DirectionSignMask(d);
+    __m128 TMin = _mm_loadu_ps(tmin), TMax = _mm_loadu_ps(tmax);
+    if (mask != -1) {
+        Trace4Masked(o, d, TMin, TMax, mask, hit, hitdist, skip_id);
+        return;
+    }
+    unsigned char need[4] = {1, 1, 1, 1};
+    float td[3][4];
+    for (int i = 0; i < 4; i++) {
+        if (!need[i]) continue;
+        need[i] = 2;
+        for (int c = 0; c < 3; c++)
+            for (int j = 0; j < 4; j++) td[c][j] = d[c][i];
+        for (int j = i + 1; j < 4; j++) {
+            if (need[j] && SignBit(d[0][j]) == SignBit(d[0][i]) && SignBit(d[1][j]) == SignBit(d[1][i]) &&
+                SignBit(d[2][j]) == SignBit(d[2][i])) {
+                need[j] = 2;
+                for (int c = 0; c < 3; c++) td[c][j] = d[c][j];
+            }
+        }
+        int th[4];
+        float tdist[4];
+        Trace4Masked(o, (const float(*)[4])td, TMin, TMax, DirectionSignMask((const float(*)[4])td), th, tdist, skip_id);
+        for (int j = 0; j < 4; j++)
+            if (need[j] == 2) {
+                need[j] = 0;
+                hit[j] = th[j];
+                hitdist[j] = tdist[j];
+            }
+    }
 }
 
 int RT_TriangleID(int tri) { return tris[tri].id; }
@@ -276,32 +428,57 @@ static float ReciprocalSSE(float a) {
     return _mm_cvtss_f32(r);
 }
 
-/* start -> stop: the unit direction and the length, as vrad's TestLine makes them */
-static float RayFromSegment(const vec3_t start, const vec3_t stop, vec3_t dir) {
-    VectorSubtract(stop, start, dir);
-    float len = sqrtf((dir[0] * dir[0] + dir[1] * dir[1]) + dir[2] * dir[2]);
-    float r = ReciprocalSSE(len);
-    VectorScale(dir, r, dir);
-    return len;
+/* 4 segments start -> stop as vrad's TestLine makes rays of them: unit directions, lengths */
+static void RaysFromSegments(const float start[3][4], const float stop[3][4], float d[3][4], float len[4]) {
+    for (int i = 0; i < 4; i++) {
+        float dx = stop[0][i] - start[0][i], dy = stop[1][i] - start[1][i], dz = stop[2][i] - start[2][i];
+        len[i] = sqrtf((dx * dx + dy * dy) + dz * dz);
+        float r = ReciprocalSSE(len[i]);
+        d[0][i] = dx * r;
+        d[1][i] = dy * r;
+        d[2][i] = dz * r;
+    }
 }
 
-/* 1 when nothing blocks start -> stop */
-float TestLine(const vec3_t start, const vec3_t stop, int static_prop_to_skip) {
-    vec3_t dir;
-    float len = RayFromSegment(start, stop, dir), dist;
-    int hit = RT_TraceRay(start, dir, len, TRACE_ID_STATICPROP | static_prop_to_skip, &dist);
-    return hit != -1 && dist < len ? 0.0f : 1.0f;
+/* visibility of 4 segments (1 = nothing in the way), skipping the triangles of one static prop */
+void TestLine4(const float start[3][4], const float stop[3][4], int static_prop_to_skip, float vis[4]) {
+    float d[3][4], len[4], tmin[4] = {0, 0, 0, 0}, dist[4];
+    int hit[4];
+    RaysFromSegments(start, stop, d, len);
+    RT_Trace4(start, (const float(*)[4])d, tmin, len, TRACE_ID_STATICPROP | static_prop_to_skip, hit, dist);
+    for (int i = 0; i < 4; i++) vis[i] = hit[i] != -1 && dist[i] < len[i] ? 0.0f : 1.0f;
 }
 
-/* how much of the line reaches the sky: 0 when the first thing it meets is not sky
+/* how much of each segment reaches the sky: 0 when the first thing met is not sky
  * TODO: 3D skybox recursion */
+void TestLine_DoesHitSky4(const float start[3][4], const float stop[3][4], int static_prop_to_skip, float frac[4]) {
+    float d[3][4], len[4], tmin[4] = {0, 0, 0, 0}, dist[4];
+    int hit[4];
+    RaysFromSegments(start, stop, d, len);
+    RT_Trace4(start, (const float(*)[4])d, tmin, len, TRACE_ID_STATICPROP | static_prop_to_skip, hit, dist);
+    for (int i = 0; i < 4; i++) {
+        float occl = hit[i] != -1 && dist[i] < len[i] && !(tris[hit[i]].id & TRACE_ID_SKY) ? 1.0f : 0.0f;
+        occl = occl > 0 ? occl : 0;
+        occl = occl < 1 ? occl : 1;
+        frac[i] = 1.0f - occl;
+    }
+}
+
+/* one segment (all 4 lanes the same) */
+float TestLine(const vec3_t start, const vec3_t stop, int static_prop_to_skip) {
+    float s[3][4], e[3][4], v[4];
+    for (int c = 0; c < 3; c++)
+        for (int i = 0; i < 4; i++) s[c][i] = start[c], e[c][i] = stop[c];
+    TestLine4((const float(*)[4])s, (const float(*)[4])e, static_prop_to_skip, v);
+    return v[0];
+}
+
 float TestLine_DoesHitSky(const vec3_t start, const vec3_t stop, int static_prop_to_skip) {
-    vec3_t dir;
-    float len = RayFromSegment(start, stop, dir), dist;
-    int hit = RT_TraceRay(start, dir, len, TRACE_ID_STATICPROP | static_prop_to_skip, &dist);
-    float occlusion = 0.0f;
-    if (hit != -1 && dist < len && !(tris[hit].id & TRACE_ID_SKY)) occlusion = 1.0f;
-    return 1.0f - occlusion;
+    float s[3][4], e[3][4], v[4];
+    for (int c = 0; c < 3; c++)
+        for (int i = 0; i < 4; i++) s[c][i] = start[c], e[c][i] = stop[c];
+    TestLine_DoesHitSky4((const float(*)[4])s, (const float(*)[4])e, static_prop_to_skip, v);
+    return v[0];
 }
 
 /* ------------------------------------------------------------------ the world's triangles */
