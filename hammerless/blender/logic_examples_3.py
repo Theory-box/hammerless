@@ -19,9 +19,13 @@ EntFire("hl_nuke_boom", "Explode", "", 0.0, null);
 EntFire("hl_nuke_boom", "Kill", "", 1.0, null);
 result = ::HL_NukeQueue.len();"""
 
-# every common infected alive, nearest to a (a position) first
+# every common infected alive within b units of a (a position), nearest first
 NUKE_QUEUE = """local list = [], e = null;
-while (e = Entities.FindByClassname(e, "infected")) if (e.GetHealth() > 0) list.append([(e.GetOrigin() - a).Length(), e]);
+while (e = Entities.FindByClassname(e, "infected")) {
+    if (e.GetHealth() <= 0) continue;
+    local d = (e.GetOrigin() - a).Length();
+    if (d <= b) list.append([d, e]);
+}
 list.sort(function(x, y) { return x[0] > y[0] ? 1 : (x[0] < y[0] ? -1 : 0); });
 ::HL_NukeQueue <- [];
 foreach (p in list) ::HL_NukeQueue.append(p[1]);
@@ -32,8 +36,10 @@ EXAMPLES_3 = [
          about="Like the power-ups in Call of Duty's zombies: each common infected killed has a "
                "chance (the Value node, 0.03 = 3%) to drop a glowing pickup where it fell, one at a "
                "time. A survivor who walks over it sets off a nuke: a flash, a shake, and every "
-               "common infected explodes, nearest first, five every tenth of a second so the game "
-               "isn't asked for every explosion at once. The kills count for whoever took it. (The "
+               "common infected within the Radius (a Value node, in units) explodes, nearest first, "
+               "five every tenth of a second so the game isn't asked for every explosion at once. The "
+               "kills count for whoever took it. After a nuke, a Delay keeps new ones from dropping "
+               "for 30 seconds (the 'cooling' variable). (The "
                "game's 'infected_death' event doesn't say which infected died, so the drop uses "
                "'infected_hurt': a hit at least as big as its health left is a kill.)",
          nodes=[N("start", "HL_NodeMapStart", 0, 0),
@@ -50,6 +56,9 @@ EXAMPLES_3 = [
                 N("none_down", "HL_NodeCheck", 2, 5, op="NOT_SET"),
                 N("drop_ok", "HL_NodeBoolMath", 2, 4, op="AND"),
                 N("if_drop", "HL_NodeIf", 3, 2),
+                N("cooling", "HL_NodeGetVariable", 4, 6, var_name="cooling", value_kind="bool"),
+                N("not_cool", "HL_NodeBoolMath", 5, 6, op="NOT"),
+                N("ready", "HL_NodeBoolMath", 4, 5, op="AND"),
                 fn("fell", "entity:GetOrigin", 1, 3),
                 N("lift", "HL_NodeVectorMath", 2, 3, op="ADD", sockets={"b": (0.0, 0.0, 16.0)}),
                 N("what", "HL_NodeMakeTable", 3, 3, fields="targetname: text, model: text, origin: vec, solid: int",
@@ -74,6 +83,10 @@ EXAMPLES_3 = [
                 # the nuke
                 N("queue", "HL_NodeScriptCode", 0, 12, label="Every common, nearest first", code=NUKE_QUEUE),
                 N("wave_timer", "HL_NodeTimer", 1, 12, seconds=0.1, running=False),
+                N("radius", "HL_NodeValue", 0, 13, label="Radius", sockets={"value": 1000.0}),
+                N("cool_on", "HL_NodeSetVariable", 0, 17, var_name="cooling", value_kind="bool", sockets={"value": True}),
+                N("cool_wait", "HL_NodeDelay", 1, 17, label="Cooldown", seconds=30.0),
+                N("cool_off", "HL_NodeSetVariable", 2, 17, var_name="cooling", value_kind="bool", sockets={"value": False}),
                 N("shout", "HL_NodeMessage", 1, 13, text="NUKE!", seconds=2.0),
                 N("boom", "HL_NodeSound", 2, 13, sound="explode_3", everywhere=True),
                 fn("shake", "ScreenShake", 3, 13, {"p1": 16.0, "p2": 40.0, "p3": 1.5, "p4": 5000.0}),
@@ -89,7 +102,8 @@ EXAMPLES_3 = [
                 ("hurt.happened", "if_drop.in"), ("hurt.entityid", "hp.target"), ("hurt.amount", "lethal.a"),
                 ("hp.result", "lethal.b"), ("drop_ok.result", "all_ok.a"), ("lethal.result", "all_ok.b"), ("roll.value", "lucky.a"), ("chance.value", "lucky.b"),
                 ("down.result", "none_down.a"), ("lucky.result", "drop_ok.a"), ("none_down.result", "drop_ok.b"),
-                ("all_ok.result", "if_drop.condition"), ("hurt.entityid", "fell.target"),
+                ("all_ok.result", "ready.a"), ("cooling.result", "not_cool.a"), ("not_cool.result", "ready.b"),
+                ("ready.result", "if_drop.condition"), ("hurt.entityid", "fell.target"),
                 ("fell.result", "lift.a"), ("lift.vector", "what.f_origin"), ("what.table", "spawn.p1"),
                 ("if_drop.true", "spawn.run"), ("spawn.then", "keep.run"), ("spawn.result", "keep.value"),
                 ("keep.then", "glow.run"),
@@ -99,7 +113,8 @@ EXAMPLES_3 = [
                 ("close.result", "take_ok.b"), ("take_ok.result", "if_take.condition"),
                 ("if_take.true", "by.run"), ("each.item", "by.value"), ("by.then", "remove.run"),
                 ("nuke.result", "remove.target"), ("remove.then", "gone.run"),
-                ("gone.then", "queue.run"), ("me_at.result", "queue.a"), ("queue.then", "wave_timer.start"),
+                ("gone.then", "queue.run"), ("me_at.result", "queue.a"), ("radius.value", "queue.b"),
+                ("gone.then", "cool_on.run"), ("cool_on.then", "cool_wait.in"), ("cool_wait.out", "cool_off.run"), ("queue.then", "wave_timer.start"),
                 ("gone.then", "shout.show"), ("gone.then", "boom.play"), ("gone.then", "shake.run"),
                 ("me_at.result", "shake.p0"), ("gone.then", "flash_each.run"), ("flash_each.each", "flash.run"),
                 ("flash_each.item", "flash.p0"),
@@ -108,12 +123,13 @@ EXAMPLES_3 = [
          steps=[("Load the pickup's model", ["start", "precache"]),
                 ("A kill may drop it (one at a time)",
                  ["hurt", "hp", "lethal", "all_ok", "chance", "roll", "lucky", "down", "none_down", "drop_ok",
-                  "if_drop", "fell", "lift",
+                  "if_drop", "cooling", "not_cool", "ready", "fell", "lift",
                   "what", "spawn", "keep", "glow"]),
                 ("A survivor walks over it", ["timer", "each", "nuke", "is_down", "nuke_at", "me_at", "dist", "close",
                                               "take_ok", "if_take", "by", "remove", "gone"]),
                 ("NUKE: line them up, flash and shake",
-                 ["queue", "wave_timer", "shout", "boom", "shake", "flash_each", "flash"]),
+                 ["queue", "radius", "wave_timer", "shout", "boom", "shake", "flash_each", "flash"]),
                 ("Five explode every tenth of a second; none left: stop (the red wire is a loop back to the "
-                 "Timer, which is fine for events)", ["taker", "wave", "empty", "if_empty"])]),
+                 "Timer, which is fine for events)", ["taker", "wave", "empty", "if_empty"]),
+                ("No new drops for 30 seconds", ["cool_on", "cool_wait", "cool_off"])]),
 ]
