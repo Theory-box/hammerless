@@ -172,6 +172,7 @@ typedef struct side_s {
     unsigned smoothing;
     int material;            /* the side's material (for messages and dispinfo) */
     int disp;                /* index into mapdisps + 1; 0 = not a displacement */
+    int *overlays, noverlays;  /* info_overlays on this side (shared by the side's copies) */
 } side_t;
 
 typedef struct {
@@ -331,6 +332,15 @@ int FindMaterial(const char *name);
 int TexinfoForBrushTexture(plane_t *plane, brush_texture_t *bt, const vec3_t origin);
 int FindOrCreateTexData(int material);
 int TexDataString(const char *s);
+/* overlay.c */
+int Overlay_FromEntity(entity_t *e);
+void Overlay_UpdateSideLists(void);
+int OverlaysAreEqual(const side_t *a, const side_t *b);
+void Overlay_AddFaceToLists(int face, const side_t *side);
+void Overlay_EmitOverlayFaces(void);
+void Overlay_CountTexinfos(int *refcount);
+void Overlay_RemapTexinfos(const int *newindex);
+unsigned char *Overlay_Lumps(int *len45, unsigned char **fades, int *len60, unsigned char **levels, int *len61);
 extern char *texdata_strings;
 extern int texdata_strings_len;
 extern int *texdata_string_table;

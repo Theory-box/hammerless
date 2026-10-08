@@ -158,6 +158,7 @@ static void EmitFace(face_t *f, int onnode) {
         int e = GetEdge2(f->vertexnums[i], f->vertexnums[(i + 1) % f->numpoints], f);
         dsurfedges[numsurfedges++] = e;
     }
+    if (f->originalface && f->originalface->noverlays) Overlay_AddFaceToLists(numfaces - 1, f->originalface);
 }
 
 static void EmitMarkFace(dleaf_t *leaf, face_t *f) {
@@ -494,6 +495,7 @@ static void CompactTexinfos(void) {
             if (!ref[found]) ref[found]++;
         }
     }
+    Overlay_CountTexinfos(ref);
     for (int i = 0; i < numtexinfo; i++)
         if (ref[i] > 0) tdref[texinfos[i].texdata]++;
     int oldcount = numtexinfo, oldtd = numtexdata, oldstr = texdata_strings_len;
@@ -516,6 +518,7 @@ static void CompactTexinfos(void) {
         texinfos[n++] = old[i];
     }
     numtexinfo = n;
+    Overlay_RemapTexinfos(out);
     /* texdata, with a fresh string table */
     char *oldstrings = texdata_strings;
     int *oldtable = texdata_string_table;
@@ -716,6 +719,7 @@ void EndBSPFile(const char *path) {
     SaveVertexNormals();
     UpdateAllFaceLightmapExtents();
     EmitDispLMAlphaAndNeighbors();
+    Overlay_EmitOverlayFaces();
     EmitPhysCollision();
     leafmindist = xalloc(sizeof(unsigned short) * (numleafs + 1));
     EmitStaticProps();
@@ -777,6 +781,14 @@ void EndBSPFile(const char *path) {
     SetLump(48, g_disptris, 2 * g_numdisptris, 0);
     SetLump(34, g_lmsamples, g_numlmsamples, 0);
     SetLump(62, NULL, 0, 16);
+    {
+        unsigned char *fades, *levels;
+        int len60, len61;
+        unsigned char *ov = Overlay_Lumps(&len, &fades, &len60, &levels, &len61);
+        SetLump(45, ov, len, 0);
+        SetLump(60, fades, len60, 0);
+        SetLump(61, levels, len61, 0);
+    }
     /* the pakfile: the default cubemap (vbsp makes it whenever the world has a sky) */
     {
         char base[256];

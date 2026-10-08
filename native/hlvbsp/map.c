@@ -327,6 +327,15 @@ static int FindOrCreateTexInfo(const texinfo_t *t) {
     return numtexinfo++;
 }
 
+/* An overlay's texinfo: no axes, offsets of -99999 (vbsp's marker), its material's texdata. */
+int OverlayTexinfo(const char *material) {
+    texinfo_t t;
+    memset(&t, 0, sizeof(t));
+    for (int i = 0; i < 2; i++) t.vecs[i][3] = t.lmvecs[i][3] = -99999.0f;
+    t.texdata = FindOrCreateTexData(FindMaterial(material));
+    return FindOrCreateTexInfo(&t);
+}
+
 /* Texture axes from the side's u/v axes and scales; lightmap axes from its lightmap scale. */
 int TexinfoForBrushTexture(plane_t *plane, brush_texture_t *bt, const vec3_t origin) {
     (void)plane;
@@ -854,6 +863,17 @@ static void load_entity(parser_t *p) {
         SetKeyValue(mapent, "classname", "info_ladder");
         return;
     }
+    if (!strcmp(cls, "info_overlay")) {
+        int accessor = Overlay_FromEntity(mapent);
+        if (accessor < 0) mapent->epairs = NULL;
+        else {
+            char buf[16];
+            SetKeyValue(mapent, "classname", "info_overlay_accessor");
+            sprintf(buf, "%i", accessor);
+            SetKeyValue(mapent, "OverlayID", buf);
+        }
+        return;
+    }
     if (!strcmp(cls, "info_overlay_transition") || !_stricmp(cls, "func_instance_parms")) {
         mapent->epairs = NULL;
         return;
@@ -903,6 +923,7 @@ void LoadMapFile(const char *path) {
         }
     }
     free(p.text);
+    Overlay_UpdateSideLists();
     ClearBounds(map_mins, map_maxs);
     for (int i = 0; i < entities[0].numbrushes; i++) {
         if (mapbrushes[i].mins[0] > MAX_COORD_INTEGER) continue;

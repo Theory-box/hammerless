@@ -409,6 +409,7 @@ static face_t *TryMerge(face_t *f1, face_t *f2, const vec3_t planenormal) {
     if (!f1->w || !f2->w) return NULL;
     if (f1->texinfo != f2->texinfo || f1->planenum != f2->planenum || f1->contents != f2->contents) return NULL;
     if (f1->originalface->smoothing != f2->originalface->smoothing) return NULL;
+    if (!OverlaysAreEqual(f1->originalface, f2->originalface)) return NULL;
     winding_t *nw = TryMergeWinding(f1->w, f2->w, planenormal);
     if (!nw) return NULL;
     face_t *newf = NewFaceFromFace(f1);
