@@ -83,16 +83,18 @@ static void LoadCubemapTable(void) {
     while (fgets(line, sizeof(line), f)) {
         size_t n = strlen(line);
         while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
-        if (want > 0 && w) {
+        int header = !strncmp(line, "mat\t", 4) || !strncmp(line, "wvt\t", 4);
+        if (want > 0 && w && !header) {
             w->lines[w->nlines++] = copystring(line);
             want--;
             continue;
         }
-        if (want > 0 && r) {
+        if (want > 0 && r && !header) {
             r->lines[r->nlines++] = copystring(line);
             want--;
             continue;
         }
+        want = 0;
         if (!strncmp(line, "wvt\t", 4)) {
             char *tab = strchr(line + 4, '\t');
             if (!tab) continue;
@@ -356,7 +358,10 @@ void Cubemap_AttachDefaultCubemapToSpecularSides(void) {
         if (entity[i] >= 0) VectorCopy(entities[entity[i]].origin, origin);
         int c = FindClosestCubemap(origin, side);
         if (c == -1) continue;
-        SetSideTexinfo(side, Cubemap_CreateTexInfo(side->texinfo, samples[c].origin));
+        /* (a side without a winding gets cubemap 0 even in a map with none: vbsp then reads its zeroed
+           sample array, so the material is patched for a cubemap at 0 0 0 - measured) */
+        static const int zero[3] = {0, 0, 0};
+        SetSideTexinfo(side, Cubemap_CreateTexInfo(side->texinfo, c < numsamples ? samples[c].origin : zero));
     }
     free(specular);
     free(manual);

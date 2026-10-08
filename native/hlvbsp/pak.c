@@ -6,7 +6,8 @@
 #include "hlvbsp.h"
 
 typedef struct { char name[300]; unsigned char *data; int len; unsigned crc; } pakfile_t;
-static pakfile_t pakfiles[4096];
+static pakfile_t *pakfiles;
+static int maxpakfiles;
 static int numpakfiles;
 
 static unsigned crc32(const unsigned char *p, int n) {
@@ -31,7 +32,10 @@ static int FileInPak(const char *name) {
 
 void AddFileToPak(const char *name, unsigned char *data, int len) {
     int at = FileInPak(name);         /* (the same name again replaces the file in its place) */
-    if (at < 0 && numpakfiles == 4096) Error("too many files in the pakfile");
+    if (at < 0 && numpakfiles == maxpakfiles) {
+        maxpakfiles = maxpakfiles ? maxpakfiles * 2 : 256;
+        pakfiles = realloc(pakfiles, sizeof(pakfile_t) * maxpakfiles);
+    }
     pakfile_t *f = &pakfiles[at >= 0 ? at : numpakfiles++];
     strncpy(f->name, name, sizeof(f->name) - 1);
     f->data = data;

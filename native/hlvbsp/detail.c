@@ -2,6 +2,8 @@
  * leaves they touch, and their pieces are filtered into those leaves for collision. */
 #include "hlvbsp.h"
 
+#define DETAIL_VISIBLE_CONTENTS 0x3F
+
 static face_t *CopyFace(face_t *f) {
     face_t *n = NewFaceFromFace(f);
     n->w = CopyWinding(f->w);
@@ -248,11 +250,13 @@ static face_t *ComputeVisibleBrushSides(bspbrush_t *list) {
     for (bspbrush_t *b = list; b; b = b->next) {
         face_t *faces = NULL;
         mapbrush_t *mb = b->original;
-        if (!(mb->contents & ALL_VISIBLE_CONTENTS)) continue;
+        /* (L4D2's vbsp tests contents & 0x3F here: opaque / block-LOS detail, e.g. toolsblocklight,
+           makes no faces - measured from its code) */
+        if (!(mb->contents & DETAIL_VISIBLE_CONTENTS)) continue;
         for (int i = 0; i < b->numsides; i++) {
             winding_t *w = b->sides[i].winding;
             if (!w) continue;
-            if (!(b->sides[i].contents & ALL_VISIBLE_CONTENTS)) continue;
+            if (!(b->sides[i].contents & DETAIL_VISIBLE_CONTENTS)) continue;
             side_t *side = FindOriginalSide(mb, b->sides + i);
             face_t *f = MakeBrushFace(side, w);
             f->next = faces;

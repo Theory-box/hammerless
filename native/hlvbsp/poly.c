@@ -107,6 +107,17 @@ winding_t *ReverseWinding(const winding_t *w) {
 }
 
 /* A huge square on the plane, 4 x the world's half-size along two in-plane axes. */
+/* mathlib's VectorNormalize (x87): the squares summed in double, the length rounded to float, then
+   times 1/(length + FLT_EPSILON). (Plane normals use a float inline version instead.) */
+vec_t VectorNormalizeX87(vec3_t v) {
+    float len = (float)sqrt((double)v[0] * v[0] + (double)v[1] * v[1] + (double)v[2] * v[2]);
+    float oo = 1.0f / (len + FLT_EPSILON);
+    v[0] *= oo;
+    v[1] *= oo;
+    v[2] *= oo;
+    return len;
+}
+
 winding_t *BaseWindingForPlane(const vec3_t normal, vec_t dist) {
     int x = -1;
     vec_t max = -1, v;
@@ -123,7 +134,7 @@ winding_t *BaseWindingForPlane(const vec3_t normal, vec_t dist) {
     else vup[2] = 1;
     v = DotProduct(vup, normal);
     VectorMA(vup, -v, normal, vup);
-    VectorNormalize(vup);
+    VectorNormalizeX87(vup);     /* (mathlib's VectorNormalize here: the length summed in x87 - measured) */
     VectorScale(normal, dist, org);
     CrossProduct(vup, normal, vright);
     VectorScale(vup, (MAX_COORD_INTEGER * 4), vup);

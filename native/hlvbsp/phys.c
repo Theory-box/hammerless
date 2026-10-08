@@ -603,25 +603,22 @@ void EmitPhysCollision(void) {
     DBG("supports virtual mesh?");
     int virtualmesh = PC(53, SupportsVirtualMesh_t)(physcollision);
     DBG("ok");
-    for (int i = 0; i < nummapdisps; i++)
-        if (DispPower(i) > 3) {
-            Warning("WARNING: Map using power 4 displacements, terrain physics cannot be compressed, map will need additional memory and CPU.\n");
-            virtualmesh = 0;
-            break;
-        }
+    /* (L4D2's vbsp has no power-4 fallback: virtual meshes whenever vphysics supports them) */
     entrylist_t *lists = xalloc(sizeof(entrylist_t) * (nummodels + 1));
     textbuf_t *texts = xalloc(sizeof(textbuf_t) * (nummodels + 1));
     int total = 0, physmodels = 0;
     for (int i = 0; i < nummodels; i++) {
         if (i == 0) {
+            /* (L4D2: solid, then grates on their own - its MASK_SOLID has none - then the clips) */
             ConvertWorldBrushes(&lists[0], 0.0f, VPHYSICS_MERGE, L4D2_MASK_SOLID);
+            ConvertWorldBrushes(&lists[0], 0.0f, VPHYSICS_MERGE, CONTENTS_GRATE);
             ConvertWorldBrushes(&lists[0], 0.0f, VPHYSICS_MERGE, CONTENTS_PLAYERCLIP);
             ConvertWorldBrushes(&lists[0], 0.0f, VPHYSICS_MERGE, CONTENTS_MONSTERCLIP);
-            if (virtualmesh) Disp_BuildVirtualMesh(L4D2_MASK_SOLID);
+            if (virtualmesh) Disp_BuildVirtualMesh(L4D2_MASK_SOLID | CONTENTS_GRATE);
             else if (nummapdisps) Warning("(displacement collision without virtual meshes: not yet)\n");
             ConvertWaterModelToPhysCollide(&lists[0], 0);
         } else {
-            ConvertModelToPhysCollide(&lists[i], i, L4D2_MASK_SOLID | CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP | L4D2_MASK_WATER,
+            ConvertModelToPhysCollide(&lists[i], i, L4D2_MASK_SOLID | CONTENTS_GRATE | CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP | L4D2_MASK_WATER,
                                       VPHYSICS_SHRINK, VPHYSICS_MERGE);
         }
         if (!lists[i].n) continue;

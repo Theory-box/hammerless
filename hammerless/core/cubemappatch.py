@@ -77,6 +77,8 @@ _TOKEN = re.compile(r'"([^"]*)"|(\{)|(\})|(\[[^\]]*\])|([^\s{}"\[\]]+)')
 def parse_kv(text: str) -> KV | None:
     """The first top-level block of a KeyValues text (a .vmt), with conditionals applied."""
     text = re.sub(r"//[^\n]*", "", text)
+    # (a quote left open would swallow line ends; the table hlvbsp reads is one line per entry)
+    text = re.sub(r'"[^"]*"', lambda m: m.group(0).replace("\r", " ").replace("\n", " "), text)
     toks: list[tuple[str, str]] = []
     for m in _TOKEN.finditer(text):
         if m.group(1) is not None:
@@ -170,7 +172,10 @@ def kv_value_text(v: str) -> str:
     mi, mf = _INT.match(v), _FLOAT.match(v)
     iend, fend = (mi.end() if mi else 0), (mf.end() if mf else 0)
     if fend > iend and fend == len(v):
-        f = struct.unpack("<f", struct.pack("<f", float(v)))[0]
+        try:
+            f = struct.unpack("<f", struct.pack("<f", float(v)))[0]
+        except (OverflowError, ValueError):
+            return v
         return "%f" % f
     if mi and iend == len(v):
         n = int(v)
@@ -377,6 +382,6 @@ def write_cubemap_table(path: str, material_names: list[str], read_text) -> int:
             lines = cm.wvt_patch(name)
             out.append("\t".join(["wvt", name, str(len(lines))]))
             out.extend(lines)
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
+    with open(path, "w", encoding="latin-1", errors="replace", newline="\n") as f:
         f.write("\n".join(out) + "\n")
     return len(order)

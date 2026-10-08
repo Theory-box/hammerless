@@ -153,7 +153,7 @@ void AddFileToPak(const char *name, unsigned char *data, int len);
 
 /* maps/<map>/<material>_depth_<n>, lower case */
 static void WaterTextureName(const char *material, int depth, char *out) {
-    sprintf(out, "maps/%s/%s_depth_%i", g_mapbase, material, depth);
+    snprintf(out, 600, "maps/%s/%s_depth_%i", g_mapbase, material, depth);
     for (char *c = out; *c; c++) *c = (char)tolower((unsigned char)*c);
 }
 
@@ -175,9 +175,10 @@ static int FindOrCreateWaterTexInfo(int texinfo, float depth) {
     depthtexinfos[numdepth++] = ti;
     /* the patch: the water material with $waterdepth inserted */
     char path[700], text[1400];
-    sprintf(path, "materials/%s.vmt", full);
-    int len = sprintf(text, "\"patch\"\r\n{\r\n\t\"include\"\t\t\"materials/%s.vmt\"\r\n\t\"insert\"\r\n\t{\r\n\t\t\"$waterdepth\"\t\t\"%i\"\r\n\t}\r\n}\r\n",
+    snprintf(path, sizeof(path), "materials/%s.vmt", full);
+    int len = snprintf(text, sizeof(text), "\"patch\"\r\n{\r\n\t\"include\"\t\t\"materials/%s.vmt\"\r\n\t\"insert\"\r\n\t{\r\n\t\t\"$waterdepth\"\t\t\"%i\"\r\n\t}\r\n}\r\n",
                       material, (int)depth);
+    if (len >= (int)sizeof(text)) len = (int)sizeof(text) - 1;
     unsigned char *data = xalloc(len + 1);
     memcpy(data, text, len);
     AddFileToPak(path, data, len);
@@ -286,8 +287,8 @@ void EnsurePresenceOfWaterLODControlEntity(void) {
     for (int i = 0; i < num_entities; i++)
         if (!_stricmp(ValueForKey(&entities[i], "classname"), "water_lod_control")) return;
     Warning("Water found with no water_lod_control entity, creating a default one.\n");
-    entity_t *e = &entities[num_entities++];
-    memset(e, 0, sizeof(*e));
+    extern entity_t *AllocEntity(void);
+    entity_t *e = AllocEntity();
     e->firstbrush = nummapbrushes;
     SetKeyValue(e, "classname", "water_lod_control");
     SetKeyValue(e, "cheapwaterstartdistance", "1000");

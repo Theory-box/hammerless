@@ -106,7 +106,7 @@ int OverlaysAreEqual(const side_t *a, const side_t *b) {
 void Overlay_AddFaceToLists(int face, const side_t *side) {
     for (int i = 0; i < side->noverlays; i++) {
         mapoverlay_t *o = &overlays[side->overlays[i]];
-        if (has(o->faces, o->nfaces, face)) continue;
+        if (has(o->faces, o->nfaces < OVERLAY_BSP_FACE_COUNT + 1 ? o->nfaces : OVERLAY_BSP_FACE_COUNT + 1, face)) continue;
         if (o->nfaces < OVERLAY_BSP_FACE_COUNT + 1) o->faces[o->nfaces] = face;
         o->nfaces++;
     }

@@ -108,9 +108,10 @@ def material_row(content, name: str, game_dir: str | None, surfaceprops: dict[st
         else:
             if _true(g("%compileladder")):
                 contents |= CONTENTS_LADDER
-            team = (g("%compileteam") or "").strip()
-            if team[:1].isdigit() and int(team.split()[0]) in (1, 2):
-                contents |= CONTENTS_TEAM1 if int(team.split()[0]) == 1 else CONTENTS_TEAM2
+            m_team = re.match(r"\s*(\d+)", g("%compileteam") or "")
+            team = int(m_team.group(1)) if m_team else 0
+            if team in (1, 2):
+                contents |= CONTENTS_TEAM1 if team == 1 else CONTENTS_TEAM2
             if _true(g("%noportal")):
                 flags |= SURF_NOPORTAL
             if _true(g("%hotsurface")):          # (L4D2's vbsp marks these like %noPortal)
@@ -198,7 +199,7 @@ def write_cubemap_materials(path: str, vmf_path: str, content, game_dir: str | N
     """For env_cubemap: which materials are specular and their patch .vmt templates (core/cubemappatch)."""
     from .cubemappatch import write_cubemap_table
     from .gamematerials import _read_text
-    with open(vmf_path, encoding="utf-8", errors="replace") as f:
+    with open(vmf_path, encoding="latin-1") as f:      # (bytes as they are: hlvbsp reads them raw)
         names = vmf_materials(f.read())
     return write_cubemap_table(path, names, lambda n: _read_text(content, f"materials/{n}.vmt", game_dir))
 
@@ -309,7 +310,7 @@ def detail_models(detail_text: str, vmf_text: str) -> list[str]:
 
 def write_detail_file(path: str, vmf_path: str, content, game_dir: str | None) -> str:
     """The game's detail kinds (detail.vbsp, or the map's own choice) for hlvbsp; returns its text."""
-    with open(vmf_path, encoding="utf-8", errors="replace") as f:
+    with open(vmf_path, encoding="latin-1") as f:      # (bytes as they are: hlvbsp reads them raw)
         name = detail_vbsp_name(f.read())
     data = _model_bytes(content, name, game_dir) or b""
     with open(path, "wb") as f:
@@ -318,20 +319,20 @@ def write_detail_file(path: str, vmf_path: str, content, game_dir: str | None) -
 
 
 def write_prop_table(path: str, vmf_path: str, content, game_dir: str | None, detail_text: str = "") -> int:
-    with open(vmf_path, encoding="utf-8", errors="replace") as f:
+    with open(vmf_path, encoding="latin-1") as f:      # (bytes as they are: hlvbsp reads them raw)
         text = f.read()
     seen: dict[str, str] = {}
     for model in vmf_static_prop_models(text) + detail_models(detail_text, text):
         seen.setdefault(model.lower().replace("\\", "/"), model)
     models = list(seen.values())
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
+    with open(path, "w", encoding="latin-1", errors="replace", newline="\n") as f:
         for model in models:
             f.write("\n".join(prop_model_record(content, model, game_dir)) + "\n")
     return len(models)
 
 
 def write_material_table(path: str, vmf_path: str, content, game_dir: str | None) -> int:
-    with open(vmf_path, encoding="utf-8", errors="replace") as f:
+    with open(vmf_path, encoding="latin-1") as f:      # (bytes as they are: hlvbsp reads them raw)
         names = vmf_materials(f.read())
     surfaceprops: dict[str, int] = {}
     rows = [material_row(content, n, game_dir, surfaceprops) for n in names]
@@ -343,7 +344,7 @@ def write_material_table(path: str, vmf_path: str, content, game_dir: str | None
             known.add(bottom.lower())
             rows.append(material_row(content, bottom, game_dir, surfaceprops))
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
+    with open(path, "w", encoding="latin-1", errors="replace", newline="\n") as f:
         f.write("\n".join(rows) + "\n")
     return len(rows)
 

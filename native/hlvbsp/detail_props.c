@@ -478,7 +478,7 @@ static int SelectDetail(const detailgroup_t *g) {
 }
 
 static void EmitOnFace(dface_t *face, const detailobject_t *d) {
-    if (face->numedges < 3) return;
+    if (face->numedges < 3 || !d->ngroups) return;
     int *se = &dsurfedges[face->firstedge];
     int vi = se[0] < 0;
     float *first = dvertexes[dedges[abs(se[0])].v[vi]].point;
@@ -515,6 +515,7 @@ static void EmitOnFace(dface_t *face, const detailobject_t *d) {
 extern void DispPositionOnSurface(int i, float u, float v, vec3_t pt, vec3_t normal, float *alpha);
 
 static void EmitOnDisplacement(dface_t *face, const detailobject_t *d) {
+    if (!d->ngroups) return;
     float area = 0.0f;
     int *se = &dsurfedges[face->firstedge];
     int vi = se[0] < 0;

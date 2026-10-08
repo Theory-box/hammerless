@@ -115,7 +115,7 @@ static int PlaneFromPoints(const vec3_t p0, const vec3_t p1, const vec3_t p2) {
     VectorSubtract(p0, p1, t1);
     VectorSubtract(p2, p1, t2);
     CrossProduct(t1, t2, normal);
-    VectorNormalize(normal);
+    VectorNormalizeX87(normal);
     vec_t dist = DotProduct(p0, normal);
     if (SnapVector(normal)) {
         /* re-derive the distance through the centre of the three points */
@@ -223,7 +223,10 @@ typedef struct { char *name; int material; } textureref_t;
 static textureref_t *texrefs;
 static int numtexrefs, max_texrefs;
 
-int FindMaterial(const char *name) {
+int FindMaterial(const char *name_) {
+    char name[256];
+    strncpy(name, name_, sizeof(name) - 1);
+    name[sizeof(name) - 1] = 0;
     for (int i = 0; i < numtexrefs; i++)
         if (!strcmp(texrefs[i].name, name)) return i;
     if (numtexrefs == max_texrefs) {
@@ -446,8 +449,9 @@ int TexinfoForBrushTexture(plane_t *plane, brush_texture_t *bt, const vec3_t ori
     if (!bt->scale[0]) bt->scale[0] = 1;
     if (!bt->scale[1]) bt->scale[1] = 1;
     for (int k = 0; k < 3; k++) {
-        tx.vecs[0][k] = bt->uaxis[k] / bt->scale[0];
-        tx.vecs[1][k] = bt->vaxis[k] / bt->scale[1];
+        /* (times the reciprocal, as the game's vector divide does - measured) */
+        tx.vecs[0][k] = bt->uaxis[k] * (1.0f / bt->scale[0]);
+        tx.vecs[1][k] = bt->vaxis[k] * (1.0f / bt->scale[1]);
         tx.lmvecs[0][k] = bt->uaxis[k] / bt->lightmap_scale;
         tx.lmvecs[1][k] = bt->vaxis[k] / bt->lightmap_scale;
     }
@@ -553,7 +557,7 @@ static void AddBrushBevels(mapbrush_t *b) {
             int k = (j + 1) % w->numpoints;
             vec3_t vec, vec2;
             VectorSubtract(w->p[j], w->p[k], vec);
-            if (VectorNormalize(vec) < 0.5) continue;
+            if (VectorNormalizeX87(vec) < 0.5) continue;
             SnapVector(vec);
             for (k = 0; k < 3; k++)
                 if (vec[k] == -1 || vec[k] == 1) break;
@@ -563,7 +567,7 @@ static void AddBrushBevels(mapbrush_t *b) {
                     VectorClear(vec2);
                     vec2[axis] = dir;
                     CrossProduct(vec, vec2, normal);
-                    if (VectorNormalize(normal) < 0.5) continue;
+                    if (VectorNormalizeX87(normal) < 0.5) continue;
                     dist = DotProduct(w->p[j], normal);
                     /* a bevel only if every point of the brush is behind it */
                     for (k = 0; k < b->numsides; k++) {
@@ -872,12 +876,19 @@ static void load_solid(parser_t *p, loadent_t *le) {
 
 static int IsAreaPortal(const char *cls) { return !strncmp(cls, "func_areaportal", 15); }
 
-static void load_entity(parser_t *p) {
+/* A new entity at the end of the list (the array grows). */
+entity_t *AllocEntity(void) {
     if (num_entities == max_entities) {
         max_entities = max_entities ? max_entities * 2 : 1024;
         entities = realloc(entities, sizeof(entity_t) * max_entities);
     }
-    entity_t *mapent = &entities[num_entities++];
+    entity_t *e = &entities[num_entities++];
+    memset(e, 0, sizeof(*e));
+    return e;
+}
+
+static void load_entity(parser_t *p) {
+    entity_t *mapent = AllocEntity();
     memset(mapent, 0, sizeof(*mapent));
     mapent->firstbrush = nummapbrushes;
     loadent_t le = {mapent, 0, 0};
