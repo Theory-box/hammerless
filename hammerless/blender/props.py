@@ -13,6 +13,8 @@ OBJECT_ROLES = [
     ("BRUSH_ENTITY", "Brush Entity", "Brush geometry that belongs to an entity (func_detail, triggers...)"),
     ("TERRAIN", "Terrain", "Heightfield mesh converted to displacements"),
     ("ENTITY", "Point Entity", "An entity at this object's origin (spawns, items, infected...)"),
+    ("MODEL", "Custom Model", "This mesh becomes a game model, placed here as a prop (any shape: not "
+                              "limited to convex brushes). Copies sharing the mesh (Alt+D) share one model"),
     ("IGNORE", "Ignore", "Not exported"),
 ]
 
@@ -100,6 +102,30 @@ def _on_classname_change(self, context):
         kv.key, kv.value = k, v
 
 
+_PHYSICS_CLASSES: list = []
+
+
+def _physics_classes():
+    """The game's physics prop classes (scripts/propdata.txt), read once; a short list without the game."""
+    if not _PHYSICS_CLASSES:
+        names = []
+        try:
+            import re
+            from .ops import game_root, game_content
+            content = game_content(game_root(bpy.context))
+            text = content.read("scripts/propdata.txt").decode("latin-1") if content else ""
+            names = [n for n in re.findall(r'^\s*"([A-Za-z]+\.[A-Za-z_]+)"\s*$', text, re.M)
+                     if not n.endswith(".Base") and n != "PropData.txt"]
+        except Exception:
+            names = []
+        names = names or ["Wooden.Small", "Wooden.Medium", "Wooden.Large", "Metal.Small", "Metal.Medium",
+                          "Metal.Large", "Plastic.Small", "Plastic.Medium", "Cardboard.Medium", "Stone.Medium"]
+        default = "Wooden.Medium" if "Wooden.Medium" in names else names[0]
+        names.sort(key=lambda n: (n != default, n))
+        _PHYSICS_CLASSES.extend((n, n, "") for n in names)
+    return _PHYSICS_CLASSES
+
+
 class HL_ObjectSettings(bpy.types.PropertyGroup):
     role: EnumProperty(name="Role", items=OBJECT_ROLES, default="AUTO")
     classname: StringProperty(name="Class", description="Entity classname",
@@ -112,6 +138,18 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
     preset_part: StringProperty(description="On a preset part: which part it is")
     brush_detail: EnumProperty(name="Detail", items=DETAIL_CHOICES, default="AUTO",
                                description="Whether this brush is func_detail")
+    model_kind: EnumProperty(name="Prop", default="STATIC", items=[
+        ("STATIC", "Static", "Part of the map: solid, lit like the world, can't move (prop_static)"),
+        ("DYNAMIC", "Dynamic", "Logic can move, hide or animate it; doesn't fall (prop_dynamic)"),
+        ("PHYSICS", "Physics", "Falls, can be pushed and shot around (prop_physics)")])
+    model_collision: EnumProperty(name="Collision", default="HULLS", items=[
+        ("HULLS", "Convex Pieces", "Solid: each loose part of the mesh wrapped in its convex hull"),
+        ("NONE", "None", "Players and zombies walk through it (not for Physics props)")])
+    physics_class: EnumProperty(name="Physics Class", items=lambda self, context: _physics_classes(),
+                                description="How it behaves when hit: the game's own classes (scripts/propdata.txt): "
+                                            "weight feel, health, breaking. A broken prop with no gibs just disappears")
+    model_mass: FloatProperty(name="Mass", default=0.0, min=0.0, soft_max=1000.0, unit="MASS",
+                              description="Physics props: kg (0 = worked out from its size)")
     use_convex_hull: BoolProperty(
         name="Use Convex Hull",
         description="Wrap each loose part in its convex hull instead of requiring it to be convex")

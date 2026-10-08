@@ -223,13 +223,13 @@ class Bench:
     def screenshot(self, name: str, pos=None, ang=None, hud: bool = False, out_dir: str | None = None) -> str:
         """A screenshot (JPEG) from the host's eyes, or from pos (x, y, z) looking at ang (pitch, yaw).
         Returns the file's path (copied to out_dir when given). Needs sv_cheats 1 to move the camera."""
-        cmds = ["cl_drawhud 0", "r_drawviewmodel 0"] if not hud else []
+        cmds = ["hideconsole", "gameui_hide"]      # the console or a menu / dialog would be in the picture
+        cmds += ["cl_drawhud 0", "r_drawviewmodel 0"] if not hud else []
         if pos is not None:
             cmds.append("setpos {} {} {}".format(*pos))
         if ang is not None:
             cmds.append("setang {} {} 0".format(*ang))
-        if cmds:
-            self.console(*cmds, wait=0.5)
+        self.console(*cmds, wait=0.5)
         shots = os.path.join(self.game, "screenshots")
         path = os.path.join(shots, f"{name}.jpg")
         if os.path.exists(path):
@@ -307,6 +307,7 @@ def done(text):
     open(os.path.join(OUT, "bench_result.txt"), "w").write(text)
     os._exit(0)
 def start():
+    global bpy                  # (prep code may import bpy again)
     try:
         s = bpy.context.scene.hammerless
         s.map_name, s.output_dir, s.sound_mode = "{map}", OUT, "OFF"

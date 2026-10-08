@@ -855,6 +855,43 @@ def test_logic_value_wires():
                                                     for e in entities(blocks, "logic_script"))
 
 
+def test_custom_models_extract():
+    # Custom Model meshes: linked copies share one model, each copy is a prop where the object is
+    from mathutils import Vector
+    from hammerless.blender.extract import extract_scene
+    from hammerless.core.build import Report
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    bpy.ops.mesh.primitive_monkey_add(location=(0, 2, 1))
+    m = bpy.context.object
+    m.hammerless.role = "MODEL"
+    bpy.ops.object.duplicate_move_linked()
+    m2 = bpy.context.object
+    m2.location, m2.rotation_euler = (3, 2, 1), (0, 0, math.radians(90))
+    bpy.ops.mesh.primitive_cylinder_add(location=(-3, 2, 1))
+    c = bpy.context.object
+    c.hammerless.role, c.hammerless.model_kind = "MODEL", "PHYSICS"
+    bpy.ops.mesh.primitive_cube_add(location=(0, -3, 1))
+    flipped = bpy.context.object
+    flipped.hammerless.role, flipped.scale = "MODEL", (-1, 1, 1)
+    rep = Report()
+    ir, _ = extract_scene(bpy.context, rep)
+    assert not rep.errors, rep.errors
+    props = [e for e in ir.entities if e.classname.startswith("prop_")]
+    monkeys = [e for e in props if e.keyvalues["model"].endswith("/suzanne.mdl")]
+    assert len(monkeys) == 2, [e.keyvalues for e in props]
+    assert abs(monkeys[1].angles[1] - 90) < 0.01 and abs(monkeys[1].origin[0] - 3 * 52.49) < 0.5
+    spec = ir.models["hammerless/test_map/suzanne"]
+    assert spec.kind == "STATIC" and len(spec.collision) == 3      # head and two eyes: three convex pieces
+    phys = [e for e in props if e.classname == "prop_physics"]
+    assert len(phys) == 1 and ir.models[phys[0].keyvalues["model"][7:-4]].kind == "PHYSICS"
+    # a mirrored copy is its own model, with its triangles turned so they still face out
+    cube = next(s for n, s in ir.models.items() if "cube" in n)
+    (mat, verts) = cube.triangles[0]
+    a, b, cc = (Vector(v[0]) for v in verts)
+    assert (b - a).cross(cc - a).dot(Vector(verts[0][1])) > 0
+
+
 def test_logic_loops():
     # Blender marks wires that loop back invalid: a loop of event wires still works (a timer that
     # stops itself), a circle of value wires is left out with a warning

@@ -180,7 +180,7 @@ def build_map_text(context, root: str | None):
         return None, None, rep
     gamedir = os.path.join(root, "left4dead2") if root else None
     content = game_content(root)        # loads the game's surface list before materials are read
-    ir, _mats = extract_scene(context, rep, gamedir)
+    ir, _mats = extract_scene(context, rep, gamedir, content)
     if rep.errors:
         return ir, None, rep
     from .logic import compile_logic
@@ -217,6 +217,37 @@ def _write_mode_addon(gamedir: str, rep: Report) -> None:
     if cc.game_running():
         rep.warnings.append("Override and HUD nodes need Hammerless's game mode, which was just installed: "
                             "close Left 4 Dead 2 and Build & Play again (the game reads game modes when it starts)")
+
+
+def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None:
+    """The map's Custom Models: compiled with the game's studiomdl into models/hammerless/<map>/ (only the
+    ones that changed since the last build), and their materials."""
+    import hashlib
+    from ..core import models as m
+    studiomdl = os.path.join(root, "bin", "studiomdl.exe")
+    if not os.path.exists(studiomdl):
+        rep.errors.append("Custom Models need studiomdl.exe from the Left 4 Dead 2 Authoring Tools (Steam > Library > "
+                          "Tools): it isn't in the game's bin folder")
+        return
+    m.write_model_materials(gamedir, f"models/hammerless/{ir.settings.name}", ir.model_materials)
+    built = 0
+    for name, spec in ir.models.items():
+        sig = hashlib.sha1((m.reference_smd(spec.triangles) + m.collision_smd(spec.collision)
+                            + m.qc_text(spec)).encode()).hexdigest()
+        folder = os.path.join(work, "models", name.split("/")[-1])
+        stamp = os.path.join(folder, "built.sha1")
+        have = all(os.path.exists(os.path.join(gamedir, *f.split("/"))) for f in m.model_files(name)[:3])
+        if have and os.path.exists(stamp) and open(stamp).read() == sig:
+            continue
+        res = m.compile_model(studiomdl, gamedir, spec, folder)
+        if not res.ok:
+            errs = m.studiomdl_errors(res.log) or res.log.strip().splitlines()[-3:]
+            rep.errors.append(f"Custom Model '{name.split('/')[-1]}' didn't compile: " + "; ".join(errs[:3]))
+            continue
+        with open(stamp, "w") as f:
+            f.write(sig)
+        built += 1
+    rep.info.append(f"Custom Models: {len(ir.models)} ({built} compiled now)")
 
 
 def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
@@ -267,6 +298,10 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
             cc.set_map_owner(cc.Tools(root), s.map_name, path)
             if ir.scripted_mode:
                 _write_mode_addon(gamedir, rep2)
+            if ir.models:
+                _compile_models(root, gamedir, ir, rep2, os.path.dirname(path))
+                if rep2.errors:
+                    return None, root, rep2
         except OSError as ex:
             rep2.errors.append(f"Can't write the map's scripts into the game folder ({ex}). Is Left 4 Dead 2 "
                                "installed somewhere that needs administrator rights?")

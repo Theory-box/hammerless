@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Custom Models (object role):** any mesh becomes a game model placed as a prop: Static, Dynamic (logic can move it) or Physics (falls, gets pushed; the game's own physics classes). Collision from each loose part's convex hull; linked copies share one model; materials (game textures or your own images) are made into model materials. Compiled with the game's studiomdl for now (our own model writer comes next). Tested in game: solid, nav goes around static ones, physics ones fall.
+
 - **In-game test bench (for development, in `tests/ingame`):** drives the running game from Python (about 0.1 s per request), builds test maps without lighting in about 30 s, reads which logic wires fired, takes screenshots. `tests/ingame/test_examples.py` plays every logic example in the game and checks it: 38 of 42 automated (the rest need real play). It found the fixes below.
 - **Debug Log** wire lines now say which graph they're in (`[Example 21: Two-Step Gate] button.pressed -> steps.in`), for maps with several graphs.
 - **Fixes:**

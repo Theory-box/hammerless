@@ -223,7 +223,7 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
                 r.warnings.append(f"Material '{m}' not found in game files (will show as purple/black checkers).")
         for e in ir.entities:
             mdl = e.keyvalues.get("model", "")
-            if mdl.endswith(".mdl") and not content.has_model(mdl):
+            if mdl.endswith(".mdl") and not mdl.startswith("models/hammerless/") and not content.has_model(mdl):
                 r.warnings.append(f"Model '{mdl}' on {e.classname} not found in game files.")
 
     if physical:

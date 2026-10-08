@@ -74,6 +74,13 @@ map compiler...) should get its own regression script built the same way.
 Entity names in a built map: an object `Example 21 button` becomes `hl_example_21_button`; a node's entity is
 `hl_<slug of "Example 21: Two-Step Gate">_<node id>` (Volumes, Timers, relays: named after the node).
 
+## Custom models: `test_models.py`
+
+`python tests/ingame/test_models.py --shots <folder>` builds the demo level with a few Custom Model objects
+(static, linked copy, physics, dynamic) as `hl_test_models` and checks them in the game: physics prop falls,
+dynamic prop exists, static model is solid, the nav mesh goes around it; `--shots` saves a screenshot to look at.
+Run it when changing the model pipeline; it is the reference for our own model writer.
+
 ## Probes
 
 Small VScript files that print `HL…` lines; the bench's `run` replaced them for new work.

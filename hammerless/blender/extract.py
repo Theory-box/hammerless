@@ -420,6 +420,128 @@ def source_angles(matrix_world) -> tuple[float, float, float]:
     return (math.degrees(e.y), math.degrees(e.z), math.degrees(e.x))
 
 
+# ---------------------------------------------------------------- custom models
+
+PROP_CLASSES = {"STATIC": "prop_static", "DYNAMIC": "prop_dynamic", "PHYSICS": "prop_physics"}
+
+
+def _model_texture(mat, path: str, content) -> str:
+    """The texture a model material shows: a Hammerless-made material's own texture, or the
+    $basetexture of the game material it uses."""
+    from ..core.models import base_texture_of
+    if path.startswith("hammerless/"):
+        hs = mat.hammerless if mat is not None else None
+        base = (hs.source_material.strip().lower().replace("\\", "/") if hs else "") or ""
+        if not base:
+            return path                       # a converted image texture: the VTF is at the same path
+        path = base                           # a game material with a surface patch: show the original
+    if content is not None:
+        data = content.read(f"materials/{path}.vmt")
+        if data:
+            tex = base_texture_of(data.decode("latin-1", "replace"))
+            if tex:
+                return tex
+    return path
+
+
+def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, content, matrix=None,
+               label: str | None = None) -> Entity:
+    """A Custom Model object: its mesh as a model (shared by every object with the same mesh, scale and
+    settings) and a prop entity placing it. Model space = the object's own axes, scaled to Hammer units."""
+    from ..core.models import ModelSpec, safe_name, PHYSICS
+    hs = obj.hammerless
+    matrix = matrix if matrix is not None else obj.matrix_world
+    loc, rot, sca = matrix.decompose()
+    kind = hs.model_kind
+    collide = hs.model_collision if kind != "PHYSICS" else "HULLS"
+    key = (obj.data.name, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class, round(hs.model_mass, 3),
+           tuple(slot.material.name if slot.material else "" for slot in obj.material_slots))
+    name = getattr(ir, "_model_keys", {}).get(key)
+    if name is None:
+        import hashlib
+        stem = safe_name(obj.data.name)
+        if key[1:] != ((1.0, 1.0, 1.0), "STATIC", "HULLS", key[4], key[5], key[6]):
+            stem += "_" + hashlib.sha1(repr(key).encode()).hexdigest()[:6]
+        name = f"hammerless/{ir.settings.name}/{stem}"
+        while name in ir.models:              # two meshes whose names clean up the same
+            name += "x"
+        ir.__dict__.setdefault("_model_keys", {})[key] = name
+        ir.models[name] = _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, collide)
+    spec = ir.models[name]
+    kv = {"model": f"models/{name}.mdl", "solid": "6" if spec.collision else "0"}
+    if kind == "STATIC":
+        kv["disableshadows"] = "0"
+    kv.update(object_keyvalues(obj))
+    origin = tuple(c * scale for c in loc)
+    return Entity(PROP_CLASSES[kind], origin, source_angles(rot.to_matrix().to_4x4()), kv, [], label or obj.name,
+                  object_outputs(obj))
+
+
+def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, collide):
+    from ..core.models import ModelSpec
+    eval_obj = obj.evaluated_get(depsgraph)
+    mesh = eval_obj.to_mesh()
+    try:
+        flip = (sca.x * sca.y * sca.z) < 0       # a mirrored copy: keep the faces facing out
+        size = Vector((sca.x * scale, sca.y * scale, sca.z * scale))
+        mesh.calc_loop_triangles()
+        uv = mesh.uv_layers.active.data if mesh.uv_layers.active else None
+        normals = mesh.corner_normals if hasattr(mesh, "corner_normals") else None
+        slots = obj.material_slots
+        mat_names: dict[int, str] = {}
+        triangles = []
+        for tri in mesh.loop_triangles:
+            mi = tri.material_index
+            if mi not in mat_names:
+                mat = slots[mi].material if mi < len(slots) else None
+                path, _ts, _lm = materials.resolve(mat)
+                mname = texture_file_name(mat.name) if mat is not None else "default"
+                ir.model_materials[mname] = (_model_texture(mat, path, content), False, False)
+                mat_names[mi] = mname
+            verts = []
+            for li, vi in zip(tri.loops, tri.vertices):
+                co = mesh.vertices[vi].co
+                p = (co.x * size.x, co.y * size.y, co.z * size.z)
+                n = normals[li].vector if normals is not None else mesh.loops[li].normal
+                n = Vector((n.x / (sca.x or 1), n.y / (sca.y or 1), n.z / (sca.z or 1))).normalized()
+                t = uv[li].uv if uv is not None else (0.0, 0.0)
+                verts.append((p, (n.x, n.y, n.z), (t[0], t[1])))
+            if flip:
+                verts.reverse()
+            triangles.append((mat_names[mi], tuple(verts)))
+        pieces = []
+        if collide == "HULLS":
+            bm = bmesh.new()
+            bm.from_mesh(mesh)
+            bm.transform(Matrix.Diagonal((size.x, size.y, size.z, 1.0)))
+            for part in _loose_parts(bm):
+                pts = [tuple(v.co) for f in part for v in f.verts]
+                hull = bmesh.new()
+                for p in {tuple(round(c, 4) for c in q) for q in pts}:
+                    hull.verts.new(p)
+                if len(hull.verts) >= 4:
+                    res = bmesh.ops.convex_hull(hull, input=hull.verts[:])
+                    for g in res.get("geom_interior", []) + res.get("geom_unused", []):
+                        if isinstance(g, bmesh.types.BMVert) and g.is_valid:
+                            hull.verts.remove(g)
+                    bmesh.ops.triangulate(hull, faces=hull.faces[:])
+                    hull.verts.index_update()
+                    if hull.faces:
+                        pieces.append(([tuple(v.co) for v in hull.verts],
+                                       [tuple(v.index for v in f.verts) for f in hull.faces]))
+                hull.free()
+            bm.free()
+    finally:
+        eval_obj.to_mesh_clear()
+    surface = "default"
+    for slot in obj.material_slots:
+        if slot.material is not None and slot.material.hammerless.surface not in ("", "DEFAULT"):
+            surface = slot.material.hammerless.surface
+            break
+    return ModelSpec(name, triangles, pieces, kind, surface, obj.hammerless.model_mass, obj.hammerless.physics_class,
+                     f"models/hammerless/{ir.settings.name}/")
+
+
 def object_keyvalues(obj) -> dict[str, str]:
     return {kv.key: kv.value for kv in obj.hammerless.keyvalues if kv.key}
 
@@ -494,7 +616,7 @@ def scene_settings_to_ir(s) -> MapSettings:
     )
 
 
-def extract_scene(context, report, game_dir: str | None = None) -> tuple[MapIR, MaterialResolver]:
+def extract_scene(context, report, game_dir: str | None = None, content=None) -> tuple[MapIR, MaterialResolver]:
     s = context.scene.hammerless
     scale = s.units_per_meter
     depsgraph = context.evaluated_depsgraph_get()
@@ -536,9 +658,14 @@ def extract_scene(context, report, game_dir: str | None = None) -> tuple[MapIR, 
                                           object_outputs(obj)))
             elif role == "LIGHT":
                 ir.entities.append(light_entity(obj, scale))
+            elif role == "MODEL":
+                if obj.type != "MESH":
+                    report.warnings.append(f"'{obj.name}' is a Custom Model but not a mesh: skipped")
+                    continue
+                ir.entities.append(model_prop(obj, depsgraph, scale, materials, ir, content))
         except Exception as ex:
             report.errors.append(f"'{obj.name}': {ex}")
-    _extract_instances(context, depsgraph, scale, ir, materials, report)
+    _extract_instances(context, depsgraph, scale, ir, materials, report, content)
     if hidden:
         report.warnings.append(f"{len(hidden)} hidden object(s) are left out of the map (Alt+H shows them; a "
                                f"missing wall can make the map leak): {', '.join(sorted(hidden)[:5])}"
@@ -546,7 +673,7 @@ def extract_scene(context, report, game_dir: str | None = None) -> tuple[MapIR, 
     return ir, materials
 
 
-def _extract_instances(context, depsgraph, scale, ir, materials, report) -> None:
+def _extract_instances(context, depsgraph, scale, ir, materials, report, content=None) -> None:
     """Copies made by collection instances (Add > Collection Instance, linked asset kits) and by
     geometry nodes: each copy exports like the object it copies, at the copy's place."""
     skipped = set()
@@ -570,6 +697,8 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report) -> None
                 origin = tuple(c * scale for c in matrix.translation)
                 ir.entities.append(Entity(src.hammerless.classname, origin, source_angles(matrix),
                                           object_keyvalues(src), [], label, object_outputs(src)))
+            elif role == "MODEL" and src.type == "MESH":
+                ir.entities.append(model_prop(src, depsgraph, scale, materials, ir, content, matrix, label))
             elif role in ("TERRAIN", "LIGHT"):
                 skipped.add(f"{src.name} ({role.lower()})")
         except Exception as ex:

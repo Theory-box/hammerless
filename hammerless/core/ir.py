@@ -136,6 +136,8 @@ class MapIR:
     entities: list[Entity] = field(default_factory=list)
     crescendos: dict[str, list[tuple[str, float]]] = field(default_factory=dict)
     extra_scripts: dict[str, str] = field(default_factory=dict)   # game file path -> text (logic graphs)
+    models: dict = field(default_factory=dict)                    # custom model name -> models.ModelSpec
+    model_materials: dict = field(default_factory=dict)           # model material name -> (texture, translucent, alphatest)
     logic_functions: list[str] = field(default_factory=list)       # map script functions (all graphs)
     logic_events: dict = field(default_factory=dict)               # game event -> [(condition, relay)]
     logic_script_events: dict = field(default_factory=dict)        # game event -> [script run when it happens]

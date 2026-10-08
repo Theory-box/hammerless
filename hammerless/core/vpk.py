@@ -110,17 +110,28 @@ class GameContent:
             self.files.update(v.entries)
 
     def read(self, path: str) -> bytes | None:
+        """A game file: from the VPKs, else a loose file in the game folder (Hammerless's own custom
+        models and materials are written there)."""
         path = path.lower().replace("\\", "/")
         for v in self.vpks:
             if path in v.entries:
                 return v.read(path)
+        loose = self._loose(path)
+        if loose:
+            with open(loose, "rb") as f:
+                return f.read()
         return None
+
+    def _loose(self, path: str) -> str | None:
+        full = os.path.join(self.game_root, "left4dead2", *path.split("/"))
+        return full if os.path.isfile(full) else None
 
     def has_material(self, name: str) -> bool:
         return f"materials/{name.lower().replace(chr(92), '/')}.vmt" in self.files
 
     def has_model(self, path: str) -> bool:
-        return path.lower().replace("\\", "/") in self.files
+        path = path.lower().replace("\\", "/")
+        return path in self.files or self._loose(path) is not None
 
     def materials(self, prefix: str = "") -> list[str]:
         prefix = prefix.lower()

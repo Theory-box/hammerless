@@ -258,6 +258,15 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                 col.label(text=_detail_note(context, obj))
         if eff in ("BRUSH", "BRUSH_ENTITY"):
             col.prop(hs, "use_convex_hull")
+        if eff == "MODEL":
+            col.prop(hs, "model_kind")
+            if hs.model_kind == "PHYSICS":
+                col.prop(hs, "physics_class")
+                col.prop(hs, "model_mass")
+            else:
+                col.prop(hs, "model_collision")
+            if hs.model_kind == "DYNAMIC":
+                col.label(text="Name it (Keyvalues: targetname) to use it from logic", icon="INFO")
 
 
 def _detail_note(context, obj) -> str:

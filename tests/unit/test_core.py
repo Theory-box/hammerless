@@ -2176,5 +2176,44 @@ class TestOverrideAnswer(unittest.TestCase):
         self.assertTrue(any("takes an answer" in p for p in problems), problems)
 
 
+class TestCustomModels(unittest.TestCase):
+    def test_qc_by_prop_kind(self):
+        from hammerless.core.models import ModelSpec, qc_text
+        tri = ("mat", (((0, 0, 0), (0, 0, 1), (0, 0)), ((1, 0, 0), (0, 0, 1), (1, 0)), ((0, 1, 0), (0, 0, 1), (0, 1))))
+        piece = ([(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)], [(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)])
+        static = qc_text(ModelSpec("hammerless/m/a", [tri], [piece], "STATIC", materials_dir="models/hammerless/m/"))
+        self.assertIn("$staticprop", static)
+        self.assertNotIn("prop_data", static)
+        self.assertIn('$cdmaterials "models/hammerless/m/"', static)
+        phys = qc_text(ModelSpec("hammerless/m/b", [tri], [piece, piece], "PHYSICS", mass=12, physics_class="Metal.Small"))
+        self.assertNotIn("$staticprop", phys)        # the game deletes physics props made from static models
+        self.assertIn('prop_data { "base" "Metal.Small" }', phys)   # and ones without prop_data
+        self.assertIn("$concave", phys)
+        self.assertIn("$mass 12", phys)
+
+    def test_collision_faces_point_out(self):
+        from hammerless.core.models import collision_smd
+        # a tetrahedron with every triangle listed the wrong way round
+        pts = [(0, 0, 0), (10, 0, 0), (0, 10, 0), (0, 0, 10)]
+        text = collision_smd([(pts, [(0, 2, 1), (0, 3, 2), (0, 1, 3), (1, 2, 3)][::1])])
+        rows = [l.split() for l in text.splitlines() if l.startswith("0 ") and len(l.split()) == 9]
+        centre = (2.5, 2.5, 2.5)
+        for i in range(0, len(rows), 3):
+            p = [tuple(map(float, r[1:4])) for r in rows[i:i + 3]]
+            n = tuple(map(float, rows[i][4:7]))
+            u = [p[1][k] - p[0][k] for k in range(3)]
+            v = [p[2][k] - p[0][k] for k in range(3)]
+            wound = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+            out = [p[0][k] - centre[k] for k in range(3)]
+            self.assertGreater(sum(wound[k] * out[k] for k in range(3)), 0)      # counter-clockwise from outside
+            self.assertGreater(sum(n[k] * out[k] for k in range(3)), 0)
+
+    def test_base_texture_of_vmt(self):
+        from hammerless.core.models import base_texture_of
+        self.assertEqual(base_texture_of('"LightmappedGeneric"\n{\n\t"$basetexture" "Wood\\WoodWall003a"\n}'),
+                         "Wood/WoodWall003a")
+        self.assertEqual(base_texture_of('LightmappedGeneric { $basetexture concrete/floor01 }'), "concrete/floor01")
+
+
 if __name__ == "__main__":
     unittest.main()
