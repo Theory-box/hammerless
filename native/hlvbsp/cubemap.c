@@ -25,6 +25,9 @@ static sidelist_t *sidelists;
 static int numsamples;
 static cuberecord_t *records;
 static int numrecords;
+typedef struct { char *name; char **lines; int nlines; } wvtrecord_t;
+static wvtrecord_t *wvts;          /* blend materials' LightmappedGeneric copies (Python wrote the text) */
+static int numwvts;
 static char **defaultnames;               /* materials/maps/<map>/c<x>_<y>_<z>.vtf, in order */
 static int numdefaultnames;
 static unsigned char *is_cubemap_texdata;
@@ -75,16 +78,36 @@ static void LoadCubemapTable(void) {
     if (!f) return;
     char line[4096];
     cuberecord_t *r = NULL;
+    wvtrecord_t *w = NULL;
     int want = 0;
     while (fgets(line, sizeof(line), f)) {
         size_t n = strlen(line);
         while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
+        if (want > 0 && w) {
+            w->lines[w->nlines++] = copystring(line);
+            want--;
+            continue;
+        }
         if (want > 0 && r) {
             r->lines[r->nlines++] = copystring(line);
             want--;
             continue;
         }
+        if (!strncmp(line, "wvt\t", 4)) {
+            char *tab = strchr(line + 4, '\t');
+            if (!tab) continue;
+            *tab = 0;
+            wvts = realloc(wvts, sizeof(wvtrecord_t) * (numwvts + 1));
+            w = &wvts[numwvts++];
+            r = NULL;
+            w->name = copystring(line + 4);
+            want = atoi(tab + 1);
+            w->lines = xalloc(sizeof(char *) * (want + 1));
+            w->nlines = 0;
+            continue;
+        }
         if (strncmp(line, "mat\t", 4)) continue;
+        w = NULL;
         char *fields[7], *p = line;
         int k = 0;
         for (; k < 7 && p; k++) {
@@ -145,13 +168,14 @@ static void replace_all(char *s, int max, const char *token, const char *value) 
 }
 
 /* The patch .vmt for a material and (first) its dependent; 0 when neither needs one. */
-static int PatchEnvmapForMaterialAndDependents(const char *material, const int origin[3], const char *cubetex, int depth) {
-    cuberecord_t *r = Record(material);
+static int PatchEnvmapForMaterialAndDependents(const char *material, const char *recname, const int origin[3],
+                                               const char *cubetex, int depth) {
+    cuberecord_t *r = Record(recname);
     if (!r || depth > 8) return 0;
     int dep_patched = 0;
     char deppatched[600] = "";
     if (strcmp(r->dep, "-")) {
-        dep_patched = PatchEnvmapForMaterialAndDependents(r->dep, origin, cubetex, depth + 1);
+        dep_patched = PatchEnvmapForMaterialAndDependents(r->dep, r->dep, origin, cubetex, depth + 1);
         if (dep_patched) PatchedName(r->dep, origin, 1, deppatched, sizeof(deppatched));
     }
     if (!r->patchable) return 0;
@@ -219,7 +243,7 @@ static int Cubemap_CreateTexInfo(int texinfo, const int origin[3]) {
         char nametmp[600];
         strncpy(nametmp, name, sizeof(nametmp) - 1);
         nametmp[sizeof(nametmp) - 1] = 0;
-        if (!PatchEnvmapForMaterialAndDependents(nametmp, origin, tex, 0)) return texinfo;
+        if (!PatchEnvmapForMaterialAndDependents(nametmp, TexDataName(OriginalTexData(td)), origin, tex, 0)) return texinfo;
         char file[700];
         snprintf(file, sizeof(file), "materials/%s.vtf", tex);
         defaultnames = realloc(defaultnames, sizeof(char *) * (numdefaultnames + 1));
@@ -337,6 +361,65 @@ void Cubemap_AttachDefaultCubemapToSpecularSides(void) {
     free(specular);
     free(manual);
     free(entity);
+}
+
+/* ------------------------------------------------------------------ blend materials on brush faces */
+static wvtrecord_t *WvtRecord(const char *name) {
+    LoadCubemapTable();
+    for (int i = 0; i < numwvts; i++)
+        if (!strcmp(wvts[i].name, name)) return &wvts[i];
+    for (int i = 0; i < numwvts; i++)
+        if (same_name(wvts[i].name, name)) return &wvts[i];
+    return NULL;
+}
+
+/* maps/<map>/<material>_wvt_patch: a LightmappedGeneric copy of the blend material (vbsp's
+   CreateBrushVersionOfWorldVertexTransitionMaterial). */
+static int CreateBrushVersionOfWorldVertexTransitionMaterial(int texinfo, wvtrecord_t *w) {
+    if (texinfo == TEXINFO_NODE) return texinfo;
+    int td = texinfos[texinfo].texdata;
+    const char *name = TexDataName(td);
+    if (stristr_(name, "_wvt_patch")) return texinfo;
+    char patched[700];
+    int len = snprintf(patched, sizeof(patched), "maps/%s/%s_wvt_patch", g_mapbase, name);
+    if (len >= 128 - 1) Error("Generated worldvertextransition patch name : %s too long! (max = %d)\n", patched, 128);
+    for (char *c = patched; *c; c++) *c = *c == 92 ? '/' : (char)tolower((unsigned char)*c);
+    int newtd = FindTexDataByName(patched);
+    int had = newtd != -1;
+    if (!had) {
+        Warning("Patching WVT material: %s\n", patched);
+        int cap = 4096, n = 0;
+        char *text = xalloc(cap);
+        for (int i = 0; i < w->nlines; i++) {
+            int l = (int)strlen(w->lines[i]);
+            while (n + l + 3 > cap) text = realloc(text, cap *= 2);
+            memcpy(text + n, w->lines[i], l);
+            n += l;
+            text[n++] = '\r';
+            text[n++] = '\n';
+        }
+        char path[800];
+        snprintf(path, sizeof(path), "materials/%s.vmt", patched);
+        AddFileToPak(path, (unsigned char *)text, n);
+        newtd = CloneTexData(td, patched);
+    }
+    texinfo_t t = texinfos[texinfo];
+    t.texdata = newtd;
+    if (had) {
+        int found = FindTexInfoExact(&t);
+        if (found >= 0) return found;
+    }
+    return AppendTexinfo(&t);
+}
+
+void WorldVertexTransitionFixup(void) {
+    for (int i = 0; i < nummapbrushsides; ++i) {
+        side_t *side = &brushsides[i];
+        if (side->disp || side->texinfo < 0) continue;
+        wvtrecord_t *w = WvtRecord(TexDataName(texinfos[side->texinfo].texdata));
+        if (!w) continue;
+        side->texinfo = CreateBrushVersionOfWorldVertexTransitionMaterial(side->texinfo, w);
+    }
 }
 
 /* Cubemaps no surface uses still get their texture. */

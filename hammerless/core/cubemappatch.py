@@ -13,6 +13,7 @@ material, whether it is specular and the patch text with @CUBE@ / @DEP@ for the 
 from __future__ import annotations
 
 import re
+import struct
 
 DEPENDENT_VARS = ("$bottommaterial", "$crackmaterial", "$fallbackmaterial")
 
@@ -158,6 +159,30 @@ def _has_pair(kv: KV, key: str, value: str) -> bool:
     return any(_has_pair(c, key, value) for c in kv.children if c.is_block())
 
 
+_INT = re.compile(r"\s*[+-]?\d+")
+_FLOAT = re.compile(r"\s*[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+def kv_value_text(v: str) -> str:
+    """A value as KeyValues writes it back: loading typed it (int, float or string)."""
+    if not v:
+        return v
+    mi, mf = _INT.match(v), _FLOAT.match(v)
+    iend, fend = (mi.end() if mi else 0), (mf.end() if mf else 0)
+    if fend > iend and fend == len(v):
+        f = struct.unpack("<f", struct.pack("<f", float(v)))[0]
+        return "%f" % f
+    if mi and iend == len(v):
+        n = int(v)
+        if -2**31 < n < 2**31 - 1:
+            return "%d" % n
+    return v
+
+
+WVT_REMOVED = ("$basetexture2", "$bumpmap2", "$bumpframe2", "$basetexture2noenvmap", "$blendmodulatetexture",
+               "$maskedblending", "$surfaceprop2")
+
+
 class CubemapMaterials:
     """Reads the materials (in the order vbsp loads them) and builds their records."""
 
@@ -219,6 +244,56 @@ class CubemapMaterials:
             return True
         dep = self.dependent(name)
         return bool(dep) and self.patchable(dep[1], depth + 1)
+
+    def shader(self, name: str, depth: int = 0) -> str:
+        """The material's shader (through "patch" materials' includes)."""
+        kv = self.load(name)
+        if not kv or depth > 8:
+            return ""
+        if kv.name.lower() == "patch":
+            inc = (kv.get_string("include") or "").replace("\\", "/")
+            if inc.lower().startswith("materials/"):
+                inc = inc[len("materials/"):]
+            if inc.lower().endswith(".vmt"):
+                inc = inc[:-4]
+            return self.shader(inc, depth + 1)
+        return kv.name
+
+    def wvt_patch(self, name: str) -> list[str]:
+        """vbsp's LightmappedGeneric copy of a blend material for brush faces (the _wvt_patch .vmt):
+        the material as KeyValues loaded it, renamed, with the second layer's keys removed."""
+        kv = self.load(name)
+        root = KV(kv.name)
+        root.children = list(kv.children)
+        for key in WVT_REMOVED:
+            c = root.find(key)
+            if c is not None:
+                root.children.remove(c)
+        flag = root.find("$basetexturenoenvmap")
+        if flag is not None and flag.value is not None:
+            try:
+                on = int(float(flag.value))
+            except ValueError:
+                m = _INT.match(flag.value)
+                on = int(m.group(0)) if m else 0
+            if on:
+                c = root.find("$envmap")
+                if c is not None:
+                    root.children.remove(c)
+        lines: list[str] = []
+
+        def write(node: KV, indent: int, name_: str) -> None:
+            lines.append("\t" * indent + f'"{name_}"')
+            lines.append("\t" * indent + "{")
+            for c in node.children:
+                if c.children:
+                    write(c, indent + 1, self.spell(c.name))
+                elif c.value:
+                    lines.append("\t" * (indent + 1) + f'"{self.spell(c.name)}"' + "\t\t" + f'"{kv_value_text(c.value)}"')
+            lines.append("\t" * indent + "}")
+
+        write(root, 0, self.spell("LightmappedGeneric"))
+        return lines
 
     def template(self, name: str) -> list[str]:
         """The patch .vmt's lines for `name`, with @NAME@ (the material as referenced), @CUBE@ (the
@@ -296,6 +371,12 @@ def write_cubemap_table(path: str, material_names: list[str], read_text) -> int:
         out.append("\t".join(["mat", name, str(int(cm.specular(name))), str(int(patchable)),
                               dep[0] if dep else "-", dep[1] if dep else "-", str(len(lines))]))
         out.extend(lines)
+    # blend materials: their LightmappedGeneric copies for brush faces
+    for name in material_names:
+        if "worldvertextransition" in cm.shader(name).lower():
+            lines = cm.wvt_patch(name)
+            out.append("\t".join(["wvt", name, str(len(lines))]))
+            out.extend(lines)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(out) + "\n")
     return len(order)

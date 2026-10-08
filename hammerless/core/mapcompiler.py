@@ -355,7 +355,7 @@ UNSUPPORTED_CLASSES = {
 }
 
 
-def unsupported(vmf_text: str, content=None, game_dir: str | None = None) -> list[str]:
+def unsupported(vmf_text: str) -> list[str]:
     """Reasons hlvbsp can't compile this map exactly like vbsp yet (empty: it can)."""
     from .vmf import parse
     why: list[str] = []
@@ -363,32 +363,9 @@ def unsupported(vmf_text: str, content=None, game_dir: str | None = None) -> lis
     def add(reason: str) -> None:
         if reason not in why:
             why.append(reason)
-    blocks = parse(vmf_text)
-    for b in blocks:
+    for b in parse(vmf_text):
         if b.name.lower() == "entity":
             cls = (b.get("classname") or "").lower()
             if cls in UNSUPPORTED_CLASSES:
                 add(UNSUPPORTED_CLASSES[cls])
-    # blend (WorldVertexTransition) materials on sides that aren't displacements: vbsp writes a
-    # LightmappedGeneric copy of the material for them (not done yet)
-    if content is not None:
-        shaders: dict[str, str] = {}
-
-        def sides(block):
-            for it in block.items:
-                if not isinstance(it, tuple):
-                    if it.name.lower() == "side":
-                        yield it
-                    else:
-                        yield from sides(it)
-        for b in blocks:
-            for side in sides(b):
-                if side.blocks("dispinfo"):
-                    continue
-                mat = (side.get("material") or "").lower().replace("\\", "/")
-                if mat not in shaders:
-                    shaders[mat] = read_vmt(content, mat, game_dir).get("shader", "")
-                if "worldvertextransition" in shaders[mat]:
-                    add("blend materials on brushes")
-                    return why
     return why

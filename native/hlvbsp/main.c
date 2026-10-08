@@ -197,7 +197,8 @@ int main(int argc, char **argv) {
     LoadMapFile(path);
     {
         extern void Cubemap_FixupBrushSidesMaterials(void), Cubemap_AttachDefaultCubemapToSpecularSides(void),
-            Cubemap_AddUnreferencedCubemaps(void);
+            Cubemap_AddUnreferencedCubemaps(void), WorldVertexTransitionFixup(void);
+        WorldVertexTransitionFixup();
         Cubemap_FixupBrushSidesMaterials();
         Cubemap_AttachDefaultCubemapToSpecularSides();
         Cubemap_AddUnreferencedCubemaps();

@@ -2330,6 +2330,19 @@ class TestCubemapPatch(unittest.TestCase):
         self.assertIn('\t\t"Proxies"', broken)
         self.assertNotIn('\t\t"ShatteredGlass_DX7"', broken)
 
+    def test_blend_material_copy(self):
+        """A blend material on brush faces: KeyValues retypes numbers, the second layer goes."""
+        from hammerless.core.cubemappatch import CubemapMaterials, kv_value_text
+        self.assertEqual([kv_value_text(v) for v in ["1", ".7", "007", "[1 1 1]", "1.0", ""]],
+                         ["1", "0.700000", "7", "[1 1 1]", "1.000000", ""])
+        vmts = {"nature/blend": 'WorldVertexTransition\n{\n$basetexture "a/b"\n$basetexture2 "c/d"\n'
+                                '$detailblendfactor ".7"\n$surfaceprop dirt\n$surfaceprop2 grass\n}'}
+        cm = CubemapMaterials(lambda n: vmts.get(n))
+        self.assertEqual(cm.shader("nature/blend"), "WorldVertexTransition")
+        self.assertEqual(cm.wvt_patch("nature/blend"), ['"LightmappedGeneric"', "{", '\t"$basetexture"\t\t"a/b"',
+                                                        '\t"$detailblendfactor"\t\t"0.700000"',
+                                                        '\t"$surfaceprop"\t\t"dirt"', "}"])
+
     def test_console_only_keys_are_ignored(self):
         cm = self._cm()
         self.assertFalse(cm.specular("plain/wall"))
