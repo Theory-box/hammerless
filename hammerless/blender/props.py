@@ -377,6 +377,19 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("HAMMERLESS", "Hammerless (faster)",
          "Hammerless's visibility compiler: the same results as vvis, about 3 times faster. If it ever fails, "
          "Valve's vvis runs instead")])
+    light_tool: EnumProperty(name="Light Compiler", default="VALVE", items=[
+        ("VALVE", "Valve vrad", "L4D2's own lighting compiler (vrad.exe)"),
+        ("CYCLES", "Cycles",
+         "vrad lays out the lighting, then Blender's Cycles bakes the lightmaps with the same lights (its GPU "
+         "if it has one). Prop lighting and switchable lights stay vrad's")])
+    cycles_samples: IntProperty(name="Samples", default=1024, min=1, max=65536, soft_max=4096,
+                                description="Cycles samples per lightmap sample: more is smoother and slower")
+    cycles_stitch: BoolProperty(name="Stitch Seams", default=True,
+                                description="Make neighbouring faces' lighting meet exactly along the edges they "
+                                            "share (each face has its own lightmap, so they otherwise show seams)")
+    cycles_denoise: BoolProperty(name="Denoise", default=False,
+                                 description="Run Blender's denoiser (OpenImageDenoise, on the GPU when there is "
+                                             "one) on the Cycles bake")
     vis_mode: EnumProperty(name="Visibility (vvis)", default="FULL", items=[
         ("SKIP", "Skip", "No visibility pass: everything always renders (slow in-game on big maps)"),
         ("FAST", "Fast", "Quick visibility pass"),

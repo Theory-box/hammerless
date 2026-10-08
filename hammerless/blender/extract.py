@@ -442,7 +442,10 @@ def light_entity(obj, scale: float) -> Entity:
         kv.setdefault("_ambient", "140 160 190 80")
         kv.setdefault("pitch", str(round(-pitch)))  # light_environment: negative = pointing down
     else:
-        kv.setdefault("_light", f"{col} {int(lamp.energy / 3)}")
+        # Cycles: a point or spot light of P watts gives P / (4 pi d^2) W/m^2 at d metres. vrad (with
+        # Hammer's default inverse-square falloff) gives brightness * 100^2 / d_units^2, and 1 W/m^2 is
+        # 100 of its units (the same scale as the sun: strength 1 -> brightness 100)
+        kv.setdefault("_light", f"{col} {round(lamp.energy * scale * scale / (400 * math.pi))}")
         if cls == "light_spot":
             cone = math.degrees(lamp.spot_size) / 2
             kv.setdefault("_cone", str(round(cone)))

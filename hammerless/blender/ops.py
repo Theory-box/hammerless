@@ -46,14 +46,23 @@ BUILD_PROGRESS = {"vis": ""}      # the running build's latest "vis 42%, about 3
 
 def compile_options(s) -> "cc.CompileOptions | str":
     if s.compile_preset != "CUSTOM":
-        if s.vis_tool == "VALVE":
+        if s.vis_tool == "VALVE" and s.light_tool == "VALVE":
             return s.compile_preset
         import dataclasses
-        return dataclasses.replace(cc.PRESETS[s.compile_preset], vis_tool=s.vis_tool)
+        return dataclasses.replace(cc.PRESETS[s.compile_preset], vis_tool=s.vis_tool, light_tool=s.light_tool,
+                                   **_cycles_options(s))
     return cc.CompileOptions(vis=s.vis_mode, rad=s.rad_mode, hdr=s.hdr_mode,
                              static_prop_lighting=s.static_prop_lighting,
                              extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad,
-                             vis_tool=s.vis_tool)
+                             vis_tool=s.vis_tool, light_tool=s.light_tool, **_cycles_options(s))
+
+
+def _cycles_options(s) -> dict:
+    """Cycles bake settings (only when baking with Cycles, so they don't change vrad builds' fingerprint)."""
+    if s.light_tool != "CYCLES":
+        return {}
+    return {"cycles_samples": s.cycles_samples, "cycles_denoise": s.cycles_denoise,
+            "cycles_stitch": s.cycles_stitch}
 
 
 def launch_options(s) -> cc.LaunchOptions:
@@ -928,6 +937,14 @@ class HL_OT_build(bpy.types.Operator):
             nav["analysis_early"] = not self._job.done
 
     def _step(self, context):
+        if self._job.bake_request:
+            if not getattr(self, "_bake_shown", False):      # the bake blocks Blender: show the status first,
+                self._bake_shown = True                       # bake on the next tick (after the redraw)
+                context.workspace.status_text_set("Hammerless: baking the lighting with Cycles "
+                                                  "(Blender pauses until it's done)...")
+                return {"PASS_THROUGH"}
+            self._bake_shown = False
+            self._cycles_bake(context)
         new = self._job.poll()
         if new:
             for line in new:                    # vis progress from Hammerless's vis compiler, for the panel header
@@ -937,7 +954,9 @@ class HL_OT_build(bpy.types.Operator):
                     elif line.startswith("===="):
                         BUILD_PROGRESS["vis"] = ""
             write_log(new, append=True)
-            context.workspace.status_text_set(f"Hammerless: {new[-1][:120]}")
+            shown = [ln for ln in new if isinstance(ln, str) and not ln.startswith("CDynamicFunction")]
+            if shown:                                         # (not the compilers' DLL loading chatter)
+                context.workspace.status_text_set(f"Hammerless: {shown[-1][:120]}")
         self._start_analysis_early(context)
         if not self._job.done:
             return {"PASS_THROUGH"}
@@ -1037,7 +1056,43 @@ class HL_OT_build(bpy.types.Operator):
             self.report({"INFO"}, f"{compiled}.{note}  [{timing}]")
         return self._finish(context, {"FINISHED"})
 
+    def _eye_points(self, context):
+        """Where players can see from, for skipping faces nobody sees: over this build's nav mesh (waiting
+        for it if it's still being made), else the map's nav file in the game. None: bake every face."""
+        from ..core.lightbake import eye_points
+        mesh = None
+        if self._nav is not None:
+            self._nav["thread"].join()
+            mesh = self._nav.get("mesh")
+        if mesh is None and self._root:
+            from ..core.navfile import load_nav
+            path = os.path.join(cc.Tools(self._root).maps_dir, self._owner[1] + ".nav")
+            try:
+                mesh = load_nav(path) if os.path.exists(path) else None
+            except Exception:            # an unreadable nav: just bake everything
+                mesh = None
+        if mesh is None or not mesh.areas:
+            return None
+        return eye_points(mesh.areas)
+
+    def _cycles_bake(self, context):
+        """The compile waits after vrad: bake its lighting with Cycles here (Blender's main thread)."""
+        bsp = self._job.bake_request
+        try:
+            from .cyclesbake import bake_bsp
+            opts = self._job._opts
+            lines = bake_bsp(bsp, context.scene.hammerless.units_per_meter, opts.cycles_samples,
+                             opts.cycles_denoise, opts.cycles_stitch, self._eye_points(context))
+        except Exception as ex:          # the map still has vrad's lighting
+            import traceback
+            traceback.print_exc()
+            lines = [f"!! Cycles bake failed ({ex}): the map keeps vrad's lighting"]
+            self.report({"WARNING"}, lines[0][3:])
+        self._job.bake_finished(lines)
+
     def _finish(self, context, result):
+        if self._job is not None:
+            self._job.bake_abandoned = True      # stopped watching: nobody is left to bake
         snap = self._job.base + ".analysis.bsp" if self._job is not None else None
         if snap and os.path.exists(snap) and not (self._nav and self._nav.get("analysis")
                                                   and self._nav["analysis"]["thread"].is_alive()):
