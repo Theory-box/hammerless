@@ -823,6 +823,46 @@ class TestLogicGraph(unittest.TestCase):
         self.assertEqual(sum(e.classname == "info_director" for e in ir.entities), 1)
 
 
+class TestScriptNodes(unittest.TestCase):
+    """Game functions and events as logic nodes (core/vscript.py catalogue)."""
+
+    def test_catalogue(self):
+        from hammerless.core import vscript as vs
+        f = vs.function("player:GiveItem")
+        self.assertEqual((f["on"], f["params"], vs.is_pure(f)), ("player", ["string"], False))
+        self.assertTrue(vs.is_pure(vs.function("Director.GetFurthestSurvivorFlow")))
+        hurt = {x["name"]: x for x in vs.event("player_hurt")["fields"]}
+        self.assertTrue(hurt["userid"]["player"] and hurt["attacker"]["player"])
+        self.assertTrue(hurt["attackerentid"]["entity"] and not hurt["attackerentid"]["player"])
+
+    def test_event_into_action_into_entity_node(self):
+        from hammerless.core.logic import LLink, LNode, compile_graph
+        ir = MapIR()
+        nodes = [LNode("Hurt", "SCRIPT_EVENT", {"event": "player_hurt"}),
+                 LNode("Give", "SCRIPT_CALL", {"fn": "player:GiveItem"}, consts={"p0": "weapon_pain_pills"}),
+                 LNode("Wait", "DELAY", {"seconds": 1.0}),
+                 LNode("Flow", "SCRIPT_CALL", {"fn": "Director.GetFurthestSurvivorFlow"}),
+                 LNode("Far", "COMPARE", {"op": "GREATER"}, consts={"b": 5000.0}),
+                 LNode("When", "WHEN", {"once": True}),
+                 LNode("Stagger", "SCRIPT_CALL", {"fn": "player:Stagger"})]
+        links = [LLink("Hurt", "happened", "Give", "run"), LLink("Hurt", "userid", "Give", "target", data=True),
+                 LLink("Give", "then", "Wait", "in"),
+                 LLink("Flow", "result", "Far", "a", data=True), LLink("Far", "result", "When", "condition", data=True),
+                 LLink("When", "true", "Stagger", "run")]
+        self.assertEqual(compile_graph(nodes, links, ir), [])
+        script = next(v for k, v in ir.extra_scripts.items() if "logic_" in k)
+        self.assertIn("function OnGameEvent_player_hurt(params)", script)
+        self.assertIn("HL_Ctx.userid <- GetPlayerFromUserID(params.userid)", script)
+        target = next(line for line in script.splitlines() if "local t = " in line)
+        self.assertIn('::HL_Ctx.userid', target)
+        self.assertIn('t.GiveItem("weapon_pain_pills");', script)
+        self.assertRegex(script, r'::HL_S_give <- function\(\) \{[^}]*\}[^}]*EntFire\("hl_wait", "Trigger"')
+        self.assertIn("HL_S_give();", script)                              # the event runs it directly
+        self.assertIn("(Director.GetFurthestSurvivorFlow() > 5000.0)", script)
+        relay = next(e for e in ir.entities if e.keyvalues.get("targetname") == "hl_when_true")
+        self.assertIn(("RunScriptCode", "HL_S_stagger()"), [(o.input, o.parameter) for o in relay.outputs])
+
+
 class TestPathProgressSpawns(unittest.TestCase):
     def test_at_least_one_tank(self):
         from hammerless.core.logic import LLink, LNode, compile_graph

@@ -18,10 +18,11 @@ EVENT_COLOR = (1.0, 0.62, 0.15, 1.0)
 OBJECT_COLOR = (0.35, 0.65, 1.0, 1.0)
 FLOAT_COLOR = (0.63, 0.63, 0.63, 1.0)       # Blender's colours: grey numbers, pink true/false
 BOOL_COLOR = (0.80, 0.65, 0.84, 1.0)
-DATA_SOCKETS = ("HL_FloatSocket", "HL_BoolSocket")
+DATA_SOCKETS = ("HL_FloatSocket", "HL_BoolSocket", "HL_TextSocket", "HL_VectorSocket", "HL_ThingSocket", "HL_AnySocket")
 CATEGORY_COLORS = {"Events": (0.45, 0.18, 0.16), "Scene": (0.16, 0.33, 0.40), "Flow": (0.25, 0.25, 0.30),
                    "Values": (0.22, 0.22, 0.40),
-                   "Actions": (0.18, 0.36, 0.20), "Director": (0.33, 0.20, 0.42), "Objectives": (0.45, 0.38, 0.12)}
+                   "Actions": (0.18, 0.36, 0.20), "Director": (0.33, 0.20, 0.42), "Objectives": (0.45, 0.38, 0.12),
+                   "Script": (0.16, 0.26, 0.42)}
 
 
 class HL_LogicTree(bpy.types.NodeTree):
@@ -180,7 +181,16 @@ class _Node:
 
     def to_lnode(self, context) -> LNode:
         params = {s.identifier: s.value for s in self.inputs if getattr(s, "takes_value", False) and s.value}
-        consts = {s.identifier: s.value for s in self.inputs if s.bl_idname in DATA_SOCKETS}
+        consts = {}
+        for s in self.inputs:
+            if s.bl_idname not in DATA_SOCKETS or not hasattr(s, "value"):
+                continue
+            v = s.value
+            if s.bl_idname == "HL_ThingSocket":
+                v = v.name if v is not None else ""
+            elif s.bl_idname == "HL_VectorSocket":
+                v = tuple(v)
+            consts[s.identifier] = v
         return LNode(self.name, self.kind, self.settings(), params=params, consts=consts)
 
     def with_object(self, context, n: LNode, ident="object", position=False) -> LNode:
@@ -1017,6 +1027,316 @@ class HL_NodeObjective(_Node, bpy.types.Node):
         return {"text": self.text, "done_text": self.done_text}
 
 
+# ---------------------------------------------------------------- Script: the game's own functions and events
+
+TEXT_COLOR = (0.44, 0.84, 0.70, 1.0)
+VECTOR_COLOR = (0.39, 0.39, 0.78, 1.0)
+THING_COLOR = (0.93, 0.45, 0.58, 1.0)
+ANY_COLOR = (0.45, 0.45, 0.45, 1.0)
+
+
+class HL_TextSocket(bpy.types.NodeSocket):
+    """Text, worked out live in the game (wire it in, or type it here)"""
+    bl_idname = "HL_TextSocket"
+    bl_label = "Text"
+    value: StringProperty(name="Value", default="")
+
+    def draw(self, context, layout, node, text):
+        if self.is_output or self.is_linked:
+            layout.label(text=text)
+        else:
+            layout.prop(self, "value", text=text)
+
+    def draw_color(self, context, node):
+        return TEXT_COLOR
+
+    @classmethod
+    def draw_color_simple(cls):
+        return TEXT_COLOR
+
+
+class HL_VectorSocket(bpy.types.NodeSocket):
+    """A position, direction or angles (x y z), worked out live in the game"""
+    bl_idname = "HL_VectorSocket"
+    bl_label = "Vector"
+    value: FloatVectorProperty(name="Value", size=3, default=(0.0, 0.0, 0.0))
+
+    def draw(self, context, layout, node, text):
+        if self.is_output or self.is_linked:
+            layout.label(text=text)
+        else:
+            col = layout.column(align=True)
+            col.label(text=text)
+            col.prop(self, "value", text="")
+
+    def draw_color(self, context, node):
+        return VECTOR_COLOR
+
+    @classmethod
+    def draw_color_simple(cls):
+        return VECTOR_COLOR
+
+
+class HL_ThingSocket(bpy.types.NodeSocket):
+    """A player, entity or nav area in the running game: wire one in, or pick a scene object here"""
+    bl_idname = "HL_ThingSocket"
+    bl_label = "Entity"
+    value: PointerProperty(type=bpy.types.Object, name="Object")
+
+    def draw(self, context, layout, node, text):
+        if self.is_output or self.is_linked:
+            layout.label(text=text)
+        else:
+            layout.prop(self, "value", text=text)
+
+    def draw_color(self, context, node):
+        return THING_COLOR
+
+    @classmethod
+    def draw_color_simple(cls):
+        return THING_COLOR
+
+
+class HL_AnySocket(bpy.types.NodeSocket):
+    """Any value (a table, a list, ...): connects to every kind of value wire"""
+    bl_idname = "HL_AnySocket"
+    bl_label = "Value"
+
+    def draw(self, context, layout, node, text):
+        layout.label(text=text)
+
+    def draw_color(self, context, node):
+        return ANY_COLOR
+
+    @classmethod
+    def draw_color_simple(cls):
+        return ANY_COLOR
+
+
+SOCKET_OF_KIND = {"num": "HL_FloatSocket", "bool": "HL_BoolSocket", "text": "HL_TextSocket", "vec": "HL_VectorSocket",
+                  "thing": "HL_ThingSocket", "any": "HL_AnySocket"}
+
+
+def _data_socket(sockets, kind, ident, label):
+    return sockets.new(SOCKET_OF_KIND.get(kind, "HL_AnySocket"), label, identifier=ident)
+
+
+def _rebuild_script_call(self, context=None):
+    from ..core import vscript as vs
+    self.inputs.clear()
+    self.outputs.clear()
+    f = vs.function(self.fn)
+    if f is None:
+        self.label = ""
+        return
+    self.label = vs.label(f)
+    if not vs.is_pure(f):
+        self.ev_in("run", "Run")
+        self.ev_out("then", "Then")
+    for ident, text, kind in vs.param_sockets(f):
+        _data_socket(self.inputs, kind, ident, text)
+    rk = vs.result_kind(f)
+    if rk:
+        _data_socket(self.outputs, rk, "result", "Result")
+
+
+class HL_NodeScriptCall(_Node, bpy.types.Node):
+    """One of the game's script functions: value functions just give a result, the others run when an
+    event comes in (Run) and fire Then afterwards"""
+    bl_idname, bl_label, bl_icon = "HL_NodeScriptCall", "Game Function", "SCRIPT"
+    kind, category = "SCRIPT_CALL", "Script"
+    fn: StringProperty(name="Function", default="", update=_rebuild_script_call)
+
+    def make_sockets(self):
+        _rebuild_script_call(self)
+
+    def draw_buttons(self, context, layout):
+        from ..core import vscript as vs
+        f = vs.function(self.fn)
+        op = layout.operator("hammerless.logic_pick_function", text=f"{f['group']}: {vs.label(f)}" if f else "Pick Function",
+                             icon="VIEWZOOM")
+        op.node_name = self.name
+
+    def draw_buttons_ext(self, context, layout):
+        from ..core import vscript as vs
+        self.draw_buttons(context, layout)
+        f = vs.function(self.fn)
+        if f:
+            box = layout.box()
+            box.label(text=f"{f['returns']} {f['call'] if not f.get('on') else f['on'] + '.' + f['name']}({', '.join(f['params'])})")
+            for line in _wrap(f.get("desc") or "", 40):
+                box.label(text=line)
+
+    def settings(self):
+        return {"fn": self.fn}
+
+
+def _rebuild_script_event(self, context=None):
+    from ..core import vscript as vs
+    self.inputs.clear()
+    self.outputs.clear()
+    e = vs.event(self.event)
+    if e is None:
+        self.label = ""
+        return
+    self.label = f"On {vs.event_label(e)}"
+    self.ev_out("happened", "Happened")
+    for fld in e["fields"]:
+        _data_socket(self.outputs, vs.field_kind(fld), fld["name"], fld["name"].replace("_", " ").title())
+
+
+class HL_NodeScriptEvent(_Node, bpy.types.Node):
+    """Any of the game's events (player hurt, item picked up, tank killed...): fires Happened, with the
+    event's details (who, what, how much) as values for the nodes it runs"""
+    bl_idname, bl_label, bl_icon = "HL_NodeScriptEvent", "Game Event (any)", "LIGHT"
+    kind, category = "SCRIPT_EVENT", "Script"
+    event: StringProperty(name="Event", default="", update=_rebuild_script_event)
+
+    def make_sockets(self):
+        _rebuild_script_event(self)
+
+    def draw_buttons(self, context, layout):
+        from ..core import vscript as vs
+        e = vs.event(self.event)
+        op = layout.operator("hammerless.logic_pick_event", text=vs.event_label(e) if e else "Pick Event",
+                             icon="VIEWZOOM")
+        op.node_name = self.name
+
+    def draw_buttons_ext(self, context, layout):
+        from ..core import vscript as vs
+        self.draw_buttons(context, layout)
+        e = vs.event(self.event)
+        if e:
+            box = layout.box()
+            for fld in e["fields"]:
+                kind = "player" if fld.get("player") else "entity" if fld.get("entity") else fld["type"]
+                box.label(text=f"{fld['name']} ({kind}){': ' + fld['note'] if fld['note'] else ''}"[:90])
+
+    def settings(self):
+        return {"event": self.event}
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    words, lines, line = text.split(), [], ""
+    for w in words:
+        if len(line) + len(w) + 1 > width and line:
+            lines.append(line)
+            line = w
+        else:
+            line = f"{line} {w}".strip()
+    return lines + ([line] if line else [])
+
+
+def _function_items(self, context):
+    from ..core import vscript as vs
+    if not _function_items.cache:
+        _function_items.cache = [(f["id"], f"{f['group']}: {vs.label(f)}", f.get("desc") or f["id"])
+                                 for f in vs.catalogue()["functions"]]
+    return _function_items.cache
+
+
+_function_items.cache = []
+
+
+def _event_items(self, context):
+    from ..core import vscript as vs
+    if not _event_items.cache:
+        _event_items.cache = [(e["name"], vs.event_label(e), e.get("note") or e["name"]) for e in vs.catalogue()["events"]]
+    return _event_items.cache
+
+
+_event_items.cache = []
+
+
+def _node_in_editor(context, name):
+    tree = getattr(context.space_data, "edit_tree", None)
+    return tree.nodes.get(name) if tree else None
+
+
+class HL_OT_logic_pick_function(bpy.types.Operator):
+    bl_idname = "hammerless.logic_pick_function"
+    bl_label = "Pick Game Function"
+    bl_description = "Search the game's script functions"
+    bl_property = "choice"
+    node_name: StringProperty(options={"HIDDEN"})
+    choice: EnumProperty(items=_function_items)
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        node = _node_in_editor(context, self.node_name)
+        if node is not None:
+            node.fn = self.choice
+        return {"FINISHED"}
+
+
+class HL_OT_logic_pick_event(bpy.types.Operator):
+    bl_idname = "hammerless.logic_pick_event"
+    bl_label = "Pick Game Event"
+    bl_description = "Search the game's events"
+    bl_property = "choice"
+    node_name: StringProperty(options={"HIDDEN"})
+    choice: EnumProperty(items=_event_items)
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        node = _node_in_editor(context, self.node_name)
+        if node is not None:
+            node.event = self.choice
+        return {"FINISHED"}
+
+
+def _script_menus():
+    """Add > Script > Functions / Game Events: one submenu per group, each item a node already set up."""
+    from ..core import vscript as vs
+    menus = []
+
+    def leaf(idname, title, entries, node_type, prop):
+        def draw(self, context):
+            for value, text in entries:
+                op = self.layout.operator("node.add_node", text=text)
+                op.type, op.use_transform = node_type, True
+                s = op.settings.add()
+                s.name, s.value = prop, repr(value)
+        return type(idname, (bpy.types.Menu,), {"bl_idname": idname, "bl_label": title, "draw": draw})
+
+    fn_menus = [leaf(f"HL_MT_logic_fn_{i}", group, [(f["id"], vs.label(f)) for f in fs], "HL_NodeScriptCall", "fn")
+                for i, (group, fs) in enumerate(vs.groups())]
+    ev_menus = [leaf(f"HL_MT_logic_ev_{i}", group, [(e["name"], vs.event_label(e)) for e in es], "HL_NodeScriptEvent",
+                     "event") for i, (group, es) in enumerate(vs.event_groups())]
+
+    def parent(idname, title, children, extra=None):
+        def draw(self, context):
+            if extra:
+                op = self.layout.operator("node.add_node", text=extra[1], icon="VIEWZOOM")
+                op.type, op.use_transform = extra[0], True
+                self.layout.separator()
+            for m in children:
+                self.layout.menu(m.bl_idname)
+        return type(idname, (bpy.types.Menu,), {"bl_idname": idname, "bl_label": title, "draw": draw})
+
+    menus += fn_menus + ev_menus
+    menus.append(parent("HL_MT_logic_game_functions", "Game Functions", fn_menus, ("HL_NodeScriptCall", "Search...")))
+    menus.append(parent("HL_MT_logic_game_events", "Game Events", ev_menus, ("HL_NodeScriptEvent", "Search...")))
+    return menus
+
+
+SCRIPT_MENUS = _script_menus()
+
+
+def _script_add_menu(self, context):
+    if getattr(context.space_data, "tree_type", "") != TREE:
+        return
+    self.layout.separator()
+    self.layout.menu("HL_MT_logic_game_functions", icon="SCRIPT")
+    self.layout.menu("HL_MT_logic_game_events", icon="LIGHT")
+
+
 CATEGORIES = [
     ("Events", [HL_NodeMapStart, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton, HL_NodeTimer]),
     ("Values", [HL_NodeProgress, HL_NodeRandomValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath,
@@ -1097,7 +1417,8 @@ def _compiled_links(tree, report):
             for src, out in _sources(inp):
                 if not isinstance(src, _Node):
                     continue
-                if out.bl_idname != inp.bl_idname:
+                if out.bl_idname != inp.bl_idname and not (out.bl_idname in DATA_SOCKETS and inp.bl_idname in DATA_SOCKETS
+                                                            and "HL_AnySocket" in (out.bl_idname, inp.bl_idname)):
                     report.warnings.append(f"{tree.name}: the wire from '{src.label or src.name}' to "
                                            f"'{node.label or node.name}' joins a {out.bl_label} with a "
                                            f"{inp.bl_label}, so it does nothing")
@@ -1305,7 +1626,9 @@ class HL_OT_logic_refresh_node(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_BoolSocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + (
+CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_BoolSocket, HL_TextSocket, HL_VectorSocket,
+           HL_ThingSocket, HL_AnySocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + tuple(SCRIPT_MENUS) + (
+    HL_NodeScriptCall, HL_NodeScriptEvent, HL_OT_logic_pick_function, HL_OT_logic_pick_event,
     HL_OT_logic_new, HL_OT_logic_from_outputs, HL_OT_logic_refresh_node)
 
 
@@ -1313,9 +1636,11 @@ def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
     bpy.types.NODE_MT_add.append(_add_menu)
+    bpy.types.NODE_MT_add.append(_script_add_menu)
 
 
 def unregister():
+    bpy.types.NODE_MT_add.remove(_script_add_menu)
     bpy.types.NODE_MT_add.remove(_add_menu)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

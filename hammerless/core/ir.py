@@ -138,6 +138,7 @@ class MapIR:
     extra_scripts: dict[str, str] = field(default_factory=dict)   # game file path -> text (logic graphs)
     logic_functions: list[str] = field(default_factory=list)       # map script functions (all graphs)
     logic_events: dict = field(default_factory=dict)               # game event -> [(condition, relay)]
+    logic_script_events: dict = field(default_factory=dict)        # game event -> [script run when it happens]
     logic_progress: list = field(default_factory=list)             # Path Progress: (relay, from, to)
     logic_counts: bool = False                                     # count infected as they appear
     logic_retry: bool = False                                      # spawns where the game picks the spot

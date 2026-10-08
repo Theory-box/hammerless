@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from . import vscript as vs
 from .entities import CRESCENDO, default_keyvalues
 from .gamefiles import sq_text
 from .ir import Brush, Entity, MapIR, Output
@@ -126,6 +127,11 @@ class _Compiler:
         self.defined: set[str] = set()
         self.whens: list[tuple[str, str, str, bool]] = []
         self.converted: dict[str, tuple[str, str]] = {}   # object -> (class it became, node that did it)
+        # script nodes (game functions and events): their event outputs run Squirrel directly
+        self.script_fns: dict[str, tuple[str, str]] = {}     # node -> (function, body before Then)
+        self.script_takes: dict[tuple[str, str], str] = {}  # (node, input) -> function to call
+        self.script_conts: dict[tuple[str, str], list[str]] = {}   # (node, output) -> code it runs
+        self.script_events: dict[str, list[str]] = {}       # game event -> event nodes
 
     # -- names and entities
     def fn_name(self, base: str) -> str:
@@ -223,9 +229,45 @@ class _Compiler:
         self.expr_cache[key] = e
         return e
 
+    def typed_in(self, n: LNode, sock: str, kind: str) -> str:
+        """A typed input (text, vector, entity...): its wire, or the value typed / object picked on it."""
+        src = self.data_links.get((n.id, sock))
+        if src is not None:
+            return self.expr_out(*src)
+        if kind in (vs.NUM, vs.BOOL):
+            return self.expr_in(n, sock, False if kind == vs.BOOL else 0.0)
+        v = n.consts.get(sock)
+        if kind == vs.THING:
+            if not v:
+                return "null"
+            e = self.entity_of(v)
+            if e is None:
+                self.problems.append(f"Logic node '{n.id}': '{v}' isn't an entity in the map (set its Role, or "
+                                     "wire in what the node should act on)")
+                return "null"
+            return f'Entities.FindByName(null, "{self.name_of(e, v)}")'
+        return vs.literal(kind, v)
+
+    def script_args(self, n: LNode, f: dict) -> tuple:
+        socks = vs.param_sockets(f)
+        target = self.typed_in(n, "target", vs.THING) if f.get("on") else None
+        args = [self.typed_in(n, ident, kind) for ident, _label, kind in socks if ident != "target"]
+        return target, args
+
     def value_expr(self, n: LNode, sock: str) -> str:
         s, k = n.settings, n.kind
         slug = _slug(f"{self.graph}_{n.id}" if self.graph else n.id)
+        if k == "SCRIPT_CALL":
+            f = vs.function(s.get("fn", ""))
+            if f is None or sock != "result":
+                return "null"
+            if vs.is_pure(f):
+                return vs.call_expr(f, *self.script_args(n, f))
+            return f'(("{slug}" in ::HL_R) ? ::HL_R["{slug}"] : null)'
+        if k == "SCRIPT_EVENT":
+            e = vs.event(s.get("event", ""))
+            fld = next((x for x in (e or {}).get("fields", []) if x["name"] == sock), None)
+            return vs.field_expr(sock, vs.field_kind(fld)) if fld else "null"
         if k == "VALUE":
             return self.expr_in(n, "value") if sock == "value" else "0.0"
         if k == "PROGRESS":
@@ -298,6 +340,33 @@ class _Compiler:
             self.takes.setdefault((nid, sock), []).append(_Take(target, inp, param))
 
         k = n.kind
+        if k == "SCRIPT_CALL":
+            f = vs.function(s.get("fn", ""))
+            if f is None:
+                self.problems.append(f"Logic node '{nid}': pick a game function")
+                return
+            if vs.is_pure(f):
+                return                      # a value: turned into an expression where it's used
+            fn = self.fn_name(f"HL_S_{slug}")
+            target, args = self.script_args(n, f)
+            guard = ""
+            if f.get("on"):            # what it acts on, worked out once
+                guard = (f"    local t = {target};\n    if (t == null || !t.IsValid()) {{ printl(\"HAMMERLESS_SCRIPT "
+                         f"'{sq_text(nid)}': nothing to act on\"); return; }}\n")
+                target = "t"
+            call = vs.call_expr(f, target, args)
+            body = guard + (f'    ::HL_R["{slug}"] <- {call};\n' if f["returns"] != "void" else f"    {call};\n")
+            self.script_fns[nid] = (fn, body)
+            self.script_takes[(nid, "run")] = fn
+            take("run", *self.script_call(fn))
+            return
+        if k == "SCRIPT_EVENT":
+            e = vs.event(s.get("event", ""))
+            if e is None:
+                self.problems.append(f"Logic node '{nid}': pick a game event")
+                return
+            self.script_events.setdefault(e["name"], []).append(nid)
+            return
         if k in ("OBJECT", "DIRECTOR"):
             e = self.director() if k == "DIRECTOR" else self.entity_of(n.obj)
             if e is None:
@@ -649,6 +718,20 @@ class _Compiler:
             "hint_instance_type": "2"})
 
     def link(self, l: LLink):
+        src = (l.from_node, l.from_socket)
+        if self._script_source(*src):
+            # a script node's output: run the next node's function, or fire its entity input
+            cont = self.script_conts.setdefault(src, [])
+            fn = self.script_takes.get((l.to_node, l.to_socket))
+            if fn is not None:
+                cont.append(f"    {fn}();")
+            else:
+                for t in self.takes.get((l.to_node, l.to_socket), []):
+                    cont.append(f'    EntFire("{t.target}", "{t.input}", "{sq_text(t.param or "")}");')
+            if self.log:
+                self.log_names.append(f"{l.from_node}.{l.from_socket} -> {l.to_node}.{l.to_socket}")
+                cont.append(f"    HL_Log{self.graph_tag}({len(self.log_names) - 1});")
+            return
         f = self.fires.get((l.from_node, l.from_socket))
         takes = self.takes.get((l.to_node, l.to_socket))
         if f is None or not takes:
@@ -664,6 +747,21 @@ class _Compiler:
             f.entity.outputs.append(Output(f.output, LOGIC_SCRIPT, "RunScriptCode",
                                            f"HL_Log{self.graph_tag}({len(self.log_names) - 1})", f.delay, f.times))
 
+    def _script_source(self, nid: str, sock: str) -> bool:
+        n = self.nodes.get(nid)
+        return n is not None and ((n.kind == "SCRIPT_CALL" and sock == "then" and nid in self.script_fns)
+                                  or (n.kind == "SCRIPT_EVENT" and sock == "happened"))
+
+    def render_script_nodes(self):
+        """Script nodes' functions, now that their wires (what Then runs) are known."""
+        for nid, (fn, body) in self.script_fns.items():
+            then = "\n".join(self.script_conts.get((nid, "then"), []))
+            self.functions.append(f"::{fn} <- function() {{\n{body}{then}\n}}")   # root: callable from anywhere
+        for ev, nids in self.script_events.items():
+            code = "\n".join(line for nid in nids for line in self.script_conts.get((nid, "happened"), []))
+            if code:
+                self.ir.logic_script_events.setdefault(ev, []).append(code)
+
     def finish_script(self):
         """(Re)write the one map script shared by all graphs: their functions, and one handler per
         game event registered on the script's own scope (the pattern that works in L4D2)."""
@@ -678,10 +776,12 @@ class _Compiler:
         self.ir.logic_progress += self.progress
         self.ir.logic_whens += self.whens
         ir = self.ir
-        if not (ir.logic_functions or ir.logic_events or ir.logic_progress or ir.logic_counts or ir.logic_whens):
+        if not (ir.logic_functions or ir.logic_events or ir.logic_progress or ir.logic_counts or ir.logic_whens
+                or ir.logic_script_events):
             return
         thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens)
-        parts = [f"// Hammerless logic graphs for {ir.settings.name}\n"]
+        parts = [f"// Hammerless logic graphs for {ir.settings.name}\n",
+                 "::HL_Ctx <- {};   // the event being handled, its fields\n::HL_R <- {};     // what action nodes returned\n"]
         if ir.logic_counts:
             parts.append("HL_Count <- { tank = 0, witch = 0, smoker = 0, boomer = 0, hunter = 0, spitter = 0, "
                          "jockey = 0, charger = 0 };\n"
@@ -772,6 +872,8 @@ class _Compiler:
                          + ("    HL_When_Think();\n" if ir.logic_whens else "")
                          + ("    HL_Retry();\n" if ir.logic_retry else "") + "}\n")
         events = {ev: list(t) for ev, t in ir.logic_events.items()}
+        for ev in ir.logic_script_events:
+            events.setdefault(ev, [])
         if ir.logic_counts:
             for ev in COUNT_CODE:
                 events.setdefault(ev, [])
@@ -782,6 +884,10 @@ class _Compiler:
             for cond, relay in targets:
                 fire = f"EntFire(\"{relay}\", \"Trigger\");"
                 body += f"    if ({cond}) {fire}\n" if cond else f"    {fire}\n"
+            if ir.logic_script_events.get(game_event):
+                info = vs.event(game_event)
+                body += (vs.context_code(info) if info else "    ::HL_Ctx <- clone params;") + "\n"
+                body += "\n".join(ir.logic_script_events[game_event]) + "\n"
             parts.append(f"function OnGameEvent_{game_event}(params) {{\n{body}}}\n")
         if events:
             parts.append("__CollectEventCallbacks(this, \"OnGameEvent_\", \"GameEventCallbacks\", "
@@ -809,5 +915,6 @@ def compile_graph(nodes: list[LNode], links: list[LLink], ir: MapIR, graph: str 
     for l in links:
         if not l.data:
             c.link(l)
+    c.render_script_nodes()
     c.finish_script()
     return problems

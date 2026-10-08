@@ -5,3 +5,4 @@ demo/hammerless_build/
 dist/
 *.blend[0-9]*
 demo/demo_level_generated.blend
+scripts/vscript_help.txt
