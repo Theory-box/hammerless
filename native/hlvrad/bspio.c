@@ -74,6 +74,59 @@ void SetLump(int i, void *data, int len, int version) {
     lumps[i].version = version;
 }
 
+/* a game lump's version, or -1 without it */
+int GameLumpVersion(int id) {
+    const lump_t *l = &lumps[LUMP_GAME_LUMP];
+    int count = 0;
+    if (l->len >= 4) memcpy(&count, l->data, 4);
+    for (int g = 0; g < count && 4 + 16 * g + 16 <= l->len; g++) {
+        int gid;
+        unsigned short ver;
+        memcpy(&gid, l->data + 4 + 16 * g, 4), memcpy(&ver, l->data + 4 + 16 * g + 6, 2);
+        if (gid == id) return ver;
+    }
+    return -1;
+}
+
+/* replaces (or adds at the end) one game lump; the directory is followed by the lumps' data in its order */
+void SetGameLump(int id, int version, const void *data, int len) {
+    const lump_t *l = &lumps[LUMP_GAME_LUMP];
+    int count = 0;
+    if (l->len >= 4) memcpy(&count, l->data, 4);
+    int found = 0, total = 0;
+    for (int g = 0; g < count; g++) {
+        int gid, glen;
+        memcpy(&gid, l->data + 4 + 16 * g, 4), memcpy(&glen, l->data + 4 + 16 * g + 12, 4);
+        if (gid == id) found = 1, glen = len;
+        total += glen;
+    }
+    int ncount = count + !found;
+    if (!found) total += len;
+    unsigned char *out = xalloc(4 + 16 * ncount + total + 1);
+    memcpy(out, &ncount, 4);
+    int at = 4 + 16 * ncount;
+    for (int g = 0; g < ncount; g++) {
+        int gid, glen, ofs;
+        unsigned short gflags = 0, gver = (unsigned short)version;
+        const unsigned char *src;
+        if (g < count) {
+            memcpy(&gid, l->data + 4 + 16 * g, 4), memcpy(&gflags, l->data + 4 + 16 * g + 4, 2);
+            memcpy(&ofs, l->data + 4 + 16 * g + 8, 4), memcpy(&glen, l->data + 4 + 16 * g + 12, 4);
+            src = l->data + (ofs - game_lump_offset);
+            if (gid == id) src = data, glen = len, gflags = 0;
+            else memcpy(&gver, l->data + 4 + 16 * g + 6, 2);
+        } else {
+            gid = id, glen = len, src = data;
+        }
+        int fofs = game_lump_offset + at;        /* (file offsets, as read; WriteBSPFile moves them) */
+        memcpy(out + 4 + 16 * g, &gid, 4), memcpy(out + 4 + 16 * g + 4, &gflags, 2), memcpy(out + 4 + 16 * g + 6, &gver, 2);
+        memcpy(out + 4 + 16 * g + 8, &fofs, 4), memcpy(out + 4 + 16 * g + 12, &glen, 4);
+        if (glen) memcpy(out + at, src, glen);
+        at += glen;
+    }
+    SetLump(LUMP_GAME_LUMP, out, at, l->version);
+}
+
 void MapArrays(void) {
     dplanes = (dplane_t *)lumps[LUMP_PLANES].data; numplanes = lumps[LUMP_PLANES].len / sizeof(dplane_t);
     dvertexes = (dvertex_t *)lumps[LUMP_VERTEXES].data; numvertexes = lumps[LUMP_VERTEXES].len / sizeof(dvertex_t);
@@ -86,7 +139,7 @@ void MapArrays(void) {
 /* vbsp's order (as hlvbsp writes it) with 58 (HDR faces) after the faces; an empty lump takes the
  * current offset. */
 static const int lump_order[] = {59, 6, 2, 43, 44, 10, 17, 1, 18, 19, 14, 5, 20, 21, 4, 0, 29, 62, 26, 3, 12, 13, 7, 58,
-                                 33, 48, 28, 9, 8, 53, 37, 38, 39, 30, 31, 51, 52, 55, 56, 16, 36, 45, 50, 60, 61, 46,
+                                 33, 48, 28, 9, 8, 53, 37, 38, 39, 30, 31, 56, 52, 51, 55, 16, 36, 45, 50, 60, 61, 46,
                                  15, 41, 42, 54, 34, 47, 11, 27, 22, 23, 24, 25, 49, 35, 40};
 
 void WriteBSPFile(const char *path) {

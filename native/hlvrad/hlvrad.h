@@ -47,6 +47,8 @@ void LoadBSPFile(const char *path);
 void WriteBSPFile(const char *path);
 void SetLump(int i, void *data, int len, int version);    /* takes ownership of data */
 const unsigned char *GameLump(int id, int *len);
+int GameLumpVersion(int id);
+void SetGameLump(int id, int version, const void *data, int len);
 
 /* ------------------------------------------------------------------ the map's arrays (views into lumps) */
 typedef struct { vec3_t normal; float dist; int type; } dplane_t;
@@ -297,6 +299,7 @@ extern float g_SunAngularExtent;
 extern int g_bFast, g_bExtra;
 void ExportDirectLightsToWorldLights(void);
 void ComputePerLeafAmbientLighting(void);
+void ComputeDetailPropLighting(void);
 int ClusterFromPoint(const vec3_t p);
 
 /* ------------------------------------------------------------------ utilities */

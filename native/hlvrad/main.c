@@ -117,6 +117,7 @@ int main(int argc, char **argv) {
     }
     for (int i = 0; i < numfaces; i++) FinalLightFace(i);
     ExportDirectLightsToWorldLights();
+    ComputeDetailPropLighting();
     ComputePerLeafAmbientLighting();
     SetLump(LUMP_LIGHTING_HDR, dlightdata, lightdatasize, 1);
     WriteBSPFile(path);

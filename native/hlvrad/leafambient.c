@@ -456,23 +456,24 @@ static void AmbientFromSurface(const dface_t *f, vec3_t c) {
     }
 }
 
-static void ColorFromAverage(const dface_t *f, float scale, vec3_t color) {
+/* (colors: one per light style, styles from nstyles on not kept) */
+static void ColorFromAverage(const dface_t *f, float scale, vec3_t *colors, int nstyles) {
     if (texinfo[f->texinfo].flags & SURF_SKY) {
         if (skylight)
-            for (int k = 0; k < 3; k++) color[k] += skylight[k] * scale;
+            for (int k = 0; k < 3; k++) colors[0][k] += skylight[k] * scale;
         return;
     }
     for (int m = 0; m < 4 && f->styles[m] != 255; m++) {
-        if (f->styles[m] != 0) continue;                 /* (only style 0 is kept) */
+        if (f->styles[m] >= nstyles) continue;
         const unsigned char *avg = dlightdata + f->lightofs - 4 * (m + 1);
         vec3_t c;
         for (int k = 0; k < 3; k++) c[k] = (float)avg[k] * power2_n((signed char)avg[3]);
         AmbientFromSurface(f, c);
-        for (int k = 0; k < 3; k++) color[k] += c[k] * scale;
+        for (int k = 0; k < 3; k++) colors[f->styles[m]][k] += c[k] * scale;
     }
 }
 
-static void ColorPointSample(const dface_t *f, const float luv[2], float scale, vec3_t color) {
+static void ColorPointSample(const dface_t *f, const float luv[2], float scale, vec3_t *colors, int nstyles) {
     if (f->lightofs == -1) return;
     int smax = f->m_LightmapTextureSizeInLuxels[0] + 1, tmax = f->m_LightmapTextureSizeInLuxels[1] + 1;
     int ds = (int)luv[0], dt = (int)luv[1];
@@ -486,14 +487,14 @@ static void ColorPointSample(const dface_t *f, const float luv[2], float scale, 
         vec3_t c;
         for (int k = 0; k < 3; k++) c[k] = (float)lm[k] * power2_n((signed char)lm[3]);
         AmbientFromSurface(f, c);
-        if (f->styles[m] == 0)
-            for (int k = 0; k < 3; k++) color[k] += c[k] * scale;
+        if (f->styles[m] < nstyles)
+            for (int k = 0; k < 3; k++) colors[f->styles[m]][k] += c[k] * scale;
     }
 }
 
 static int g_dbgSurf, g_dbgHasLux;          /* (the last ray's hit, for AMBRAYS) */
 static float g_dbgFrac, g_dbgLux[2];
-static void CalcRayAmbientLighting(const vec3_t start, const vec3_t end, float tanTheta, vec3_t color) {
+void CalcRayAmbientLighting(const vec3_t start, const vec3_t end, float tanTheta, vec3_t *colors, int nstyles) {
     lightsurf_t ls;
     VectorCopy(start, ls.start);
     VectorSubtract(end, start, ls.delta);
@@ -510,8 +511,8 @@ static void CalcRayAmbientLighting(const vec3_t start, const vec3_t end, float t
     if (!ls.hasluxel) avg = 1.0f;
     float point = 1.0f - avg;
     const dface_t *f = &g_pFaces[ls.surface];
-    if (avg != 0) ColorFromAverage(f, avg, color);
-    if (point != 0) ColorPointSample(f, ls.luxel, point, color);
+    if (avg != 0) ColorFromAverage(f, avg, colors, nstyles);
+    if (point != 0) ColorPointSample(f, ls.luxel, point, colors, nstyles);
 }
 
 /* ------------------------------------------------------------------ a sample's cube */
@@ -557,7 +558,7 @@ static void AmbientFromSphericalSamples(const vec3_t start, vec3_t cube[6]) {
         vec3_t end;
         for (int k = 0; k < 3; k++) end[k] = start[k] + g_anorms[i][k] * (float)(COORD_EXTENT * 1.74);
         VectorClear(rad[i]);
-        CalcRayAmbientLighting(start, end, tanTheta, rad[i]);
+        CalcRayAmbientLighting(start, end, tanTheta, &rad[i], 1);
     }
     for (int j = 6; --j >= 0;) {
         float t = 0;
@@ -776,15 +777,29 @@ static int NearestNeighbourWithLight(int leaf, const unsigned short (*index)[2])
 
 void VectorToColorRGBExp32(const vec3_t v, unsigned char *c);
 
-void ComputePerLeafAmbientLighting(void) {
+/* what the rays need (also for detail props): the tree's parents, displacements' triangles, the sky light */
+void AmbientSetup(void) {
+    static int done;
+    if (done) return;
+    done = 1;
     dtexdata = (const dtexdata_t *)lumps[LUMP_TEXDATA].data;
     BuildParents();
     BuildDispCollision();
     BuildGammaTable();
-    /* surface lights small enough go into the cubes */
     int wlump = g_bHDR ? LUMP_WORLDLIGHTS_HDR : LUMP_WORLDLIGHTS;
     worldlights = lumps[wlump].data;
     numworldlights = lumps[wlump].len / 100;
+    skylight = NULL;
+    for (int i = 0; i < numworldlights && !skylight; i++) {
+        int type;
+        memcpy(&type, worldlights + 100 * i + 52, 4);
+        if (type == emit_skyambient) skylight = (const float *)(worldlights + 100 * i + 12);
+    }
+}
+
+void ComputePerLeafAmbientLighting(void) {
+    AmbientSetup();
+    /* surface lights small enough go into the cubes */
     int insurf = 0, nsurf = 0;
     for (int i = 0; i < numworldlights; i++) {
         unsigned char *wl = worldlights + 100 * i;
@@ -800,12 +815,6 @@ void ComputePerLeafAmbientLighting(void) {
         if (type == emit_surface) nsurf++;
         if (flags & DWL_FLAGS_INAMBIENTCUBE) insurf++;
     }
-    skylight = NULL;
-    for (int i = 0; i < numworldlights && !skylight; i++) {
-        int type;
-        memcpy(&type, worldlights + 100 * i + 52, 4);
-        if (type == emit_skyambient) skylight = (const float *)(worldlights + 100 * i + 12);
-    }
     Msg("%d of %d (%d%% of) surface lights went in leaf ambient cubes.\n", insurf, nsurf, nsurf ? insurf * 100 / nsurf : 0);
     if (getenv("AMBRAYS")) {     /* (debugging: rays' colours: 9 floats each, start, end, colour; out adds surface, frac, luxel) */
         FILE *in = fopen(getenv("AMBRAYS"), "rb"), *of = fopen("raysout.bin", "wb");
@@ -813,7 +822,7 @@ void ComputePerLeafAmbientLighting(void) {
         while (fread(rec, 4, 9, in) == 9) {
             float o[13];
             VectorClear(o + 6);
-            CalcRayAmbientLighting(rec, rec + 3, tanTheta, o + 6);
+            CalcRayAmbientLighting(rec, rec + 3, tanTheta, (vec3_t *)(o + 6), 1);
             memcpy(o, rec, 24);
             o[9] = (float)g_dbgSurf, o[10] = g_dbgFrac, o[11] = g_dbgHasLux ? g_dbgLux[0] : -1, o[12] = g_dbgLux[1];
             fwrite(o, 4, 13, of);
@@ -866,7 +875,7 @@ void ComputePerLeafAmbientLighting(void) {
             if (!(dleafs[i].contents & CONTENTS_SOLID)) Msg("Bad leaf ambient for leaf %d\n", i);
             index[i][1] = (unsigned short)NearestNeighbourWithLight(i, (const unsigned short(*)[2])index);
         }
-    SetLump(g_bHDR ? LUMP_LEAF_AMBIENT_INDEX_HDR : LUMP_LEAF_AMBIENT_INDEX, index, 4 * numleafs, 1);
+    SetLump(g_bHDR ? LUMP_LEAF_AMBIENT_INDEX_HDR : LUMP_LEAF_AMBIENT_INDEX, index, 4 * numleafs, 0);   /* (vrad: version 0 for the index, 1 for the samples) */
     SetLump(g_bHDR ? LUMP_LEAF_AMBIENT_LIGHTING_HDR : LUMP_LEAF_AMBIENT_LIGHTING, out, 28 * nout, 1);
     free(planes);
 }

@@ -626,6 +626,17 @@ static void GatherSampleLight4(lightout4_t *out, const directlight_t *dl, const 
     }
 }
 
+/* one light at one point (in all 4 lanes, as vrad duplicates it): the falloff times the normal's dot */
+float GatherSampleLightAtPoint(const directlight_t *dl, const vec3_t pos, const vec3_t normal) {
+    points4_t p;
+    p.normalCount = 1;
+    for (int c = 0; c < 3; c++)
+        for (int i = 0; i < LANES; i++) p.pos[c][i] = pos[c], p.normals[0][c][i] = normal[c];
+    lightout4_t out;
+    GatherSampleLight4(&out, dl, &p);
+    return out.dot[0][0] * out.falloff[0];
+}
+
 /* ------------------------------------------------------------------ a face's direct light */
 static int FindOrAllocateLightstyleSamples(dface_t *f, facelight_t *fl, int style, int normalCount) {
     int k;
