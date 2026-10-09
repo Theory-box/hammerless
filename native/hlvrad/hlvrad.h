@@ -201,6 +201,17 @@ void DispUVToSurfNormal(const dispsurf_t *d, float u, float v, vec3_t out);
 extern const char *g_modeldir, *g_gamedir;
 void AddStaticPropsForRayTrace(void);
 
+/* embree.c (-embree) */
+extern int g_bEmbree;
+int EM_Init(void);
+void *EM_NewScene(const float *verts, int ntris);
+int EM_Nearest(void *scene, const float o[3], const float d[3], float tnear, float tfar, int (*skip)(int tri, void *data),
+               void *data, float *t, float *u, float *v);
+void EM_Nearest4(void *scene, const float o[3][4], const float d[3][4], const float tnear[4], const float tfar[4],
+                 int (*skip)(int tri, void *data), void *data, int hit[4], float t[4]);
+void EM_Blocked4(void *scene, const float o[3][4], const float d[3][4], const float tnear[4], const float tfar[4],
+                 int (*skip)(int tri, void *data), void *data, int blocked[4]);
+
 /* raytrace.c */
 void RT_AddTriangle(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2);
 void RT_SetupAccelerationStructure(void);

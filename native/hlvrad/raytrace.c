@@ -20,6 +20,21 @@ typedef struct {
 static rttri_t *tris;
 static float (*tri_verts)[9];
 static int numtris, maxtris;
+/* (-embree: the triangles in Embree instead of the kd-tree: all of them; the solid ones and the sky's apart, with
+ * each one's number in tris) */
+static void *em_scene, *em_solid, *em_sky;
+static int *solid_tri, *sky_tri;
+
+static void *SceneOf(int sky, int **map) {
+    int n = 0;
+    for (int i = 0; i < numtris; i++) n += !(tris[i].id & TRACE_ID_SKY) != sky;
+    float (*v)[9] = xalloc(sizeof(float[9]) * (n + 1));
+    *map = xalloc(sizeof(int) * (n + 1));
+    n = 0;
+    for (int i = 0; i < numtris; i++)
+        if (!(tris[i].id & TRACE_ID_SKY) != sky) memcpy(v[n], tri_verts[i], 36), (*map)[n++] = i;
+    return EM_NewScene(v[0], n);
+}
 
 void RT_AddTriangle(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2) {
     if (numtris == maxtris) {
@@ -319,6 +334,13 @@ static void SubtreeWork(int i, int thread) {
 }
 
 void RT_SetupAccelerationStructure(void) {
+    if (g_bEmbree && EM_Init()) {
+        tri_verts = realloc(tri_verts, sizeof(float[9]) * (numtris + 1));      /* (Embree reads 16 bytes at a time) */
+        em_scene = EM_NewScene(tri_verts[0], numtris);
+        em_solid = SceneOf(0, &solid_tri);
+        em_sky = SceneOf(1, &sky_tri);
+        return;
+    }
     kdbuild_t main = {0};
     main.defer = 8192;            /* (speed only: smaller subtrees built on all cores; a tree node's number doesn't
                                    * change which nodes a ray visits, so the tracing is the same) */
@@ -499,9 +521,27 @@ done:
     _mm_storeu_ps(hitdist, hd);
 }
 
+/* (-embree) the same with Embree (triangles skipped by their id; map: the scene's triangles' numbers in tris) */
+typedef struct { int id; const int *map; } skip_t;
+static int SkipTriID(int tri, void *data) {
+    const skip_t *k = data;
+    return tris[k->map ? k->map[tri] : tri].id == k->id;
+}
+static void EmbreeTrace4(const float o[3][4], const float d[3][4], const float tmin[4], const float tmax[4], int skip_id,
+                         int hit[4], float hitdist[4]) {
+    float tnear[4];
+    for (int i = 0; i < 4; i++) tnear[i] = tmin[i] > 1.0e-10f ? tmin[i] : 1.0e-10f;
+    skip_t k = {skip_id, NULL};
+    EM_Nearest4(em_scene, o, d, tnear, tmax, skip_id == -1 ? NULL : SkipTriID, &k, hit, hitdist);
+}
+
 /* 4 rays: same-signed directions are traced together; mixed ones in groups, as Valve's tracer does */
 void RT_Trace4(const float o[3][4], const float d[3][4], const float tmin[4], const float tmax[4], int skip_id, int hit[4],
                float hitdist[4]) {
+    if (em_scene) {
+        EmbreeTrace4(o, d, tmin, tmax, skip_id, hit, hitdist);
+        return;
+    }
     int mask = DirectionSignMask(d);
     __m128 TMin = _mm_loadu_ps(tmin), TMax = _mm_loadu_ps(tmax);
     if (mask != -1) {
@@ -536,6 +576,11 @@ void RT_Trace4(const float o[3][4], const float d[3][4], const float tmin[4], co
 
 /* 4 unit rays with the same direction signs (mask), from 0 to tmax (vrad's ray stream) */
 void RT_Trace4Mask(const float o[3][4], const float d[3][4], const float tmax[4], int mask, int hit[4], float hitdist[4]) {
+    if (em_scene) {
+        static const float zero[4] = {0, 0, 0, 0};
+        EmbreeTrace4(o, d, zero, tmax, -1, hit, hitdist);
+        return;
+    }
     Trace4Masked(o, d, _mm_setzero_ps(), _mm_loadu_ps(tmax), mask, hit, hitdist, -1);
 }
 
@@ -565,6 +610,14 @@ void TestLine4(const float start[3][4], const float stop[3][4], int static_prop_
     float d[3][4], len[4], tmin[4] = {0, 0, 0, 0}, dist[4];
     int hit[4];
     RaysFromSegments(start, stop, d, len);
+    if (em_scene) {             /* (anything in the way will do: Embree stops at the first it finds) */
+        skip_t k = {TRACE_ID_STATICPROP | static_prop_to_skip, NULL};
+        float tnear[4] = {1.0e-10f, 1.0e-10f, 1.0e-10f, 1.0e-10f};
+        int blocked[4];
+        EM_Blocked4(em_scene, start, (const float(*)[4])d, tnear, len, k.id == -1 ? NULL : SkipTriID, &k, blocked);
+        for (int i = 0; i < 4; i++) vis[i] = blocked[i] ? 0.0f : 1.0f;
+        return;
+    }
     RT_Trace4(start, (const float(*)[4])d, tmin, len, TRACE_ID_STATICPROP | static_prop_to_skip, hit, dist);
     for (int i = 0; i < 4; i++) vis[i] = hit[i] != -1 && dist[i] < len[i] ? 0.0f : 1.0f;
 }
@@ -575,6 +628,18 @@ void TestLine_DoesHitSky4(const float start[3][4], const float stop[3][4], int s
     float d[3][4], len[4], tmin[4] = {0, 0, 0, 0}, dist[4];
     int hit[4];
     RaysFromSegments(start, stop, d, len);
+    if (em_scene) {             /* (the sky is reached when nothing solid comes before it: the nearest sky triangle,
+                                 * then anything solid before that) */
+        skip_t k = {TRACE_ID_STATICPROP | static_prop_to_skip, solid_tri};
+        float tnear[4] = {1.0e-10f, 1.0e-10f, 1.0e-10f, 1.0e-10f};
+        int blocked[4];
+        EM_Nearest4(em_sky, start, (const float(*)[4])d, tnear, len, NULL, NULL, hit, dist);
+        for (int i = 0; i < 4; i++)
+            if (hit[i] < 0) dist[i] = len[i];
+        EM_Blocked4(em_solid, start, (const float(*)[4])d, tnear, dist, k.id == -1 ? NULL : SkipTriID, &k, blocked);
+        for (int i = 0; i < 4; i++) frac[i] = blocked[i] ? 0.0f : 1.0f;
+        return;
+    }
     RT_Trace4(start, (const float(*)[4])d, tmin, len, TRACE_ID_STATICPROP | static_prop_to_skip, hit, dist);
     for (int i = 0; i < 4; i++) {
         float occl = hit[i] != -1 && dist[i] < len[i] && !(tris[hit[i]].id & TRACE_ID_SKY) ? 1.0f : 0.0f;

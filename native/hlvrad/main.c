@@ -60,6 +60,7 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-lights") && i + 1 < argc) designer_lights = argv[++i];
         else if (!_stricmp(a, "-bounce") && i + 1 < argc) g_numbounce = atoi(argv[++i]);
         else if (!_stricmp(a, "-threads") && i + 1 < argc) g_numthreads = atoi(argv[++i]);
+        else if (!_stricmp(a, "-embree")) g_bEmbree = 1;         /* (Embree's tracer: faster, not vrad's to the bit) */
         else if (
                  !_stricmp(a, "-chop") ||
                  !_stricmp(a, "-maxchop") || !_stricmp(a, "-dispchop")) {

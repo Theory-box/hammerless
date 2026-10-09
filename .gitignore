@@ -8,3 +8,5 @@ demo/demo_level_generated.blend
 scripts/vscript_help.txt
 demo/hl_test_*.blend
 native/hlvrad32.exe
+hammerless/core/embree4.dll
+hammerless/core/tbb12.dll
