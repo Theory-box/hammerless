@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (test release, 2026-10-08)
 
 - **Sky light from the sky (World > Sky & Sun > Sky Light):** instead of one colour from every direction, each part of the sky lights the map with its own colour, taken from the map's skybox (so the light matches the sky you see: warm from a sunset horizon, blue from above) or from an HDRI image (the picked one or the World's Environment Texture, with a rotation). The overall level stays your Sky Light Brightness: a floor under open sky gets as much light as before. Bounced light, props, grass and the light on zombies and survivors follow it. Needs the Hammerless light compiler (Valve's vrad lights the sky with one colour, with a note in the log).
 - **Faster Build & Play:** the game starts as soon as you press Build & Play, so it boots while the map exports and compiles, and the map is sent to it once it reaches its menu. **Fast Map Loading** (*Settings > Game Window*, on by default) tests as a LAN-only game (`sv_lan 1`): measured, the map loads about 6 seconds faster, because the game no longer registers with Steam's servers on every load (untick it to let friends join online). From pressing the button to the map loaded: 18 s before, 8 s now (with a 4-second build).

@@ -5,24 +5,32 @@
 No Hammer, no VMF editing, no console commands.
 
 > [!WARNING]
-> **Work in progress (v0.1, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene (converting objects, moving outputs into a logic graph), and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
+> **Work in progress (v0.8, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene (converting objects, moving outputs into a logic graph), and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
 
 ## Features
 
-- **One-click Build & Play**: export, compile (vbsp / vvis / vrad), copy to the game and launch, reusing a running game. **Smart builds** only redo what changed: entity edits skip geometry, unchanged maps skip the compile. Optional **Hammerless vis compiler**: the same visibility data as vvis, about 3 times faster. Hammerless's own **map compiler** (the default) writes the same map as vbsp byte for byte, with Valve's vbsp as the fallback.
+- **One-click Build & Play**: export, compile, copy to the game and launch. The game starts the moment you press the button, so it boots while the map compiles, and a running game is reused. **Fast Map Loading** (LAN-only test games) skips a 6-second Steam wait on every load: from button to map in about 8 seconds on a small map. **Smart builds** only redo what changed: entity edits skip geometry, unchanged maps skip the compile.
+- **Hammerless's own compilers**, each checked against the output of Valve's:
+  - **Map compiler** (the default): the same map as vbsp, byte for byte on Valve's own sample maps.
+  - **Vis compiler**: the same visibility data as vvis, about 3 times faster.
+  - **Light compiler**: the same lighting as vrad (byte for byte on the test maps), about 3 times faster on all cores; Normal and Final quality, prop and grass lighting.
+  - **Model compiler** (the default): Custom Models without studiomdl.
+  - Anything one of them doesn't do yet goes to Valve's tool, with a note in the log.
 - **Meshes become brushes.** Any convex mesh is a wall or floor; non-convex meshes can use a convex hull. **Terrain** objects become displacements (sculpt them however you like).
+- **Custom Models**: any mesh becomes a game prop (static, dynamic or physics), with collision, your own textures or the game's, and no extra tools.
 - **Game content in Blender**: all 8,000+ L4D2 materials and 5,500 models, with real textured previews in the viewport. Your own image textures are converted automatically.
 - **Ready-made presets**: Start / End Safe Room (fully wired), Horde Trigger, Horde Button, Crescendo Button, Tank Ambush, Gate + Button, Ladder, Zombie Ladder, Zombie Climb, Zombie Spawn Area.
 - **Logic nodes**: wire map events visually (Path Progress → When → Spawn Tank, buttons, timers, movers, Director settings).
 - **Nav mesh made in Blender**: a port of the game's own nav generator builds the mesh while the map compiles (about 0.5 s instead of the game's two extra reloads), plus the game's **nav analysis** (visibility, hiding spots) done in Blender, so the game loads the map once.
 - **See how the map renders**: the vis portals, a heatmap of how much the game draws from each spot, and which objects make the vis compile slow.
 - **See what the Director sees**: colour the nav by reachability, path distance, *what can be seen from here*, no-spawn marks, and **where zombies can spawn**.
+- **Sky light from the sky**: instead of one flat sky colour, each part of the sky lights the map with its own colour, from the skybox you picked (so the light matches the sky) or from an HDRI image. Props are lit per vertex by default.
 - **AI Director, lighting, sky and fog settings** in panels. Leak-proof by default (auto skybox seal).
 
 ## Requirements
 
 - **Blender 4.2 or newer**
-- **Left 4 Dead 2** (Steam) and the **Left 4 Dead 2 Authoring Tools** (*Steam > Library > Tools*), which provide the map compilers
+- **Left 4 Dead 2** (Steam) and the **Left 4 Dead 2 Authoring Tools** (*Steam > Library > Tools*): Hammerless's own compilers do most of the work, but Valve's are still the fallback (and the Authoring Tools are still required for now)
 - Windows (the compilers are Windows programs)
 
 ## Install
@@ -56,4 +64,4 @@ The full walkthrough is in **[Getting Started](docs/GETTING_STARTED.md)**.
 
 [GPL-3.0-or-later](LICENSE), like Blender itself.
 
-Hammerless is a fan-made tool, not affiliated with or endorsed by Valve. Left 4 Dead 2, Source and their content are Valve's; Hammerless doesn't include any game files and reads them from your own installation. The nav mesh generator and nav analysis follow the algorithms in Valve's published Source SDK 2013 nav code, reimplemented and checked against the game's output.
+Hammerless is a fan-made tool, not affiliated with or endorsed by Valve. Left 4 Dead 2, Source and their content are Valve's; Hammerless doesn't include any game files and reads them from your own installation. The nav mesh generator and nav analysis follow the algorithms in Valve's published Source SDK 2013 nav code, reimplemented and checked against the game's output. The map, vis, light and model compilers are likewise reimplemented (the map compiler after Quake 2's GPL tools) and checked against Valve's tools' output.
