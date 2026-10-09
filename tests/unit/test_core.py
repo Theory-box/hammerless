@@ -1501,11 +1501,30 @@ class TestLightCompilerGpu(unittest.TestCase):
             cc.HLVRAD, cc.HLPHYS = old
 
     def test_exact_choice_relights(self):
-        # Exact over the GPU counts for hlvrad (the next build relights); with Valve's vrad it does nothing
+        # Exact over the GPU counts for hlvrad: the next build relights (only: the geometry stays); with Valve's vrad
+        # it does nothing
         from hammerless.core import compile as cc
         gpu, exact = cc.CompileOptions(light_tool="HAMMERLESS"), cc.CompileOptions(light_tool="HAMMERLESS", light_exact=True)
-        self.assertNotEqual(cc._opts_rest(repr(gpu)), cc._opts_rest(repr(exact)))
-        self.assertEqual(cc._opts_rest(repr(cc.CompileOptions())), cc._opts_rest(repr(cc.CompileOptions(light_exact=True))))
+        self.assertEqual(cc._opts_rest(repr(gpu)), cc._opts_rest(repr(exact)))
+        self.assertNotEqual(cc._opts_rad(repr(gpu)), cc._opts_rad(repr(exact)))
+        self.assertEqual(cc._opts_rad(repr(cc.CompileOptions())), cc._opts_rad(repr(cc.CompileOptions(light_exact=True))))
+
+    def test_lighting_settings(self):
+        # each lighting setting is a vrad / hlvrad option; changing one relights only, and ours count only for hlvrad
+        from dataclasses import replace
+        from hammerless.core import compile as cc
+        o = cc.CompileOptions(sky_rays=16, supersample=False, bounces=50, patch_size=2, static_prop_lighting=True,
+                              prop_polys=True)
+        self.assertEqual(o.vrad_args(), ["-hdr", "-extrasky", "16", "-noextra", "-bounce", "50", "-chop", "2",
+                                         "-maxchop", "2", "-StaticPropLighting", "-StaticPropPolys"])
+        u = cc.CompileOptions(ss_points=8, ss_passes=8, ss_threshold=0.03, fix_quirks=True, light_exact=True)
+        self.assertEqual(u.hlvrad_args(), ["-sspoints", "8", "-sspasses", "8", "-ssthreshold", "0.03", "-fixquirks"])
+        a = cc.CompileOptions(light_tool="HAMMERLESS")
+        for changed in (replace(a, bounces=10), replace(a, ss_points=8), replace(a, extra_vrad="-smooth 30")):
+            self.assertEqual(cc._opts_rest(repr(a)), cc._opts_rest(repr(changed)))
+            self.assertNotEqual(cc._opts_rad(repr(a)), cc._opts_rad(repr(changed)))
+        v = cc.CompileOptions()
+        self.assertEqual(cc._opts_rad(repr(v)), cc._opts_rad(repr(replace(v, ss_points=8))))
 
 
 class TestCompileSkip(unittest.TestCase):

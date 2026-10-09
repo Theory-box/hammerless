@@ -62,11 +62,17 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-threads") && i + 1 < argc) g_numthreads = atoi(argv[++i]);
         else if (!_stricmp(a, "-embree")) g_bEmbree = 1;
         else if (!_stricmp(a, "-gpu")) g_bGPU = 1;              /* (the GPU's ray tracing: faster, not vrad's to the bit) */         /* (Embree's tracer: faster, not vrad's to the bit) */
-        else if (
-                 !_stricmp(a, "-chop") ||
-                 !_stricmp(a, "-maxchop") || !_stricmp(a, "-dispchop")) {
+        else if (!_stricmp(a, "-chop") && i + 1 < argc) minchop = (float)atof(argv[++i]);     /* (patches at a face's edges) */
+        else if (!_stricmp(a, "-maxchop") && i + 1 < argc) maxchop = (float)atof(argv[++i]);  /* (and inside it) */
+        else if (!_stricmp(a, "-dispchop")) {
             if (++i >= argc) Error("expected a value after '%s'", a);
-        } else if (!_stricmp(a, "-smooth")) {
+        }
+        /* beyond vrad (Hammerless's own): supersampling's points across a luxel (4: vrad's 4 x 4), passes and the
+         * brightness step that triggers it; -fixquirks: vrad's oddities left out (see direct.c, leafambient.c) */
+        else if (!_stricmp(a, "-sspoints") && i + 1 < argc) g_ssPoints = atoi(argv[++i]);
+        else if (!_stricmp(a, "-sspasses") && i + 1 < argc) g_ssPasses = atoi(argv[++i]);
+        else if (!_stricmp(a, "-ssthreshold") && i + 1 < argc) g_ssThreshold = (float)atof(argv[++i]);
+        else if (!_stricmp(a, "-fixquirks")) g_bFixQuirks = 1; else if (!_stricmp(a, "-smooth")) {
             if (++i >= argc) Error("expected an angle after '-smooth'");
             smoothing_threshold = (float)cos(atof(argv[i]) * (3.14159265358979323846 / 180.0));
         } else if (!_stricmp(a, "-fast")) {
@@ -95,6 +101,8 @@ int main(int argc, char **argv) {
     }
     if (!map) Error("usage: hlvrad [options] -game <gamedir> <map>");
     if (g_bLDR) Error("LDR lighting isn't supported yet (L4D2 uses HDR)");
+    if (g_ssPoints < 1 || g_ssPoints > 16) Error("-sspoints: 1 to 16");
+    if (maxchop < minchop) maxchop = minchop;
     char path[1024];
     snprintf(path, sizeof(path), "%s", map);
     size_t n = strlen(path);

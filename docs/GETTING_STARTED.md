@@ -45,7 +45,7 @@ Use the **Add** panel (category tiles + search, ★ to favourite) or **Shift+A >
 Press **Build & Play**. Hammerless exports the map, compiles it, builds the nav mesh at the same time, and launches L4D2 (or reuses the running game).
 
 - **Build** does everything Build & Play does (compile, baked lighting, nav mesh) without starting the game. **Play** starts the game on the last build.
-- **Bake Lighting** (in *View > Baked Lighting*) bakes only the lighting, quickly, and shows it in the viewport. Build & Play reuses that bake.
+- **Bake Lighting** (in *Lighting > Baked Lighting*) bakes only the lighting, quickly, and shows it in the viewport. Build & Play reuses that bake.
 - Builds are **smart**: if only entities changed, geometry and lighting are kept; if nothing changed, the compile is skipped.
 - Warnings appear as "N warning(s). See the hammerless_log text block". The *Problems* list (in the *Build & Play* panel, with **Check the Map** to re-check without building) shows them, as does the `hammerless_log` text; click a row to select the object. Most are informational, e.g. *near misses* (faces that almost line up), which Hammerless fixes when it exports.
 
@@ -74,6 +74,6 @@ A preset's parent empty shows the preset's settings and **Select All Parts**. Co
 **View**: everything drawn over the viewport. *Nav Mesh* (the nav viewer: Build Navmesh, Analyze, colour modes, the game's nav), *Baked Lighting* (**Bake Lighting**, the lighting view, *Bake Settings*), *Visibility* (*Portals*, *Rendering Load*, *Vis Cost*) and *Sound* (**Trace Sound**: outdoors, sheltered, indoors, and the sound portals where the outside comes in). The nav choices themselves (made in Blender or by the game, analysis, Zombies Climb Walls, Rebuild Nav Next Time) sit in the *Build & Play* panel with *Vis Compiler*.
 
 
-**View > Visibility**: *Portals* (how vis split the map up; tiny slivers in red), *Rendering Load* (the map coloured by how much the game draws from each spot: red is where frame rate suffers first, with a button to put the 3D cursor on the worst spot), and *Vis Cost* (where the vis compile spent its time, and the objects behind it, each with a Select button: making decorative ones Detail speeds vis up; needs *Vis Compiler: Hammerless*).
+**Visibility > View**: *Portals* (how vis split the map up; tiny slivers in red), *Rendering Load* (the map coloured by how much the game draws from each spot: red is where frame rate suffers first, with a button to put the 3D cursor on the worst spot), and *Vis Cost* (where the vis compile spent its time, and the objects behind it, each with a Select button: making decorative ones Detail speeds vis up; needs *Vis Compiler: Hammerless*).
 
 **Settings**: *Compile* (Auto Detail; with Quality *Custom*, each step and extra compiler options), *Game Window* (monitor, size, borderless, difficulty, launch options), *Folders & Game Data* (L4D2 folder, work folder, reload game data, refresh previews, **Export VMF** to open the map in Hammer), *Scene* (scale, default material, auto seal, checks), *Debug* (*Debug Log* of Director events, *Bot Walkthrough Test* where bots play the map).

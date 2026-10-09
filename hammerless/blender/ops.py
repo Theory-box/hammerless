@@ -44,25 +44,24 @@ def game_content(root: str | None) -> GameContent | None:
 BUILD_PROGRESS = {"vis": ""}      # the running build's latest "vis 42%, about 3 s left" line
 
 
-def compile_options(s) -> "cc.CompileOptions | str":
-    if s.compile_preset != "CUSTOM":
-        if s.vis_tool == "VALVE" and s.light_tool == "VALVE" and s.map_tool == "HAMMERLESS":
-            return s.compile_preset
-        import dataclasses
-        return dataclasses.replace(cc.PRESETS[s.compile_preset], vis_tool=s.vis_tool, light_tool=s.light_tool,
-                                   map_tool=s.map_tool, **_light_options(s))
-    return cc.CompileOptions(vis=s.vis_mode, rad=s.rad_mode, hdr=s.hdr_mode,
-                             static_prop_lighting=s.static_prop_lighting,
+def compile_options(s) -> "cc.CompileOptions":
+    """The build's options from the scene: Visibility's and Lighting's own settings (their Quality presets fill
+    them in), the compilers chosen."""
+    rad = "SKIP" if s.light_quality == "OFF" else ("FAST" if s.light_fast else "NORMAL")
+    return cc.CompileOptions(vis=s.vis_mode, rad=rad, hdr=s.hdr_mode, static_prop_lighting=s.static_prop_lighting,
+                             sky_rays=s.light_sky_rays, supersample=s.light_supersample, bounces=s.light_bounces,
+                             prop_polys=s.light_prop_polys, patch_size=s.light_patch_size,
                              extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad,
                              vis_tool=s.vis_tool, light_tool=s.light_tool, map_tool=s.map_tool,
                              **_light_options(s))
 
 
 def _light_options(s) -> dict:
-    """Cycles bake settings (only when baking with Cycles, so they don't change vrad builds' fingerprint),
-    or whether the Hammerless light compiler matches vrad exactly (CPU) or uses the GPU."""
+    """The chosen light compiler's own settings (only then, so they don't change other builds' fingerprint): the
+    Hammerless one's (Exact or the GPU, and what goes beyond vrad), or Cycles' bake settings."""
     if s.light_tool == "HAMMERLESS":
-        return {"light_exact": s.light_exact}
+        return {"light_exact": s.light_exact, "ss_points": s.light_ss_points, "ss_passes": s.light_ss_passes,
+                "ss_threshold": s.light_ss_threshold, "fix_quirks": s.light_fix_quirks}
     if s.light_tool != "CYCLES":
         return {}
     return {"cycles_samples": s.cycles_samples, "cycles_denoise": s.cycles_denoise,
@@ -974,7 +973,7 @@ class HL_OT_build(bpy.types.Operator):
             return ("Build the map (walls, visibility, lighting, nav mesh), then start Left 4 Dead 2 on it. "
                     "Only what changed is redone")
         return ("Build the map without starting the game: walls, visibility, baked lighting and the nav mesh. "
-                "Only what changed is redone. Then Play starts it, and View > Baked Lighting can show it")
+                "Only what changed is redone. Then Play starts it, and Lighting > Baked Lighting can show it")
 
     play: BoolProperty(name="Play", default=True)
     bake: BoolProperty(name="Bake Lighting", default=False, options={"HIDDEN", "SKIP_SAVE"},
@@ -1021,7 +1020,7 @@ class HL_OT_build(bpy.types.Operator):
             import dataclasses
             opts = cc.PRESETS[opts] if isinstance(opts, str) else opts
             if opts.rad == "SKIP":
-                self.report({"ERROR"}, "Quality is Quick, which doesn't bake lighting: choose Fast or higher")
+                self.report({"ERROR"}, "Lighting Quality is Off: choose Fast or higher in the Lighting panel")
                 return {"CANCELLED"}
             opts = dataclasses.replace(opts, vis="FAST" if opts.vis != "SKIP" else "SKIP")
             self.play = False

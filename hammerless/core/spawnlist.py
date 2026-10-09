@@ -68,7 +68,7 @@ _TIPS = {
     "prop_door_rotating_checkpoint": "The safe room presets already include one.",
     "info_director": "Added automatically. You only need this to name it yourself.",
     "info_player_start": "Added automatically when missing.",
-    "light_environment": "Set the sun in World > Sky & Sun instead. Added automatically.",
+    "light_environment": "Set the sun in Lighting > Sky & Sun instead. Added automatically.",
 }
 
 # Default box (Hammer units, mins/maxs) for a new brush entity added without a mesh

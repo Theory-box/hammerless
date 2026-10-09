@@ -37,6 +37,8 @@ layout(set = 0, binding = 14, std430) readonly buffer LightData { uint lightdata
 #define TEST_EPSILON 0.03125
 #define MASK_OPAQUE_ 1
 
+bool wFix;              // -fixquirks: faces only where they are, displacements only in reach (leafambient.c)
+
 // the walk's state (lightsurf_t)
 vec3 lsStart, lsDelta;
 int lsSurface;
@@ -58,6 +60,7 @@ bool PointInFaceWinding(vec3 pt, int f) {
 
 bool PointOnSurface(vec3 pt, int f) {
     if ((faces[f].b.w & SURF_NOLIGHT) != 0) return false;
+    if (wFix && !PointInFaceWinding(pt, f)) return false;
     float s = dot(pt, faces[f].lmS.xyz) + faces[f].lmS.w, t = dot(pt, faces[f].lmT.xyz) + faces[f].lmT.w;
     if (s < float(faces[f].b.x) || t < float(faces[f].b.y)) return false;
     float ds = s - float(faces[f].b.x), dt = t - float(faces[f].b.y);
@@ -178,6 +181,7 @@ int EnumerateLeaf(int leaf, float start, float end) {
     int dface;
     vec2 lux;
     float dist = ClipRayToDispInLeaf(leaf, dface, lux);
+    if (wFix && dist > end + 1e-4) dist = 1.0;
     if (dist < lsHitfrac) {
         lsHitfrac = dist, lsSurface = dface, lsLuxel = lux;
         hit = true, lsHasLuxel = true;

@@ -12,6 +12,7 @@ layout(set = 0, binding = 18, std430) writeonly buffer Out { float outv[]; };
 layout(push_constant) uniform PC {
     int npoints, haveSkyMap, skymapW, skymapH;
     vec4 skylight;          // the sky ambient light's colour; w: 1 when there is one
+    int fix;                // -fixquirks
 } pc;
 #include "skymap.glsl"
 
@@ -70,6 +71,7 @@ const vec3 boxdir[6] = vec3[6](vec3(1, 0, 0), vec3(-1, 0, 0), vec3(0, 1, 0), vec
 void main() {
     int i = int(gl_GlobalInvocationID.x);
     if (i >= pc.npoints) return;
+    wFix = pc.fix != 0;
     vec3 start = vec3(points[3 * i], points[3 * i + 1], points[3 * i + 2]);
     vec3 rad[162];
     for (int r = 0; r < 162; r++) rad[r] = RayColor(start, (start + anorms[r].xyz * RAY_LENGTH) - start);

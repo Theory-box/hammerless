@@ -796,7 +796,8 @@ static void SetupPoints4(const lightinfo_t *l, int facenum, int normalCount, int
  * rest of the sample), the last light's value in ResampleLightAt4Points, and also whatever the ray
  * tracer's deeper frames left (its mailbox, the sky test's temporaries), which isn't reproduced here. */
 static __thread __m128 g_staleSlot;
-static int extrapasses = 4;
+int g_ssPoints = 4, g_ssPasses = 4, g_bFixQuirks;
+float g_ssThreshold = 0.0625f;
 
 static void ResampleLightAt4Points(const points4_t *p, const int cluster[LANES], const dface_t *f, int style, int flags,
                                    vec3_t result[LANES][NUM_BUMP_VECTS + 1]) {
@@ -863,7 +864,7 @@ static void ResampleLightAt4Points(const points4_t *p, const int cluster[LANES],
 /* which of 4 points lie in the winding (every edge turns the same way as the first); bit i: point i is out */
 static int PointsInWinding(const float pt[3][LANES], const winding_t *w, int *invalid) {
     __m128 px = _mm_loadu_ps(pt[0]), py = _mm_loadu_ps(pt[1]), pz = _mm_loadu_ps(pt[2]);
-    __m128 mask = g_staleSlot, tx = _mm_setzero_ps(), ty = tx, tz = tx;
+    __m128 mask = g_bFixQuirks ? _mm_setzero_ps() : g_staleSlot, tx = _mm_setzero_ps(), ty = tx, tz = tx;     /* (-fixquirks: no leftover) */
     *invalid = 0;
     for (int k = 0; k < w->numpoints; k++) {
         const float *a = w->p[k], *b = w->p[(k + 1) % w->numpoints];
@@ -889,8 +890,45 @@ static int PointsInWinding(const float pt[3][LANES], const winding_t *w, int *in
     return 1;
 }
 
+/* -sspoints n other than vrad's 4: an n x n grid of points across the luxel for direct light, (n / 2) x (n / 2) for the sky
+ * ambient (at least 1), lit 4 at a time; points outside a partial luxel's piece of the face left out */
+static int SupersampleGrid(const lightinfo_t *l, int facenum, facelight_t *fl, int si, int style, int normalCount,
+                           const vec3_t *flatBump, vec3_t *light, int flags) {
+    const sample_t *sample = &fl->sample[si];
+    const dface_t *f = &g_pFaces[facenum];
+    float origin[2];
+    WorldToLuxelSpace(l, sample->pos, origin);
+    int n = flags & NON_AMBIENT_ONLY ? g_ssPoints : (g_ssPoints / 2 > 1 ? g_ssPoints / 2 : 1), total = n * n, count = 0;
+    float cscale = 1.0f / (float)n, csshift = -((float)(n - 1) * cscale) / 2.0f;
+    for (int b = 0; b < normalCount; b++) VectorClear(light[b]);
+    float nin[LANES][3], nout[LANES][3], pos[LANES][3], pt[3][LANES];
+    for (int i = 0; i < LANES; i++) VectorCopy(sample->normal, nin[i]);
+    for (int at = 0; at < total; at += LANES) {
+        int lanes = total - at < LANES ? total - at : LANES;
+        for (int i = 0; i < LANES; i++) {
+            int k = at + (i < lanes ? i : lanes - 1);
+            LuxelSpaceToWorld(l, origin[0] + csshift + (float)(k / n) * cscale, origin[1] + csshift + (float)(k % n) * cscale, pos[i]);
+            for (int c = 0; c < 3; c++) pt[c][i] = pos[i][c];
+        }
+        int invalid = 0;
+        if (sample->w && !PointsInWinding((const float(*)[LANES])pt, sample->w, &invalid)) continue;
+        points4_t p;
+        int cluster[LANES];
+        SetupPoints4(l, facenum, normalCount, 0, flatBump, (const float(*)[3])pos, (const float(*)[3])nin, &p, cluster, nout);
+        vec3_t result[LANES][NUM_BUMP_VECTS + 1];
+        ResampleLightAt4Points(&p, cluster, f, style, flags, result);
+        for (int i = 0; i < lanes; i++) {
+            if ((invalid >> i) & 1) continue;
+            for (int b = 0; b < normalCount; b++) VectorAdd(light[b], result[i][b], light[b]);
+            count++;
+        }
+    }
+    return count;
+}
+
 static int SupersampleLightAtPoint(const lightinfo_t *l, int facenum, facelight_t *fl, int si, int style, int normalCount,
                                    const vec3_t *flatBump, vec3_t *light, int flags) {
+    if (g_ssPoints != 4) return SupersampleGrid(l, facenum, fl, si, style, normalCount, flatBump, light, flags);
     const sample_t *sample = &fl->sample[si];
     const dface_t *f = &g_pFaces[facenum];
     float origin[2];
@@ -947,7 +985,7 @@ static void BuildSupersampleFaceLights(const lightinfo_t *l, int facenum, faceli
     vec3_t **ls = fl->light[style];
     for (int i = 0; i < fl->numsamples; i++)
         SampleIntensity(ls, i, normalCount, (int)fl->sample[i].s + (int)fl->sample[i].t * w, size, intensity);
-    for (int pass = 1, another = 1; another && pass <= extrapasses; pass++) {
+    for (int pass = 1, another = 1; another && pass <= g_ssPasses; pass++) {
         for (int i = 0; i < fl->numsamples; i++) {
             if (done[i]) continue;
             gradient[i] = 0.0f;
@@ -976,7 +1014,7 @@ static void BuildSupersampleFaceLights(const lightinfo_t *l, int facenum, faceli
         }
         another = 0;
         for (int i = 0; i < fl->numsamples; i++) {
-            if (done[i] || gradient[i] < 0.0625) continue;
+            if (done[i] || gradient[i] < g_ssThreshold) continue;
             done[i] = 1;
             another = 1;
             vec3_t amb[NUM_BUMP_VECTS + 1], dir[NUM_BUMP_VECTS + 1];

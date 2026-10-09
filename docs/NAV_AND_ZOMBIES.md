@@ -13,9 +13,9 @@ Bots, zombies and the AI Director all run on the **nav mesh**, the game's map of
 
 Both "in Blender" options are measured against the game's own output: the nav analysis matches the game's visibility on 99.92% of area pairs, and its hiding spots exactly.
 
-## The viewer (View > Nav Mesh)
+## The viewer (Nav Mesh > View)
 
-The *View > Nav Mesh* header says whether the nav is up to date. Under the viewer's buttons it reports the path from start to end (OK / BROKEN), how many areas are reachable or islands, and the drop, jump and ladder counts.
+The *Nav Mesh* panel's header says whether the nav is up to date. Under the viewer's buttons it reports the path from start to end (OK / BROKEN), how many areas are reachable or islands, and the drop, jump and ladder counts.
 
 | Button | What it does |
 |---|---|

@@ -181,6 +181,7 @@ static void IndirectLightingAtPoint(const vec3_t pos, const vec3_t normal, vec3_
         for (int k = 0; k < 3; k++) delta[k] = (pos[k] + dir[k] * MAX_TRACE_LENGTH_F) - pos[k];
         int hasluxel;
         float luxel[2];
+        if (g_bFixQuirks) LightSurfaceBegin();      /* (vrad keeps one finder for all the rays: later rays miss what's farther) */
         int s = FindLightSurfaceKept(pos, delta, &hasluxel, luxel);
         if (logRays) {
             float rec[12];

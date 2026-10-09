@@ -1,5 +1,5 @@
 """Automatic acoustics in Blender: ray traces the scene (its walls, floors and terrain) for
-core/acoustics.py, adds the soundscapes to the map on export, and draws the result in View > Sound.
+core/acoustics.py, adds the soundscapes to the map on export, and draws the result in Sound > View.
 """
 import time
 
@@ -103,7 +103,7 @@ def add_acoustics(context, ir, rep) -> None:
     rep.info.append("Sound: " + summary)
 
 
-# ---------------------------------------------------------------- View > Sound
+# ---------------------------------------------------------------- Sound > View
 
 def _build(scale):
     smooth = gpu.shader.from_builtin("SMOOTH_COLOR")

@@ -386,7 +386,7 @@ static int StartGPU(void) {
     cai.commandPool = pool, cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, cai.commandBufferCount = 1;
     CHECK(vkAllocateCommandBuffers(dev, &cai, &cmd));
     prog_gather = Program(spv_gather, sizeof(spv_gather), 8, 36);
-    prog_ambient = Program(spv_ambient, sizeof(spv_ambient), 19, 32);
+    prog_ambient = Program(spv_ambient, sizeof(spv_ambient), 19, 36);
     prog_propind = Program(spv_propind, sizeof(spv_propind), 19, 16);
     Msg("Lighting on the GPU: %s\n", props.deviceName);
     return 1;
@@ -543,8 +543,8 @@ static void WalkBuffers(gbuf_t **bufs, gbuf_t *dirs) {
 void GPU_Ambient(const float *points, int n, const float skylight[4], float *out) {
     int w = 0, h = 0;
     SkyMapData(&w, &h);
-    struct { int npoints, haveSkyMap, skymapW, skymapH; float skylight[4]; } pc;
-    pc.haveSkyMap = HaveSkyMap(), pc.skymapW = w, pc.skymapH = h;
+    struct { int npoints, haveSkyMap, skymapW, skymapH; float skylight[4]; int fix; } pc;
+    pc.haveSkyMap = HaveSkyMap(), pc.skymapW = w, pc.skymapH = h, pc.fix = g_bFixQuirks;
     memcpy(pc.skylight, skylight, 16);
     for (int at = 0; at < n; at += POINT_CHUNK) {
         int k = n - at < POINT_CHUNK ? n - at : POINT_CHUNK;
@@ -560,7 +560,7 @@ void GPU_Ambient(const float *points, int n, const float skylight[4], float *out
 }
 
 void GPU_PropIndirect(const float *points, int n, float *out) {
-    struct { int npoints, nskyFull, fast, pad; } pc = {0, (int)(g_flSkySampleScale * 162.0f), g_bFast, 0};
+    struct { int npoints, nskyFull, fast, fix; } pc = {0, (int)(g_flSkySampleScale * 162.0f), g_bFast, g_bFixQuirks};
     for (int at = 0; at < n; at += POINT_CHUNK) {
         int k = n - at < POINT_CHUNK ? n - at : POINT_CHUNK;
         Ensure(&in_buf, 28 * (size_t)k);

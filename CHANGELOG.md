@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **A panel per system, each with its own Quality.** The sidebar now has *Lighting*, *Visibility*, *Nav Mesh* and *Sound* panels, each holding everything about it: the compiler, its settings and its view (the old *View* panel's parts moved into them; *Sky & Sun* moved from World to Lighting).
+  - **Lighting Quality** (Off / Fast / Normal / Final / Ultra / Custom) fills in settings you can see and change: sky rays, supersampling (points, passes, edge threshold), bounces, bounce patch size, prop lighting, prop shadows from the full model, and *Fix vrad's Quirks*. Changing one makes it Custom.
+  - **Visibility Quality** (Off / Fast / Full), with the vis compiler and Auto Detail.
+  - **Build & Play's Quality** sets them all at once (Quick / Fast / Normal / Final / Ultra), and shows *Mixed* when they're on different levels. Files saved before are translated on load and build the same as before.
+  - Changing only lighting settings relights the map without rebuilding its geometry.
+- **Ultra lighting** (Hammerless light compiler): Final plus 8 × 8 supersampling points, more passes, a lower edge threshold, and vrad's quirks fixed: edge luxels vrad leaves dark (a stale value in its supersampling drops valid points), bounced light picked up from a face's lightmap rectangle instead of the face, far displacements hiding nearer faces, and props' bounced light missing far surfaces. It goes beyond vrad's look on purpose (it is not vrad-identical). On a real map on an RTX 4090: 2.6 s (15 s on the CPU).
+- The light compiler takes `-sspoints`, `-sspasses`, `-ssthreshold`, `-fixquirks`, and vrad's `-chop` / `-maxchop` (bounce patch size, before ignored).
+
 ## 0.9.0 (test release, 2026-10-08)
 
 - **Lighting on the graphics card:** the Hammerless light compiler now lights the map on the GPU (Vulkan ray tracing: NVIDIA RTX, AMD RX 6000 and newer, Intel Arc). Direct light, supersampling, the light for moving models (leaf ambient) and static prop lighting all run there. Measured on a real map with an RTX 4090: Normal quality 2.2 s → 1.2 s, Final 7.3 s → 1.5 s. It looks the same as vrad's: 99.99% of lightmap pixels come out byte-identical (Final 99.92%; the rest are near-black pixels and single pixels on shadow edges), 99.996% of prop vertices, and the leaf ambient differs from vrad's no more than two vrad runs differ from each other. Without a capable card it lights on the CPU as before.

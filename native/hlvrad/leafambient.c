@@ -458,9 +458,12 @@ static int PointInFaceWinding(const vec3_t pt, const dface_t *f) {
     return ok;
 }
 
+/* (vrad takes a face where the point is in its lightmap's rectangle, a little bigger than the face; -fixquirks: in the
+ * face itself) */
 static int PointOnSurface(const vec3_t pt, const dface_t *f, lightsurf_t *ls) {
     const texinfo_t *tx = &texinfo[f->texinfo];
     if (tx->flags & SURF_NOLIGHT) return 0;
+    if (g_bFixQuirks && !PointInFaceWinding(pt, f)) return 0;
     float s = DotProduct(pt, tx->lightmapVecsLuxelsPerWorldUnits[0]) + tx->lightmapVecsLuxelsPerWorldUnits[0][3];
     float t = DotProduct(pt, tx->lightmapVecsLuxelsPerWorldUnits[1]) + tx->lightmapVecsLuxelsPerWorldUnits[1][3];
     if (s < f->m_LightmapTextureMinsInLuxels[0] || t < f->m_LightmapTextureMinsInLuxels[1]) return 0;
@@ -519,6 +522,9 @@ static int EnumerateLeaf(lightsurf_t *ls, int leaf, float start, float end) {
     float lux[2];
     vec3_t n;
     float dist = ClipRayToDispInLeaf(ls->start, ls->delta, leaf, &dface, lux, n);
+    /* (vrad takes a displacement's hit anywhere along the ray as soon as the walk reaches a leaf its box touches, so
+     * one far away can hide nearer faces; -fixquirks: only hits in this leaf's stretch of the ray) */
+    if (g_bFixQuirks && dist > end + 1e-4f) dist = 1.0f;
     if (dist < ls->hitfrac) {
         ls->hitfrac = dist, ls->surface = dface;
         ls->luxel[0] = lux[0], ls->luxel[1] = lux[1];

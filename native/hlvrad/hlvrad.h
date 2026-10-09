@@ -356,6 +356,9 @@ void LightForTexture(const char *name, vec3_t result);
 const char *TexDataName(int texdata);
 extern float g_SunAngularExtent;
 extern int g_bFast, g_bExtra;
+extern int g_ssPoints, g_ssPasses, g_bFixQuirks;   /* (supersampling: points across a luxel, passes; beyond vrad) */
+extern float g_ssThreshold;
+extern float maxchop, minchop;                     /* (bounce patches' sizes, in luxels) */
 void ExportDirectLightsToWorldLights(void);
 void ComputePerLeafAmbientLighting(void);
 void ComputeDetailPropLighting(void);

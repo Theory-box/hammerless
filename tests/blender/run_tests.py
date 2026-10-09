@@ -492,9 +492,14 @@ def test_surface_override_patch_material():
 def test_custom_compile_options():
     from hammerless.blender.ops import compile_options, launch_options
     s = reset_scene()
-    assert compile_options(s) == "NORMAL"
-    s.compile_preset = "CUSTOM"
-    s.vis_mode, s.rad_mode, s.hdr_mode = "FAST", "SKIP", "LDR"
+    from hammerless.core import compile as cc
+    assert compile_options(s).vrad_args() == cc.PRESETS["NORMAL"].vrad_args()
+    s.compile_preset = "FINAL"                      # (sets Lighting and Visibility)
+    assert s.light_quality == "FINAL" and s.vis_mode == "FULL" and s.light_sky_rays == 16
+    s.light_bounces = 50                            # (a lighting setting by hand: Custom, and the build shows Mixed)
+    assert s.light_quality == "CUSTOM" and s.compile_preset == "CUSTOM"
+    assert "-bounce" in compile_options(s).vrad_args()
+    s.vis_mode, s.light_quality, s.hdr_mode = "FAST", "OFF", "LDR"
     o = compile_options(s)
     assert o.vvis_args() == ["-fast"] and o.vrad_args() is None
     s.window_width, s.window_height = 1280, 720

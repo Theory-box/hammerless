@@ -26,20 +26,39 @@ COLLECTION_ROLES = [
 ]
 
 DETAIL_CHOICES = [
-    ("AUTO", "Auto", "Follow the map's Auto Detail setting (Settings > Compile)"),
+    ("AUTO", "Auto", "Follow the map's Auto Detail setting (Visibility panel)"),
     ("DETAIL", "Detail", "Always func_detail: doesn't slow down vvis, but doesn't block visibility or "
                          "seal the map. For furniture, trim, overlapping boxes"),
     ("WORLD", "World", "Never func_detail: blocks visibility, so the game skips drawing what's behind it. "
                        "For walls between areas"),
 ]
 
-COMPILE_PRESETS = [
-    ("QUICK", "Quick", "Geometry only (no vis, no lighting). Fastest; the map is fullbright"),
-    ("FAST", "Fast", "Fast vis + fast lighting. Terrain shows lighting seams between patches"),
-    ("NORMAL", "Normal", "Full vis + normal lighting. Small maps still compile in seconds"),
-    ("FINAL", "Final", "Full quality. Slow"),
-    ("CUSTOM", "Custom", "Choose each compile step yourself (see Compile settings)"),
+COMPILE_PRESETS = [   # (stored by position: new ones go last)
+    ("QUICK", "Quick", "Geometry only (Visibility and Lighting off). Fastest; the map is fullbright"),
+    ("FAST", "Fast", "Fast Visibility and Lighting. Terrain shows lighting seams between patches"),
+    ("NORMAL", "Normal", "Full Visibility, Normal Lighting. Small maps still compile in seconds"),
+    ("FINAL", "Final", "Full Visibility, Final Lighting (16 times the sky rays)"),
+    ("CUSTOM", "Mixed", "Visibility and Lighting are set to different levels in their own panels"),
+    ("ULTRA", "Ultra", "Full Visibility, Ultra Lighting: beyond vrad (finer supersampling, vrad's oddities fixed). "
+                       "Needs the Hammerless light compiler"),
 ]
+
+LIGHT_QUALITY = [
+    ("OFF", "Off", "No lighting: the map is fullbright"),
+    ("FAST", "Fast", "vrad's quick lighting (Valve's vrad runs it); terrain may show seams"),
+    ("NORMAL", "Normal", "vrad's normal lighting"),
+    ("FINAL", "Final", "16 times the sky rays: smoother sky light and shadows"),
+    ("ULTRA", "Ultra", "Final, plus finer supersampling and vrad's oddities fixed (Hammerless light compiler)"),
+    ("CUSTOM", "Custom", "Your own settings below"),
+]
+
+
+def _q(name):
+    """(an update calling quality.<name>)"""
+    def update(self, context):
+        from . import quality
+        getattr(quality, name)(self, context)
+    return update
 
 
 def _sound_display(self, context):
@@ -409,7 +428,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     map_name: StringProperty(name="Map Name", default="my_map", update=lambda self, c: _on_map_name(self),
                              description="File name of the map: lowercase letters, digits and _ (spaces "
                                          "become _)")
-    compile_preset: EnumProperty(name="Quality", items=COMPILE_PRESETS, default="NORMAL")
+    compile_preset: EnumProperty(name="Quality", items=COMPILE_PRESETS, default="NORMAL",
+                                 update=_q("on_build_quality"),
+                                 description="Sets Lighting's and Visibility's quality together (each can still be "
+                                             "changed in its own panel: then this shows Mixed)")
+    settings_version: IntProperty(default=0)      # (quality.migrate: files saved before per-system qualities)
     vis_tool: EnumProperty(name="Vis Compiler", default="VALVE", items=[
         ("VALVE", "Valve vvis", "L4D2's own visibility compiler (vvis.exe)"),
         ("HAMMERLESS", "Hammerless (faster)",
@@ -444,10 +467,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     cycles_denoise: BoolProperty(name="Denoise", default=False,
                                  description="Run Blender's denoiser (OpenImageDenoise, on the GPU when there is "
                                              "one) on the Cycles bake")
-    vis_mode: EnumProperty(name="Visibility (vvis)", default="FULL", items=[
-        ("SKIP", "Skip", "No visibility pass: everything always renders (slow in-game on big maps)"),
+    vis_mode: EnumProperty(name="Quality", default="FULL", update=_q("on_vis_quality"), items=[
+        ("SKIP", "Off", "No visibility pass: everything always renders (slow in-game on big maps)"),
         ("FAST", "Fast", "Quick visibility pass"),
         ("FULL", "Full", "Full visibility pass (best in-game performance)")])
+    # (before per-system qualities: kept so older files' Custom choice can be read, see quality.migrate)
     rad_mode: EnumProperty(name="Lighting (vrad)", default="NORMAL", items=[
         ("SKIP", "Skip (fullbright)", "No lighting pass"),
         ("FAST", "Fast", "Quick lighting; terrain may show seams"),
@@ -457,10 +481,46 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("HDR", "HDR only", "What L4D2 uses (Valve's own maps only have HDR lighting)"),
         ("BOTH", "LDR + HDR", "Also bakes an LDR copy, which L4D2 doesn't use: twice the lighting time"),
         ("LDR", "LDR only", "Not used by L4D2: the game shows flat lighting")])
-    static_prop_lighting: BoolProperty(name="Per-vertex Prop Lighting", default=True,
+    static_prop_lighting: BoolProperty(name="Prop Lighting", default=True, update=_q("on_light_setting"),
                                        description="Light static props per vertex in the build (-StaticPropLighting): "
                                                    "better prop lighting, and the game doesn't have to do it at every "
-                                                   "map load. Fast lighting skips it")
+                                                   "map load")
+    # --- lighting quality: its presets fill these in (quality.py)
+    light_quality: EnumProperty(name="Quality", items=LIGHT_QUALITY, default="NORMAL", update=_q("on_light_quality"))
+    light_fast: BoolProperty(name="Fast Lighting", default=False, update=_q("on_light_setting"),
+                             description="vrad's quick, rough lighting (-fast; always Valve's vrad): fewer rays "
+                                         "everywhere, the settings below mostly don't apply")
+    light_sky_rays: FloatProperty(name="Sky Rays", default=1.0, min=0.25, max=64.0, soft_max=32.0, step=100,
+                                  update=_q("on_light_setting"),
+                                  description="Times vrad's number of sky rays per luxel (-extrasky): more is smoother "
+                                              "sky light and sun spread. Final uses 16")
+    light_supersample: BoolProperty(name="Supersampling", default=True, update=_q("on_light_setting"),
+                                    description="Light luxels again at several points where the light changes "
+                                                "sharply (shadow edges): cleaner edges")
+    light_ss_points: IntProperty(name="Points", default=4, min=1, max=16, update=_q("on_light_setting"),
+                                 description="Points across a luxel when supersampling (4: vrad's 4 x 4; Ultra 8 x 8). "
+                                             "Hammerless light compiler only")
+    light_ss_passes: IntProperty(name="Passes", default=4, min=1, max=16, update=_q("on_light_setting"),
+                                 description="How many times supersampling spreads to the neighbours of luxels it "
+                                             "changed (vrad: 4). Hammerless light compiler only")
+    light_ss_threshold: FloatProperty(name="Edge Threshold", default=0.0625, min=0.005, max=0.5, step=0.5,
+                                      precision=4, update=_q("on_light_setting"),
+                                      description="The brightness step between neighbouring luxels that triggers "
+                                                  "supersampling: lower catches softer edges (vrad: 0.0625). "
+                                                  "Hammerless light compiler only")
+    light_bounces: IntProperty(name="Bounces", default=100, min=0, max=1000, soft_max=200, update=_q("on_light_setting"),
+                               description="Light bounces between surfaces (0: direct light only)")
+    light_prop_polys: BoolProperty(name="Prop Shadows from Full Model", default=True, update=_q("on_light_setting"),
+                                   description="Props cast shadows with their full model, not their simpler "
+                                               "collision shape (-StaticPropPolys)")
+    light_patch_size: FloatProperty(name="Bounce Patch Size", default=4.0, min=1.0, max=16.0, step=100,
+                                    update=_q("on_light_setting"),
+                                    description="Size of the pieces bounced light is worked out on, in luxels "
+                                                "(vrad: 4). Smaller is finer bounce light in corners, and much slower")
+    light_fix_quirks: BoolProperty(name="Fix vrad's Quirks", default=False, update=_q("on_light_setting"),
+                                   description="Go beyond vrad: leave out its oddities (edge luxels it leaves dark, "
+                                               "bounced light from surfaces it shouldn't see, props' bounced light "
+                                               "missing far surfaces). Hammerless light compiler only")
     extra_vbsp: StringProperty(name="vbsp", description="Extra command-line options for vbsp")
     extra_vvis: StringProperty(name="vvis", description="Extra command-line options for vvis")
     extra_vrad: StringProperty(name="vrad", description="Extra command-line options for vrad, e.g. -bounce 50")

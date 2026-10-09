@@ -254,14 +254,14 @@ def _note(layout, lines, icon="INFO"):
 def draw_panel(layout, context):
     s = context.scene.hammerless
     kind, message = bake_status(context)
-    quick = s.compile_preset == "QUICK"
+    quick = s.light_quality == "OFF"
     if not shown():
         _note(layout, ["See your map's baked light and shadows,", "as the game lights it (from the last build)"])
         if kind == "BUSY":
             _note(layout, [message], icon="SORTTIME")
             return
         if quick:
-            _note(layout, ["Quality is Quick, which skips lighting:", "choose Fast or higher first"], icon="ERROR")
+            _note(layout, ["Lighting Quality is Off:", "choose Fast or higher above first"], icon="ERROR")
         _bake_button(layout)
         if kind == "READY":
             row = layout.row(align=True)

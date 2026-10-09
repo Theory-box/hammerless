@@ -19,9 +19,21 @@ DEFAULT_GAME_ROOTS = [
 @dataclass
 class CompileOptions:
     vis: str = "FULL"           # SKIP / FAST / FULL
-    rad: str = "NORMAL"         # SKIP / FAST / NORMAL / FINAL
+    rad: str = "NORMAL"         # SKIP / FAST (vrad -fast) / NORMAL (with the lighting settings below) / FINAL (older
+                                # builds: -final and prop lighting with full-model shadows)
     hdr: str = "HDR"            # LDR / HDR / BOTH (L4D2 only uses HDR: Valve's maps have no LDR lighting)
     static_prop_lighting: bool = False
+    # lighting settings (the Lighting panel's; its Quality presets fill them in)
+    sky_rays: float = 1.0          # times vrad's sky rays (16: Final, -extrasky)
+    supersample: bool = True       # re-light luxels where the light changes sharply (off: -noextra)
+    bounces: int = 100             # -bounce
+    prop_polys: bool = False       # props cast shadows with their full model, not their collision (-StaticPropPolys)
+    patch_size: float = 4.0        # bounce patches, in luxels (vrad's 4; smaller: finer bounced light, -chop/-maxchop)
+    # (the Hammerless light compiler's own, beyond vrad: Valve's ignores them)
+    ss_points: int = 4             # supersampling points across a luxel (vrad's 4 x 4)
+    ss_passes: int = 4
+    ss_threshold: float = 0.0625   # the brightness step between neighbours that triggers it
+    fix_quirks: bool = False       # leave out vrad's oddities (see hlvrad -fixquirks)
     extra_vbsp: str = ""
     extra_vvis: str = ""
     extra_vrad: str = ""
@@ -51,22 +63,62 @@ class CompileOptions:
             args.append("-fast")
         elif self.rad == "FINAL":
             args += ["-final"]
+        else:
+            if self.sky_rays != 1:
+                args += ["-extrasky", _num(self.sky_rays)]
+            if not self.supersample:
+                args.append("-noextra")
+            if self.bounces != 100:
+                args += ["-bounce", str(self.bounces)]
+            if self.patch_size != 4:
+                args += ["-chop", _num(self.patch_size), "-maxchop", _num(self.patch_size)]
         if self.static_prop_lighting or self.rad == "FINAL":
-            args += ["-StaticPropLighting", "-StaticPropPolys"]
+            args.append("-StaticPropLighting")
+        if self.prop_polys or self.rad == "FINAL" or (self.static_prop_lighting and self.rad != "NORMAL"):
+            args.append("-StaticPropPolys")
         return args + self.extra_vrad.split()
+
+    def hlvrad_args(self) -> list[str]:
+        """The Hammerless light compiler's own options (after vrad_args)."""
+        args = [] if self.light_exact else ["-gpu"]      # (no capable GPU: hlvrad warns and uses the CPU)
+        if self.ss_points != 4:
+            args += ["-sspoints", str(self.ss_points)]
+        if self.ss_passes != 4:
+            args += ["-sspasses", str(self.ss_passes)]
+        if self.ss_threshold != 0.0625:
+            args += ["-ssthreshold", _num(self.ss_threshold)]
+        if self.fix_quirks:
+            args.append("-fixquirks")
+        return args
+
+
+def _num(x: float) -> str:
+    return str(int(x)) if float(x).is_integer() else repr(float(x))
 
 
 VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
 
 
+# what lighting is baked with: a change only relights (the Hammerless light compiler's own only count when it's used)
+_LIGHT_FIELDS = ("hdr", "static_prop_lighting", "extra_vrad", "sky_key", "sky_rays", "supersample", "bounces",
+                 "prop_polys", "patch_size")
+_HLVRAD_FIELDS = ("light_exact", "ss_points", "ss_passes", "ss_threshold", "fix_quirks")
+
+
+def _field(text: str, name: str) -> str | None:
+    m = re.search(r"\b%s=('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|[^,)]+)" % name, text)
+    return m.group(1) if m else None
+
+
 def _opts_rest(text: str) -> str:
-    """Compile options without the visibility and lighting levels: those are tracked apart (a more
-    complete vis serves a lesser one; lighting can be added to a map compiled without it). Which map,
-    vis or light compiler ran (Valve's or ours) doesn't count: they give the same map. Choosing Exact
-    lighting over the GPU's does, so the next build gives what was asked for (Valve's vrad ignores it)."""
+    """Compile options without the visibility and lighting: those are tracked apart (a more complete vis
+    serves a lesser one; lighting can be added or redone on a map compiled without it). Which map, vis or
+    light compiler ran (Valve's or ours) doesn't count: they give the same map."""
+    for name in _LIGHT_FIELDS + _HLVRAD_FIELDS:
+        v = _field(text, name)
+        if v is not None:
+            text = text.replace(f", {name}={v}", "", 1)
     text = re.sub(r", (vis|map)_tool='\w+'", "", text)
-    if "light_tool='HAMMERLESS'" not in text:
-        text = re.sub(r", light_exact=\w+", "", text)
     text = text.replace("light_tool='HAMMERLESS'", "light_tool='VALVE'")
     return re.sub(r"(vis|rad)='\w+'", r"\1='*'", text)
 
@@ -166,8 +218,21 @@ def _opts_vis(text: str) -> str | None:
 
 
 def _opts_rad(text: str) -> str | None:
+    """The lighting a build bakes: its level and every lighting setting (SKIP: none)."""
     m = re.search(r"rad='(\w+)'", text)
-    return m.group(1) if m else None
+    if not m or m.group(1) == "SKIP":
+        return m.group(1) if m else None
+    names = _LIGHT_FIELDS + (_HLVRAD_FIELDS if "light_tool='HAMMERLESS'" in text else ())
+    return "|".join([m.group(1)] + [f"{n}={_field(text, n)}" for n in names])
+
+
+def _with_light(text: str, source: str) -> str:
+    """Options text with the lighting settings `source` was baked with (lighting kept from an earlier build)."""
+    for name in _LIGHT_FIELDS + _HLVRAD_FIELDS:
+        old, new = _field(text, name), _field(source, name)
+        if old is not None and new is not None:
+            text = text.replace(f", {name}={old}", f", {name}={new}", 1)
+    return text
 
 
 def _serves(built: str, opts: "CompileOptions") -> bool:
@@ -175,15 +240,17 @@ def _serves(built: str, opts: "CompileOptions") -> bool:
     same lighting (rad SKIP asks for none: a compile for the nav analysis doesn't need it)."""
     vis, rad = _opts_vis(built), _opts_rad(built)
     return (vis in VIS_RANK and VIS_RANK[vis] >= VIS_RANK[opts.vis]
-            and (opts.rad == "SKIP" or rad == opts.rad))
+            and (opts.rad == "SKIP" or rad == _opts_rad(repr(opts))))
 
 
 PRESETS = {
     "QUICK": CompileOptions(vis="SKIP", rad="SKIP"),   # geometry only; map is fullbright
     "FAST": CompileOptions(vis="FAST", rad="FAST"),
     # (props lit per vertex in the build: the game would otherwise do it at every map load)
-    "NORMAL": CompileOptions(vis="FULL", rad="NORMAL", static_prop_lighting=True),
-    "FINAL": CompileOptions(vis="FULL", rad="FINAL"),
+    "NORMAL": CompileOptions(vis="FULL", rad="NORMAL", static_prop_lighting=True, prop_polys=True),
+    "FINAL": CompileOptions(vis="FULL", rad="NORMAL", static_prop_lighting=True, prop_polys=True, sky_rays=16),
+    "ULTRA": CompileOptions(vis="FULL", rad="NORMAL", static_prop_lighting=True, prop_polys=True, sky_rays=16,
+                            ss_points=8, ss_passes=8, ss_threshold=0.03, fix_quirks=True),
 }
 
 
@@ -460,8 +527,7 @@ class CompileJob:
             valve = [tools.exe("vrad")] + vrad + game + [self.base]
             if use_hlvrad(opts):
                 sky = ["-skymap", self.base + ".hlsky"] if opts.sky_key else []
-                gpu = [] if opts.light_exact else ["-gpu"]   # (no capable GPU: hlvrad warns and uses the CPU)
-                self.steps.append(("vrad", [HLVRAD] + vrad + gpu + game + sky
+                self.steps.append(("vrad", [HLVRAD] + vrad + opts.hlvrad_args() + game + sky
                                    + ["-modeldir", self.base + ".hlvrad_models", self.base]))
                 self._valve_vrad = valve
             else:
@@ -478,6 +544,7 @@ class CompileJob:
         self._vmf_bytes = b""
         self._built_vis = opts.vis            # the visibility the BSP ends up with
         self._built_rad = opts.rad            # and its lighting (SKIP: none, or out of date)
+        self._built_light: str | None = None  # (lighting kept from the last build: its options, for its settings)
         self.vis_bsp: str | None = None        # a copy of the BSP once geometry and visibility are final:
                                                # the nav analysis can start on it while vrad still runs
         self.snapshot_vis = False              # make that copy (only when an analysis will use it)
@@ -640,7 +707,8 @@ class CompileJob:
             with open(self.base + ".built.vmf", "wb") as f:       # what this BSP was made from (the VMF
                 f.write(self._vmf_bytes)                         # as it was when the job started)
             with open(self.base + ".built.opts", "w", encoding="utf-8") as f:
-                f.write(repr(replace(self._opts, vis=self._built_vis, rad=self._built_rad)))
+                built = repr(replace(self._opts, vis=self._built_vis, rad=self._built_rad))
+                f.write(_with_light(built, self._built_light) if self._built_light else built)
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
             self._q.put(("OK",))
         except Exception as ex:  # surfaced to the user in the log
@@ -693,9 +761,15 @@ class CompileJob:
             return self.steps
         lights_changed = kind == "lighting"      # lights or static props moved: the bake is out of date
         want = self._opts.rad != "SKIP"
-        add_rad = want and (lights_changed or built_rad != self._opts.rad)
+        add_rad = want and (lights_changed or built_rad != _opts_rad(repr(self._opts)))
         self._built_vis = self._opts.vis if add_vis else built_vis
-        self._built_rad = self._opts.rad if add_rad else ("SKIP" if lights_changed else built_rad)
+        if add_rad:
+            self._built_rad = self._opts.rad
+        elif lights_changed:
+            self._built_rad = "SKIP"
+        else:                                    # (the lighting stays as it was baked)
+            self._built_rad = built_rad.split("|")[0]
+            self._built_light = built
         self.plan = "lighting" if add_rad else "entities"
         game = ["-game", self.tools.gamedir]
         steps = [("vbsp (entities only)", [self.tools.exe("vbsp"), "-onlyents"] + game + [self.base])]
