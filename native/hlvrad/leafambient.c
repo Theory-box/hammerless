@@ -955,6 +955,8 @@ static void LeafWork(int item, int thread) {
     gpuamb_leaf = leaf, gpuamb_cursor = gpuamb_poscursor = 0;
     if (!planes) planes = xalloc(sizeof(plane_t) * (numnodes + 1));
     leafcounts[leaf] = AmbientForLeaf(leaf, leafresults + (MAX_SAMPLES + 1) * leaf, planes);
+    if (gpuamb_phase == 2 && !g_gpuCheck && gpuamb_cursor != gpuamb_n[leaf])     /* (every answer used, in order) */
+        Error("GPU leaf ambient: leaf %d asked %d questions, answered %d", leaf, gpuamb_cursor, gpuamb_n[leaf]);
 }
 
 static unsigned char Fixed8Fraction(float t, float tmin, float tmax) {
@@ -1222,6 +1224,7 @@ void ComputePerLeafAmbientLighting(void) {
         int n = leafcounts[leaf];
         const ambsample_t *list = leafresults + (MAX_SAMPLES + 1) * leaf;
         index[leaf][0] = (unsigned short)n;
+        if (n && nout + n > 65536) Error("too many leaf ambient samples (over 65536): the map is too big for them");
         index[leaf][1] = n ? (unsigned short)nout : 0;
         const dleaf_t *l = &dleafs[leaf];
         for (int i = 0; i < n; i++, nout++) {

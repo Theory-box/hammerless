@@ -53,7 +53,7 @@ Press **Build & Play**. Hammerless exports the map, compiles it, builds the nav 
 
 Everything is in the sidebar (**N**) > **Hammerless** tab. Each panel collapses, and you can drag panels by their header to reorder them. Collapsed panels show their status on the right (problem count, nav mesh up to date, lighting baked...).
 
-**Build & Play**: Map Name (the map's file name in the game, `maps/<name>.bsp`), Quality (*Quick*: no lighting, fastest; *Fast*; *Normal*, the default; *Final*; or *Custom*), the **Build & Play**, **Build** and **Play** buttons, and **Problems**: the list from the last check or build, with **Check the Map** to check without building. Click a row to select the object.
+**Build & Play**: Map Name (the map's file name in the game, `maps/<name>.bsp`), Quality (*Quick*: no lighting or visibility, fastest; *Fast*; *Normal*, the default; *Final*; *Ultra*: it sets the Lighting and Visibility panels' own Quality together, and shows *Mixed* when you've set them differently), the **Build & Play**, **Build** and **Play** buttons, and **Problems**: the list from the last check or build, with **Check the Map** to check without building. Click a row to select the object.
 
 **Add**: category tiles, search and ★ favourites for everything you can place.
 
@@ -69,11 +69,16 @@ Everything is in the sidebar (**N**) > **Hammerless** tab. Each panel collapses,
 
 A preset's parent empty shows the preset's settings and **Select All Parts**. Collections get a role too: *Properties > Collection > Hammerless*.
 
-**World**: *Sky & Sun* (sky picker, sun and sky light, Add Sun if Missing; a Blender Sun lamp overrides these), *Fog* (tick the box in its header), *AI Director* (tick the box in its header to customise it: common limit, horde size and timing, No Random Hordes, No Wandering Zombies, specials, Tanks, Witches; *Director Spawns* hands a type to your logic graph), *Sound* (*Automatic Reverb*, or *Reverb + City Ambience* with the outside heard through doorways and windows), *Logic Graphs* (see [Logic Nodes](LOGIC_NODES.md)).
+Each system has its own panel with its compiler, its settings and its *View* (what it draws over the viewport):
 
-**View**: everything drawn over the viewport. *Nav Mesh* (the nav viewer: Build Navmesh, Analyze, colour modes, the game's nav), *Baked Lighting* (**Bake Lighting**, the lighting view, *Bake Settings*), *Visibility* (*Portals*, *Rendering Load*, *Vis Cost*) and *Sound* (**Trace Sound**: outdoors, sheltered, indoors, and the sound portals where the outside comes in). The nav choices themselves (made in Blender or by the game, analysis, Zombies Climb Walls, Rebuild Nav Next Time) sit in the *Build & Play* panel with *Vis Compiler*.
+**Lighting**: Light Compiler (Valve vrad, Hammerless, or Cycles) and *Exact Lighting*; Quality (*Off*, *Fast*, *Normal*, *Final*, *Ultra*, or *Custom*), which fills in the settings under it: Sky Rays, Supersampling (Points, Passes, Edge Threshold), Bounces, Bounce Patch Size, Prop Lighting, Prop Shadows from Full Model, Fix vrad's Quirks (changing one makes it *Custom*); Lightmap Scale. Under it: *Sky & Sun* (sky picker, sun and sky light, Add Sun if Missing; a Blender Sun lamp overrides these), *Baked Lighting* (**Bake Lighting** and the lighting view) and *Advanced* (HDR, extra vrad options).
 
+**Visibility**: Quality (*Off*, *Fast*, *Full*), Vis Compiler, Auto Detail, extra vvis options. Its *View*: *Portals* (how vis split the map up; tiny slivers in red), *Rendering Load* (the map coloured by how much the game draws from each spot: red is where frame rate suffers first, with a button to put the 3D cursor on the worst spot), and *Vis Cost* (where the vis compile spent its time, and the objects behind it, each with a Select button: making decorative ones Detail speeds vis up; needs *Vis Compiler: Hammerless*).
 
-**Visibility > View**: *Portals* (how vis split the map up; tiny slivers in red), *Rendering Load* (the map coloured by how much the game draws from each spot: red is where frame rate suffers first, with a button to put the 3D cursor on the worst spot), and *Vis Cost* (where the vis compile spent its time, and the objects behind it, each with a Select button: making decorative ones Detail speeds vis up; needs *Vis Compiler: Hammerless*).
+**Nav Mesh**: made in Blender or by the game, the analysis, Zombies Climb Walls, Rebuild Nav Next Time. Its *View*: the nav viewer (Build Navmesh, Analyze, colour modes, the game's nav).
 
-**Settings**: *Compile* (Auto Detail; with Quality *Custom*, each step and extra compiler options), *Game Window* (monitor, size, borderless, difficulty, launch options), *Folders & Game Data* (L4D2 folder, work folder, reload game data, refresh previews, **Export VMF** to open the map in Hammer), *Scene* (scale, default material, auto seal, checks), *Debug* (*Debug Log* of Director events, *Bot Walkthrough Test* where bots play the map).
+**Sound**: *Automatic Reverb*, or *Reverb + City Ambience* with the outside heard through doorways and windows. Its *View*: **Trace Sound** (outdoors, sheltered, indoors, and the sound portals where the outside comes in).
+
+**World**: *Fog* (tick the box in its header), *AI Director* (tick the box in its header to customise it: common limit, horde size and timing, No Random Hordes, No Wandering Zombies, specials, Tanks, Witches; *Director Spawns* hands a type to your logic graph), *Logic Graphs* (see [Logic Nodes](LOGIC_NODES.md)).
+
+**Settings**: *Compile* (the map and model compilers, extra vbsp options), *Game Window* (monitor, size, borderless, difficulty, launch options), *Folders & Game Data* (L4D2 folder, work folder, reload game data, refresh previews, **Export VMF** to open the map in Hammer), *Scene* (scale, default material, auto seal, checks), *Debug* (*Debug Log* of Director events, *Bot Walkthrough Test* where bots play the map).

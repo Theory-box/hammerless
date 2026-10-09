@@ -192,7 +192,7 @@ int EnumerateLeaf(int leaf, float start, float end) {
 // EnumerateNodesAlongRay_r without recursion: 0 when a surface was found (lsSurface; -1 for none at all)
 struct WTask { int node, kind; float s, e; };     // kind 0 a subtree over s..e, 1 a node's faces at s
 int Walk() {
-    WTask stack[128];
+    WTask stack[256];
     int sp = 0;
     stack[sp++] = WTask(0, 0, 0.0, 1.0);
     while (sp > 0) {
@@ -215,7 +215,7 @@ int Walk() {
                 float split;
                 if (ddn == 0.0) split = 1.0;
                 else split = clamp((p.w - sdn) / ddn, 0.0, 1.0);
-                if (sp + 2 > 128) return 1;
+                if (sp + 2 > 256) return 1;            // (deeper than any real map's tree)
                 stack[sp++] = WTask(side ? n.y : n.z, 0, split, end);       // (then the far side,)
                 stack[sp++] = WTask(node, 1, split, split);                 // (the node's faces,)
                 node = side ? n.z : n.y;                                    // (the near side first)

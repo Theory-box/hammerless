@@ -78,13 +78,25 @@ def launch_options(s) -> cc.LaunchOptions:
                             difficulty="" if s.difficulty == "KEEP" else s.difficulty, lan=s.fast_loading)
 
 
-def _world_sky_image():
-    """The World's Environment Texture image, if it has one."""
-    world = bpy.context.scene.world
-    if world and world.use_nodes and world.node_tree:
-        for node in world.node_tree.nodes:
-            if node.type == "TEX_ENVIRONMENT" and node.image:
-                return node.image
+def _world_sky_image(context=None):
+    """The image of the Environment Texture the World's output actually shows, if any (the World's own Mapping
+    rotation isn't read: Sky Rotation turns it)."""
+    world = (context or bpy.context).scene.world
+    if not (world and world.use_nodes and world.node_tree):
+        return None
+    nodes = world.node_tree.nodes
+    outputs = [n for n in nodes if n.type == "OUTPUT_WORLD" and n.is_active_output] or \
+              [n for n in nodes if n.type == "OUTPUT_WORLD"]
+    seen, todo = set(), list(outputs)
+    while todo:                          # (upstream from the output, through every linked input)
+        node = todo.pop(0)
+        if node.name in seen:
+            continue
+        seen.add(node.name)
+        if node.type == "TEX_ENVIRONMENT" and node.image:
+            return node.image
+        for sock in node.inputs:
+            todo += [link.from_node for link in sock.links]
     return None
 
 
@@ -109,28 +121,30 @@ def _image_rgb(img, width: int = 512):
 
 def export_sky(context, root, base: str) -> tuple[str, str]:
     """Sky Light from the sky: the sky's picture as <map>.hlsky_src.npy for the light compiler. Returns its
-    fingerprint ("" for one colour) and a note for the log ("" if fine)."""
+    fingerprint ("" for one colour) and a note for the log ("" if fine). Never stops the build."""
     import hashlib
     import numpy as np
     from ..core import skylight
     s = context.scene.hammerless
     if s.sky_light == "FLAT":
         return "", ""
-    if s.sky_light == "SKYBOX":
-        content = game_content(root)
-        pano = skylight.from_skybox(content, s.skyname) if content else None
-        if pano is None:
-            return "", f"Sky Light: couldn't read the skybox '{s.skyname}': the sky lights the map with one colour"
-    else:
-        img = s.sky_image or _world_sky_image()
-        if img is None:
-            return "", "Sky Light: no image picked and the World has no Environment Texture: one colour instead"
-        try:
+    try:
+        if s.sky_light == "SKYBOX":
+            content = game_content(root)
+            pano = skylight.from_skybox(content, s.skyname) if content else None
+            if pano is None:
+                return "", f"Sky Light: couldn't read the skybox '{s.skyname}': the sky lights the map with one colour"
+        else:
+            img = s.sky_image or _world_sky_image(context)
+            if img is None:
+                return "", "Sky Light: no image picked and the World has no Environment Texture: one colour instead"
             pano = skylight.from_equirect_image(_image_rgb(img), s.sky_rotation)
-        except Exception as ex:          # (an image that can't be read: never stop the build)
-            return "", f"Sky Light: couldn't read the image '{img.name}' ({ex}): one colour instead"
-    np.save(base + ".hlsky_src.npy", pano)
-    return hashlib.sha1(pano.tobytes()).hexdigest()[:16], ""
+        np.save(base + ".hlsky_src.npy", pano)
+    except Exception as ex:          # (a sky that can't be read or saved: one colour, never a failed build)
+        return "", f"Sky Light: couldn't use the sky picture ({ex}): the sky lights the map with one colour"
+    # (the fingerprint covers how the picture is turned into the light, so a new version remakes it)
+    recipe = f"{skylight.BLUR_DEGREES}|{skylight.MAP_W}|{skylight.MAP_H}|v2".encode()
+    return hashlib.sha1(recipe + pano.tobytes()).hexdigest()[:16], ""
 
 
 def _quoted_object(message: str) -> str:
@@ -996,6 +1010,11 @@ class HL_OT_build(bpy.types.Operator):
         if self.play and not self.bake:      # the game boots while the map exports and compiles
             early_root = game_root(context)
             if early_root:
+                gamedir = cc.Tools(early_root).gamedir
+                from ..core.gamefiles import MODE_ADDON
+                if os.path.exists(os.path.join(gamedir, *MODE_ADDON.split("/"))) and not cc.game_running():
+                    # (an installed game mode the add-on has changed: updated before the game reads it)
+                    _write_mode_addon(gamedir, Report())
                 cc.prestart_game(cc.Tools(early_root), launch_options(context.scene.hammerless))
         path, root, rep = export_vmf(self, context)
         self._export_s = time.time() - self._t0
@@ -1024,13 +1043,16 @@ class HL_OT_build(bpy.types.Operator):
                 return {"CANCELLED"}
             opts = dataclasses.replace(opts, vis="FAST" if opts.vis != "SKIP" else "SKIP")
             self.play = False
-        sky_key, sky_note = export_sky(context, root, os.path.splitext(path)[0])
-        if sky_note:
-            write_log([sky_note], append=True)
-        if sky_key:
-            import dataclasses
-            opts = cc.PRESETS[opts] if isinstance(opts, str) else opts
-            opts = dataclasses.replace(opts, sky_key=sky_key)
+        if cc.use_hlvrad(opts):          # (only our light compiler uses the sky's picture)
+            sky_key, sky_note = export_sky(context, root, os.path.splitext(path)[0])
+            if sky_note:
+                write_log([sky_note], append=True)
+            if sky_key:
+                import dataclasses
+                opts = dataclasses.replace(opts, sky_key=sky_key)
+        elif context.scene.hammerless.sky_light != "FLAT" and opts.rad != "SKIP":
+            write_log(["Sky Light from the sky needs the Hammerless light compiler: the sky lights the map with "
+                       "one colour"], append=True)
         self._job = cc.CompileJob(tools, path, opts, skip_if_unchanged=True)
         self._nav = None
         s = context.scene.hammerless
@@ -1114,7 +1136,8 @@ class HL_OT_build(bpy.types.Operator):
             self.report({"ERROR"}, msg)
             return self._finish(context, {"CANCELLED"})
         import time
-        s = context.scene.hammerless
+        owner = bpy.data.scenes.get(self._owner[0])     # (the scene that was built, even if another is shown now)
+        s = (owner or context.scene).hammerless
         compiled = ("Map unchanged, skipped compiling" if self._job.skipped else
                     {"entities": "Updated entities only (geometry and lighting kept)",
                      "lighting": "Updated entities and relit (geometry kept)"}.get(self._job.plan, "Compiled"))
@@ -1171,7 +1194,7 @@ class HL_OT_build(bpy.types.Operator):
                 s.generate_nav = False
                 timing += f", nav mesh {self._nav['seconds']:.1f}s (during the compile)"
         write_log([timing], append=True)       # (once: the waits above return before this)
-        if self.play and (context.scene.name, s.map_name) != self._owner:
+        if self.play and (context.scene.name, context.scene.hammerless.map_name) != self._owner:
             self.report({"WARNING"}, f"{compiled} '{self._owner[1]}', but the scene or Map Name changed meanwhile: "
                                      "not launching (press Play)")
             return self._finish(context, {"FINISHED"})
@@ -1220,6 +1243,7 @@ class HL_OT_build(bpy.types.Operator):
     def _cycles_bake(self, context):
         """The compile waits after vrad: bake its lighting with Cycles here (Blender's main thread)."""
         bsp = self._job.bake_request
+        ok = True
         try:
             from .cyclesbake import bake_bsp
             opts = self._job._opts
@@ -1230,7 +1254,8 @@ class HL_OT_build(bpy.types.Operator):
             traceback.print_exc()
             lines = [f"!! Cycles bake failed ({ex}): the map keeps vrad's lighting"]
             self.report({"WARNING"}, lines[0][3:])
-        self._job.bake_finished(lines)
+            ok = False
+        self._job.bake_finished(lines, ok)
 
     def _finish(self, context, result):
         if self._job is not None:

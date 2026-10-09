@@ -2097,6 +2097,12 @@ def compile_logic(context, ir, report) -> None:
         volumes = {n.obj for n in nodes if n.kind == "VOLUME" and n.obj}
         if volumes:     # a volume's mesh becomes the trigger, not a solid wall
             ir.brushes = [b for b in ir.brushes if b.source.split(" (part ")[0] not in volumes]
+            for e in ir.entities:
+                # one the user made a brush entity of their own class (keyvalues, outputs) stays: say so
+                if e.brushes and e.classname != "func_detail" and e.source.split(" (part ")[0] in volumes:
+                    report.warnings.append(f"{tree.name}: '{e.source}' is a {e.classname} and a Volume node makes "
+                                           "a trigger of it too, so the map gets both: clear its class (Role: Brush) "
+                                           "or use another object for the volume")
             ir.entities = [e for e in ir.entities if not (e.source.split(" (part ")[0] in volumes
                                                           and e.classname == "func_detail")]
         links = _compiled_links(tree, report)

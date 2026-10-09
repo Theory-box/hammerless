@@ -1479,6 +1479,20 @@ class TestVisCompiler(unittest.TestCase):
         self.assertIn(("OK",), lines)
 
 
+class TestSkyImage(unittest.TestCase):
+    def test_hdri_faces_as_blender_shows_it(self):
+        # Blender's environment texture puts the image's centre along +x and its right quarter along -y: a bright
+        # spot there lights the map from that side (our panorama: column u looks along 2 pi u - pi from +x to +y)
+        import numpy as np
+        from hammerless.core.skylight import from_equirect_image
+        for col, want_u in ((128, 0.5), (192, 0.25)):
+            img = np.zeros((128, 256, 3), np.float32)
+            img[60:68, col - 4:col + 4] = 1.0
+            pano = from_equirect_image(img, 0.0, 256, 128)
+            u = (np.argmax(pano[64, :, 0]) + 0.5) / 256
+            self.assertAlmostEqual(u, want_u, delta=0.03)
+
+
 class TestLightCompilerGpu(unittest.TestCase):
     """hlvrad lights on the GPU (-gpu) unless Exact Lighting (match vrad) is on."""
 

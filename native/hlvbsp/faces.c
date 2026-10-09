@@ -256,6 +256,9 @@ static void FixFaceEdges(face_t **list, face_t *f) {
         int *in = xalloc(sizeof(int) * numsuperverts), *out = xalloc(sizeof(int) * numsuperverts * 3), nout = 0;
         for (int k = 0; k < numsuperverts; k++) in[k] = k;
         Triangulate_r(out, &nout, in, numsuperverts, poly);
+        /* (vbsp's MAX_MAP_PRIMITIVES / MAX_MAP_PRIMINDICES: a primitive's first index is 16 bits) */
+        if (g_numprimitives >= 32768) Error("Too many t-junction primitives in map, max = %d", 32768);
+        if (g_numprimindices + nout > 65536) Error("Too many t-junction primitive indices in map, max = %d", 65536);
         dprimitive_t *prim = &g_primitives[g_numprimitives];
         f->firstprim = g_numprimitives;
         g_numprimitives++;

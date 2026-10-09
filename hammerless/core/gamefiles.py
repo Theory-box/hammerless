@@ -361,7 +361,7 @@ def game_files(ir: MapIR) -> dict[str, str]:
     files.update(mode_files(ir))
     for name, stages in ir.crescendos.items():
         if f"scripts/vscripts/{director_input_script(s.name, name)}.nut" in ir.extra_scripts:
-            continue          # reported by collect_crescendos_conflicts (a Director Settings node has this name)
+            continue          # a safety net: Director Settings nodes steer clear of crescendo names (core/logic.py)
         files[f"scripts/vscripts/{director_input_script(s.name, name)}.nut"] = crescendo_script(
             name, stages, crescendo_options(ir, stages))
     return files

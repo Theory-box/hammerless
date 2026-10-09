@@ -227,6 +227,7 @@ class _Compiler:
         self.data_links: dict[tuple[str, str], tuple[str, str]] = {}
         self.expr_cache: dict[tuple[str, str], str] = {}
         self.defined: set[str] = set()
+        self.random_fns: dict[str, str] = {}               # Random Value node -> its function
         self.whens: list[tuple[str, str, str, bool]] = []
         self.converted: dict[str, tuple[str, str]] = {}   # object -> (class it became, node that did it)
         # script nodes (game functions and events): their event outputs run Squirrel directly
@@ -286,6 +287,7 @@ class _Compiler:
         if e is not None and e.brushes:
             e.classname = classname
             e.keyvalues = {**kv, **{k: v for k, v in e.keyvalues.items() if k == "targetname"}}
+            self.name_of(e, obj)     # a func_detail (or an empty catalog name) has none to keep
             return e
         brushes = [b for b in self.ir.brushes if _base(b.source) == obj]
         if not brushes:
@@ -397,9 +399,9 @@ class _Compiler:
             lo, hi = self.expr_in(n, "min", 0.0), self.expr_in(n, "max", 1.0)
             if s.get("each_time"):
                 return f"RandomFloat({lo}, {hi})"
-            fn = f"HL_Random_{slug}"
-            if fn not in self.defined:
-                self.defined.add(fn)
+            fn = self.random_fns.get(n.id)
+            if fn is None:
+                fn = self.random_fns[n.id] = self.fn_name(f"HL_Random_{slug}")
                 say = (f'printl("HAMMERLESS_VALUE {sq_text(n.id)} rolled " + {fn}_v);\n        ' if self.log else "")
                 self.functions.append(f"{fn}_v <- null;\nfunction {fn}() {{\n    if ({fn}_v == null) {{\n"
                                       f"        {fn}_v = RandomFloat({lo}, {hi});\n        {say}}}\n"
@@ -742,7 +744,7 @@ class _Compiler:
             else:
                 # the game picks the spot (ZSpawn without a position, like its own spawns) and/or
                 # only if fewer than `limit` of this infected have appeared so far
-                fn = f"HL_Spawn_{slug}"
+                fn = self.fn_name(f"HL_Spawn_{slug}")
                 check = f"if (HL_Count.{what} >= {limit}) return;\n    " if limit and what in SPAWN_TYPES else ""
                 if limit and what in SPAWN_TYPES:
                     self.ir.logic_counts = True
@@ -766,7 +768,7 @@ class _Compiler:
             if n.pos is None:
                 self.problems.append(f"Logic node '{nid}': pick where to teleport to (an object or empty)")
                 return
-            fn = f"HL_Teleport_{slug}"
+            fn = self.fn_name(f"HL_Teleport_{slug}")
             x, y, z = n.pos
             self.functions.append(
                 f"function {fn}() {{\n    local p = null, i = 0;\n"
@@ -795,9 +797,17 @@ class _Compiler:
             fire("started", start, "OnTrigger")
             fire("completed", done, "OnTrigger")
         elif k == "DIRECTOR_SETTINGS":
-            from .gamefiles import director_input_script, director_option_lines
-            # (never the map-wide Director script's name, which a node called 'Director' would take)
-            name = director_input_script(self.ir.settings.name, slug if slug != "director" else "director_settings")
+            from .entities import CRESCENDO
+            from .gamefiles import crescendo_key, director_input_script, director_option_lines
+            # never the map-wide Director script's name (which a node called 'Director' would take), nor a
+            # crescendo's: its script file has the same form, and one would replace the other
+            key = slug if slug != "director" else "director_settings"
+            crescendos = {crescendo_key(e.keyvalues.get("name", "crescendo")) for e in self.ir.entities
+                          if e.classname == CRESCENDO}
+            while (key in crescendos or f"scripts/vscripts/{director_input_script(self.ir.settings.name, key)}.nut"
+                   in self.ir.extra_scripts):
+                key += "_settings"
+            name = director_input_script(self.ir.settings.name, key)
             base = {line.split("=")[0].strip(): line for line in director_option_lines(self.ir)}
             for key, opt in DIRECTOR_FIELDS:
                 v = s.get(key, -1)

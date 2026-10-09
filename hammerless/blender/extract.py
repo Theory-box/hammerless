@@ -55,8 +55,8 @@ def detail_choice(obj) -> str:
     return "AUTO"
 
 
-def _world_brushes(obj, *args) -> list:
-    brushes = mesh_to_brushes(obj, *args)
+def _world_brushes(obj, *args, **kw) -> list:
+    brushes = mesh_to_brushes(obj, *args, **kw)
     choice = detail_choice(obj)
     for b in brushes:
         b.detail = choice
@@ -253,14 +253,17 @@ def image_to_rgba8(img) -> np.ndarray:
 
 # ---------------------------------------------------------------- geometry
 
-def _evaluated_mesh(obj, depsgraph, scale: float, matrix=None):
+def _evaluated_mesh(obj, depsgraph, scale: float, matrix=None, mesh=None):
     """World-space bmesh (modifiers applied) scaled to Hammer units. matrix: where this copy of
-    the object is (an instance), else the object's own place."""
-    eval_obj = obj.evaluated_get(depsgraph)
-    mesh = eval_obj.to_mesh()
+    the object is (an instance), else the object's own place. mesh: already evaluated geometry to
+    use instead of the object's (a Geometry Nodes instance)."""
     bm = bmesh.new()
-    bm.from_mesh(mesh)
-    eval_obj.to_mesh_clear()
+    if mesh is not None:
+        bm.from_mesh(mesh)
+    else:
+        eval_obj = obj.evaluated_get(depsgraph)
+        bm.from_mesh(eval_obj.to_mesh())
+        eval_obj.to_mesh_clear()
     bm.transform(Matrix.Scale(scale, 4) @ (matrix if matrix is not None else obj.matrix_world))
     return bm
 
@@ -288,9 +291,9 @@ def _loose_parts(bm) -> list[list]:
 
 
 def mesh_to_brushes(obj, depsgraph, scale: float, materials: MaterialResolver, matrix=None,
-                    label: str | None = None) -> list[Brush]:
-    bm = _evaluated_mesh(obj, depsgraph, scale, matrix)
-    slots = [s.material for s in obj.material_slots]
+                    label: str | None = None, mesh=None) -> list[Brush]:
+    bm = _evaluated_mesh(obj, depsgraph, scale, matrix, mesh)
+    slots = list(mesh.materials) if mesh is not None else [s.material for s in obj.material_slots]
     mirrored = (matrix if matrix is not None else obj.matrix_world).determinant() < 0  # flips face winding
     label = label or obj.name
     brushes = []
@@ -432,6 +435,8 @@ def _model_texture(mat, path: str, content) -> str:
     if path.startswith("hammerless/"):
         hs = mat.hammerless if mat is not None else None
         base = (hs.source_material.strip().lower().replace("\\", "/") if hs else "") or ""
+        if not base and mat is not None and "/" in mat.name and not mat.name.startswith("hammerless/"):
+            base = mat.name.lower()            # material named like a game path (as MaterialResolver does)
         if not base:
             return path                       # a converted image texture: the VTF is at the same path
         path = base                           # a game material with a surface patch: show the original
@@ -454,12 +459,15 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
     loc, rot, sca = matrix.decompose()
     kind = hs.model_kind
     collide = hs.model_collision if kind != "PHYSICS" else "HULLS"
-    key = (obj.data.name, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class, round(hs.model_mass, 3),
+    # the model is the mesh with modifiers applied: with any on, objects sharing the mesh can differ
+    modified = any(m.show_viewport for m in obj.modifiers)
+    shape = f"{obj.data.name}@{obj.name}" if modified else obj.data.name
+    key = (shape, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class, round(hs.model_mass, 3),
            tuple(slot.material.name if slot.material else "" for slot in obj.material_slots))
     name = getattr(ir, "_model_keys", {}).get(key)
     if name is None:
         import hashlib
-        stem = safe_name(obj.data.name)
+        stem = safe_name(obj.name if modified else obj.data.name)
         if key[1:] != ((1.0, 1.0, 1.0), "STATIC", "HULLS", key[4], key[5], key[6]):
             stem += "_" + hashlib.sha1(repr(key).encode()).hexdigest()[:6]
         name = f"hammerless/{ir.settings.name}/{stem}"
@@ -491,6 +499,7 @@ def _hull_thickness(hull) -> float:
 
 def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, collide):
     from ..core.models import ModelSpec
+    from ..core.phywrite import MAX_PIECE_TRIANGLES
     eval_obj = obj.evaluated_get(depsgraph)
     mesh = eval_obj.to_mesh()
     try:
@@ -508,7 +517,8 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
                 mat = slots[mi].material if mi < len(slots) else None
                 path, _ts, _lm = materials.resolve(mat)
                 mname = texture_file_name(mat.name) if mat is not None else "default"
-                ir.model_materials[mname] = (_model_texture(mat, path, content), False, False)
+                mode = _alpha_mode(mat) if mat is not None else "OPAQUE"
+                ir.model_materials[mname] = (_model_texture(mat, path, content), mode == "BLENDED", mode == "CUTOUT")
                 mat_names[mi] = mname
             verts = []
             for li, vi in zip(tri.loops, tri.vertices):
@@ -538,7 +548,13 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
                             hull.verts.remove(g)
                     bmesh.ops.triangulate(hull, faces=hull.faces[:])
                     hull.verts.index_update()
-                    if hull.faces and _hull_thickness(hull) > 0.5:      # a flat part (a plane) has no inside
+                    if len(hull.faces) > MAX_PIECE_TRIANGLES:
+                        # more than the collision file can number: left out rather than written broken
+                        materials.report.warnings.append(
+                            f"Custom Model '{obj.name}': a collision piece has {len(hull.faces)} triangles (at most "
+                            f"{MAX_PIECE_TRIANGLES}), so that piece has no collision: split it into smaller parts "
+                            "or use a simpler shape")
+                    elif hull.faces and _hull_thickness(hull) > 0.5:      # a flat part (a plane) has no inside
                         pieces.append(([tuple(v.co) for v in hull.verts],
                                        [tuple(v.index for v in f.verts) for f in hull.faces]))
                 hull.free()
@@ -678,6 +694,7 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
         except Exception as ex:
             report.errors.append(f"'{obj.name}': {ex}")
     _extract_instances(context, depsgraph, scale, ir, materials, report, content)
+    _drop_comma_outputs(ir, report)
     if hidden:
         report.warnings.append(f"{len(hidden)} hidden object(s) are left out of the map (Alt+H shows them; a "
                                f"missing wall can make the map leak): {', '.join(sorted(hidden)[:5])}"
@@ -685,10 +702,25 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
     return ir, materials
 
 
+def _drop_comma_outputs(ir, report) -> None:
+    """An object Output with a comma in it would split into the wrong fields in the map (the game stores
+    target, input, value, delay and times comma-separated): it is left out, with a warning."""
+    for e in ir.entities:
+        keep = []
+        for o in e.outputs:
+            bad = next((v for v in (o.target, o.input, o.parameter) if "," in (v or "")), None)
+            if bad is None:
+                keep.append(o)
+            else:
+                report.warnings.append(f"'{e.source}': the Output {o.output} has a comma in '{bad}', which the game "
+                                       "can't pass in an output (it splits the output's fields): it is left out")
+        e.outputs = keep
+
+
 def _extract_instances(context, depsgraph, scale, ir, materials, report, content=None) -> None:
     """Copies made by collection instances (Add > Collection Instance, linked asset kits) and by
     geometry nodes: each copy exports like the object it copies, at the copy's place."""
-    skipped = set()
+    skipped, skipped_geo = set(), set()
     for inst in depsgraph.object_instances:
         if not inst.is_instance or inst.parent is None:
             continue
@@ -697,14 +729,24 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report, content
         role = effective_role(src)
         label = f"{holder.name} > {src.name}"
         matrix = inst.matrix_world.copy()
+        # Geometry Nodes instancing geometry (not an object): the copy's "object" is the node tree's own
+        # object, carrying the instanced mesh. Its settings are the holder's, its shape is that mesh only
+        geo = None
+        if src == holder:
+            geo = inst.object.data if inst.object.type == "MESH" else None
+            label = f"{holder.name} > instance"
+            if geo is None or role not in ("BRUSH", "BRUSH_ENTITY", "ENTITY"):
+                if role not in ("IGNORE", "NONE"):
+                    skipped_geo.add(holder.name)
+                continue
         try:
             if role == "BRUSH" and src.type == "MESH":
-                ir.brushes.extend(_world_brushes(src, depsgraph, scale, materials, matrix, label))
+                ir.brushes.extend(_world_brushes(src, depsgraph, scale, materials, matrix, label, mesh=geo))
             elif role == "BRUSH_ENTITY" and src.type == "MESH":
                 cls = src.hammerless.classname or "func_detail"
                 ir.entities.append(Entity(cls, None, (0, 0, 0), object_keyvalues(src),
-                                          mesh_to_brushes(src, depsgraph, scale, materials, matrix, label), label,
-                                          object_outputs(src)))
+                                          mesh_to_brushes(src, depsgraph, scale, materials, matrix, label, mesh=geo),
+                                          label, object_outputs(src)))
             elif role == "ENTITY" and src.hammerless.classname:
                 origin = tuple(c * scale for c in matrix.translation)
                 ir.entities.append(Entity(src.hammerless.classname, origin, source_angles(matrix),
@@ -718,3 +760,6 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report, content
     if skipped:
         report.warnings.append("Instanced terrain and lights aren't exported yet (make them real objects): "
                                + ", ".join(sorted(skipped)[:5]))
+    if skipped_geo:
+        report.warnings.append("Geometry Nodes copies of geometry (not of an object) export only as brushes, not "
+                               "as Custom Models, terrain or lights: add Realize Instances, or instance an object: " + ", ".join(sorted(skipped_geo)[:5]))

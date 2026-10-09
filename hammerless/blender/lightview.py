@@ -64,18 +64,18 @@ def shown() -> bool:
     return _state["data"] is not None
 
 
-def load(context) -> str | None:
-    """Read the last compile's lighting. Returns an error message, or None."""
-    path = bsp_path(context)
+def load(context, path: str | None = None) -> str | None:
+    """Read the last compile's lighting (of the scene's map, or path). Returns an error message, or None."""
+    path = path or bsp_path(context)
     if not os.path.exists(path):
         return "This map hasn't been built yet: press Build first (it bakes the lighting)"
     try:
         with open(path, "rb") as f:
             data = read_lightmaps(f.read())
-    except (OSError, ValueError) as ex:
+    except Exception as ex:          # (a map being written, or cut short: never an error out of the draw callback)
         return f"Couldn't read the compiled map: {ex}"
     if data.faces == 0:
-        return "The last build has no baked lighting (Quality: Quick skips it): choose Fast or higher and Build"
+        return "The last build has no baked lighting (Lighting Quality was Off): choose Fast or higher and Build"
     _state.update(path=path, mtime=os.path.getmtime(path), data=data, batch=None, texture=None, scale=None,
                   error=None, loaded_at=time.time(), edited=False)
     _redraw()
@@ -109,7 +109,8 @@ def _follow_compiles() -> None:
     except OSError:
         return
     if mtime != _state["mtime"] and now - mtime > 1.0:       # (finished writing)
-        err = load(bpy.context)
+        _state["mtime"] = mtime                                # (once per build, even when it has no lighting)
+        err = load(bpy.context, _state["path"])
         if err:
             _state["error"] = err
 
@@ -119,6 +120,11 @@ def _draw():
         return
     s = bpy.context.scene.hammerless
     if not s.show_lightmap:
+        return
+    try:
+        if os.path.normcase(bsp_path(bpy.context)) != os.path.normcase(_state["path"] or ""):
+            return                   # (another scene or map: the shown lighting isn't its)
+    except Exception:
         return
     _follow_compiles()
     if _state["batch"] is None or _state["scale"] != s.units_per_meter:
@@ -299,6 +305,7 @@ def draw_panel(layout, context):
 CLASSES = (HL_OT_lightmap_show, HL_OT_lightmap_clear, HL_OT_lightmap_delete)
 
 
+@bpy.app.handlers.persistent
 def _forget_on_load(*_args):
     clear()
 
@@ -306,6 +313,7 @@ def _forget_on_load(*_args):
 _WATCHED = (bpy.types.Mesh, bpy.types.Light, bpy.types.Material, bpy.types.World)
 
 
+@bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph):
     """Remember that the scene changed after the shown build (walls, lights, materials)."""
     if _state["data"] is None or _state["edited"]:

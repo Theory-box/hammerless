@@ -204,8 +204,11 @@ typedef struct {
     VkPipelineLayout pl;
     VkPipeline pipe;
     VkDescriptorSet ds;
-    int nbind;
+    int nbind, ok;
 } program_t;
+
+/* (while starting: a failure is a warning, and the lighting goes to the CPU) */
+#define TRY(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { Msg("Warning: GPU: %s failed (%d)\n", #x, (int)r_); return p; } } while (0)
 
 /* binding 0 the scene, 1 .. nbind-1 storage buffers */
 static program_t Program(const uint32_t *code, size_t codesize, int nbind, uint32_t pcsize) {
@@ -215,7 +218,7 @@ static program_t Program(const uint32_t *code, size_t codesize, int nbind, uint3
     VkShaderModuleCreateInfo smi = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     smi.codeSize = codesize, smi.pCode = code;
     VkShaderModule sm;
-    CHECK(vkCreateShaderModule(dev, &smi, NULL, &sm));
+    TRY(vkCreateShaderModule(dev, &smi, NULL, &sm));
     VkDescriptorSetLayoutBinding b[24];
     for (int i = 0; i < nbind; i++) {
         b[i].binding = (uint32_t)i;
@@ -224,25 +227,26 @@ static program_t Program(const uint32_t *code, size_t codesize, int nbind, uint3
     }
     VkDescriptorSetLayoutCreateInfo dli = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     dli.bindingCount = (uint32_t)nbind, dli.pBindings = b;
-    CHECK(vkCreateDescriptorSetLayout(dev, &dli, NULL, &p.dl));
+    TRY(vkCreateDescriptorSetLayout(dev, &dli, NULL, &p.dl));
     VkPushConstantRange pcr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, pcsize};
     VkPipelineLayoutCreateInfo pli = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pli.setLayoutCount = 1, pli.pSetLayouts = &p.dl, pli.pushConstantRangeCount = 1, pli.pPushConstantRanges = &pcr;
-    CHECK(vkCreatePipelineLayout(dev, &pli, NULL, &p.pl));
+    TRY(vkCreatePipelineLayout(dev, &pli, NULL, &p.pl));
     VkComputePipelineCreateInfo cpci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     cpci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT, cpci.stage.module = sm, cpci.stage.pName = "main";
     cpci.layout = p.pl;
-    CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, NULL, &p.pipe));
+    TRY(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, NULL, &p.pipe));
     VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
                                   {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (uint32_t)(nbind - 1)}};
     VkDescriptorPoolCreateInfo dpi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpi.maxSets = 1, dpi.poolSizeCount = 2, dpi.pPoolSizes = ps;
     VkDescriptorPool pool;
-    CHECK(vkCreateDescriptorPool(dev, &dpi, NULL, &pool));
+    TRY(vkCreateDescriptorPool(dev, &dpi, NULL, &pool));
     VkDescriptorSetAllocateInfo dsa = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     dsa.descriptorPool = pool, dsa.descriptorSetCount = 1, dsa.pSetLayouts = &p.dl;
-    CHECK(vkAllocateDescriptorSets(dev, &dsa, &p.ds));
+    TRY(vkAllocateDescriptorSets(dev, &dsa, &p.ds));
+    p.ok = 1;
     return p;
 }
 
@@ -381,13 +385,23 @@ static int StartGPU(void) {
     VkCommandPoolCreateInfo cpi = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     cpi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, cpi.queueFamilyIndex = qfam;
     VkCommandPool pool;
-    CHECK(vkCreateCommandPool(dev, &cpi, NULL, &pool));
+    if (vkCreateCommandPool(dev, &cpi, NULL, &pool) != VK_SUCCESS) {
+        Msg("Warning: the graphics card didn't start for ray tracing: lighting on the CPU\n");
+        return 0;
+    }
     VkCommandBufferAllocateInfo cai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     cai.commandPool = pool, cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, cai.commandBufferCount = 1;
-    CHECK(vkAllocateCommandBuffers(dev, &cai, &cmd));
+    if (vkAllocateCommandBuffers(dev, &cai, &cmd) != VK_SUCCESS) {
+        Msg("Warning: the graphics card didn't start for ray tracing: lighting on the CPU\n");
+        return 0;
+    }
     prog_gather = Program(spv_gather, sizeof(spv_gather), 8, 36);
     prog_ambient = Program(spv_ambient, sizeof(spv_ambient), 19, 36);
     prog_propind = Program(spv_propind, sizeof(spv_propind), 19, 16);
+    if (!prog_gather.ok || !prog_ambient.ok || !prog_propind.ok) {
+        Msg("Warning: the graphics card's driver didn't take hlvrad's GPU programs: lighting on the CPU\n");
+        return 0;
+    }
     Msg("Lighting on the GPU: %s\n", props.deviceName);
     return 1;
 }
@@ -486,7 +500,15 @@ void GPU_Lights(void) {
 }
 
 /* ------------------------------------------------------------------ work */
-#define GATHER_CHUNK 16384            /* groups a job (4 points each) */
+#define GATHER_CHUNK 16384            /* groups a job at most (4 points each) */
+/* (a job's size from its work: Windows resets a GPU busy for 2 seconds, and a game may share the card. Budgets:
+ * hardware rays a job, and tree walks, which are much slower) */
+#define RAY_BUDGET 100000000.0
+#define WALK_BUDGET 30000000.0
+static int JobSize(double per_item, double budget, int most) {
+    double k = budget / (per_item > 1 ? per_item : 1);
+    return k < 64 ? 64 : k > most ? most : (int)k;
+}
 
 static gbuf_t in_buf, out_buf;
 
@@ -497,8 +519,9 @@ void GPU_Gather(const gpugroup_t *groups, int n, int slot, float *out) {
     struct { int ngroups, slot, nlights, fast, nskyFull, skymapW, skymapH, haveSkyMap; float sunExtent; } pc;
     pc.slot = slot, pc.nlights = nlights, pc.fast = g_bFast, pc.nskyFull = (int)(g_flSkySampleScale * 162.0f);
     pc.skymapW = w, pc.skymapH = h, pc.haveSkyMap = HaveSkyMap(), pc.sunExtent = g_SunAngularExtent;
-    for (int at = 0; at < n; at += GATHER_CHUNK) {
-        int k = n - at < GATHER_CHUNK ? n - at : GATHER_CHUNK;
+    int chunk = JobSize(4.0 * (pc.nskyFull + 30 + nlights), RAY_BUDGET, GATHER_CHUNK);
+    for (int at = 0; at < n; at += chunk) {
+        int k = n - at < chunk ? n - at : chunk;
         Ensure(&in_buf, sizeof(gpugroup_t) * (size_t)k);
         Ensure(&out_buf, 64 * 4 * (size_t)k);
         memcpy(in_buf.map, groups + at, sizeof(gpugroup_t) * (size_t)k);
@@ -546,8 +569,9 @@ void GPU_Ambient(const float *points, int n, const float skylight[4], float *out
     struct { int npoints, haveSkyMap, skymapW, skymapH; float skylight[4]; int fix; } pc;
     pc.haveSkyMap = HaveSkyMap(), pc.skymapW = w, pc.skymapH = h, pc.fix = g_bFixQuirks;
     memcpy(pc.skylight, skylight, 16);
-    for (int at = 0; at < n; at += POINT_CHUNK) {
-        int k = n - at < POINT_CHUNK ? n - at : POINT_CHUNK;
+    int chunk = JobSize(NUMVERTEXNORMALS, WALK_BUDGET, POINT_CHUNK);
+    for (int at = 0; at < n; at += chunk) {
+        int k = n - at < chunk ? n - at : chunk;
         Ensure(&in_buf, 12 * (size_t)k);
         Ensure(&out_buf, 72 * (size_t)k);
         memcpy(in_buf.map, points + 3 * (size_t)at, 12 * (size_t)k);
@@ -561,8 +585,9 @@ void GPU_Ambient(const float *points, int n, const float skylight[4], float *out
 
 void GPU_PropIndirect(const float *points, int n, float *out) {
     struct { int npoints, nskyFull, fast, fix; } pc = {0, (int)(g_flSkySampleScale * 162.0f), g_bFast, g_bFixQuirks};
-    for (int at = 0; at < n; at += POINT_CHUNK) {
-        int k = n - at < POINT_CHUNK ? n - at : POINT_CHUNK;
+    int chunk = JobSize(pc.nskyFull, WALK_BUDGET, POINT_CHUNK);
+    for (int at = 0; at < n; at += chunk) {
+        int k = n - at < chunk ? n - at : chunk;
         Ensure(&in_buf, 28 * (size_t)k);
         Ensure(&out_buf, 12 * (size_t)k);
         memcpy(in_buf.map, points + 7 * (size_t)at, 28 * (size_t)k);

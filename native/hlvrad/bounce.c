@@ -30,6 +30,9 @@ float maxchop = 4, minchop = 4;
 typedef struct { vec3_t reflectivity; int name, width, height, view_width, view_height; } dtexdata_t;
 
 static int NewPatch(void) {
+    /* (vrad's limit: a shooter's tests (one per patch) fill buffers this size) */
+    if (numpatches >= MAX_PATCHES)
+        Error("too many bounce patches (over %d): use a bigger Bounce Patch Size or Lightmap Scale", MAX_PATCHES);
     if (numpatches == maxpatches) {
         maxpatches = maxpatches ? maxpatches * 2 : 4096;
         patches = realloc(patches, sizeof(patch_t) * maxpatches);

@@ -62,8 +62,8 @@ def _face(content, sky: str, side: str):
     color = _vmt_value(text, "color")
     if color:
         nums = [float(x) for x in re.findall(r"[-\d.]+", color)[:3]]
-        if len(nums) == 3:
-            rgb = rgb * np.array(nums, np.float32)
+        if len(nums) == 3:                     # ("{r g b}" is 0..255, "[r g b]" 0..1)
+            rgb = rgb * (np.array(nums, np.float32) / (255.0 if "{" in color else 1.0))
     cover = 1.0
     transform = _vmt_value(text, "basetexturetransform")
     if transform and re.search(r"scale\s+1\s+2", transform):
@@ -112,15 +112,16 @@ def from_skybox(content, sky: str, w: int = 256, h: int = 128) -> np.ndarray | N
 
 
 def from_equirect_image(rgb: np.ndarray, rotation_degrees: float = 0.0, w: int = 256, h: int = 128) -> np.ndarray:
-    """An HDRI (h, w, 3 linear, row 0 at the top, Blender's world mapping: the image's centre looks along -y)
-    as our panorama, turned by rotation_degrees about the vertical."""
+    """An HDRI (h, w, 3 linear, row 0 at the top, Blender's world mapping: the image's centre looks along +x, its
+    columns turning towards -y to the right) as our panorama, turned by rotation_degrees about the vertical."""
     ih, iw, _ = rgb.shape
     dirs = _directions(w, h)
     rot = np.radians(rotation_degrees)
     x = dirs[..., 0] * np.cos(-rot) - dirs[..., 1] * np.sin(-rot)
     y = dirs[..., 0] * np.sin(-rot) + dirs[..., 1] * np.cos(-rot)
-    # Blender: u = atan2(dir.y, -dir.x) / (2 pi) + 0.5, v = atan2(dir.z, hypot(dir.x, dir.y)) / pi + 0.5 (from the bottom)
-    u = np.arctan2(y, -x) / (2 * np.pi) + 0.5
+    # Blender (Cycles' and EEVEE's environment texture): u = 0.5 - atan2(dir.y, dir.x) / (2 pi),
+    # v = atan2(dir.z, hypot(dir.x, dir.y)) / pi + 0.5 (from the bottom)
+    u = 0.5 - np.arctan2(y, x) / (2 * np.pi)
     v = np.arctan2(dirs[..., 2], np.hypot(x, y)) / np.pi + 0.5
     px = np.clip((u * iw).astype(int), 0, iw - 1)
     py = np.clip(((1 - v) * ih).astype(int), 0, ih - 1)

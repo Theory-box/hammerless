@@ -133,6 +133,10 @@ int main(int argc, char **argv) {
     }
     Stage("load");
     MapVis();
+    if (!HaveVis() && g_numbounce > 0) {         /* (as vrad: without vis, every patch would see every other) */
+        Msg("No vis information, direct lighting only.\n");
+        g_numbounce = 0;
+    }
     ParseEntities();
     FindFacePatches();
     LoadDisplacements();

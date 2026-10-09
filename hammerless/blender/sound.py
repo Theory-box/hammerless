@@ -74,6 +74,8 @@ def trace(context, starts=None):
     if not spots:
         raise ValueError("No floors found to listen from")
     spots = acoustics.reachable(spots, scene_starts(context) if starts is None else starts)
+    if not spots:
+        raise ValueError("No floor can be reached from the survivors' start: check the start is on a floor")
     acoustics.analyse(spots, cast)
     zl = acoustics.zones(spots, spacing)
     counts = {k: sum(s.kind == k for s in spots) for k in ("OUTDOOR", "SHELTERED", "INDOOR")}

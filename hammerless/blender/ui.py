@@ -441,6 +441,8 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
         q.prop(s, "light_fix_quirks")
         col.separator()
         col.prop(s, "lightmap_scale", text="Lightmap Scale")
+        if s.vis_mode == "SKIP" and s.light_quality != "OFF":
+            _hint(layout, "Visibility is Off: no bounced light", "(vrad lights only directly without vis)")
         if s.light_fast:
             _hint(layout, "Fast Lighting always uses Valve's vrad")
         elif not ours and s.light_quality != "OFF":

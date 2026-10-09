@@ -74,7 +74,7 @@ class CompileOptions:
                 args += ["-chop", _num(self.patch_size), "-maxchop", _num(self.patch_size)]
         if self.static_prop_lighting or self.rad == "FINAL":
             args.append("-StaticPropLighting")
-        if self.prop_polys or self.rad == "FINAL" or (self.static_prop_lighting and self.rad != "NORMAL"):
+        if self.prop_polys or self.rad == "FINAL":
             args.append("-StaticPropPolys")
         return args + self.extra_vrad.split()
 
@@ -99,10 +99,13 @@ def _num(x: float) -> str:
 VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
 
 
-# what lighting is baked with: a change only relights (the Hammerless light compiler's own only count when it's used)
-_LIGHT_FIELDS = ("hdr", "static_prop_lighting", "extra_vrad", "sky_key", "sky_rays", "supersample", "bounces",
-                 "prop_polys", "patch_size")
-_HLVRAD_FIELDS = ("light_exact", "ss_points", "ss_passes", "ss_threshold", "fix_quirks")
+# what lighting is baked with: a change only relights. Settings count only where they apply: the normal-lighting ones
+# not with vrad -fast, the Hammerless light compiler's own only when it's used (the sky picture too), Cycles' with it
+_LIGHT_FIELDS = ("hdr", "static_prop_lighting", "extra_vrad", "prop_polys")
+_NORMAL_FIELDS = ("sky_rays", "supersample", "bounces", "patch_size")
+_HLVRAD_FIELDS = ("light_exact", "ss_points", "ss_passes", "ss_threshold", "fix_quirks", "sky_key")
+_CYCLES_FIELDS = ("cycles_samples", "cycles_denoise", "cycles_stitch")
+_ALL_LIGHT_FIELDS = _LIGHT_FIELDS + _NORMAL_FIELDS + _HLVRAD_FIELDS + _CYCLES_FIELDS
 
 
 def _field(text: str, name: str) -> str | None:
@@ -113,13 +116,12 @@ def _field(text: str, name: str) -> str | None:
 def _opts_rest(text: str) -> str:
     """Compile options without the visibility and lighting: those are tracked apart (a more complete vis
     serves a lesser one; lighting can be added or redone on a map compiled without it). Which map, vis or
-    light compiler ran (Valve's or ours) doesn't count: they give the same map."""
-    for name in _LIGHT_FIELDS + _HLVRAD_FIELDS:
+    light compiler ran (Valve's or ours) doesn't count: they give the same map (Cycles is part of the lighting)."""
+    for name in _ALL_LIGHT_FIELDS:
         v = _field(text, name)
         if v is not None:
             text = text.replace(f", {name}={v}", "", 1)
-    text = re.sub(r", (vis|map)_tool='\w+'", "", text)
-    text = text.replace("light_tool='HAMMERLESS'", "light_tool='VALVE'")
+    text = re.sub(r", (vis|map|light)_tool='\w+'", "", text)
     return re.sub(r"(vis|rad)='\w+'", r"\1='*'", text)
 
 
@@ -222,13 +224,16 @@ def _opts_rad(text: str) -> str | None:
     m = re.search(r"rad='(\w+)'", text)
     if not m or m.group(1) == "SKIP":
         return m.group(1) if m else None
-    names = _LIGHT_FIELDS + (_HLVRAD_FIELDS if "light_tool='HAMMERLESS'" in text else ())
-    return "|".join([m.group(1)] + [f"{n}={_field(text, n)}" for n in names])
+    names = _LIGHT_FIELDS + (_NORMAL_FIELDS if m.group(1) == "NORMAL" else ())
+    names += _HLVRAD_FIELDS if "light_tool='HAMMERLESS'" in text else ()
+    cycles = "light_tool='CYCLES'" in text
+    names += _CYCLES_FIELDS if cycles else ()
+    return "|".join([m.group(1), "cycles" if cycles else "vrad"] + [f"{n}={_field(text, n)}" for n in names])
 
 
 def _with_light(text: str, source: str) -> str:
     """Options text with the lighting settings `source` was baked with (lighting kept from an earlier build)."""
-    for name in _LIGHT_FIELDS + _HLVRAD_FIELDS:
+    for name in _ALL_LIGHT_FIELDS + ("light_tool",):
         old, new = _field(text, name), _field(source, name)
         if old is not None and new is not None:
             text = text.replace(f", {name}={old}", f", {name}={new}", 1)
@@ -554,6 +559,7 @@ class CompileJob:
         self.bake_abandoned = False
         self._bake_done = threading.Event()
         self._bake_lines: list[str] = []
+        self._bake_ok = False
 
     def start(self) -> "CompileJob":
         other = _ACTIVE_JOBS.get(self.base)
@@ -646,11 +652,16 @@ class CompileJob:
                     if why:
                         self._q.put("Hammerless map compiler doesn't do " + ", ".join(why) + " yet: running Valve's vbsp")
                         cmd = self._valve_vbsp
+                if name == "vrad" and cmd[0] == HLVRAD and self._opts.sky_key:
+                    try:
+                        prepare_skymap(self.base, self._opts.sky_key)
+                    except Exception as ex:          # (the sky picture: one colour instead, ours still lights it)
+                        self._q.put(f"Sky Light: couldn't prepare the sky picture ({ex}): the sky lights the map "
+                                    "with one colour")
+                        cmd = [c for i, c in enumerate(cmd) if c != "-skymap" and (i == 0 or cmd[i - 1] != "-skymap")]
                 if name == "vrad" and cmd[0] == HLVRAD:
                     try:
                         prepare_hlvrad(self.tools, self.base)
-                        if self._opts.sky_key:
-                            prepare_skymap(self.base, self._opts.sky_key)
                     except Exception as ex:          # never let the model copy stop a build
                         self._q.put(f"Hammerless light compiler couldn't read the game's models ({ex}): running Valve's vrad")
                         cmd = self._valve_vrad
@@ -693,8 +704,8 @@ class CompileJob:
                         self._q.put(f"(lighting check skipped: {ex})")
                     for msg, _loc, _obj in self.lighting:
                         self._q.put(f"!! {msg}")
-                    if self._opts.light_tool == "CYCLES":
-                        self._cycles_bake()
+                    if self._opts.light_tool == "CYCLES" and not self._cycles_bake():
+                        self._built_rad = "SKIP"     # (vrad's lighting only: the next build bakes again)
             if self.plan != "full":
                 from .buildplan import strip_stale
                 strip_stale(self.base + ".bsp")
@@ -715,7 +726,8 @@ class CompileJob:
             self._q.put(f"!! {ex}")
             self._q.put(("FAILED",))
 
-    def _cycles_bake(self):
+    def _cycles_bake(self) -> bool:
+        """Whether Blender baked the map with Cycles (else it keeps vrad's lighting)."""
         import time
         self._q.put("==== Cycles lighting ====")
         t0 = time.time()
@@ -725,14 +737,16 @@ class CompileJob:
             if self._stopping or self.bake_abandoned:
                 self.bake_request = None
                 self._q.put("Cycles bake skipped (not watching the build): the map keeps vrad's lighting")
-                return
+                return False
         for line in self._bake_lines:
             self._q.put(line)
         self.timings.append(("cycles", time.time() - t0))
+        return self._bake_ok
 
-    def bake_finished(self, lines: list[str]):
+    def bake_finished(self, lines: list[str], ok: bool = True):
         """Main thread: the bake is written (or failed: lines say so, vrad's lighting stays)."""
         self._bake_lines = lines
+        self._bake_ok = ok
         self.bake_request = None
         self._bake_done.set()
 
@@ -921,6 +935,8 @@ def _run_console_script(tools: Tools, steps: list[tuple[str, list[str]]], log_st
                 pos += i + len(needle)
                 break
         time.sleep(3.0)  # let the client finish connecting / the map settle
+        if launch_id is not None and LOAD_STATUS["launch_id"] != launch_id:
+            return                              # (a newer Build & Play started meanwhile)
         if commands:
             cheats = cheats or any(c.startswith("sv_cheats 1") for c in commands)
             if any(c.startswith("sv_cheats 0") for c in commands):
@@ -1268,6 +1284,7 @@ PRESTART: dict = {"time": None, "log_start": 0}
 MENU_MARKER = b"binkopen("          # the menu's background movie starting: commands are taken from then on
                                     # (measured: sent then, taken 0.1 s later; no second copy of the game)
 PRESTART_WAIT = 90.0                # (then the map is sent anyway)
+PRESTART_GRACE = 15.0               # (a pre-started game not running after this was closed, or crashed)
 
 
 def prestart_game(tools: Tools, window: LaunchOptions | None = None) -> bool:
@@ -1293,6 +1310,9 @@ def _prestarted_booting(tools: Tools) -> bool:
     if _menu_reached(tools):
         PRESTART["time"] = None
         return False
+    if time.time() - PRESTART["time"] > PRESTART_GRACE and not game_running():
+        PRESTART["time"] = None              # (closed or crashed while booting: start afresh)
+        return False
     return True
 
 
@@ -1306,15 +1326,23 @@ def _menu_reached(tools: Tools) -> bool:
         return False
 
 
-def _send_when_ready(tools: Tools, commands: list[str], launch_id: int):
-    """Send commands to the pre-started game once it has reached its menu (or given up waiting)."""
+def _send_when_ready(tools: Tools, commands: list[str], launch_id: int, fresh_cmd: list[str], move_window):
+    """Send commands to the pre-started game once it has reached its menu (or given up waiting). If it was
+    closed meanwhile, start the game afresh with the map (fresh_cmd): -hijack would start a bare game."""
     import time
-    deadline = (PRESTART["time"] or time.time()) + PRESTART_WAIT
+    started = PRESTART["time"] or time.time()
+    deadline = started + PRESTART_WAIT
     while time.time() < deadline:
         if LOAD_STATUS["launch_id"] != launch_id:
             return                                  # a newer launch took over
-        if game_running() and _menu_reached(tools):
+        running = game_running()
+        if running and _menu_reached(tools):
             break
+        if not running and time.time() - started > PRESTART_GRACE:
+            PRESTART["time"] = None
+            subprocess.Popen(fresh_cmd, cwd=tools.root)
+            move_window()
+            return
         time.sleep(0.25)
     PRESTART["time"] = None
     if LOAD_STATUS["launch_id"] == launch_id:
@@ -1346,21 +1374,21 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
             # it on for the rest of the session: a lit map loaded after one would look unlit
             pre = ["sv_cheats 1", "mat_fullbright 0"] + pre
         commands = ["con_logfile console.log"] + pre + ["sv_cheats 0", f"map {map_cmd}"]
-        proc = None if booting else send_commands(tools, commands)
-    else:
-        cmd = _game_command(tools, window, extra)
-        cmd += ["+map", map_name] + ([mode] if mode != "coop" else [])
-        proc = None
+    cmd = _game_command(tools, window, extra)
+    cmd += ["+map", map_name] + ([mode] if mode != "coop" else [])
+    # (a new launch before anything is sent: an older one's scripts see it and stop)
     LOAD_STATUS["launch_id"] += 1
     LOAD_STATUS["seconds"] = None
     LOAD_STATUS["flow"] = None
     LOAD_STATUS["error"] = None
     launch_id = LOAD_STATUS["launch_id"]
+    proc = send_commands(tools, commands) if not fresh and not booting else None
 
     def move_window():
         _move_window(window)
     if booting:          # started ahead by Build & Play: the map goes to it once it reaches its menu
-        threading.Thread(target=_send_when_ready, args=(tools, commands, launch_id), daemon=True).start()
+        threading.Thread(target=_send_when_ready, args=(tools, commands, launch_id, cmd, move_window),
+                         daemon=True).start()
     elif proc is None:
         if steam_ready():
             proc = subprocess.Popen(cmd, cwd=tools.root)

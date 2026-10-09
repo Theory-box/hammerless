@@ -23,6 +23,9 @@ void MapVis(void) {
     visdatasize = lumps[LUMP_VISIBILITY].len;
     numclusters = 0;
     if (visdatasize >= 4) memcpy(&numclusters, visdata, 4);
+    else                    /* (no vis: the leaves still have clusters, all of them seeing each other) */
+        for (int i = 0; i < numleafs; i++)
+            if (dleafs[i].cluster >= numclusters) numclusters = dleafs[i].cluster + 1;
 }
 
 int VisRowBytes(void) { return numclusters / 8 + 1; }
@@ -58,7 +61,7 @@ void GetClusterPVS(int cluster, unsigned char *pvs) {
 
 /* (a cluster of -1 counts as seen: vrad would rather light a sample than leave it black) */
 int PVSCheck(const unsigned char *pvs, int cluster) {
-    if (cluster >= 0) return pvs[cluster >> 3] & (1 << (cluster & 7));
+    if (cluster >= 0 && cluster < numclusters) return pvs[cluster >> 3] & (1 << (cluster & 7));
     return 1;
 }
 

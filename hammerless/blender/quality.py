@@ -18,6 +18,7 @@ LIGHT_PRESETS = {
 BUILD_LEVELS = {"QUICK": ("SKIP", "OFF"), "FAST": ("FAST", "FAST"), "NORMAL": ("FULL", "NORMAL"),
                 "FINAL": ("FULL", "FINAL"), "ULTRA": ("FULL", "ULTRA")}
 
+SETTINGS_VERSION = 1      # (quality.migrate: files saved before per-system qualities are translated once)
 _applying = False         # (settings being set by a preset: not a change of the user's own)
 
 
@@ -32,6 +33,12 @@ def _set(s, values: dict):
         _applying = was
 
 
+def _current(s):
+    """(a scene whose qualities have been touched is on today's settings: never translated as an older file's)"""
+    if s.settings_version < SETTINGS_VERSION:
+        s.settings_version = SETTINGS_VERSION
+
+
 def _sync_build(s):
     """Build & Play's Quality: the level both systems are on, or Mixed."""
     level = next((k for k, v in BUILD_LEVELS.items() if v == (s.vis_mode, s.light_quality)), "CUSTOM")
@@ -39,8 +46,12 @@ def _sync_build(s):
 
 
 def on_build_quality(s, context=None):
-    if _applying or s.compile_preset not in BUILD_LEVELS:
+    if _applying:
         return
+    if s.compile_preset not in BUILD_LEVELS:          # (Mixed picked by hand: it's whatever the systems are on)
+        _sync_build(s)
+        return
+    _current(s)
     vis, light = BUILD_LEVELS[s.compile_preset]
     _set(s, {"vis_mode": vis, "light_quality": light})
     _set(s, LIGHT_PRESETS.get(light, {}))
@@ -49,18 +60,23 @@ def on_build_quality(s, context=None):
 def on_light_quality(s, context=None):
     if _applying:
         return
+    _current(s)
     _set(s, LIGHT_PRESETS.get(s.light_quality, {}))
     _sync_build(s)
 
 
 def on_vis_quality(s, context=None):
     if not _applying:
+        _current(s)
         _sync_build(s)
 
 
 def on_light_setting(s, context=None):
     """A lighting setting changed by hand: the preset is now Custom (unless it still matches one)."""
-    if _applying or s.light_quality == "OFF":
+    if _applying:
+        return
+    _current(s)
+    if s.light_quality == "OFF":
         return
     now = {k: getattr(s, k) for k in _NORMAL}
     match = next((k for k, v in LIGHT_PRESETS.items() if all(_same(now[n], x) for n, x in v.items())), "CUSTOM")
@@ -73,7 +89,6 @@ def _same(a, b) -> bool:
 
 
 # ---------------------------------------------------------------- files saved before the per-system qualities
-SETTINGS_VERSION = 1
 
 
 def migrate(s):
@@ -86,11 +101,12 @@ def migrate(s):
         on_build_quality(s)
     else:
         light = {"SKIP": "OFF", "FAST": "FAST", "NORMAL": "NORMAL", "FINAL": "FINAL"}[s.rad_mode]
-        props = s.static_prop_lighting
+        props = s.static_prop_lighting or light == "FINAL"     # (Final always lit props)
         _set(s, {"light_quality": light})
         _set(s, LIGHT_PRESETS.get(light, {}))
-        if light == "NORMAL" and not props:       # (Custom's own prop lighting choice)
-            _set(s, {"static_prop_lighting": False, "light_prop_polys": False, "light_quality": "CUSTOM"})
+        if light != "OFF" and props != s.static_prop_lighting:
+            # (Custom's own prop lighting choice; lit props were shadowed with their full model)
+            _set(s, {"static_prop_lighting": props, "light_prop_polys": props, "light_quality": "CUSTOM"})
         _sync_build(s)
     s.settings_version = SETTINGS_VERSION
 
@@ -98,8 +114,11 @@ def migrate(s):
 @bpy.app.handlers.persistent
 def _on_load(_dummy=None):
     for scene in bpy.data.scenes:
-        if hasattr(scene, "hammerless"):
-            migrate(scene.hammerless)
+        if hasattr(scene, "hammerless") and scene.library is None:     # (linked scenes can't be changed)
+            try:
+                migrate(scene.hammerless)
+            except Exception as ex:          # (one scene's trouble mustn't stop the others)
+                print(f"Hammerless: couldn't update {scene.name}'s settings: {ex}")
 
 
 def register():

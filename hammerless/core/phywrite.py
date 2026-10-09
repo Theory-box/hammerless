@@ -17,6 +17,9 @@ import math
 import struct
 
 INCH = 0.0254
+# a ledge numbers its triangles in 12 bits and points from an edge to its twin in 15 (signed, 4-byte units):
+# past this many triangles in one piece the numbers wrap and the collision comes out broken
+MAX_PIECE_TRIANGLES = 4096
 
 
 def _ivp(p):
@@ -64,6 +67,9 @@ def _solid(points, tris):
 def _ledge(points, tris):
     """One convex piece as an IVP compact ledge (bytes, without its tree node)."""
     n = len(tris)
+    if n > MAX_PIECE_TRIANGLES or len(points) > 0xFFFF:
+        raise ValueError(f"collision piece has {n} triangles and {len(points)} points: at most "
+                         f"{MAX_PIECE_TRIANGLES} triangles fit in a collision file")
     # each triangle: slot 0 header, slots 1-3 edges (4 bytes each); edge (i -> next) twins with (next -> i)
     where = {}
     for t, tri in enumerate(tris):

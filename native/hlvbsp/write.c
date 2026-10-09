@@ -57,6 +57,7 @@ void BeginBSPFile(void) {
 }
 
 void BeginModel(void) {
+    if (nummodels >= 1024) Error("Too many brush entities in map, max = %d", 1024);    /* (vbsp's MAX_MAP_MODELS) */
     dmodel_t *mod = &dmodels[nummodels];
     mod->firstface = numfaces;
     firstmodleaf = numleafs;
@@ -175,7 +176,10 @@ static void EmitMarkFace(dleaf_t *leaf, face_t *f) {
     int i;
     for (i = leaf->firstleafface; i < numleaffaces; i++)
         if (dleaffaces[i] == facenum) break;
-    if (i == numleaffaces) dleaffaces[numleaffaces++] = (unsigned short)facenum;
+    if (i == numleaffaces) {
+        if (numleaffaces >= 65536) Error("Too many leaf faces in map, max = %d", 65536);    /* (MAX_MAP_LEAFFACES) */
+        dleaffaces[numleaffaces++] = (unsigned short)facenum;
+    }
 }
 
 static void VecToShorts(const vec3_t v, short *s) {
@@ -198,7 +202,10 @@ static void EmitLeaf(node_t *node) {
         int brushnum = (int)(b->original - mapbrushes), i;
         for (i = leaf->firstleafbrush; i < numleafbrushes; i++)
             if (dleafbrushes[i] == brushnum) break;
-        if (i == numleafbrushes) dleafbrushes[numleafbrushes++] = (unsigned short)brushnum;
+        if (i == numleafbrushes) {
+            if (numleafbrushes >= 65536) Error("Too many leaf brushes in map, max = %d", 65536);  /* (MAX_MAP_LEAFBRUSHES) */
+            dleafbrushes[numleafbrushes++] = (unsigned short)brushnum;
+        }
     }
     leaf->numleafbrushes = (unsigned short)(numleafbrushes - leaf->firstleafbrush);
     if (leaf->contents & CONTENTS_SOLID) return;

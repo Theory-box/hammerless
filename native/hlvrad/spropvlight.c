@@ -529,6 +529,8 @@ static void PropWork(int i, int thread) {
     else
         Msg("Warning: static prop %d (%s): model files missing, not lit\n", i, name);
     free(mdl), free(vvd), free(vtx);
+    if (gpuprop_phase == 2 && !g_gpuCheck && (gpuprop_dc != gpuprops[i].nd || gpuprop_ic != gpuprops[i].ni))
+        Error("GPU prop lighting: prop %d's questions changed between passes", i);    /* (every answer used, in order) */
 }
 
 void ComputeStaticPropLighting(void) {
