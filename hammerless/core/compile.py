@@ -814,9 +814,16 @@ class CompileJob:
         """Copy the BSP into the game. While the game has this map loaded it keeps the file
         open and Windows refuses the copy: unload the map (disconnect) and try again."""
         import time
+        from . import stringtables
+        dictionary = stringtables.keep_for_next_build(dest, self.tools.gamedir)
         for attempt in range(12):
             try:
                 shutil.copy2(self.base + ".bsp", dest)
+                if dictionary:          # (the game's dictionary: it doesn't spend ~10 s building one at load)
+                    try:
+                        stringtables.put_dictionary(dest, stringtables.for_map(dictionary, self.name))
+                    except Exception as ex:          # never fail a build over it: the game makes its own
+                        self._q.put(f"(stringtable dictionary not kept: {ex})")
                 return
             except PermissionError:
                 if attempt == 0:

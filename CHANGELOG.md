@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **About 6 s faster Build & Play:** a freshly built map has no *stringtable dictionary* (a list of the game's precached files it uses to compress network data), so the game built one at every load: about 10 s. Each build now keeps the dictionary the game saved into the previous build of the map (or, for a new map, the last one it saved for any Hammerless map). Measured on a real map: map start 9.1 s to 2.6 s after the compile, Build & Play 35 s to 30 s. The very first build on a computer still pays it once.
+
 ## 0.11.0 (test release, 2026-10-09)
 
 - **Bounce lighting's links on the graphics card:** working out which surfaces bounce light to which (millions of visibility rays) now runs on the GPU: on a real map that step went from 0.26 s to 0.11 s; Normal lighting takes 1.0 s, Final 1.4 s, Ultra 2.2 s (RTX 4090).

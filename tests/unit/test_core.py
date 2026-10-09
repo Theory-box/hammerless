@@ -2429,5 +2429,72 @@ class TestCubemapPatch(unittest.TestCase):
         self.assertFalse(cm.patchable("plain/wall"))
 
 
+class TestStringtableDictionary(unittest.TestCase):
+    """The game's stringtable dictionary is carried from one build to the next (it saves ~10 s of map load)."""
+
+    def _bsp(self, path, pak_last=True, files=None):
+        import io
+        import struct
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+            for name, data in (files or {"sp_hdr_0.vhv": b"vhv"}).items():
+                z.writestr(name, data)
+        pak = buf.getvalue()
+        header = bytearray(1036)
+        header[:8] = b"VBSP" + struct.pack("<i", 21)
+        lump1 = b"PLANES" * 10
+        body = bytearray()
+        at = len(header)
+        order = [(40, pak), (1, lump1)] if not pak_last else [(1, lump1), (40, pak)]
+        for i, data in order:
+            struct.pack_into("<iiii", header, 8 + 16 * i, 0, at + len(body), len(data), 0)
+            body += data + b"\0" * ((-len(data)) % 4)
+        with open(path, "wb") as f:
+            f.write(bytes(header) + bytes(body))
+        return lump1
+
+    def test_put_read_and_rename(self):
+        import struct
+        import tempfile
+        from hammerless.core import stringtables as st
+        dct = b"maps/old_map.bsp\0maps/old_map.nav\0models/a.mdl\0maps/old_map_extra.txt\0"
+        for last in (True, False):
+            with tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, "m.bsp")
+                lump1 = self._bsp(p, pak_last=last)
+                self.assertIsNone(st.read_dictionary(p))
+                st.put_dictionary(p, st.for_map(dct, "new_map"))
+                st.put_dictionary(p, st.for_map(dct, "new_map"))          # (replaced, not added twice)
+                got = st.read_dictionary(p)
+                self.assertEqual(got, b"maps/new_map.bsp\0maps/new_map.nav\0models/a.mdl\0maps/old_map_extra.txt\0")
+                with open(p, "rb") as f:
+                    data = f.read()
+                _v, off, ln, _c = struct.unpack_from("<iiii", data, 8 + 16 * 1)
+                self.assertEqual(data[off:off + ln], lump1)                # (other lumps untouched)
+                import io
+                import zipfile
+                _v, off, ln, _c = struct.unpack_from("<iiii", data, 8 + 16 * 40)
+                with zipfile.ZipFile(io.BytesIO(data[off:off + ln])) as z:
+                    self.assertEqual(sorted(z.namelist()), ["sp_hdr_0.vhv", "stringtable_dictionary.dct"])
+                    self.assertTrue(all(i.compress_type == zipfile.ZIP_STORED for i in z.infolist()))
+
+    def test_keep_for_next_build(self):
+        import tempfile
+        from hammerless.core import stringtables as st
+        big = b"maps/a.bsp\0" + b"".join(b"sound/s%d.wav\0" % i for i in range(st._MIN_STRINGS))
+        with tempfile.TemporaryDirectory() as game:
+            maps = os.path.join(game, "maps")
+            os.makedirs(maps)
+            self.assertIsNone(st.keep_for_next_build(os.path.join(maps, "none.bsp"), game))
+            a = os.path.join(maps, "a.bsp")
+            self._bsp(a, files={"stringtable_dictionary.dct": big})
+            self.assertEqual(st.keep_for_next_build(a, game), big)         # the map's own, and cached
+            b = os.path.join(maps, "b.bsp")
+            self._bsp(b, files={"stringtable_dictionary.dct": b"maps/b.bsp\0"})   # (too small to be of use)
+            self.assertEqual(st.keep_for_next_build(b, game), big)         # a new map gets the cached one
+            self.assertTrue(st.for_map(big, "b").startswith(b"maps/b.bsp\0"))
+
+
 if __name__ == "__main__":
     unittest.main()
