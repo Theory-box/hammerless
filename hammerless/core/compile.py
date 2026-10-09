@@ -32,6 +32,7 @@ class CompileOptions:
     cycles_samples: int = 1024
     cycles_stitch: bool = True     # make neighbouring faces' lightmaps agree along shared edges
     cycles_denoise: bool = False   # measured: OpenImageDenoise smears the packed bake (7.7% off vs 1.3% raw)
+    sky_key: str = ""              # sky light from a picture of the sky (<map>.hlsky_src.npy): its fingerprint
 
     def vbsp_args(self) -> list[str]:
         return self.extra_vbsp.split()
@@ -89,6 +90,13 @@ def hlvrad_unsupported(opts: "CompileOptions") -> list[str]:
     if not os.path.exists(HLVRAD):
         why.append("(hlvrad.exe is missing)")
     return why
+
+
+def prepare_skymap(base: str, key: str = "") -> None:
+    """The sky picture the build exported (<map>.hlsky_src.npy) blurred and scaled for hlvrad (<map>.hlsky)."""
+    import numpy as np
+    from .skylight import make_skymap
+    make_skymap(base + ".hlsky", np.load(base + ".hlsky_src.npy"), key)
 
 
 def use_hlvrad(opts: "CompileOptions") -> bool:
@@ -444,8 +452,9 @@ class CompileJob:
         if vrad is not None:
             valve = [tools.exe("vrad")] + vrad + game + [self.base]
             if use_hlvrad(opts):
-                self.steps.append(("vrad", [HLVRAD] + vrad + game + ["-modeldir", self.base + ".hlvrad_models",
-                                                                     self.base]))
+                sky = ["-skymap", self.base + ".hlsky"] if opts.sky_key else []
+                self.steps.append(("vrad", [HLVRAD] + vrad + game + sky + ["-modeldir", self.base + ".hlvrad_models",
+                                                                           self.base]))
                 self._valve_vrad = valve
             else:
                 self.steps.append(("vrad", valve))
@@ -565,12 +574,17 @@ class CompileJob:
                 if name == "vrad" and cmd[0] == HLVRAD:
                     try:
                         prepare_hlvrad(self.tools, self.base)
+                        if self._opts.sky_key:
+                            prepare_skymap(self.base, self._opts.sky_key)
                     except Exception as ex:          # never let the model copy stop a build
                         self._q.put(f"Hammerless light compiler couldn't read the game's models ({ex}): running Valve's vrad")
                         cmd = self._valve_vrad
                 elif name == "vrad" and self._opts.light_tool == "HAMMERLESS":
                     self._q.put("Hammerless light compiler doesn't do " + ", ".join(hlvrad_unsupported(self._opts))
                                 + " yet: running Valve's vrad")
+                if name == "vrad" and cmd[0] != HLVRAD and self._opts.sky_key:
+                    self._q.put("Sky Light from the sky needs the Hammerless light compiler: Valve's vrad lights it "
+                                "with one colour")
                 code, out = self._exec(cmd)
                 if code != 0 and name == "vrad" and cmd[0] == HLVRAD and self._valve_vrad and not self._stopping:
                     # ours writes the map only when it has finished, so it's untouched
@@ -963,6 +977,7 @@ def clear_build(tools: Tools | None, work_base: str, map_name: str) -> list[str]
     if tools is not None:
         paths.append(os.path.join(tools.maps_dir, map_name + ".bsp"))
     shutil.rmtree(work_base + ".hlvrad_models", ignore_errors=True)    # (models copied for hlvrad)
+    paths += [work_base + ".hlsky", work_base + ".hlsky.key", work_base + ".hlsky_src.npy"]
     return _remove(paths)
 
 

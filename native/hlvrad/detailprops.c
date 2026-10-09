@@ -14,7 +14,7 @@
 #define VERTEXNORMAL_CONE_INNER_ANGLE (7.275 * 3.14159265358979323846 / 180.0)
 #define COORD_EXTENT (2 * 16384)
 
-float GatherSampleLightAtPoint(const directlight_t *dl, const vec3_t pos, const vec3_t normal);
+float GatherSampleLightAtPoint(const directlight_t *dl, const vec3_t pos, const vec3_t normal, vec3_t color);
 void CalcRayAmbientLighting(const vec3_t start, const vec3_t end, float tanTheta, vec3_t *colors, int nstyles);
 void AmbientSetup(void);
 void VectorToColorRGBExp32(const vec3_t v, unsigned char *c);
@@ -90,8 +90,9 @@ static void MaxDirectLighting(const vec3_t origin, const vec3_t normal, vec3_t *
     for (directlight_t *dl = activelights; dl; dl = dl->next) {
         if (dl->light.type == emit_skyambient) continue;
         if (!PVSCheck(dl->pvs, cluster)) continue;
-        float f = GatherSampleLightAtPoint(dl, origin, normal);
-        for (int k = 0; k < 3; k++) maxcolor[dl->light.style][k] = dl->light.intensity[k] * f + maxcolor[dl->light.style][k];
+        vec3_t lc;
+        float f = GatherSampleLightAtPoint(dl, origin, normal, lc);
+        for (int k = 0; k < 3; k++) maxcolor[dl->light.style][k] = lc[k] * f + maxcolor[dl->light.style][k];
     }
 }
 

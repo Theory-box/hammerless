@@ -76,6 +76,61 @@ def launch_options(s) -> cc.LaunchOptions:
                             difficulty="" if s.difficulty == "KEEP" else s.difficulty, lan=s.fast_loading)
 
 
+def _world_sky_image():
+    """The World's Environment Texture image, if it has one."""
+    world = bpy.context.scene.world
+    if world and world.use_nodes and world.node_tree:
+        for node in world.node_tree.nodes:
+            if node.type == "TEX_ENVIRONMENT" and node.image:
+                return node.image
+    return None
+
+
+def _image_rgb(img, width: int = 512):
+    """An image's pixels as linear float RGB (h, w, 3), row 0 at the top, scaled down to `width` wide."""
+    import numpy as np
+    small = img.copy()
+    try:
+        w, h = small.size
+        if w > width:
+            small.scale(width, max(1, round(h * width / w)))
+        w, h = small.size
+        px = np.empty(w * h * 4, np.float32)
+        small.pixels.foreach_get(px)
+        rgb = px.reshape(h, w, 4)[::-1, :, :3]
+        if not small.is_float and small.colorspace_settings.name == "sRGB":
+            rgb = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+        return np.ascontiguousarray(rgb)
+    finally:
+        bpy.data.images.remove(small)
+
+
+def export_sky(context, root, base: str) -> tuple[str, str]:
+    """Sky Light from the sky: the sky's picture as <map>.hlsky_src.npy for the light compiler. Returns its
+    fingerprint ("" for one colour) and a note for the log ("" if fine)."""
+    import hashlib
+    import numpy as np
+    from ..core import skylight
+    s = context.scene.hammerless
+    if s.sky_light == "FLAT":
+        return "", ""
+    if s.sky_light == "SKYBOX":
+        content = game_content(root)
+        pano = skylight.from_skybox(content, s.skyname) if content else None
+        if pano is None:
+            return "", f"Sky Light: couldn't read the skybox '{s.skyname}': the sky lights the map with one colour"
+    else:
+        img = s.sky_image or _world_sky_image()
+        if img is None:
+            return "", "Sky Light: no image picked and the World has no Environment Texture: one colour instead"
+        try:
+            pano = skylight.from_equirect_image(_image_rgb(img), s.sky_rotation)
+        except Exception as ex:          # (an image that can't be read: never stop the build)
+            return "", f"Sky Light: couldn't read the image '{img.name}' ({ex}): one colour instead"
+    np.save(base + ".hlsky_src.npy", pano)
+    return hashlib.sha1(pano.tobytes()).hexdigest()[:16], ""
+
+
 def _quoted_object(message: str) -> str:
     """First 'Name' in a message that is an object in the scene (for selecting it)."""
     import re
@@ -967,6 +1022,13 @@ class HL_OT_build(bpy.types.Operator):
                 return {"CANCELLED"}
             opts = dataclasses.replace(opts, vis="FAST" if opts.vis != "SKIP" else "SKIP")
             self.play = False
+        sky_key, sky_note = export_sky(context, root, os.path.splitext(path)[0])
+        if sky_note:
+            write_log([sky_note], append=True)
+        if sky_key:
+            import dataclasses
+            opts = cc.PRESETS[opts] if isinstance(opts, str) else opts
+            opts = dataclasses.replace(opts, sky_key=sky_key)
         self._job = cc.CompileJob(tools, path, opts, skip_if_unchanged=True)
         self._nav = None
         s = context.scene.hammerless

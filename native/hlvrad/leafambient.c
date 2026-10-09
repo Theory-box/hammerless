@@ -559,11 +559,16 @@ float Power2Over255(int e) { return power2_table[(e + 128) & 255]; }
 /* the sky ambient light's intensity, as the world lights lump has it */
 static const float *skylight;
 
+static __thread const float *raydir;      /* (the ray being followed: the sky map's colour in its direction) */
+static void SkyColor(vec3_t c) {
+    if (HaveSkyMap() && raydir) SkyMapColor(raydir, Luminance(skylight), c);
+    else VectorCopy(skylight, c);
+}
+
 static void AmbientFromSurface(const dface_t *f, vec3_t c) {
     const texinfo_t *tx = &texinfo[f->texinfo];
     if (tx->flags & SURF_SKY) {
-        if (skylight)
-            for (int k = 0; k < 3; k++) c[k] = skylight[k];
+        if (skylight) SkyColor(c);
     } else {
         for (int k = 0; k < 3; k++) c[k] = c[k] * dtexdata[tx->texdata].reflectivity[k];
     }
@@ -572,8 +577,11 @@ static void AmbientFromSurface(const dface_t *f, vec3_t c) {
 /* (colors: one per light style, styles from nstyles on not kept) */
 static void ColorFromAverage(const dface_t *f, float scale, vec3_t *colors, int nstyles) {
     if (texinfo[f->texinfo].flags & SURF_SKY) {
-        if (skylight)
-            for (int k = 0; k < 3; k++) colors[0][k] += skylight[k] * scale;
+        if (skylight) {
+            vec3_t c;
+            SkyColor(c);
+            for (int k = 0; k < 3; k++) colors[0][k] += c[k] * scale;
+        }
         return;
     }
     for (int m = 0; m < 4 && f->styles[m] != 255; m++) {
@@ -655,6 +663,7 @@ void CalcRayAmbientLighting(const vec3_t start, const vec3_t end, float tanTheta
     if (!ls.hasluxel) avg = 1.0f;
     float point = 1.0f - avg;
     const dface_t *f = &g_pFaces[ls.surface];
+    raydir = ls.delta;
     if (avg != 0) ColorFromAverage(f, avg, colors, nstyles);
     if (point != 0) ColorPointSample(f, ls.luxel, point, colors, nstyles);
 }

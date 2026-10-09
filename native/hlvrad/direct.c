@@ -383,6 +383,8 @@ typedef struct {
     float dot[NUM_BUMP_VECTS + 1][LANES];
     float falloff[LANES];
     float sunAmount[LANES];
+    int tinted;                                    /* (sky map: the light's colour per normal, instead of its own) */
+    float tint[NUM_BUMP_VECTS + 1][3][LANES];
 } lightout4_t;
 
 typedef struct {
@@ -598,7 +600,8 @@ void SkyDirectionAt(int i, vec3_t out) { SkyDirection(i, out); }
 static void GatherSampleAmbientSky4(lightout4_t *out, const directlight_t *dl, const points4_t *p) {
     float sumdot[LANES] = {0}, ambient[NUM_BUMP_VECTS + 1][LANES] = {{0}}, possible[NUM_BUMP_VECTS + 1][LANES] = {{0}};
     float dots[NUM_BUMP_VECTS + 1][LANES];
-    (void)dl;
+    float skyscale = HaveSkyMap() ? Luminance(dl->light.intensity) : 0.0f;
+    float colsum[NUM_BUMP_VECTS + 1][3][LANES] = {{{0}}};
     int nsky = g_bFast || (g_gatherFlags & GATHERLFLAGS_FORCE_FAST) ? NUMVERTEXNORMALS / 4
                                                                      : (int)(g_flSkySampleScale * 162.0f);
     int ignore = g_gatherFlags & GATHERLFLAGS_IGNORE_NORMALS;
@@ -635,6 +638,13 @@ static void GatherSampleAmbientSky4(lightout4_t *out, const directlight_t *dl, c
         TestLine_DoesHitSky4(p->pos, (const float(*)[LANES])stop, g_gatherSkipProp, frac);      /* (flEpsilon is 0 here) */
         for (int n = 0; n < p->normalCount; n++)
             for (int i = 0; i < LANES; i++) ambient[n][i] = ambient[n][i] + frac[i] * dots[n][i];
+        if (skyscale > 0) {                        /* (the sky seen this way: the ray goes along -anorm) */
+            vec3_t look = {-anorm[0], -anorm[1], -anorm[2]}, c;
+            SkyMapColor(look, skyscale, c);
+            for (int n = 0; n < p->normalCount; n++)
+                for (int i = 0; i < LANES; i++)
+                    for (int k = 0; k < 3; k++) colsum[n][k][i] += frac[i] * dots[n][i] * c[k];
+        }
     }
     for (int i = 0; i < LANES; i++) out->falloff[i] = 1.0f;
     for (int n = 0; n < p->normalCount; n++)
@@ -644,10 +654,18 @@ static void GatherSampleAmbientSky4(lightout4_t *out, const directlight_t *dl, c
             d = ReciprocalSSE(d);
             out->dot[n][i] = ambient[n][i] * d;
         }
+    if (skyscale > 0) {         /* (colour = the sky's average over the rays that got out, weighted as the light is) */
+        out->tinted = 1;
+        for (int n = 0; n < p->normalCount; n++)
+            for (int i = 0; i < LANES; i++)
+                for (int k = 0; k < 3; k++) out->tint[n][k][i] = ambient[n][i] > 0 ? colsum[n][k][i] / ambient[n][i] : 0.0f;
+    }
 }
 
 static void GatherSampleLight4(lightout4_t *out, const directlight_t *dl, const points4_t *p) {
-    memset(out, 0, sizeof(*out));
+    out->tinted = 0;
+    memset(out->dot, 0, sizeof(out->dot)), memset(out->falloff, 0, sizeof(out->falloff));
+    memset(out->sunAmount, 0, sizeof(out->sunAmount));
     switch (dl->light.type) {
     case emit_skylight: GatherSampleSkyLight4(out, dl, p); break;
     case emit_skyambient: GatherSampleAmbientSky4(out, dl, p); break;
@@ -664,13 +682,14 @@ static void GatherSampleLight4(lightout4_t *out, const directlight_t *dl, const 
 }
 
 /* one light at one point (in all 4 lanes, as vrad duplicates it): the falloff times the normal's dot */
-float GatherSampleLightAtPoint(const directlight_t *dl, const vec3_t pos, const vec3_t normal) {
+float GatherSampleLightAtPoint(const directlight_t *dl, const vec3_t pos, const vec3_t normal, vec3_t color) {
     points4_t p;
     p.normalCount = 1;
     for (int c = 0; c < 3; c++)
         for (int i = 0; i < LANES; i++) p.pos[c][i] = pos[c], p.normals[0][c][i] = normal[c];
     lightout4_t out;
     GatherSampleLight4(&out, dl, &p);
+    for (int k = 0; k < 3; k++) color[k] = out.tinted ? out.tint[0][k][0] : dl->light.intensity[k];
     return out.dot[0][0] * out.falloff[0];
 }
 
@@ -757,7 +776,7 @@ static void ResampleLightAt4Points(const points4_t *p, const int cluster[LANES],
                 float fx = out.dot[b][i] * out.falloff[i];
                 fx = fx * mask[i];
                 if (b == 0) ((float *)&g_staleSlot)[i] = fx;
-                for (int k = 0; k < 3; k++) result[i][b][k] += fx * dl->light.intensity[k];
+                for (int k = 0; k < 3; k++) result[i][b][k] += fx * (out.tinted ? out.tint[b][k][i] : dl->light.intensity[k]);
             }
     }
 }
@@ -959,7 +978,8 @@ void BuildFacelights(int facenum) {
             if (style < 0) continue;
             for (int b = 0; b < normalCount; b++)
                 for (int i = 0; i < count; i++)
-                    for (int k = 0; k < 3; k++) fl->light[style][b][group + i][k] += fxdot[b][i] * dl->light.intensity[k];
+                    for (int k = 0; k < 3; k++)
+                        fl->light[style][b][group + i][k] += fxdot[b][i] * (out.tinted ? out.tint[b][k][i] : dl->light.intensity[k]);
         }
     }
     if (g_bExtra && !isdisp)

@@ -303,6 +303,10 @@ void ComputeDetailPropLighting(void);
 void ComputeStaticPropLighting(void);
 void PrepareFinalLight(void);
 void BuildSkyDirections(int n);
+void LoadSkyMap(const char *path);
+int HaveSkyMap(void);
+void SkyMapColor(const vec3_t dir, float scale, vec3_t out);
+float Luminance(const vec3_t c);
 #define MAX_THREADS 64
 extern int g_numthreads;
 int NumThreads(void);

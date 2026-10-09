@@ -48,7 +48,7 @@ static void FacelightsWork(int face, int thread) { (void)thread; BuildFacelights
 static void FinalLightWork(int face, int thread) { (void)thread; FinalLightFace(face); }
 
 int main(int argc, char **argv) {
-    const char *map = NULL, *designer_lights = NULL;
+    const char *map = NULL, *designer_lights = NULL, *skymap_path = NULL;
     Msg("Hammerless hlvrad\n");
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -69,6 +69,8 @@ int main(int argc, char **argv) {
             smoothing_threshold = (float)cos(atof(argv[i]) * (3.14159265358979323846 / 180.0));
         } else if (!_stricmp(a, "-fast")) {
             g_bFast = 1;
+        } else if (!_stricmp(a, "-skymap") && i + 1 < argc) {
+            skymap_path = argv[++i];
         } else if (!_stricmp(a, "-final")) {
             g_flSkySampleScale = 16.0f;
         } else if (!_stricmp(a, "-extrasky") && i + 1 < argc) {
@@ -96,6 +98,7 @@ int main(int argc, char **argv) {
     size_t n = strlen(path);
     if (n < 4 || _stricmp(path + n - 4, ".bsp")) strncat(path, ".bsp", sizeof(path) - n - 1);
     Stage(NULL);
+    if (skymap_path) LoadSkyMap(skymap_path);
     LoadBSPFile(path);
     MapArrays();
     /* light the HDR copy of the faces (made from the faces the first time) */

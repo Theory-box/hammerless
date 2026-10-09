@@ -20,7 +20,7 @@
 #define MAX_TRACE_LENGTH_F 56755.84f
 
 extern __thread int g_gatherFlags, g_gatherSkipProp;
-float GatherSampleLightAtPoint(const directlight_t *dl, const vec3_t pos, const vec3_t normal);
+float GatherSampleLightAtPoint(const directlight_t *dl, const vec3_t pos, const vec3_t normal, vec3_t color);
 void LightSurfaceBegin(void);
 int FindLightSurfaceKept(const vec3_t start, const vec3_t delta, int *hasluxel, float luxel[2]);
 void AmbientSetup(void);
@@ -87,9 +87,10 @@ static void DirectLightingAtPoint(const vec3_t pos, const vec3_t normal, vec3_t 
             for (int k = 0; k < 3; k++) adj[k] = pos[k] + fudge[k] * 4.0f;
         }
         g_gatherFlags = flags | GATHERLFLAGS_FORCE_FAST, g_gatherSkipProp = skipProp;
-        float f = GatherSampleLightAtPoint(dl, adj, normal);
+        vec3_t lc;
+        float f = GatherSampleLightAtPoint(dl, adj, normal, lc);
         g_gatherFlags = 0, g_gatherSkipProp = -1;
-        for (int k = 0; k < 3; k++) out[k] = dl->light.intensity[k] * f + out[k];
+        for (int k = 0; k < 3; k++) out[k] = lc[k] * f + out[k];
     }
     SpLog(0, pos, normal, out, skipProp, flags);
 }

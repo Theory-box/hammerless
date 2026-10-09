@@ -475,6 +475,20 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                            description="Compass direction the sunlight travels towards")
     ambient_color: FloatVectorProperty(name="Sky Light Color", subtype="COLOR_GAMMA", size=3, min=0, max=1,
                                        default=(0.55, 0.63, 0.75))
+    sky_light: EnumProperty(name="Sky Light", default="FLAT", items=[
+        ("FLAT", "One Colour", "The sky lights the map with the Sky Light Color from every direction (what "
+                               "Valve's vrad does)"),
+        ("SKYBOX", "From the Skybox", "Each part of the sky lights the map with its own colour, taken from the "
+                                      "map's skybox: warm from a sunset horizon, blue from above. Needs the "
+                                      "Hammerless light compiler"),
+        ("IMAGE", "From an Image (HDRI)", "Like From the Skybox, but from a panorama image (an HDRI): the one "
+                                         "picked here, or the World's Environment Texture. The game still "
+                                         "shows the skybox. Needs the Hammerless light compiler")])
+    sky_image: PointerProperty(name="Sky Image", type=bpy.types.Image,
+                               description="Panorama (equirectangular) image to light the map with; empty: the "
+                                           "World's Environment Texture")
+    sky_rotation: FloatProperty(name="Sky Rotation", default=0.0, min=-360.0, max=360.0, subtype="NONE",
+                                description="Turns the sky image round the vertical (degrees)")
     ambient_brightness: IntProperty(name="Sky Light Brightness", default=80, min=0, max=2000,
                                     description="Light from the sky dome that fills shadows")
     lightmap_scale: IntProperty(name="Lightmap Scale", default=16, min=1, max=128,
