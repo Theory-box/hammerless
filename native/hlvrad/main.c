@@ -47,18 +47,6 @@ static void Stage(const char *name) {
 static void FacelightsWork(int face, int thread) { (void)thread; BuildFacelights(face); }
 static void FinalLightWork(int face, int thread) { (void)thread; FinalLightFace(face); }
 
-/* -progress <file>: the map with the lighting so far, written after each stage (to a .tmp, then renamed into
- * place: a reader never sees half of one) for a view to show the bake as it goes */
-static const char *g_progress;
-void Progress(void) {
-    if (!g_progress) return;
-    char tmp[1100];
-    snprintf(tmp, sizeof(tmp), "%s.tmp", g_progress);
-    SetLump(LUMP_LIGHTING_HDR, dlightdata, lightdatasize, 1);
-    WriteBSPFile(tmp);
-    if (!MoveFileExA(tmp, g_progress, MOVEFILE_REPLACE_EXISTING)) remove(tmp);
-}
-
 int main(int argc, char **argv) {
     const char *map = NULL, *designer_lights = NULL, *skymap_path = NULL;
     Msg("Hammerless hlvrad\n");
@@ -103,8 +91,6 @@ int main(int argc, char **argv) {
             Error("-textureshadows isn't supported yet");
         } else if (!_stricmp(a, "-StaticPropLighting")) {
             g_bStaticPropLighting = 1;
-        } else if (!_stricmp(a, "-progress") && i + 1 < argc) {
-            g_progress = argv[++i];
         } else if (!_stricmp(a, "-timing")) {
             g_timing = 1;
         } else if (!_stricmp(a, "-noextra")) {
@@ -212,14 +198,6 @@ int main(int argc, char **argv) {
         Msg("Warning: -gi needs the GPU: vrad's bounced light instead\n");
         g_giPasses = 0;
     }
-    if (g_progress && g_numbounce > 0 && !g_giPasses) {   /* (the direct light first: vrad's bounce comes in one go) */
-        int bounces = g_numbounce;
-        g_numbounce = 0;
-        PrepareFinalLight();
-        RunThreadsOn(numfaces, FinalLightWork);
-        g_numbounce = bounces;
-        Progress();
-    }
     if (g_numbounce > 0 && !g_giPasses) {
         Stage("lightmap offsets");
         MakeAllScales();
@@ -231,7 +209,6 @@ int main(int argc, char **argv) {
     RunThreadsOn(numfaces, FinalLightWork);
     Stage("final light");
     if (g_giPasses) {
-        Progress();                 /* (the direct light; then each bounce) */
         BuildIndirectGPU();
         Stage("gi (bounced light)");
     }

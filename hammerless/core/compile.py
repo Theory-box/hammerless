@@ -511,7 +511,7 @@ class CompileJob:
     """
 
     def __init__(self, tools: Tools, vmf_path: str, preset: "str | CompileOptions" = "NORMAL",
-                 copy_to_game: bool = True, skip_if_unchanged: bool = False, progress: bool = False):
+                 copy_to_game: bool = True, skip_if_unchanged: bool = False):
         self.tools = tools
         self.skip_if_unchanged = skip_if_unchanged
         self.timings: list[tuple[str, float]] = []
@@ -550,13 +550,6 @@ class CompileJob:
                 self._valve_vrad = valve
             else:
                 self.steps.append(("vrad", valve))
-        # (our light compiler writes the map with the lighting so far after each stage, for the Baked Lighting view
-        # to show the bake as it goes; not part of the options: it doesn't change the result)
-        self.progress_path: str | None = None
-        if progress and use_hlvrad(opts):
-            self.progress_path = self.base + ".progress.bsp"
-            self.steps = [(n, c[:-1] + ["-progress", self.progress_path, c[-1]] if n == "vrad" and c[0] == HLVRAD else c)
-                          for n, c in self.steps]
         self.plan = "full"            # what a smart build decided (buildplan.plan); see _choose_steps
         self.log: list[str] = []
         self.done = False
@@ -627,12 +620,6 @@ class CompileJob:
             self._run_steps()
         finally:
             self._proc = None
-            for p in (self.progress_path, self.progress_path and self.progress_path + ".tmp"):
-                if p and os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
             if _ACTIVE_JOBS.get(self.base) is self:
                 del _ACTIVE_JOBS[self.base]
 

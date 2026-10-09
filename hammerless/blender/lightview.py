@@ -5,7 +5,6 @@ exported, and turning it off frees it. It shows the compiled map's own faces, so
 wall the light stays where the compiled wall was until the next compile.
 """
 import os
-import threading
 import time
 
 import bpy
@@ -20,8 +19,6 @@ _state = {"path": None, "mtime": None, "data": None, "batch": None, "texture": N
 _status = {"key": None, "time": 0.0, "value": ("NONE", "")}
 _handlers = []
 _SHADER = None
-# a bake being watched: its progress file (the map with the lighting so far), read off the main thread
-_watch = {"file": None, "bsp": None, "mtime": None, "reading": None, "result": None}
 
 
 def _shader():
@@ -85,60 +82,6 @@ def load(context, path: str | None = None) -> str | None:
     return None
 
 
-def watch(context, progress_file: str) -> None:
-    """Show a running bake's lighting as it goes: each time the light compiler writes its progress file."""
-    _watch.update(file=progress_file, bsp=bsp_path(context), mtime=None, reading=None, result=None)
-    if not bpy.app.timers.is_registered(_watch_tick):
-        bpy.app.timers.register(_watch_tick, first_interval=0.2)
-
-
-def _read_progress(path: str, mtime: float) -> None:
-    try:
-        with open(path, "rb") as f:
-            data = read_lightmaps(f.read())
-        _watch["result"] = (mtime, data)
-    except Exception:                    # (replaced or removed meanwhile: the next one comes)
-        _watch["result"] = None
-
-
-def _watch_tick():
-    path = _watch["file"]
-    if not path:
-        return None
-    if _watch["reading"] is not None and not _watch["reading"].is_alive():
-        _watch["reading"] = None
-        result, _watch["result"] = _watch["result"], None
-        if result and result[1].faces:
-            s = bpy.context.scene.hammerless if bpy.context.scene else None
-            if s and os.path.normcase(bsp_path(bpy.context)) == os.path.normcase(_watch["bsp"]):
-                try:
-                    bsp_mtime = os.path.getmtime(_watch["bsp"])
-                except OSError:
-                    bsp_mtime = None
-                # (shown as the map's own lighting: the finished map, written last, replaces it)
-                _state.update(path=_watch["bsp"], mtime=bsp_mtime, data=result[1], batch=None, texture=None,
-                              scale=None, error=None, loaded_at=time.time(), edited=False)
-                if not s.show_lightmap:
-                    s.show_lightmap = True
-                _redraw()
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        mtime = None
-    if mtime is None:
-        from ..core import compile as cc
-        if not cc.compile_running(os.path.splitext(_watch["bsp"])[0] + ".vmf") and _watch["reading"] is None:
-            _watch["file"] = None        # (the build is over: the finished map is shown the usual way)
-            return None
-        return 0.2
-    if mtime != _watch["mtime"] and _watch["reading"] is None:
-        _watch["mtime"] = mtime
-        t = threading.Thread(target=_read_progress, args=(path, mtime), daemon=True)
-        _watch["reading"] = t
-        t.start()
-    return 0.2
-
-
 def clear() -> None:
     _state.update(path=None, mtime=None, data=None, batch=None, texture=None, scale=None, error=None,
                   loaded_at=None)
@@ -165,9 +108,7 @@ def _follow_compiles() -> None:
         mtime = os.path.getmtime(_state["path"])
     except OSError:
         return
-    if _watch["file"] and mtime != _state["mtime"] and not bpy.app.timers.is_registered(_watch_tick):
-        _watch["file"] = None
-    if mtime != _state["mtime"] and now - mtime > 1.0 and not _watch["file"]:   # (finished writing)
+    if mtime != _state["mtime"] and now - mtime > 1.0:       # (finished writing)
         _state["mtime"] = mtime                                # (once per build, even when it has no lighting)
         err = load(bpy.context, _state["path"])
         if err:
@@ -351,8 +292,7 @@ def draw_panel(layout, context):
     _note(layout, [f"Built {mins} min ago" if mins else "Built just now",
                    f"{d.faces:,} faces, {d.luxels:,} light samples"], icon="TIME")
     if kind == "BUSY":
-        _note(layout, ["Baking... showing the lighting so far" if _watch["file"] else
-                       "Building... the view updates when it's done"], icon="SORTTIME")
+        _note(layout, ["Building... the view updates when it's done"], icon="SORTTIME")
     elif _state["edited"]:
         box = layout.box()
         _note(box, ["You've changed the scene since this", "bake: bake again to update the lighting"],
@@ -395,9 +335,6 @@ def register():
 
 
 def unregister():
-    _watch["file"] = None
-    if bpy.app.timers.is_registered(_watch_tick):
-        bpy.app.timers.unregister(_watch_tick)
     if _forget_on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_forget_on_load)
     if _on_depsgraph in bpy.app.handlers.depsgraph_update_post:
