@@ -18,6 +18,7 @@
 #include "shaders/ambient.spv.h"
 #include "shaders/propind.spv.h"
 #include "shaders/vis.spv.h"
+#include "shaders/gi.spv.h"
 
 int g_bGPU;
 int g_gpuCheck;                   /* (debugging, HLGPUCHK: the GPU's answers checked against the CPU's, single threaded) */
@@ -281,7 +282,7 @@ static void Run(program_t *p, const accel_t *scene, gbuf_t *const *bufs, const v
 }
 
 /* ------------------------------------------------------------------ start */
-static program_t prog_gather, prog_ambient, prog_propind, prog_vis;
+static program_t prog_gather, prog_ambient, prog_propind, prog_vis, prog_gi;
 
 static int HasExtension(VkPhysicalDevice p, const char *name) {
     uint32_t n = 0;
@@ -401,7 +402,8 @@ static int StartGPU(void) {
     prog_ambient = Program(spv_ambient, sizeof(spv_ambient), 19, 36);
     prog_propind = Program(spv_propind, sizeof(spv_propind), 19, 16);
     prog_vis = Program(spv_vis, sizeof(spv_vis), 4, 4);
-    if (!prog_gather.ok || !prog_ambient.ok || !prog_propind.ok || !prog_vis.ok) {
+    prog_gi = Program(spv_gi, sizeof(spv_gi), 7, 16);
+    if (!prog_gather.ok || !prog_ambient.ok || !prog_propind.ok || !prog_vis.ok || !prog_gi.ok) {
         Msg("Warning: the graphics card's driver didn't take hlvrad's GPU programs: lighting on the CPU\n");
         return 0;
     }
@@ -428,7 +430,8 @@ int GPU_Init(void) {
 }
 
 /* ------------------------------------------------------------------ the shadow scene and the lights */
-static accel_t shadow_tlas;
+static accel_t shadow_tlas, shadow_props;
+static int have_props;
 static gbuf_t propids, lightbuf, pvsbuf, skydirs, skymapbuf;
 static int nlights;
 static int slotstyle[256], nslots, styleslot[256];
@@ -446,12 +449,12 @@ void GPU_ShadowScene(void) {
         else if (id & TRACE_ID_STATICPROP) ids[np] = id & ~TRACE_ID_STATICPROP, memcpy(props + 9 * np++, v + 9 * i, 36);
         else memcpy(world + 9 * nw++, v + 9 * i, 36);
     }
-    static accel_t bw, bs, bp;
+    static accel_t bw, bs;
     static gbuf_t vw, vs, vp, ib;
     accel_t *blas[3] = {NULL, NULL, NULL};
     if (nw) bw = TriangleBLAS(world, (uint32_t)nw, 1, &vw), blas[0] = &bw;
     if (ns) bs = TriangleBLAS(sky, (uint32_t)ns, 1, &vs), blas[1] = &bs;
-    if (np) bp = TriangleBLAS(props, (uint32_t)np, 0, &vp), blas[2] = &bp;
+    if (np) shadow_props = TriangleBLAS(props, (uint32_t)np, 0, &vp), blas[2] = &shadow_props, have_props = 1;
     shadow_tlas = TopLevel(blas, 3, &ib);
     propids = Upload(ids, sizeof(int) * (np ? np : 1));
     free(world), free(sky), free(props), free(ids);
@@ -583,6 +586,36 @@ void GPU_Ambient(const float *points, int n, const float skylight[4], float *out
         WalkBuffers(bufs, &anorms);
         Run(&prog_ambient, &shadow_tlas, bufs, &pc, sizeof(pc), (uint32_t)k);
         memcpy(out + 18 * (size_t)at, out_buf.map, 72 * (size_t)k);
+    }
+}
+
+/* ------------------------------------------------------------------ -gi: bounced light by final gathering */
+static accel_t gi_tlas;
+static gbuf_t gi_tris;
+
+/* the surfaces rays pick light up from (faces and displacements, with what each triangle is) and the props as blockers */
+void GPU_GIScene(const float *verts, const gpustri_t *tris, int ntris) {
+    static accel_t b;
+    static gbuf_t vb, ib;
+    accel_t *blas[3] = {NULL, NULL, have_props ? &shadow_props : NULL};
+    if (ntris) b = TriangleBLAS(verts, (uint32_t)ntris, 1, &vb), blas[0] = &b;
+    gi_tlas = TopLevel(blas, 3, &ib);
+    gi_tris = Upload(tris, sizeof(gpustri_t) * (ntris ? ntris : 1));
+}
+
+/* each point's bounced light (gi.comp), rays a point: per point 16 floats (4 normals' colours) */
+void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *out) {
+    struct { int ngroups, nrays, seed, pad; } pc = {0, rays, seed, 0};
+    int chunk = JobSize(4.0 * rays, RAY_BUDGET, GATHER_CHUNK);
+    for (int at = 0; at < n; at += chunk) {
+        int k = n - at < chunk ? n - at : chunk;
+        Ensure(&in_buf, sizeof(gpugroup_t) * (size_t)k);
+        Ensure(&out_buf, 64 * 4 * (size_t)k);
+        memcpy(in_buf.map, groups + at, sizeof(gpugroup_t) * (size_t)k);
+        pc.ngroups = k;
+        gbuf_t *bufs[7] = {NULL, &in_buf, &gi_tris, &walkbufs[4], &lightdata, &out_buf, &walkbufs[0]};
+        Run(&prog_gi, &gi_tlas, bufs, &pc, sizeof(pc), 4 * (uint32_t)k);
+        memcpy(out + 64 * (size_t)at, out_buf.map, 64 * 4 * (size_t)k);
     }
 }
 

@@ -1668,7 +1668,8 @@ void FinalLightFace(int facenum) {
     for (int k = 0; k < nstyles; k++) {
         int isdisp = f->dispinfo != -1;
         radial_t *rad = isdisp ? BuildDispLuxelRadial(facenum, k) : BuildLuxelRadial(facenum, k);
-        radial_t *prad = g_numbounce > 0 && k == 0 ? (isdisp ? BuildDispPatchRadial(facenum, bump) : BuildPatchRadial(facenum)) : NULL;
+        radial_t *prad = g_numbounce > 0 && !g_giPasses && k == 0
+                             ? (isdisp ? BuildDispPatchRadial(facenum, bump) : BuildPatchRadial(facenum)) : NULL;
         unsigned char *pdata[NUM_BUMP_VECTS + 1];
         for (int b = 0; b < bumpCount; b++) pdata[b] = dlightdata + f->lightofs + (k * bumpCount + b) * fl->numluxels * 4;
         int avgCount = 0;
@@ -1718,6 +1719,86 @@ void FinalLightFace(int facenum) {
 }
 
 void AllocFacelights(void) { facelight = xalloc(sizeof(facelight_t) * (numfaces + 1)); }
+
+/* -gi: bounced light by final gathering, instead of vrad's patches. Each face's lightmap samples (the points their
+ * direct light was gathered at) get the light the lightmaps around them send back (gi.comp), g_giPasses times: each
+ * pass gathers from the lightmaps the last one made (direct + bounced so far), so n passes give n bounces. */
+int g_giPasses, g_giRays = 256;
+static void FinalWork(int face, int thread) { (void)thread; FinalLightFace(face); }
+
+void BuildIndirectGPU(void) {
+    if (!g_giPasses) return;
+    GpuGISurfaces();
+    /* the points: every lit face's samples, 4 at a time as their direct light was gathered */
+    int cap = 4096, n = 0;
+    gpugroup_t *groups = xalloc(sizeof(gpugroup_t) * cap);
+    int (*where)[2] = xalloc(sizeof(int[2]) * cap);            /* (face, first sample) */
+    int *k0 = xalloc(sizeof(int) * (numfaces + 1));
+    vec3_t *(*direct)[NUM_BUMP_VECTS + 1] = xalloc(sizeof(*direct) * (numfaces + 1));
+    for (int facenum = 0; facenum < numfaces; facenum++) {
+        dface_t *f = &g_pFaces[facenum];
+        facelight_t *fl = &facelight[facenum];
+        k0[facenum] = -1;
+        if ((texinfo[f->texinfo].flags & TEX_SPECIAL) || f->lightofs < 0 || !fl->numsamples) continue;
+        int k;
+        for (k = 0; k < MAXLIGHTMAPS && f->styles[k] != 255 && f->styles[k] != 0; k++) {}
+        if (k >= MAXLIGHTMAPS || f->styles[k] != 0) continue;
+        k0[facenum] = k;
+        lightinfo_t l;
+        InitLightinfo(&l, facenum);
+        int isdisp = f->dispinfo != -1;
+        const texinfo_t *tex = &texinfo[f->texinfo];
+        int normalCount = tex->flags & SURF_BUMPLIGHT ? NUM_BUMP_VECTS + 1 : 1;
+        vec3_t flatBump[NUM_BUMP_VECTS];
+        if (l.isflat && normalCount > 1)
+            GetBumpNormals(tex->textureVecsTexelsPerWorldUnits[0], tex->textureVecsTexelsPerWorldUnits[1], l.facenormal,
+                           l.facenormal, flatBump);
+        for (int b = 0; b < normalCount; b++) {            /* (the direct light, kept: each pass adds to it afresh) */
+            direct[facenum][b] = xalloc(sizeof(vec3_t) * (fl->numsamples + 1));
+            memcpy(direct[facenum][b], fl->light[k][b], sizeof(vec3_t) * fl->numsamples);
+        }
+        for (int group = 0; group < fl->numsamples; group += LANES) {
+            int count = fl->numsamples - group < LANES ? fl->numsamples - group : LANES;
+            float pos[LANES][3], nin[LANES][3], nout[LANES][3];
+            for (int i = 0; i < LANES; i++) {
+                sample_t *sp = &fl->sample[group + (i < count ? i : count - 1)];
+                VectorCopy(sp->pos, pos[i]);
+                VectorCopy(sp->normal, nin[i]);
+            }
+            points4_t p;
+            int cluster[LANES];
+            SetupPoints4(&l, facenum, normalCount, isdisp, (const vec3_t *)flatBump, (const float(*)[3])pos,
+                         (const float(*)[3])nin, &p, cluster, nout);
+            if (n == cap) cap *= 2, groups = realloc(groups, sizeof(gpugroup_t) * cap), where = realloc(where, sizeof(int[2]) * cap);
+            gpugroup_t *q = &groups[n];
+            memset(q, 0, sizeof(*q));
+            memcpy(q->pos, p.pos, sizeof(q->pos));
+            for (int b = 0; b < normalCount; b++) memcpy(q->nrm[b], p.normals[b], sizeof(q->nrm[b]));
+            q->lanes = count, q->normalCount = normalCount;
+            where[n][0] = facenum, where[n][1] = group;
+            n++;
+        }
+    }
+    float *out = xalloc(sizeof(float) * 64 * (size_t)(n + 1));
+    for (int pass = 0; pass < g_giPasses; pass++) {
+        double t0 = Seconds();
+        GPU_Lightmaps();
+        GPU_GIGather(groups, n, g_giRays, pass + 1, out);
+        for (int g = 0; g < n; g++) {
+            int facenum = where[g][0], first = where[g][1], k = k0[facenum];
+            facelight_t *fl = &facelight[facenum];
+            for (int i = 0; i < groups[g].lanes; i++)
+                for (int b = 0; b < groups[g].normalCount; b++)
+                    for (int c = 0; c < 3; c++)
+                        fl->light[k][b][first + i][c] = direct[facenum][b][first + i][c] + out[64 * (size_t)g + 16 * i + 3 * b + c];
+        }
+        RunThreadsOn(numfaces, FinalWork);
+        if (getenv("HLGPUDBG")) Msg("GI pass %d: %d points, %d rays each, %.3f s\n", pass + 1, 4 * n, g_giRays, Seconds() - t0);
+    }
+    for (int facenum = 0; facenum < numfaces; facenum++)
+        for (int b = 0; b < NUM_BUMP_VECTS + 1; b++) free(direct[facenum][b]);
+    free(groups), free(where), free(k0), free(direct), free(out);
+}
 
 /* -gpu: every face's direct light in rounds (see GpuQuery) */
 static int *roundfaces;

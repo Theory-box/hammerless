@@ -60,8 +60,10 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-lights") && i + 1 < argc) designer_lights = argv[++i];
         else if (!_stricmp(a, "-bounce") && i + 1 < argc) g_numbounce = atoi(argv[++i]);
         else if (!_stricmp(a, "-threads") && i + 1 < argc) g_numthreads = atoi(argv[++i]);
-        else if (!_stricmp(a, "-embree")) g_bEmbree = 1;
-        else if (!_stricmp(a, "-gpu")) g_bGPU = 1;              /* (the GPU's ray tracing: faster, not vrad's to the bit) */         /* (Embree's tracer: faster, not vrad's to the bit) */
+        else if (!_stricmp(a, "-embree")) g_bEmbree = 1;         /* (Embree's tracer: faster, not vrad's to the bit) */
+        else if (!_stricmp(a, "-gpu")) g_bGPU = 1;               /* (the GPU's ray tracing: faster, not vrad's to the bit) */
+        else if (!_stricmp(a, "-gi") && i + 1 < argc) g_giPasses = atoi(argv[++i]);    /* (bounces by final gathering: -gpu) */
+        else if (!_stricmp(a, "-girays") && i + 1 < argc) g_giRays = atoi(argv[++i]);            /* (its rays a sample) */
         else if (!_stricmp(a, "-chop") && i + 1 < argc) minchop = (float)atof(argv[++i]);     /* (patches at a face's edges) */
         else if (!_stricmp(a, "-maxchop") && i + 1 < argc) maxchop = (float)atof(argv[++i]);  /* (and inside it) */
         else if (!_stricmp(a, "-dispchop")) {
@@ -192,7 +194,11 @@ int main(int argc, char **argv) {
     else RunThreadsOn(numfaces, FacelightsWork);
     Stage("direct lighting (faces)");
     PrecompLightmapOffsets();
-    if (g_numbounce > 0) {
+    if (g_giPasses && !g_bGPU) {
+        Msg("Warning: -gi needs the GPU: vrad's bounced light instead\n");
+        g_giPasses = 0;
+    }
+    if (g_numbounce > 0 && !g_giPasses) {
         Stage("lightmap offsets");
         MakeAllScales();
         Stage("transfers");
@@ -202,6 +208,10 @@ int main(int argc, char **argv) {
     PrepareFinalLight();
     RunThreadsOn(numfaces, FinalLightWork);
     Stage("final light");
+    if (g_giPasses) {
+        BuildIndirectGPU();
+        Stage("gi (bounced light)");
+    }
     ExportDirectLightsToWorldLights();
     ComputeDetailPropLighting();
     Stage("detail props");

@@ -256,6 +256,12 @@ void GPU_Lightmaps(void);
 void GPU_Ambient(const float *points, int n, const float skylight[4], float *out);   /* out: 18 floats per point */
 void GPU_PropIndirect(const float *points, int n, float *out);
 void GPU_PatchEnds(const float *ends, int n);
+typedef struct { int face, kind; float lux[6]; } gpustri_t;     /* (gi.comp's STri: 0 face, 1 disp, 2 sky) */
+void GPU_GIScene(const float *verts, const gpustri_t *tris, int ntris);
+void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *out);   /* out: 16 floats a point */
+extern int g_giPasses, g_giRays;                                  /* (-gi n, -girays n) */
+void BuildIndirectGPU(void);
+void GpuGISurfaces(void);
 void GPU_ClearPairs(const int *pairs, int n, uint32_t *bits);                  /* (shooter, receiver) in */                       /* in 7, out 3 per vertex */
 const float *RT_Triangles(int *n);
 const float *SkyMapData(int *w, int *h);

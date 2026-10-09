@@ -1050,7 +1050,7 @@ static void GpuWalkScene(void) {
         g->b[0] = f->m_LightmapTextureMinsInLuxels[0], g->b[1] = f->m_LightmapTextureMinsInLuxels[1];
         g->b[2] = (tx->flags & SURF_BUMPLIGHT) && !(tx->flags & SURF_NOLIGHT) ? 4 : 1;
         g->b[3] = tx->flags;
-        g->c[0] = f->planenum, g->c[1] = (f->onnode ? 1 : 0) | (f->dispinfo != -1 ? 2 : 0);
+        g->c[0] = f->planenum, g->c[1] = (f->onnode ? 1 : 0) | (f->dispinfo != -1 ? 2 : 0) | (f->side ? 4 : 0);
         g->c[2] = at, g->c[3] = facewindings[i]->numpoints;
         for (int k = 0; k < facewindings[i]->numpoints; k++, at++) memcpy(wind + 4 * at, facewindings[i]->p[k], 12);
         memcpy(g->refl, dtexdata[tx->texdata].reflectivity, 12);
@@ -1090,6 +1090,46 @@ static void GpuWalkScene(void) {
     GPU_WalkScene(&w);
     free(planes), free(nodes), free(leaves), free(ld), free(lf), free(faces), free(wind), free(disps), free(dv), free(dl);
     free(dt), free(dor), free(dn);
+}
+
+/* -gi: the surfaces gathering rays meet, as triangles: every face (lit ones with their lightmap, sky and unlit ones
+ * only blocking) and the displacements with their corners' luxels (as ClipRayToDispInLeaf orders them) */
+void AmbientSetup(void);
+void GpuGISurfaces(void) {
+    AmbientSetup();
+    int cap = 4096, n = 0;
+    float *v = xalloc(sizeof(float) * 9 * cap);
+    gpustri_t *t = xalloc(sizeof(gpustri_t) * cap);
+#define GI_TRI(a, b, c, tri)                                                                      \
+    do {                                                                                          \
+        if (n == cap) cap *= 2, v = realloc(v, sizeof(float) * 9 * cap), t = realloc(t, sizeof(gpustri_t) * cap); \
+        memcpy(v + 9 * n, a, 12), memcpy(v + 9 * n + 3, b, 12), memcpy(v + 9 * n + 6, c, 12);    \
+        t[n++] = tri;                                                                             \
+    } while (0)
+    for (int i = 0; i < numfaces; i++) {
+        const dface_t *f = &g_pFaces[i];
+        if (f->dispinfo != -1) continue;
+        /* (only what vrad's rays stop at: no triggers or other tools faces, glass, fences, water) */
+        int flags = texinfo[f->texinfo].flags;
+        if (!(flags & SURF_SKY) && ((flags & (SURF_NOLIGHT | 0x0010)) || f->lightofs < 0)) continue;   /* (0x10: SURF_TRANS) */
+        gpustri_t tri = {i, (flags & SURF_SKY) ? 2 : 0, {0}};
+        const winding_t *w = facewindings[i];
+        for (int j = 2; j < w->numpoints; j++) GI_TRI(w->p[0], w->p[j - 1], w->p[j], tri);
+    }
+    for (int i = 0; i < numdispsurfs; i++) {
+        const dispsurf_t *d = &dispsurfs[i];
+        const dispcoll_t *c = &dcoll[i];
+        if (d->face < 0 || !(d->contents & MASK_OPAQUE)) continue;
+        for (int k = 0; k < c->ntris; k++) {
+            int i0 = c->tris[k][0], i1 = c->tris[k][2], i2 = c->tris[k][1];
+            gpustri_t tri = {c->face, 1, {c->luxel[i0][0], c->luxel[i0][1], c->luxel[i1][0], c->luxel[i1][1],
+                                          c->luxel[i2][0], c->luxel[i2][1]}};
+            GI_TRI(d->verts[i0], d->verts[i1], d->verts[i2], tri);
+        }
+    }
+#undef GI_TRI
+    GPU_GIScene(v, t, n);
+    free(v), free(t);
 }
 
 /* what the rays need (also for detail props): the tree's parents, displacements' triangles, the sky light */

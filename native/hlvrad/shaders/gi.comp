@@ -1,0 +1,102 @@
+#version 460
+#extension GL_EXT_ray_query : require
+// -gi: bounced light by final gathering. Each lightmap sample (a point of a group, as gather.comp's) sends rays over its
+// hemisphere (cosine-weighted, a stratified set turned by a random amount per point); a ray brings back the light the
+// surface it meets has in the current lightmaps times that surface's reflectivity. The mean is the bounced light at the
+// point; for bump normals, the same rays weighted towards each. Out: per point 4 normals' colours (16 floats).
+layout(local_size_x = 64) in;
+
+struct Group { vec4 pos[3]; vec4 nrm[12]; ivec4 cluster; int lanes, normalCount, flags, skip, slot, pad0, pad1, pad2; };
+struct STri { int face, kind; float lux[6]; };       // kind 0 a face, 1 a displacement, 2 sky
+struct WFace { vec4 lmS, lmT; ivec4 a; ivec4 b; ivec4 c; vec4 refl; };
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT scene;   // instance 0 the surfaces, 2 the props
+layout(set = 0, binding = 1, std430) readonly buffer Groups { Group groups[]; };
+layout(set = 0, binding = 2, std430) readonly buffer Tris { STri tris[]; };
+layout(set = 0, binding = 3, std430) readonly buffer Faces { WFace faces[]; };
+layout(set = 0, binding = 4, std430) readonly buffer LightData { uint lightdata[]; };
+layout(set = 0, binding = 5, std430) writeonly buffer Out { float outv[]; };
+layout(set = 0, binding = 6, std430) readonly buffer Planes { vec4 planes[]; };
+layout(push_constant) uniform PC { int ngroups, nrays, seed, pad; } pc;
+
+const float RAY_LENGTH = 56755.84;
+
+int LightByte(int i) { return int((lightdata[i >> 2] >> (8 * (i & 3))) & 0xFFu); }
+vec3 Rgbe(int ofs) {          // a lightmap colour as vrad's light units (c * 2^e)
+    int e = LightByte(ofs + 3);
+    if (e > 127) e -= 256;
+    return vec3(float(LightByte(ofs)), float(LightByte(ofs + 1)), float(LightByte(ofs + 2))) * exp2(float(e));
+}
+
+// the light leaving the surface a ray meets (its lightmap's first style, flat page, times reflectivity)
+vec3 Radiance(vec3 o, vec3 d) {
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, scene, gl_RayFlagsOpaqueEXT, 0xFF, o, 0.0, d, RAY_LENGTH);
+    while (rayQueryProceedEXT(q)) {}
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) return vec3(0.0);
+    if (rayQueryGetIntersectionInstanceCustomIndexEXT(q, true) != 0) return vec3(0.0);     // (a prop: blocks only)
+    int prim = rayQueryGetIntersectionPrimitiveIndexEXT(q, true);
+    int kind = tris[prim].kind, f = tris[prim].face;
+    if (kind >= 2) return vec3(0.0);                                  // (sky: in the direct light already)
+    int lightofs = faces[f].a.x, styles = faces[f].a.y;
+    if (lightofs < 0 || (styles & 0xFF) != 0) return vec3(0.0);
+    vec2 lux;
+    if (kind == 1) {
+        vec2 bc = rayQueryGetIntersectionBarycentricsEXT(q, true);
+        vec2 l0 = vec2(tris[prim].lux[0], tris[prim].lux[1]), l1 = vec2(tris[prim].lux[2], tris[prim].lux[3]),
+             l2 = vec2(tris[prim].lux[4], tris[prim].lux[5]);
+        lux = l0 + bc.x * (l1 - l0) + bc.y * (l2 - l0);
+    } else {
+        vec3 fn = planes[faces[f].c.x].xyz;                             // (a face's plane faces its way)
+        if (dot(fn, d) > 0.0) return vec3(0.0);                         // (its back: through a gap, or from inside)
+        vec3 pt = o + d * rayQueryGetIntersectionTEXT(q, true);
+        lux = vec2(dot(pt, faces[f].lmS.xyz) + faces[f].lmS.w - float(faces[f].b.x),
+                   dot(pt, faces[f].lmT.xyz) + faces[f].lmT.w - float(faces[f].b.y));
+    }
+    int smax = faces[f].a.z, tmax = faces[f].a.w;
+    int ds = clamp(int(lux.x), 0, smax - 1), dt = clamp(int(lux.y), 0, tmax - 1);
+    return Rgbe(lightofs + 4 * (dt * smax + ds)) * faces[f].refl.xyz;
+}
+
+uint Hash(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+
+void main() {
+    uint t = gl_GlobalInvocationID.x;
+    int gi = int(t >> 2), lane = int(t & 3u);
+    if (gi >= pc.ngroups) return;
+    uint o = t * 16u;
+    vec3 sum[4] = vec3[4](vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
+    if (lane < groups[gi].lanes) {
+        int nc = groups[gi].normalCount;
+        vec3 pos = vec3(groups[gi].pos[0][lane], groups[gi].pos[1][lane], groups[gi].pos[2][lane]);
+        vec3 n[4];
+        for (int k = 0; k < 4; k++)
+            n[k] = k < nc ? vec3(groups[gi].nrm[k * 3][lane], groups[gi].nrm[k * 3 + 1][lane], groups[gi].nrm[k * 3 + 2][lane])
+                          : vec3(0.0);
+        vec3 nz = normalize(n[0]);
+        vec3 nx = normalize(abs(nz.z) < 0.9 ? cross(nz, vec3(0, 0, 1)) : cross(nz, vec3(1, 0, 0)));
+        vec3 ny = cross(nz, nx);
+        uint h = Hash(t * 9781u + uint(pc.seed) * 6271u);
+        float r0 = float(h & 0xFFFFu) / 65536.0, r1 = float(h >> 16) / 65536.0;     // (this point's turn of the set)
+        float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
+        for (int i = 0; i < pc.nrays; i++) {
+            float u = fract((float(i) + 0.5) / float(pc.nrays) + r0);              // (a Hammersley set, turned)
+            float v = fract(float(bitfieldReverse(uint(i))) / 4294967296.0 + r1);
+            float phi = 6.2831853 * u, ct = sqrt(1.0 - v), st = sqrt(v);           // (cosine-weighted)
+            vec3 d = nx * (cos(phi) * st) + ny * (sin(phi) * st) + nz * ct;
+            vec3 L = Radiance(pos + nz * 0.25, d);          // (a little off the surface: not hitting itself)
+            sum[0] += L;
+            wsum[0] += 1.0;
+            for (int k = 1; k < nc; k++) {          // (a bump normal: the rays weighted by its cosine over the normal's)
+                float w = max(dot(n[k], d), 0.0) / max(ct, 0.05);
+                sum[k] += L * w;
+                wsum[k] += w;
+            }
+        }
+        for (int k = 0; k < nc; k++) sum[k] = wsum[k] > 0.0 ? sum[k] / wsum[k] : vec3(0.0);
+    }
+    for (int k = 0; k < 4; k++) outv[o + 3 * k] = sum[k].x, outv[o + 3 * k + 1] = sum[k].y, outv[o + 3 * k + 2] = sum[k].z;
+}
