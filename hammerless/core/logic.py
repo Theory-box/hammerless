@@ -797,7 +797,6 @@ class _Compiler:
             fire("started", start, "OnTrigger")
             fire("completed", done, "OnTrigger")
         elif k == "DIRECTOR_SETTINGS":
-            from .entities import CRESCENDO
             from .gamefiles import crescendo_key, director_input_script, director_option_lines
             # never the map-wide Director script's name (which a node called 'Director' would take), nor a
             # crescendo's: its script file has the same form, and one would replace the other

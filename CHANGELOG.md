@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 (test release, 2026-10-09)
 
 - **A panel per system, each with its own Quality.** The sidebar now has *Lighting*, *Visibility*, *Nav Mesh* and *Sound* panels, each holding everything about it: the compiler, its settings and its view (the old *View* panel's parts moved into them; *Sky & Sun* moved from World to Lighting).
   - **Lighting Quality** (Off / Fast / Normal / Final / Ultra / Custom) fills in settings you can see and change: sky rays, supersampling (points, passes, edge threshold), bounces, bounce patch size, prop lighting, prop shadows from the full model, and *Fix vrad's Quirks*. Changing one makes it Custom.
@@ -9,6 +9,18 @@
   - Changing only lighting settings relights the map without rebuilding its geometry.
 - **Ultra lighting** (Hammerless light compiler): Final plus 8 × 8 supersampling points, more passes, a lower edge threshold, and vrad's quirks fixed: edge luxels vrad leaves dark (a stale value in its supersampling drops valid points), bounced light picked up from a face's lightmap rectangle instead of the face, far displacements hiding nearer faces, and props' bounced light missing far surfaces. It goes beyond vrad's look on purpose (it is not vrad-identical). On a real map on an RTX 4090: 2.6 s (15 s on the CPU).
 - The light compiler takes `-sspoints`, `-sspasses`, `-ssthreshold`, `-fixquirks`, and vrad's `-chop` / `-maxchop` (bounce patch size, before ignored).
+- **Fixes from a full audit:**
+  - **Sky Light from an HDRI was turned half way round:** the sun in the image lit the map from the opposite side to where Blender shows it.
+  - **Quality presets:** a scene made with this version could have its lighting settings reset when reopened; picking *Mixed* by hand now shows the real levels; an older file's own prop lighting choice is kept at every level.
+  - **Smart builds:** changing Cycles' settings relights instead of rebuilding the whole map; the sky's picture only counts (and is only prepared) when the Hammerless light compiler lights the map; settings Fast lighting ignores don't relight.
+  - **A Cycles bake that was skipped or failed** was recorded as done, so later builds never baked again.
+  - **Build & Play:** a game you close while it's still starting no longer leads, a minute and a half later, to a bare game with the wrong window; an earlier build's console steps can't reach a newer launch; an installed Hammerless game mode is updated before the game starts.
+  - **Crashes:** a Detail brush (or a brush entity without a name) used by a Button, Move or Show/Hide node; Sky Light *From the Skybox* with a sky that can't be read; a survivor start that reaches no floor (sound).
+  - **Baked Lighting view:** it kept showing after opening another file, could show one map's lighting over another, and re-read the map every second after a build without lighting.
+  - **Custom Models:** collision pieces too detailed for the game's format are left out with a warning (they were written broken); objects sharing a mesh but with different modifiers no longer share one model; alpha (Cutout / Blended) materials; game-path materials with a Surface keep their texture.
+  - **Export:** Geometry Nodes instances of geometry export their own shape; Outputs with a comma are left out with a warning (they split into the wrong fields); a Director Settings node can't replace a crescendo's script; script functions from nodes with similar names no longer clash.
+  - **Light compiler:** a map without visibility is lit directly only (as vrad does) instead of reading past its tables; very big maps stop with a clear message instead of overflowing; a graphics driver that refuses the GPU programs falls back to the CPU; GPU work is split so Windows never resets a busy graphics card.
+  - **Map compiler:** maps over Valve's limits (leaf faces, leaf brushes, brush entities, primitives) stop with vbsp's message instead of writing a broken map.
 
 ## 0.9.0 (test release, 2026-10-08)
 

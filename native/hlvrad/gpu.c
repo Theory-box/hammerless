@@ -504,7 +504,7 @@ void GPU_Lights(void) {
 /* (a job's size from its work: Windows resets a GPU busy for 2 seconds, and a game may share the card. Budgets:
  * hardware rays a job, and tree walks, which are much slower) */
 #define RAY_BUDGET 100000000.0
-#define WALK_BUDGET 30000000.0
+#define WALK_BUDGET 160000000.0       /* (a job about 0.3 s on an RTX 4090: room for cards a few times slower) */
 static int JobSize(double per_item, double budget, int most) {
     double k = budget / (per_item > 1 ? per_item : 1);
     return k < 64 ? 64 : k > most ? most : (int)k;
