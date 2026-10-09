@@ -1780,10 +1780,14 @@ void BuildIndirectGPU(void) {
         }
     }
     float *out = xalloc(sizeof(float) * 64 * (size_t)(n + 1));
+    double last = 0;
     for (int pass = 0; pass < g_giPasses; pass++) {
-        double t0 = Seconds();
+        double t0 = Seconds(), total = 0;
         GPU_Lightmaps();
         GPU_GIGather(groups, n, g_giRays, pass + 1, out);
+        for (int g = 0; g < n; g++)
+            for (int i = 0; i < groups[g].lanes; i++)
+                for (int c = 0; c < 3; c++) total += out[64 * (size_t)g + 16 * i + c];
         for (int g = 0; g < n; g++) {
             int facenum = where[g][0], first = where[g][1], k = k0[facenum];
             facelight_t *fl = &facelight[facenum];
@@ -1794,6 +1798,10 @@ void BuildIndirectGPU(void) {
         }
         RunThreadsOn(numfaces, FinalWork);
         if (getenv("HLGPUDBG")) Msg("GI pass %d: %d points, %d rays each, %.3f s\n", pass + 1, 4 * n, g_giRays, Seconds() - t0);
+        /* (a pass gives all the bounced light so far: once one adds next to nothing, stop, as vrad's bounces do) */
+        Msg("\tGI bounce #%i: %.2f%% more\n", pass + 1, last > 0 ? 100.0 * (total - last) / last : 100.0);
+        if (pass > 0 && total - last < 0.002 * last) break;
+        last = total;
     }
     for (int facenum = 0; facenum < numfaces; facenum++)
         for (int b = 0; b < NUM_BUMP_VECTS + 1; b++) free(direct[facenum][b]);

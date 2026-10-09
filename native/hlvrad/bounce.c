@@ -14,7 +14,7 @@
 #define ON_EPSILON 0.1f
 #define PLANE_TEST_EPSILON 0.01
 #define TRANSFER_EPSILON 0.0000001
-#define MAX_PATCHES (4 * 65536)
+#define MAX_PATCHES (1 << 22)        /* (L4D2's vrad takes more than older Source's 4 * 65536) */
 #define SURF_NOCHOP 0x4000
 #define PI 3.14159265358979323846
 
@@ -533,7 +533,7 @@ typedef struct { int patch; float transfer; } transfer_t;
 static void MakeTransfer(int i1, int i2, transfer_t *all) {
     patch_t *p1 = &patches[i1], *p2 = &patches[i2];
     if (texinfo[g_pFaces[p2->face].texinfo].flags & SURF_SKY) return;
-    if (p1->numtransfers >= MAX_PATCHES) return;
+    if (p1->numtransfers >= numpatches) return;
     if (p2->area <= 0) return;
     float scale = FormFactorDiffToDiff(p2, p1);
     if (scale <= 0) return;
@@ -675,12 +675,13 @@ static void ScalesWork(int item, int thread) {
     static __thread int *face_tested, *disp_tested, stamp;       /* (tested: == this patch's stamp) */
     static __thread int pvs_cluster;
     if (!all) {
-        all = xalloc(sizeof(transfer_t) * MAX_PATCHES);
-        test_shooter = xalloc(sizeof(int) * MAX_PATCHES);
-        test_receiver = xalloc(sizeof(int) * MAX_PATCHES);
-        test_hit = xalloc(sizeof(int) * MAX_PATCHES);
-        test_dist = xalloc(sizeof(float) * MAX_PATCHES);
-        test_len = xalloc(sizeof(float) * MAX_PATCHES);
+        size_t n = (size_t)numpatches + 1;         /* (a patch's transfers: at most one to each patch) */
+        all = xalloc(sizeof(transfer_t) * n);
+        test_shooter = xalloc(sizeof(int) * n);
+        test_receiver = xalloc(sizeof(int) * n);
+        test_hit = xalloc(sizeof(int) * n);
+        test_dist = xalloc(sizeof(float) * n);
+        test_len = xalloc(sizeof(float) * n);
         pvs = xalloc(VisRowBytes() + 1);
         face_tested = xalloc(sizeof(int) * (numfaces + 1)), disp_tested = xalloc(sizeof(int) * (numfaces + 1));
         pvs_cluster = -1;
