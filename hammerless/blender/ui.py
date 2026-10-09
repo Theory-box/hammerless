@@ -425,7 +425,9 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
         on.prop(s, "light_fast")
         full = on.column()
         full.enabled = not s.light_fast
-        full.prop(s, "light_sky_rays")
+        full.prop(s, "light_sky_rays_pick")
+        if s.light_sky_rays_pick == "OTHER":
+            full.prop(s, "light_sky_rays", text="Times")
         full.prop(s, "light_supersample")
         ss = full.column(align=True)
         ss.enabled = s.light_supersample and ours

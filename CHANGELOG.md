@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Bounce lighting's links on the graphics card:** working out which surfaces bounce light to which (millions of visibility rays) now runs on the GPU: on a real map that step went from 0.26 s to 0.11 s; Normal lighting takes 1.0 s, Final 1.4 s, Ultra 2.2 s (RTX 4090).
+- **Smoother Normal lighting on the GPU:** Normal casts 4 times vrad's sky rays when the Hammerless light compiler uses the graphics card (measured: half the error of vrad's 1 times, for 0.07 s more). With Valve's vrad or Exact Lighting it stays at 1.
+- **Sky Rays** is a dropdown (1, 2, 4, 8, 16, 32, 64 times, or your own value).
+
 ## 0.10.0 (test release, 2026-10-09)
 
 - **A panel per system, each with its own Quality.** The sidebar now has *Lighting*, *Visibility*, *Nav Mesh* and *Sound* panels, each holding everything about it: the compiler, its settings and its view (the old *View* panel's parts moved into them; *Sky & Sun* moved from World to Lighting).

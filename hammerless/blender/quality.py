@@ -14,6 +14,16 @@ LIGHT_PRESETS = {
     "ULTRA": dict(_NORMAL, light_sky_rays=16.0, light_ss_points=8, light_ss_passes=8, light_ss_threshold=0.03,
                   light_fix_quirks=True),
 }
+
+
+def presets_for(s) -> dict:
+    """The Lighting presets for the scene's light compiler: on the GPU (the Hammerless one, not Exact) sky rays are
+    nearly free, so Normal casts 4 times vrad's (measured on a real map: half the error, 0.07 s more)."""
+    if s.light_tool == "HAMMERLESS" and not s.light_exact:
+        return dict(LIGHT_PRESETS, NORMAL=dict(_NORMAL, light_sky_rays=4.0))
+    return LIGHT_PRESETS
+
+
 # Build & Play's Quality: (Visibility, Lighting)
 BUILD_LEVELS = {"QUICK": ("SKIP", "OFF"), "FAST": ("FAST", "FAST"), "NORMAL": ("FULL", "NORMAL"),
                 "FINAL": ("FULL", "FINAL"), "ULTRA": ("FULL", "ULTRA")}
@@ -54,15 +64,35 @@ def on_build_quality(s, context=None):
     _current(s)
     vis, light = BUILD_LEVELS[s.compile_preset]
     _set(s, {"vis_mode": vis, "light_quality": light})
-    _set(s, LIGHT_PRESETS.get(light, {}))
+    _set(s, presets_for(s).get(light, {}))
 
 
 def on_light_quality(s, context=None):
     if _applying:
         return
     _current(s)
-    _set(s, LIGHT_PRESETS.get(s.light_quality, {}))
+    _set(s, presets_for(s).get(s.light_quality, {}))
     _sync_build(s)
+
+
+def on_light_tool(s, context=None):
+    """Another light compiler (or Exact on / off): a preset's settings follow it (Normal's sky rays)."""
+    if not _applying and s.light_quality in LIGHT_PRESETS:
+        _set(s, presets_for(s)[s.light_quality])
+
+
+# the Sky Rays dropdown (a view of light_sky_rays: nothing more is stored)
+SKY_RAY_CHOICES = (1, 2, 4, 8, 16, 32, 64)
+
+
+def get_sky_rays_pick(s) -> int:
+    v = s.light_sky_rays
+    return next((i for i, x in enumerate(SKY_RAY_CHOICES) if abs(v - x) < 1e-6), 99)
+
+
+def set_sky_rays_pick(s, value: int) -> None:
+    if value != 99:
+        s.light_sky_rays = float(SKY_RAY_CHOICES[value])
 
 
 def on_vis_quality(s, context=None):
@@ -79,7 +109,7 @@ def on_light_setting(s, context=None):
     if s.light_quality == "OFF":
         return
     now = {k: getattr(s, k) for k in _NORMAL}
-    match = next((k for k, v in LIGHT_PRESETS.items() if all(_same(now[n], x) for n, x in v.items())), "CUSTOM")
+    match = next((k for k, v in presets_for(s).items() if all(_same(now[n], x) for n, x in v.items())), "CUSTOM")
     _set(s, {"light_quality": match})
     _sync_build(s)
 
@@ -103,7 +133,7 @@ def migrate(s):
         light = {"SKIP": "OFF", "FAST": "FAST", "NORMAL": "NORMAL", "FINAL": "FINAL"}[s.rad_mode]
         props = s.static_prop_lighting or light == "FINAL"     # (Final always lit props)
         _set(s, {"light_quality": light})
-        _set(s, LIGHT_PRESETS.get(light, {}))
+        _set(s, presets_for(s).get(light, {}))
         if light != "OFF" and props != s.static_prop_lighting:
             # (Custom's own prop lighting choice; lit props were shadowed with their full model)
             _set(s, {"static_prop_lighting": props, "light_prop_polys": props, "light_quality": "CUSTOM"})

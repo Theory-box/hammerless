@@ -53,6 +53,16 @@ LIGHT_QUALITY = [
 ]
 
 
+def _sky_pick_get(self):
+    from . import quality
+    return quality.get_sky_rays_pick(self)
+
+
+def _sky_pick_set(self, value):
+    from . import quality
+    quality.set_sky_rays_pick(self, value)
+
+
 def _q(name):
     """(an update calling quality.<name>)"""
     def update(self, context):
@@ -446,7 +456,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     model_compiler: EnumProperty(name="Model Compiler", default="HAMMERLESS", items=[
         ("HAMMERLESS", "Hammerless", "Hammerless writes Custom Models' game files itself (no extra tools needed)"),
         ("STUDIOMDL", "Valve studiomdl", "L4D2's own model compiler (studiomdl.exe, from the Authoring Tools)")])
-    light_tool: EnumProperty(name="Light Compiler", default="VALVE", items=[
+    light_tool: EnumProperty(name="Light Compiler", default="VALVE", update=_q("on_light_tool"), items=[
         ("VALVE", "Valve vrad", "L4D2's own lighting compiler (vrad.exe)"),
         ("HAMMERLESS", "Hammerless",
          "Hammerless's lighting compiler: the same lighting as vrad (a few shadow-edge pixels differ very "
@@ -455,7 +465,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("CYCLES", "Cycles",
          "vrad lays out the lighting, then Blender's Cycles bakes the lightmaps with the same lights (its GPU "
          "if it has one). Prop lighting and switchable lights stay vrad's")])
-    light_exact: BoolProperty(name="Exact Lighting (match vrad)", default=False,
+    light_exact: BoolProperty(name="Exact Lighting (match vrad)", default=False, update=_q("on_light_tool"),
                               description="Off: the Hammerless light compiler uses the graphics card, much faster "
                                           "and it looks the same (the CPU when there's no suitable card). On: it "
                                           "reproduces vrad's lighting bit for bit on the CPU (slower)")
@@ -493,7 +503,14 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     light_sky_rays: FloatProperty(name="Sky Rays", default=1.0, min=0.25, max=64.0, soft_max=32.0, step=100,
                                   update=_q("on_light_setting"),
                                   description="Times vrad's number of sky rays per luxel (-extrasky): more is smoother "
-                                              "sky light and sun spread. Final uses 16")
+                                              "sky light and sun spread. Normal uses 4 on the GPU (1 otherwise), "
+                                              "Final 16")
+    light_sky_rays_pick: EnumProperty(
+        name="Sky Rays", description="Times vrad's number of sky rays per luxel: more is smoother sky light and sun "
+                                     "spread (on the GPU nearly free; on the CPU each doubling about doubles its time)",
+        items=[(str(x), f"{x}\u00d7", f"{x} times vrad's sky rays", i) for i, x in enumerate((1, 2, 4, 8, 16, 32, 64))]
+        + [("OTHER", "Other", "A value of your own (below)", 99)],
+        get=lambda self: _sky_pick_get(self), set=lambda self, v: _sky_pick_set(self, v))
     light_supersample: BoolProperty(name="Supersampling", default=True, update=_q("on_light_setting"),
                                     description="Light luxels again at several points where the light changes "
                                                 "sharply (shadow edges): cleaner edges")
