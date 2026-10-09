@@ -76,6 +76,7 @@ def use_hlvvis(opts: "CompileOptions") -> bool:
 
 
 HLVRAD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvrad.exe")
+HLPHYS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlphys.exe")  # (hlvrad's prop collision helper)
 
 
 def hlvrad_unsupported(opts: "CompileOptions") -> list[str]:
@@ -89,6 +90,8 @@ def hlvrad_unsupported(opts: "CompileOptions") -> list[str]:
         why.append("extra vrad options")
     if not os.path.exists(HLVRAD):
         why.append("(hlvrad.exe is missing)")
+    if not os.path.exists(HLPHYS):
+        why.append("(hlphys.exe is missing)")
     return why
 
 

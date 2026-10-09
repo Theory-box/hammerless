@@ -32,6 +32,12 @@ int NumThreads(void) {
     return n < 1 ? 1 : n > MAX_THREADS ? MAX_THREADS : n;
 }
 
+#ifdef _WIN64
+#define PC(c) (c).Rip
+#else
+#define PC(c) (c).Eip
+#endif
+
 /* (HLPROF=file: every millisecond, which code each worker is running; appended as raw addresses) */
 static volatile LONG prof_stop;
 static HANDLE prof_threads[MAX_THREADS];
@@ -48,13 +54,13 @@ static DWORD WINAPI Sampler(LPVOID arg) {
                 HMODULE m = NULL;
                 char name[64] = "?";
                 if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                       (LPCSTR)(size_t)c.Eip, &m) && m) {
+                                       (LPCSTR)(size_t)PC(c), &m) && m) {
                     char full[MAX_PATH];
                     GetModuleFileNameA(m, full, sizeof(full));
                     const char *b = strrchr(full, 92);           /* ('\\') */
                     snprintf(name, sizeof(name), "%s", b ? b + 1 : full);
                 }
-                unsigned int ip = (unsigned int)c.Eip - (unsigned int)(size_t)m;
+                unsigned int ip = (unsigned int)((size_t)PC(c) - (size_t)m);
                 fwrite(name, 1, 64, f);
                 fwrite(&ip, 4, 1, f);
             }
