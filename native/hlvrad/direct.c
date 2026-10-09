@@ -1797,6 +1797,7 @@ void BuildIndirectGPU(void) {
                         fl->light[k][b][first + i][c] = direct[facenum][b][first + i][c] + out[64 * (size_t)g + 16 * i + 3 * b + c];
         }
         RunThreadsOn(numfaces, FinalWork);
+        Progress();
         if (getenv("HLGPUDBG")) Msg("GI pass %d: %d points, %d rays each, %.3f s\n", pass + 1, 4 * n, g_giRays, Seconds() - t0);
         /* (a pass gives all the bounced light so far: once one adds next to nothing, stop, as vrad's bounces do) */
         Msg("\tGI bounce #%i: %.2f%% more\n", pass + 1, last > 0 ? 100.0 * (total - last) / last : 100.0);

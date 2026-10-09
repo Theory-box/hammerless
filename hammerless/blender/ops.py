@@ -1054,7 +1054,12 @@ class HL_OT_build(bpy.types.Operator):
         elif context.scene.hammerless.sky_light != "FLAT" and opts.rad != "SKIP":
             write_log(["Sky Light from the sky needs the Hammerless light compiler: the sky lights the map with "
                        "one colour"], append=True)
-        self._job = cc.CompileJob(tools, path, opts, skip_if_unchanged=True)
+        from . import lightview
+        s = context.scene.hammerless
+        watch = s.lightmap_progress and (self.bake or (lightview.shown() and s.show_lightmap))
+        self._job = cc.CompileJob(tools, path, opts, skip_if_unchanged=True, progress=watch)
+        if self._job.progress_path:
+            lightview.watch(context, self._job.progress_path)
         self._nav = None
         s = context.scene.hammerless
         unanalyzed = s.nav_analysis == "BLENDER" and cc.nav_analyzed(tools, s.map_name) is False
