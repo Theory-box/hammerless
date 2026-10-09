@@ -34,6 +34,8 @@ class CompileOptions:
     ss_passes: int = 4
     ss_threshold: float = 0.0625   # the brightness step between neighbours that triggers it
     fix_quirks: bool = False       # leave out vrad's oddities (see hlvrad -fixquirks)
+    gi: bool = False               # bounced light by final gathering on the GPU (hlvrad -gi), not vrad's patches
+    gi_rays: int = 1024            # its rays per luxel
     extra_vbsp: str = ""
     extra_vvis: str = ""
     extra_vrad: str = ""
@@ -89,7 +91,13 @@ class CompileOptions:
             args += ["-ssthreshold", _num(self.ss_threshold)]
         if self.fix_quirks:
             args.append("-fixquirks")
+        if self.gi and not self.light_exact and self.bounces > 0:
+            # (a bounce a pass: each passes on about a twentieth of the light, so 8 is as good as vrad's 100)
+            args += ["-gi", str(min(self.bounces, GI_MAX_PASSES)), "-girays", str(self.gi_rays)]
         return args
+
+
+GI_MAX_PASSES = 8
 
 
 def _num(x: float) -> str:
@@ -103,7 +111,9 @@ VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
 # not with vrad -fast, the Hammerless light compiler's own only when it's used (the sky picture too), Cycles' with it
 _LIGHT_FIELDS = ("hdr", "static_prop_lighting", "extra_vrad", "prop_polys")
 _NORMAL_FIELDS = ("sky_rays", "supersample", "bounces", "patch_size")
-_HLVRAD_FIELDS = ("light_exact", "ss_points", "ss_passes", "ss_threshold", "fix_quirks", "sky_key")
+_HLVRAD_FIELDS = ("light_exact", "ss_points", "ss_passes", "ss_threshold", "fix_quirks", "sky_key", "gi", "gi_rays")
+# (settings added later: a build from before them was baked as their default)
+_FIELD_DEFAULTS = {"gi": "False", "gi_rays": "1024"}
 _CYCLES_FIELDS = ("cycles_samples", "cycles_denoise", "cycles_stitch")
 _ALL_LIGHT_FIELDS = _LIGHT_FIELDS + _NORMAL_FIELDS + _HLVRAD_FIELDS + _CYCLES_FIELDS
 
@@ -228,7 +238,10 @@ def _opts_rad(text: str) -> str | None:
     names += _HLVRAD_FIELDS if "light_tool='HAMMERLESS'" in text else ()
     cycles = "light_tool='CYCLES'" in text
     names += _CYCLES_FIELDS if cycles else ()
-    return "|".join([m.group(1), "cycles" if cycles else "vrad"] + [f"{n}={_field(text, n)}" for n in names])
+    values = {n: _field(text, n) or _FIELD_DEFAULTS.get(n) for n in names}
+    if values.get("gi") == "False":
+        values.pop("gi_rays", None)                     # (only counts with GI on)
+    return "|".join([m.group(1), "cycles" if cycles else "vrad"] + [f"{n}={v}" for n, v in values.items()])
 
 
 def _with_light(text: str, source: str) -> str:

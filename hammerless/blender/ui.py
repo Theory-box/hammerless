@@ -435,7 +435,15 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
         ss.prop(s, "light_ss_passes")
         ss.prop(s, "light_ss_threshold")
         full.prop(s, "light_bounces")
-        full.prop(s, "light_patch_size")
+        gi_ok = ours and not s.light_exact
+        bm = full.column()
+        bm.enabled = gi_ok
+        bm.prop(s, "light_bounce_method")
+        gi = gi_ok and s.light_bounce_method == "GI" and not s.light_fast
+        if gi:
+            full.prop(s, "light_gi_rays")
+        else:
+            full.prop(s, "light_patch_size")
         on.prop(s, "static_prop_lighting")
         on.prop(s, "light_prop_polys")
         q = full.column()
@@ -443,13 +451,13 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
         q.prop(s, "light_fix_quirks")
         col.separator()
         col.prop(s, "lightmap_scale", text="Lightmap Scale")
-        if s.vis_mode == "SKIP" and s.light_quality != "OFF":
+        if s.vis_mode == "SKIP" and s.light_quality != "OFF" and not gi:
             _hint(layout, "Visibility is Off: no bounced light", "(vrad lights only directly without vis)")
         if s.light_fast:
             _hint(layout, "Fast Lighting always uses Valve's vrad")
         elif not ours and s.light_quality != "OFF":
-            _hint(layout, "Points, Passes, Edge Threshold and", "Fix vrad's Quirks need the Hammerless",
-                  "light compiler")
+            _hint(layout, "Points, Passes, Edge Threshold, Bounce", "Method and Fix vrad's Quirks need the",
+                  "Hammerless light compiler")
         _hint(layout, "Smaller lightmap scale: sharper shadows,", "slower. Materials can override it")
 
 

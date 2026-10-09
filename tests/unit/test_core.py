@@ -1540,6 +1540,24 @@ class TestLightCompilerGpu(unittest.TestCase):
         v = cc.CompileOptions()
         self.assertEqual(cc._opts_rad(repr(v)), cc._opts_rad(repr(replace(v, ss_points=8))))
 
+    def test_gi_bounce(self):
+        # ray-traced bounce: hlvrad -gi (a pass a bounce, at most 8) on the GPU only; it relights, its rays count only
+        # with it on, and a build from before the setting reads as without it (no relight after updating)
+        from dataclasses import replace
+        from hammerless.core import compile as cc
+        a = cc.CompileOptions(light_tool="HAMMERLESS")
+        gi = replace(a, gi=True, gi_rays=256)
+        self.assertEqual(gi.hlvrad_args(), ["-gpu", "-gi", "8", "-girays", "256"])
+        self.assertEqual(replace(gi, bounces=3).hlvrad_args()[1:3], ["-gi", "3"])
+        self.assertNotIn("-gi", replace(gi, light_exact=True).hlvrad_args())
+        self.assertNotIn("-gi", replace(gi, bounces=0).hlvrad_args())
+        self.assertNotEqual(cc._opts_rad(repr(a)), cc._opts_rad(repr(gi)))
+        self.assertNotEqual(cc._opts_rad(repr(gi)), cc._opts_rad(repr(replace(gi, gi_rays=1024))))
+        self.assertEqual(cc._opts_rad(repr(a)), cc._opts_rad(repr(replace(a, gi_rays=256))))
+        old = repr(a).replace(", gi=False, gi_rays=1024", "")
+        self.assertNotIn("gi=", old)
+        self.assertEqual(cc._opts_rad(old), cc._opts_rad(repr(a)))
+
 
 class TestCompileSkip(unittest.TestCase):
     def test_bsp_has_lighting(self):

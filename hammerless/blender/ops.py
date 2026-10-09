@@ -61,7 +61,8 @@ def _light_options(s) -> dict:
     Hammerless one's (Exact or the GPU, and what goes beyond vrad), or Cycles' bake settings."""
     if s.light_tool == "HAMMERLESS":
         return {"light_exact": s.light_exact, "ss_points": s.light_ss_points, "ss_passes": s.light_ss_passes,
-                "ss_threshold": s.light_ss_threshold, "fix_quirks": s.light_fix_quirks}
+                "ss_threshold": s.light_ss_threshold, "fix_quirks": s.light_fix_quirks,
+                "gi": s.light_bounce_method == "GI", "gi_rays": s.light_gi_rays}
     if s.light_tool != "CYCLES":
         return {}
     return {"cycles_samples": s.cycles_samples, "cycles_denoise": s.cycles_denoise,
