@@ -5,7 +5,7 @@
 No Hammer, no VMF editing, no console commands.
 
 > [!WARNING]
-> **Work in progress (v0.8, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene (converting objects, moving outputs into a logic graph), and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
+> **Work in progress (v0.9, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene (converting objects, moving outputs into a logic graph), and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
 
 ## Features
 
@@ -13,7 +13,7 @@ No Hammer, no VMF editing, no console commands.
 - **Hammerless's own compilers**, each checked against the output of Valve's:
   - **Map compiler** (the default): the same map as vbsp, byte for byte on Valve's own sample maps.
   - **Vis compiler**: the same visibility data as vvis, about 3 times faster.
-  - **Light compiler**: the same lighting as vrad (byte for byte on the test maps), about 3 times faster on all cores; Normal and Final quality, prop and grass lighting.
+  - **Light compiler**: lights the map **on the graphics card** (Vulkan ray tracing): looks the same as vrad's lighting and is several times faster (Final quality on a real map: 1.5 s against vrad's 16 s). **Exact Lighting** reproduces vrad byte for byte on the CPU instead. Normal and Final quality, prop and grass lighting.
   - **Model compiler** (the default): Custom Models without studiomdl.
   - Anything one of them doesn't do yet goes to Valve's tool, with a note in the log.
 - **Meshes become brushes.** Any convex mesh is a wall or floor; non-convex meshes can use a convex hull. **Terrain** objects become displacements (sculpt them however you like).
