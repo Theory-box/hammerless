@@ -45,6 +45,7 @@ static void Stage(const char *name) {
 }
 
 static void FacelightsWork(int face, int thread) { (void)thread; BuildFacelights(face); }
+static void FinalLightWork(int face, int thread) { (void)thread; FinalLightFace(face); }
 
 int main(int argc, char **argv) {
     const char *map = NULL, *designer_lights = NULL;
@@ -60,7 +61,7 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-bounce") && i + 1 < argc) g_numbounce = atoi(argv[++i]);
         else if (!_stricmp(a, "-threads") && i + 1 < argc) g_numthreads = atoi(argv[++i]);
         else if (
-                 !_stricmp(a, "-extrasky") || !_stricmp(a, "-chop") ||
+                 !_stricmp(a, "-chop") ||
                  !_stricmp(a, "-maxchop") || !_stricmp(a, "-dispchop")) {
             if (++i >= argc) Error("expected a value after '%s'", a);
         } else if (!_stricmp(a, "-smooth")) {
@@ -68,6 +69,14 @@ int main(int argc, char **argv) {
             smoothing_threshold = (float)cos(atof(argv[i]) * (3.14159265358979323846 / 180.0));
         } else if (!_stricmp(a, "-fast")) {
             g_bFast = 1;
+        } else if (!_stricmp(a, "-final")) {
+            g_flSkySampleScale = 16.0f;
+        } else if (!_stricmp(a, "-extrasky") && i + 1 < argc) {
+            g_flSkySampleScale = (float)atof(argv[++i]);
+        } else if (!_stricmp(a, "-StaticPropPolys")) {
+            g_bStaticPropPolys = 1;
+        } else if (!_stricmp(a, "-textureshadows")) {
+            Error("-textureshadows isn't supported yet");
         } else if (!_stricmp(a, "-StaticPropLighting")) {
             g_bStaticPropLighting = 1;
         } else if (!_stricmp(a, "-timing")) {
@@ -120,6 +129,10 @@ int main(int argc, char **argv) {
     SubdividePatches();
     AddDispsToClusterTable();
     Stage("setup, patches");
+    {
+        int n = (int)(g_flSkySampleScale * 162.0f);
+        BuildSkyDirections(n > 162 ? n : 162);
+    }
     CreateDirectLights();
     Stage("direct lights");
     if (getenv("SKYDBG")) {      /* (debugging: a point's cluster and whether each light's PVS has it) */
@@ -130,8 +143,11 @@ int main(int argc, char **argv) {
         for (directlight_t *dl = activelights; dl; dl = dl->next) Msg("light type %d cluster %d sees %d\n", dl->light.type, dl->light.cluster, PVSCheck(dl->pvs, c));
     }
     AddBrushesForRayTrace();
+    Stage("tracer: brushes");
     AddDispsForRayTrace();
+    Stage("tracer: displacements");
     AddStaticPropsForRayTrace();
+    Stage("tracer: props");
     RT_SetupAccelerationStructure();
     Stage("ray tracer");
     if (getenv("RTTEST")) {       /* (debugging: trace packets of 4 rays, as vradhook does with vrad's tracer) */
@@ -158,7 +174,8 @@ int main(int argc, char **argv) {
         BounceLight();
         Stage("bounce");
     }
-    for (int i = 0; i < numfaces; i++) FinalLightFace(i);
+    PrepareFinalLight();
+    RunThreadsOn(numfaces, FinalLightWork);
     Stage("final light");
     ExportDirectLightsToWorldLights();
     ComputeDetailPropLighting();

@@ -84,10 +84,6 @@ def hlvrad_unsupported(opts: "CompileOptions") -> list[str]:
         why.append("LDR lighting")
     if opts.rad == "FAST":
         why.append("fast lighting")
-    if opts.rad == "FINAL":
-        why.append("final-quality lighting")
-    if opts.static_prop_lighting:
-        why.append("static prop lighting with -StaticPropPolys")
     if opts.extra_vrad.split():
         why.append("extra vrad options")
     if not os.path.exists(HLVRAD):

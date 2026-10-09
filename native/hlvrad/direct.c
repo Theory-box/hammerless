@@ -567,7 +567,10 @@ static float Halton(int seed, int base) {
     return ret;
 }
 
-static void SkyDirection(int i, vec3_t out) {
+static vec3_t *skytable;          /* (the directions, worked out once before the threads start) */
+static int skytable_n;
+
+static void SkyDirectionCompute(int i, vec3_t out) {
     float z = Halton(i + 2, 2);
     z = (float)(2 * z - 1.0);
     float phi = (float)acos(z);
@@ -579,13 +582,25 @@ static void SkyDirection(int i, vec3_t out) {
 }
 
 /* (for the static props' bounced light, which walks the same directions) */
+static void SkyDirection(int i, vec3_t out) {
+    if (i < skytable_n) VectorCopy(skytable[i], out);
+    else SkyDirectionCompute(i, out);
+}
+
+void BuildSkyDirections(int n) {
+    skytable = xalloc(sizeof(vec3_t) * (n + 1));
+    for (int i = 0; i < n; i++) SkyDirectionCompute(i, skytable[i]);
+    skytable_n = n;
+}
+
 void SkyDirectionAt(int i, vec3_t out) { SkyDirection(i, out); }
 
 static void GatherSampleAmbientSky4(lightout4_t *out, const directlight_t *dl, const points4_t *p) {
     float sumdot[LANES] = {0}, ambient[NUM_BUMP_VECTS + 1][LANES] = {{0}}, possible[NUM_BUMP_VECTS + 1][LANES] = {{0}};
     float dots[NUM_BUMP_VECTS + 1][LANES];
     (void)dl;
-    int nsky = g_bFast || (g_gatherFlags & GATHERLFLAGS_FORCE_FAST) ? NUMVERTEXNORMALS / 4 : NUMVERTEXNORMALS;
+    int nsky = g_bFast || (g_gatherFlags & GATHERLFLAGS_FORCE_FAST) ? NUMVERTEXNORMALS / 4
+                                                                     : (int)(g_flSkySampleScale * 162.0f);
     int ignore = g_gatherFlags & GATHERLFLAGS_IGNORE_NORMALS;
     for (int j = 0; j < nsky; j++) {
         vec3_t anorm;
@@ -1118,9 +1133,20 @@ static int IsNeighbor(int face, int other) {
     return 0;
 }
 
+static void InsertPatchSampleDataIntoHashTable(void);
+static int samples_hashed, patches_hashed;
+
+/* the displacements' sample and patch hashes, made before FinalLightFace runs in threads */
+void PrepareFinalLight(void) {
+    int disps = 0;
+    for (int i = 0; i < numfaces && !disps; i++) disps = g_pFaces[i].dispinfo != -1;
+    if (!disps) return;
+    if (!samples_hashed) InsertSamplesDataIntoHashTable(), samples_hashed = 1;
+    if (!patches_hashed) InsertPatchSampleDataIntoHashTable(), patches_hashed = 1;
+}
+
 static radial_t *BuildDispLuxelRadial(int facenum, int style) {
-    static int hashed;
-    if (!hashed) InsertSamplesDataIntoHashTable(), hashed = 1;
+    if (!samples_hashed) InsertSamplesDataIntoHashTable(), samples_hashed = 1;
     facelight_t *fl = &facelight[facenum];
     radial_t *rad = AllocateRadial(facenum);
     const dispsurf_t *d = &dispsurfs[g_pFaces[facenum].dispinfo];
@@ -1272,7 +1298,8 @@ static radial_t *BuildPatchRadial(int facenum) {
  * within the displacement's patch radius, by distance and facing (vrad's patch hash, queried once per face) */
 static samplecell_t *pcells;
 static int pcellcap, numpcells, *pcellhash, pcellmask;
-static int iteration_key;
+/* (per thread: the patches already listed this time, by stamp; vrad's 16-bit key never wraps in a map's faces) */
+static __thread int iteration_key, *patch_key;
 
 static int PatchCellFind(int x, int y, int z, int add) {
     unsigned h = ((unsigned)x * 73856093u ^ (unsigned)y * 19349663u ^ (unsigned)z * 83492791u) & (unsigned)pcellmask;
@@ -1342,6 +1369,7 @@ static int GetInterestingPatches(int facenum, float radius, int **out) {
                     bits[b >> 3] |= 1 << (b & 7);
                 }
     }
+    if (!patch_key) patch_key = xalloc(sizeof(int) * (numpatches + 1));
     int key = ++iteration_key, n = 0, cap = 0;
     int *list = NULL;
     for (int x = 0; x < asize[0]; x++)
@@ -1353,8 +1381,8 @@ static int GetInterestingPatches(int facenum, float radius, int **out) {
                 if (ci < 0) continue;
                 for (int h = 0; h < pcells[ci].count; h++) {
                     patch_t *p = &patches[pcells[ci].handles[h]];
-                    if (p->iteration_key == key) continue;
-                    p->iteration_key = key;
+                    if (patch_key[pcells[ci].handles[h]] == key) continue;
+                    patch_key[pcells[ci].handles[h]] = key;
                     if (!IsNeighbor(facenum, p->face)) continue;
                     if (n == cap) cap = cap ? cap * 2 : 64, list = realloc(list, sizeof(int) * cap);
                     list[n++] = pcells[ci].handles[h];
@@ -1366,8 +1394,7 @@ static int GetInterestingPatches(int facenum, float radius, int **out) {
 }
 
 static radial_t *BuildDispPatchRadial(int facenum, int bump) {
-    static int hashed;
-    if (!hashed) InsertPatchSampleDataIntoHashTable(), hashed = 1;
+    if (!patches_hashed) InsertPatchSampleDataIntoHashTable(), patches_hashed = 1;
     facelight_t *fl = &facelight[facenum];
     radial_t *rad = AllocateRadial(facenum);
     const dispsurf_t *d = &dispsurfs[g_pFaces[facenum].dispinfo];

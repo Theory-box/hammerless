@@ -101,25 +101,38 @@ static kdnode_t *kd;
 static int numkd, maxkd;
 static int *trilist;
 static int numtrilist, maxtrilist;
-static signed char *tmp0, *tmp1;
 static float minbound[3], maxbound[3];
 
-static int AddNode(void) {
-    if (numkd == maxkd) {
-        maxkd = maxkd ? maxkd * 2 : 1024;
-        kd = realloc(kd, sizeof(kdnode_t) * maxkd);
+typedef struct {
+    kdnode_t *kd;
+    int numkd, maxkd;
+    int *trilist;
+    int numtrilist, maxtrilist;
+    signed char *tmp0, *tmp1;
+    int defer;                     /* (the main build: leave subtrees of fewer triangles than this for later) */
+} kdbuild_t;
+
+static int AddNode(kdbuild_t *b) {
+    if (b->numkd == b->maxkd) {
+        b->maxkd = b->maxkd ? b->maxkd * 2 : 1024;
+        b->kd = realloc(b->kd, sizeof(kdnode_t) * b->maxkd);
     }
-    memset(&kd[numkd], 0, sizeof(kdnode_t));
-    return numkd++;
+    memset(&b->kd[b->numkd], 0, sizeof(kdnode_t));
+    return b->numkd++;
 }
 
-static void AddTriIndex(int t) {
-    if (numtrilist == maxtrilist) {
-        maxtrilist = maxtrilist ? maxtrilist * 2 : 4096;
-        trilist = realloc(trilist, sizeof(int) * maxtrilist);
+static void AddTriIndex(kdbuild_t *b, int t) {
+    if (b->numtrilist == b->maxtrilist) {
+        b->maxtrilist = b->maxtrilist ? b->maxtrilist * 2 : 4096;
+        b->trilist = realloc(b->trilist, sizeof(int) * b->maxtrilist);
     }
-    trilist[numtrilist++] = t;
+    b->trilist[b->numtrilist++] = t;
 }
+
+/* subtrees left for the threads */
+typedef struct { int node, n, depth; int *list; float mn[3], mx[3]; kdbuild_t b; } kdtask_t;
+static kdtask_t *kdtasks;
+static int numkdtasks;
 
 static int Classify(int t, int axis, float split) {
     float minc = tri_verts[t][axis], maxc = minc;
@@ -138,7 +151,7 @@ static int Classify(int t, int axis, float split) {
  * L4D2's is x87: the box sides and areas in double (two of the full box's sides rounded to float first,
  * the left box's x side too), 1/area rounded to float, each area's terms in its own order. */
 static double CostOfSplit(int axis, const int *list, int n, const float *mn, const float *mx, float *split, int *nl,
-                          int *nr, int *nb) {
+                          int *nr, int *nb, signed char *classes) {
     *nl = *nr = *nb = 0;
     float min_coord = 1.0e23f, max_coord = -1.0e23f;
     for (int i = 0; i < n; i++) {
@@ -149,7 +162,7 @@ static double CostOfSplit(int axis, const int *list, int n, const float *mn, con
             if (c > max_coord) max_coord = c;
         }
         int cl = Classify(t, axis, *split);
-        tmp0[t] = (signed char)cl;
+        if (classes) classes[t] = (signed char)cl;
         if (cl == PLANECHECK_NEGATIVE) (*nl)++;
         else if (cl == PLANECHECK_POSITIVE) (*nr)++;
         else (*nb)++;
@@ -174,20 +187,74 @@ static double CostOfSplit(int axis, const int *list, int n, const float *mn, con
     return (x + (SR * 2.0 * oo) * *nr) * (double)COST_OF_INTERSECTION + (double)COST_OF_TRAVERSAL;
 }
 
-static void MakeLeaf(int node, const int *list, int n) {
-    kd[node].children = KDNODE_STATE_LEAF + (numtrilist << 2);
-    kd[node].count = n;
-    for (int i = 0; i < n; i++) AddTriIndex(list[i]);
+static void MakeLeaf(kdbuild_t *b, int node, const int *list, int n) {
+    b->kd[node].children = KDNODE_STATE_LEAF + (b->numtrilist << 2);
+    b->kd[node].count = n;
+    for (int i = 0; i < n; i++) AddTriIndex(b, list[i]);
 }
 
-static void RefineNode(int node, const int *list, int n, const float *mn, const float *mx, int depth) {
+/* (speed only) a big node's split candidates, each costed on its own thread */
+typedef struct { int axis; float trial, split; double cost; int nl, nr, nb; } candidate_t;
+static candidate_t *cands;
+static const int *cand_list;
+static int cand_n;
+static const float *cand_mn, *cand_mx;
+static void CandidateWork(int i, int thread) {
+    (void)thread;
+    candidate_t *c = &cands[i];
+    c->split = c->trial;
+    c->cost = CostOfSplit(c->axis, cand_list, cand_n, cand_mn, cand_mx, &c->split, &c->nl, &c->nr, &c->nb, NULL);
+}
+#define PARALLEL_SPLIT_TRIS 2048
+
+static void RefineNode(kdbuild_t *b, int node, const int *list, int n, const float *mn, const float *mx, int depth) {
     if (n < 3) {
-        MakeLeaf(node, list, n);
+        MakeLeaf(b, node, list, n);
         return;
     }
+    if (n < b->defer) {
+        kdtasks = realloc(kdtasks, sizeof(kdtask_t) * (numkdtasks + 1));
+        kdtask_t *t = &kdtasks[numkdtasks++];
+        memset(t, 0, sizeof(*t));
+        t->node = node, t->n = n, t->depth = depth;
+        t->list = xalloc(sizeof(int) * (n + 1));
+        memcpy(t->list, list, sizeof(int) * n);
+        memcpy(t->mn, mn, 12), memcpy(t->mx, mx, 12);
+        return;
+    }
+    signed char *tmp0 = b->tmp0, *tmp1 = b->tmp1;
     float best_cost = 1.0e23f, best_split = 0;
     int best_nl = 0, best_nr = 0, best_nb = 0, split_axis = 0;
     int skip = 1 + n / 10;
+    if (b->defer && n >= PARALLEL_SPLIT_TRIS) {        /* (the main build only: candidates use globals) */
+        int nc = 0;
+        cands = xalloc(sizeof(candidate_t) * (3 * (3 * (n / skip + 2) + 1) + 1));
+        for (int axis = 0; axis < 3; axis++)
+            for (int ts = -1; ts < n; ts += skip)
+                for (int tv = 0; tv < 3; tv++) {
+                    float trial;
+                    if (ts == -1) trial = (float)(0.5 * (mn[axis] + mx[axis]));
+                    else {
+                        trial = tri_verts[list[ts]][3 * tv + axis];
+                        if (trial > mx[axis] || trial < mn[axis]) continue;
+                    }
+                    cands[nc].axis = axis, cands[nc].trial = trial, nc++;
+                    if (ts == -1) break;
+                }
+        cand_list = list, cand_n = n, cand_mn = mn, cand_mx = mx;
+        RunThreadsOn(nc, CandidateWork);
+        float best_trial = 0;
+        for (int i = 0; i < nc; i++)
+            if (best_cost > cands[i].cost) {          /* (the same comparisons as the loop below) */
+                split_axis = cands[i].axis;
+                best_cost = (float)cands[i].cost;
+                best_nl = cands[i].nl, best_nr = cands[i].nr, best_nb = cands[i].nb;
+                best_split = cands[i].split, best_trial = cands[i].trial;
+            }
+        free(cands);
+        for (int i = 0; i < n; i++) tmp1[list[i]] = (signed char)Classify(list[i], split_axis, best_trial);
+        goto chosen;
+    }
     for (int axis = 0; axis < 3; axis++) {
         for (int ts = -1; ts < n; ts += skip) {
             for (int tv = 0; tv < 3; tv++) {
@@ -198,7 +265,7 @@ static void RefineNode(int node, const int *list, int n, const float *mn, const 
                     if (trial > mx[axis] || trial < mn[axis]) continue;
                 }
                 int nl, nr, nb;
-                double cost = CostOfSplit(axis, list, n, mn, mx, &trial, &nl, &nr, &nb);
+                double cost = CostOfSplit(axis, list, n, mn, mx, &trial, &nl, &nr, &nb, tmp0);
                 if (best_cost > cost) {            /* (unrounded cost against the kept float) */
                     split_axis = axis;
                     best_cost = (float)cost;
@@ -212,9 +279,10 @@ static void RefineNode(int node, const int *list, int n, const float *mn, const 
             }
         }
     }
+chosen:;
     float no_split = (float)(COST_OF_INTERSECTION * n);
     if (no_split <= best_cost || depth > MAX_TREE_DEPTH) {
-        MakeLeaf(node, list, n);
+        MakeLeaf(b, node, list, n);
         return;
     }
     int *nlist = xalloc(sizeof(int) * (n + 1));
@@ -230,18 +298,31 @@ static void RefineNode(int node, const int *list, int n, const float *mn, const 
         else if (tmp1[t] == PLANECHECK_POSITIVE) nlist[n - ++nro] = t;
         else nlist[best_nl + nbo++] = t;
     }
-    int left = AddNode();
-    AddNode();
-    kd[node].children = split_axis + (left << 2);
-    kd[node].split = best_split;
+    int left = AddNode(b);
+    AddNode(b);
+    b->kd[node].children = split_axis + (left << 2);
+    b->kd[node].split = best_split;
     if (n < 20 && (best_nl == 0 || best_nr == 0)) depth += 100;
-    RefineNode(left, nlist, best_nl + best_nb, mn, lmax, depth + 1);
-    RefineNode(left + 1, nlist + best_nl, best_nr + best_nb, rmin, mx, depth + 1);
+    RefineNode(b, left, nlist, best_nl + best_nb, mn, lmax, depth + 1);
+    RefineNode(b, left + 1, nlist + best_nl, best_nr + best_nb, rmin, mx, depth + 1);
     free(nlist);
 }
 
+static void SubtreeWork(int i, int thread) {
+    (void)thread;
+    static __thread signed char *t0, *t1;
+    if (!t0) t0 = xalloc(numtris + 1), t1 = xalloc(numtris + 1);
+    kdtask_t *t = &kdtasks[i];
+    t->b.tmp0 = t0, t->b.tmp1 = t1;
+    AddNode(&t->b);
+    RefineNode(&t->b, 0, t->list, t->n, t->mn, t->mx, t->depth);
+}
+
 void RT_SetupAccelerationStructure(void) {
-    AddNode();
+    kdbuild_t main = {0};
+    main.defer = 8192;            /* (speed only: smaller subtrees built on all cores; a tree node's number doesn't
+                                   * change which nodes a ray visits, so the tracing is the same) */
+    AddNode(&main);
     int *root = xalloc(sizeof(int) * (numtris + 1));
     for (int t = 0; t < numtris; t++) root[t] = t;
     for (int c = 0; c < 3; c++) minbound[c] = 1.0e23f, maxbound[c] = -1.0e23f;
@@ -252,10 +333,29 @@ void RT_SetupAccelerationStructure(void) {
                 if (x < minbound[c]) minbound[c] = x;
                 if (x > maxbound[c]) maxbound[c] = x;
             }
-    tmp0 = xalloc(numtris + 1);
-    tmp1 = xalloc(numtris + 1);
-    RefineNode(0, root, numtris, minbound, maxbound, 0);
+    main.tmp0 = xalloc(numtris + 1);
+    main.tmp1 = xalloc(numtris + 1);
+    RefineNode(&main, 0, root, numtris, minbound, maxbound, 0);
     free(root);
+    RunThreadsOn(numkdtasks, SubtreeWork);
+    /* each subtree into the main arrays: its root into the node left for it, the rest after, indices moved */
+    for (int i = 0; i < numkdtasks; i++) {
+        kdtask_t *t = &kdtasks[i];
+        int base = main.numkd - 1, lbase = main.numtrilist;     /* (subtree node k > 0 goes to base + k) */
+        for (int k = 1; k < t->b.numkd; k++) AddNode(&main);
+        for (int k = 0; k < t->b.numkd; k++) {
+            kdnode_t n = t->b.kd[k];
+            if ((n.children & 3) == KDNODE_STATE_LEAF) n.children = KDNODE_STATE_LEAF + (((n.children >> 2) + lbase) << 2);
+            else n.children = (n.children & 3) + (((n.children >> 2) + base) << 2);
+            main.kd[k == 0 ? t->node : base + k] = n;
+        }
+        for (int k = 0; k < t->b.numtrilist; k++) AddTriIndex(&main, t->b.trilist[k]);
+        free(t->b.kd), free(t->b.trilist), free(t->list);
+    }
+    free(kdtasks), kdtasks = NULL, numkdtasks = 0;
+    kd = main.kd, numkd = main.numkd, maxkd = main.maxkd;
+    trilist = main.trilist, numtrilist = main.numtrilist, maxtrilist = main.maxtrilist;
+    free(main.tmp0), free(main.tmp1);
     for (int i = 0; i < numtris; i++) IntersectionFormat(i);
     if (getenv("RTDUMP")) {     /* (debugging: triangles, nodes, leaf lists) */
         FILE *f = fopen(getenv("RTDUMP"), "wb");
@@ -318,8 +418,9 @@ static void Trace4Masked(const float o[3][4], const float d[3][4], __m128 TMin, 
     }
     __m128 active = _mm_cmple_ps(TMin, TMax);
     if (!_mm_movemask_ps(active)) goto done;
-    int mailbox[MAILBOX_HASH_SIZE];
-    memset(mailbox, 0xff, sizeof(mailbox));
+    /* (the triangles already tested: a slot counts only when stamped with this call's number) */
+    static __thread int mailbox[MAILBOX_HASH_SIZE], mailstamp[MAILBOX_HASH_SIZE], call;
+    call++;
     int front[3], back[3];
     for (int c = 0; c < 3; c++) {
         if (mask & (1 << c)) back[c] = 0, front[c] = 1;
@@ -361,8 +462,8 @@ static void Trace4Masked(const float o[3][4], const float d[3][4], __m128 TMin, 
                 int tnum = tl[k];
                 int slot = tnum & (MAILBOX_HASH_SIZE - 1);
                 const rttri_t *t = &tris[tnum];
-                if (mailbox[slot] == tnum || t->id == skip_id) continue;
-                mailbox[slot] = tnum;
+                if ((mailstamp[slot] == call && mailbox[slot] == tnum) || t->id == skip_id) continue;
+                mailbox[slot] = tnum, mailstamp[slot] = call;
                 __m128 nx = _mm_set1_ps(t->nx), ny = _mm_set1_ps(t->ny), nz = _mm_set1_ps(t->nz);
                 __m128 ddotn = _mm_add_ps(_mm_add_ps(_mm_mul_ps(dir[0], nx), _mm_mul_ps(dir[1], ny)), _mm_mul_ps(dir[2], nz));
                 __m128 did = _mm_or_ps(_mm_cmpgt_ps(ddotn, eps), _mm_cmplt_ps(ddotn, neps));

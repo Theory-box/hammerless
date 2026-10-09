@@ -109,9 +109,10 @@ typedef struct {
     /* (speed only: boxes around the whole and around each band of BAND triangles, a little bigger than
      * they are, so a ray that misses a box can't hit its triangles; the triangles still go in order) */
     vec3_t bmins, bmaxs;
-    float (*band)[6];
+    struct dispnode *nodes;             /* (a little tree of boxes over the triangles; node 0 the root) */
+    unsigned short *order;              /* (the leaves' triangles) */
 } dispcoll_t;
-#define BAND 16
+typedef struct dispnode { float box[6]; int left, right, first, count; } dispnode_t;     /* (leaf: left -1) */
 static dispcoll_t *dcoll;
 static int **leafdisps, *nleafdisps;
 /* per thread: the ray number, and the ray each displacement was last tested against */
@@ -180,6 +181,61 @@ static void LeavesInBox_r(int node, const vec3_t mins, const vec3_t maxs, int di
     leafdisps[leaf][nleafdisps[leaf]++] = disp;
 }
 
+/* (speed only) the triangles split in halves along their centres' longest spread, down to 4; each node's box a
+ * unit bigger than its triangles, so a ray that misses it can't hit them */
+static const dispsurf_t *bt_d;
+static const dispcoll_t *bt_c;
+static int bt_axis;
+static float TriCentre(int t, int axis) {
+    const unsigned short *tr = bt_c->tris[t];
+    return (bt_d->verts[tr[0]][axis] + bt_d->verts[tr[1]][axis]) + bt_d->verts[tr[2]][axis];
+}
+static int CompareTri(const void *a, const void *b) {
+    float x = TriCentre(*(const unsigned short *)a, bt_axis), y = TriCentre(*(const unsigned short *)b, bt_axis);
+    return x < y ? -1 : x > y ? 1 : (int)*(const unsigned short *)a - (int)*(const unsigned short *)b;
+}
+static int BuildDispNode(dispcoll_t *c, int *nn, int first, int count) {
+    int n = (*nn)++;
+    dispnode_t *node = &c->nodes[n];
+    float lo[3] = {FLT_MAX, FLT_MAX, FLT_MAX}, hi[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    float clo[3] = {FLT_MAX, FLT_MAX, FLT_MAX}, chi[3] = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    for (int i = first; i < first + count; i++) {
+        const unsigned short *tr = c->tris[c->order[i]];
+        for (int j = 0; j < 3; j++)
+            for (int k = 0; k < 3; k++) {
+                float v = bt_d->verts[tr[j]][k];
+                if (v < lo[k]) lo[k] = v;
+                if (v > hi[k]) hi[k] = v;
+            }
+        for (int k = 0; k < 3; k++) {
+            float m = TriCentre(c->order[i], k);
+            if (m < clo[k]) clo[k] = m;
+            if (m > chi[k]) chi[k] = m;
+        }
+    }
+    for (int k = 0; k < 3; k++) node->box[k] = lo[k] - 1.0f, node->box[3 + k] = hi[k] + 1.0f;
+    node->first = first, node->count = count, node->left = node->right = -1;
+    if (count <= 4) return n;
+    int axis = 0;
+    for (int k = 1; k < 3; k++)
+        if (chi[k] - clo[k] > chi[axis] - clo[axis]) axis = k;
+    bt_axis = axis;
+    qsort(c->order + first, count, sizeof(unsigned short), CompareTri);
+    int half = count / 2;
+    int l = BuildDispNode(c, nn, first, half);
+    int r = BuildDispNode(c, nn, first + half, count - half);
+    c->nodes[n].left = l, c->nodes[n].right = r;
+    return n;
+}
+static void BuildDispTree(const dispsurf_t *d, dispcoll_t *c) {
+    bt_d = d, bt_c = c;
+    c->order = xalloc(sizeof(unsigned short) * (c->ntris + 1));
+    for (int t = 0; t < c->ntris; t++) c->order[t] = (unsigned short)t;
+    c->nodes = xalloc(sizeof(dispnode_t) * (2 * c->ntris + 2));
+    int nn = 0;
+    if (c->ntris) BuildDispNode(c, &nn, 0, c->ntris);
+}
+
 static void BuildDispCollision(void) {
     dcoll = xalloc(sizeof(dispcoll_t) * (numdispsurfs + 1));
     leafdisps = xalloc(sizeof(int *) * (numleafs + 1));
@@ -201,20 +257,7 @@ static void BuildDispCollision(void) {
             }
         for (int k = 0; k < 3; k++) c->mins[k] -= 1.0f, c->maxs[k] += 1.0f;     /* (bloated a little, as vrad) */
         for (int k = 0; k < 3; k++) c->bmins[k] = c->mins[k] - 1.0f, c->bmaxs[k] = c->maxs[k] + 1.0f;
-        int nb = (c->ntris + BAND - 1) / BAND;
-        c->band = xalloc(sizeof(float[6]) * (nb + 1));
-        for (int b = 0; b < nb; b++) {
-            float *bx = c->band[b];
-            for (int k = 0; k < 3; k++) bx[k] = FLT_MAX, bx[3 + k] = -FLT_MAX;
-            for (int t = b * BAND; t < c->ntris && t < (b + 1) * BAND; t++)
-                for (int j = 0; j < 3; j++)
-                    for (int k = 0; k < 3; k++) {
-                        float v = d->verts[c->tris[t][j]][k];
-                        if (v < bx[k]) bx[k] = v;
-                        if (v > bx[3 + k]) bx[3 + k] = v;
-                    }
-            for (int k = 0; k < 3; k++) bx[k] -= 1.0f, bx[3 + k] += 1.0f;
-        }
+        BuildDispTree(d, c);
         LeavesInBox_r(0, c->mins, c->maxs, i);
     }
 }
@@ -244,18 +287,21 @@ static int RayTriangle(const vec3_t start, const vec3_t delta, const vec3_t v1, 
     return 1;
 }
 
-/* can the ray (start + t delta, t from a little before 0 to a little past 1) touch the box? (in double: no
- * rounding can wrongly say no) */
-static int RayMayHitBox(const vec3_t start, const vec3_t delta, const float *mins, const float *maxs) {
-    double t0 = -0.01, t1 = 1.01;
+/* can the ray (start + t delta, t from a little before 0 to a little past 1) touch the box? (the boxes are a unit
+ * bigger than their triangles: far more than this test's rounding, so it never wrongly says no) */
+typedef struct { float s[3], inv[3]; int zero[3]; } boxray_t;
+static void BoxRay(const vec3_t start, const vec3_t delta, boxray_t *r) {
+    for (int k = 0; k < 3; k++) r->s[k] = start[k], r->zero[k] = delta[k] == 0.0f, r->inv[k] = r->zero[k] ? 0.0f : 1.0f / delta[k];
+}
+static int RayMayHitBox(const boxray_t *r, const float *mins, const float *maxs) {
+    float t0 = -0.01f, t1 = 1.01f;
     for (int k = 0; k < 3; k++) {
-        double s = start[k], d = delta[k];
-        if (d == 0.0) {
-            if (s < mins[k] || s > maxs[k]) return 0;
+        if (r->zero[k]) {
+            if (r->s[k] < mins[k] || r->s[k] > maxs[k]) return 0;
             continue;
         }
-        double a = (mins[k] - s) / d, b = (maxs[k] - s) / d;
-        if (a > b) { double x = a; a = b; b = x; }
+        float a = (mins[k] - r->s[k]) * r->inv[k], b = (maxs[k] - r->s[k]) * r->inv[k];
+        if (a > b) { float x = a; a = b; b = x; }
         if (a > t0) t0 = a;
         if (b < t1) t1 = b;
         if (t0 > t1) return 0;
@@ -265,6 +311,8 @@ static int RayMayHitBox(const vec3_t start, const vec3_t delta, const float *min
 
 /* the nearest displacement hit in a leaf (each displacement tested once per ray) */
 static float ClipRayToDispInLeaf(const vec3_t start, const vec3_t delta, int leaf, int *face, float luxel[2], vec3_t normal) {
+    boxray_t br;
+    int haveray = 0;
     float best = 1.0f;
     *face = -1;
     for (int k = 0; k < nleafdisps[leaf]; k++) {
@@ -275,18 +323,27 @@ static float ClipRayToDispInLeaf(const vec3_t start, const vec3_t delta, int lea
         tested[di] = rayenum;
         const dispsurf_t *d = &dispsurfs[di];
         if (!(d->contents & MASK_OPAQUE)) continue;
-        if (!RayMayHitBox(start, delta, c->bmins, c->bmaxs)) continue;
+        if (!haveray) BoxRay(start, delta, &br), haveray = 1;
+        if (!RayMayHitBox(&br, c->bmins, c->bmaxs)) continue;
         float dist = FLT_MAX, bu = 0, bv = 0;
         int bt = -1;
-        for (int t = 0; t < c->ntris; t++) {
-            if (t % BAND == 0 && !RayMayHitBox(start, delta, c->band[t / BAND], c->band[t / BAND] + 3)) {
-                t += BAND - 1;
+        int stack[64], sp = 0;
+        if (c->ntris) stack[sp++] = 0;
+        while (sp) {
+            const dispnode_t *node = &c->nodes[stack[--sp]];
+            if (!RayMayHitBox(&br, node->box, node->box + 3)) continue;
+            if (node->left >= 0) {
+                stack[sp++] = node->right, stack[sp++] = node->left;
                 continue;
             }
-            const unsigned short *tr = c->tris[t];
-            float u, v, tt;
-            if (!RayTriangle(start, delta, d->verts[tr[0]], d->verts[tr[2]], d->verts[tr[1]], &u, &v, &tt)) continue;
-            if (u >= 0.0f && v >= 0.0f && u + v <= 1.0f && tt > 0.0f && tt < dist) dist = tt, bu = u, bv = v, bt = t;
+            for (int i = node->first; i < node->first + node->count; i++) {
+                int t = c->order[i];
+                const unsigned short *tr = c->tris[t];
+                float u, v, tt;
+                if (!RayTriangle(start, delta, d->verts[tr[0]], d->verts[tr[2]], d->verts[tr[1]], &u, &v, &tt)) continue;
+                if (u >= 0.0f && v >= 0.0f && u + v <= 1.0f && tt > 0.0f && (tt < dist || (tt == dist && t < bt)))
+                    dist = tt, bu = u, bv = v, bt = t;
+            }
         }
         if (bt < 0 || !(dist < best)) continue;
         best = dist;
@@ -374,9 +431,16 @@ typedef struct {
     int hasluxel;
 } lightsurf_t;
 
-static int PointInFaceWinding(const vec3_t pt, const dface_t *f) {
+/* each face's winding, made once (before the threads start) */
+static winding_t **facewindings;
+static void BuildFaceWindings(void) {
     vec3_t zero = {0, 0, 0};
-    winding_t *w = WindingFromFace(f, zero);
+    facewindings = xalloc(sizeof(winding_t *) * (numfaces + 1));
+    for (int i = 0; i < numfaces; i++) facewindings[i] = WindingFromFace(&g_pFaces[i], zero);
+}
+
+static int PointInFaceWinding(const vec3_t pt, const dface_t *f) {
+    const winding_t *w = facewindings[f - g_pFaces];
     int ok = 1;
     vec3_t edge, topt, cross, test;
     VectorSubtract(pt, w->p[0], topt);
@@ -390,7 +454,6 @@ static int PointInFaceWinding(const vec3_t pt, const dface_t *f) {
         VectorNormalize(cross);
         if (DotProduct(cross, test) < 0.0f) ok = 0;
     }
-    FreeWinding(w);
     return ok;
 }
 
@@ -488,7 +551,10 @@ static int EnumerateNodesAlongRay_r(lightsurf_t *ls, int node, float start, floa
 }
 
 /* ------------------------------------------------------------------ the colour a ray finds */
-static float power2_n(int e) { return (float)(ldexp(1.0, e) / 255.0); }
+/* 2^e / 255 for a lightmap colour's exponent (a table: ldexp was a quarter of the time) */
+static float power2_table[256];
+static float power2_n(int e) { return power2_table[(e + 128) & 255]; }
+float Power2Over255(int e) { return power2_table[(e + 128) & 255]; }
 
 /* the sky ambient light's intensity, as the world lights lump has it */
 static const float *skylight;
@@ -802,8 +868,21 @@ static int AmbientForLeaf(int leaf, ambsample_t *list, plane_t *planes) {
 
 static ambsample_t *leafresults;
 static int *leafcounts;
-static void LeafWork(int leaf, int thread) {
+static int *leaforder;           /* (the leaves with the most samples first: no big leaf left to the end) */
+static int LeafCost(int leaf) {
+    const dleaf_t *l = &dleafs[leaf];
+    int xs = (l->maxs[0] - l->mins[0]) / 32;
+    xs = xs > 1 ? xs : 1;
+    int count = xs * xs * xs;
+    return (l->contents & CONTENTS_SOLID) ? 0 : count > 128 ? 128 : count;
+}
+static int CompareCost(const void *a, const void *b) {
+    int ca = LeafCost(*(const int *)a), cb = LeafCost(*(const int *)b);
+    return ca != cb ? cb - ca : *(const int *)a - *(const int *)b;
+}
+static void LeafWork(int item, int thread) {
     static __thread plane_t *planes;
+    int leaf = leaforder[item];
     (void)thread;
     if (!planes) planes = xalloc(sizeof(plane_t) * (numnodes + 1));
     leafcounts[leaf] = AmbientForLeaf(leaf, leafresults + (MAX_SAMPLES + 1) * leaf, planes);
@@ -872,6 +951,8 @@ void AmbientSetup(void) {
     dtexdata = (const dtexdata_t *)lumps[LUMP_TEXDATA].data;
     BuildParents();
     BuildDispCollision();
+    BuildFaceWindings();
+    for (int e = -128; e < 128; e++) power2_table[e + 128] = (float)(ldexp(1.0, e) / 255.0);
     BuildGammaTable();
     int wlump = g_bHDR ? LUMP_WORLDLIGHTS_HDR : LUMP_WORLDLIGHTS;
     worldlights = lumps[wlump].data;
@@ -943,7 +1024,11 @@ void ComputePerLeafAmbientLighting(void) {
     int nout = 0;
     leafresults = xalloc(sizeof(ambsample_t) * (MAX_SAMPLES + 1) * (numleafs + 1));
     leafcounts = xalloc(sizeof(int) * (numleafs + 1));
+    leaforder = xalloc(sizeof(int) * (numleafs + 1));
+    for (int i = 0; i < numleafs; i++) leaforder[i] = i;
+    qsort(leaforder, numleafs, sizeof(int), CompareCost);
     RunThreadsOn(numleafs, LeafWork);
+    free(leaforder);
     for (int leaf = 0; leaf < numleafs; leaf++) {
         int n = leafcounts[leaf];
         const ambsample_t *list = leafresults + (MAX_SAMPLES + 1) * leaf;

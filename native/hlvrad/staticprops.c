@@ -167,6 +167,94 @@ typedef struct {
     int have_bounds;
 } propdict_t;
 
+/* the model's LOD 0 triangles from its .vtx strips (vrad -StaticPropPolys), placed as mathlib's AngleMatrix and
+ * VectorTransform place them; meshes whose material has a lights.rad "noshadow" name in it cast none */
+static void MatrixAngles(const float angles[3], const float *origin, float m[3][4]) {
+    const float d2r = (float)(3.14159265358979323846 / 180.0);
+    float y = angles[1] * d2r, p = angles[0] * d2r, r = angles[2] * d2r;
+    float sy = (float)sin(y), cy = (float)cos(y), sp = (float)sin(p), cp = (float)cos(p), sr = (float)sin(r),
+          cr = (float)cos(r);
+    m[0][0] = cp * cy, m[1][0] = cp * sy, m[2][0] = -sp;
+    float srsp = sr * sp, crsp = cr * sp;
+    m[0][1] = srsp * cy - cr * sy;
+    m[1][1] = srsp * sy + cr * cy;
+    m[2][1] = sr * cp;
+    m[0][2] = crsp * cy + sr * sy;
+    m[1][2] = crsp * sy - sr * cy;
+    m[2][2] = cr * cp;
+    for (int k = 0; k < 3; k++) m[k][3] = origin[k];
+}
+
+static void TransformPoint(const float *in, float m[3][4], vec3_t out) {
+    for (int k = 0; k < 3; k++) out[k] = ((m[k][1] * in[1] + m[k][0] * in[0]) + m[k][2] * in[2]) + m[k][3];
+}
+
+static int I32(const unsigned char *p) { int v; memcpy(&v, p, 4); return v; }
+static int U16(const unsigned char *p) { unsigned short v; memcpy(&v, p, 2); return v; }
+
+static int MeshCastsNoShadow(const unsigned char *mdl, int mlen, int material) {
+    if (!g_numnoshadow) return 0;
+    int tex = I32(mdl + 0xd0) + 64 * material;
+    if (tex < 0 || tex + 64 > mlen) return 0;
+    const char *name = (const char *)mdl + tex + I32(mdl + tex);
+    for (int i = 0; i < g_numnoshadow; i++) {
+        size_t n = strlen(g_noshadow[i]);
+        for (const char *q = name; *q; q++)
+            if (!_strnicmp(q, g_noshadow[i], n)) return 1;
+    }
+    return 0;
+}
+
+static int AddPropPolys(int id, const char *name, const vec3_t origin, const vec3_t angles) {
+    int mlen, vlen, xlen;
+    unsigned char *mdl = ReadModelFile(name, ".mdl", &mlen), *vvd = ReadModelFile(name, ".vvd", &vlen),
+                  *vtx = ReadModelFile(name, ".dx90.vtx", &xlen);
+    int ok = mdl && vvd && vtx && mlen >= 240 && vlen >= 64 && xlen >= 36;
+    if (ok) {
+        float m[3][4];
+        MatrixAngles(angles, origin, m);
+        int vstart = I32(vvd + 56), numbp = I32(mdl + 232), bpindex = I32(mdl + 236), vtxbp = I32(vtx + 32);
+        for (int b = 0; b < numbp; b++) {
+            int bp = bpindex + 16 * b, nmodels = I32(mdl + bp + 4), modelindex = I32(mdl + bp + 12);
+            int xbp = vtxbp + 8 * b;
+            for (int mi = 0; mi < nmodels; mi++) {
+                int sub = bp + modelindex + 148 * mi;
+                int nm = I32(mdl + sub + 72), meshindex = I32(mdl + sub + 76), first = I32(mdl + sub + 84) / 48;
+                int xmodel = xbp + I32(vtx + xbp + 4) + 8 * mi;
+                int xlod = xmodel + I32(vtx + xmodel + 4);                      /* (LOD 0) */
+                for (int mm = 0; mm < nm; mm++) {
+                    int mesh = sub + meshindex + 116 * mm, vofs = I32(mdl + mesh + 12);
+                    if (MeshCastsNoShadow(mdl, mlen, I32(mdl + mesh))) continue;
+                    int xmesh = xlod + I32(vtx + xlod + 4) + 9 * mm;
+                    int ngroups = I32(vtx + xmesh);
+                    for (int g = 0; g < ngroups; g++) {
+                        int xsg = xmesh + I32(vtx + xmesh + 4) + 25 * g;
+                        int xv = xsg + I32(vtx + xsg + 4), xi = xsg + I32(vtx + xsg + 12);
+                        int nstrips = I32(vtx + xsg + 16), xs = xsg + I32(vtx + xsg + 20);
+                        for (int st = 0; st < nstrips; st++) {
+                            int strip = xs + 27 * st, nidx = I32(vtx + strip), iofs = I32(vtx + strip + 4);
+                            for (int i = 0; i < nidx; i += 3) {
+                                vec3_t w[3];
+                                for (int k = 0; k < 3; k++) {
+                                    int index = U16(vtx + xi + 2 * (iofs + i + k));
+                                    int vert = U16(vtx + xv + 9 * index + 4);
+                                    const float *pos = (const float *)(vvd + vstart + 48 * (first + vofs + vert) + 16);
+                                    TransformPoint(pos, m, w[k]);
+                                }
+                                RT_AddTriangle(id, w[0], w[1], w[2]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        Msg("Error! Can't get static prop model or vtx for '%s'\n", name);
+    }
+    free(mdl), free(vvd), free(vtx);
+    return ok;
+}
+
 void AddStaticPropsForRayTrace(void) {
     int len;
     const unsigned char *g = GameLump(0x73707270 /* 'sprp' */, &len);
@@ -215,7 +303,9 @@ void AddStaticPropsForRayTrace(void) {
         if (flags & STATIC_PROP_NO_SHADOW) continue;
         if (model >= numdict) continue;
         int id = TRACE_ID_STATICPROP | i;
-        if (dict[model].collide) {
+        if (g_bStaticPropPolys) {
+            AddPropPolys(id, dict[model].name, origin, angles);
+        } else if (dict[model].collide) {
             float m[3][4];
             MatrixOrgAngles(origin, angles, m);
             void *q = ((CreateQueryModel_t)VT(pc, 48))(pc, dict[model].collide);

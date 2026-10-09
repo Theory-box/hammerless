@@ -301,11 +301,16 @@ void ExportDirectLightsToWorldLights(void);
 void ComputePerLeafAmbientLighting(void);
 void ComputeDetailPropLighting(void);
 void ComputeStaticPropLighting(void);
+void PrepareFinalLight(void);
+void BuildSkyDirections(int n);
 #define MAX_THREADS 64
 extern int g_numthreads;
 int NumThreads(void);
 void RunThreadsOn(int count, void (*fn)(int item, int thread));
-extern int g_bStaticPropLighting;
+extern int g_bStaticPropLighting, g_bStaticPropPolys;
+extern float g_flSkySampleScale;            /* (-final: 16, -extrasky n: n) */
+extern char **g_noshadow;                    /* (lights.rad "noshadow" materials) */
+extern int g_numnoshadow;
 int ClusterFromPoint(const vec3_t p);
 int PointLeafnum(const vec3_t p);
 

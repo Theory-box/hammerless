@@ -24,10 +24,12 @@ float GatherSampleLightAtPoint(const directlight_t *dl, const vec3_t pos, const 
 void LightSurfaceBegin(void);
 int FindLightSurfaceKept(const vec3_t start, const vec3_t delta, int *hasluxel, float luxel[2]);
 void AmbientSetup(void);
+float Power2Over255(int e);
 void VectorToColorRGBExp32(const vec3_t v, unsigned char *c);
 void SkyDirectionAt(int i, vec3_t out);
 
-int g_bStaticPropLighting;
+int g_bStaticPropLighting, g_bStaticPropPolys;
+float g_flSkySampleScale = 1.0f;
 
 typedef struct { vec3_t reflectivity; int name, width, height, view_width, view_height; } dtexdata_t;
 
@@ -94,17 +96,17 @@ static void DirectLightingAtPoint(const vec3_t pos, const vec3_t normal, vec3_t 
 
 /* a lightmap colour (ColorRGBExp32ToVector) */
 static void DecodeRGBE(const unsigned char *c, vec3_t v) {
-    for (int k = 0; k < 3; k++) v[k] = (float)c[k] * (float)(ldexp(1.0, (signed char)c[3]) / 255.0) * 255.0f;
+    for (int k = 0; k < 3; k++) v[k] = (float)c[k] * Power2Over255((signed char)c[3]) * 255.0f;
 }
 
 /* L4D2's: no falloff with distance, and the full number of rays unless forced fast */
-static int spiCount, spiTarget = -1;      /* (debugging, SPRAYK: one call's rays, as vradhook logs vrad's) */
+static int spiCount, spiTarget = -1;      /* (single-threaded when logging) */      /* (debugging, SPRAYK: one call's rays, as vradhook logs vrad's) */
 static FILE *rayLog;
 static void IndirectLightingAtPoint(const vec3_t pos, const vec3_t normal, vec3_t out, int forceFast, int ignoreNormals) {
     int logRays = rayLog && spiCount++ == spiTarget;
     const dtexdata_t *dtexdata = (const dtexdata_t *)lumps[LUMP_TEXDATA].data;
     VectorClear(out);
-    int nsamples = g_bFast || forceFast ? NUMVERTEXNORMALS / 4 : (int)(1.0f * 162.0f);
+    int nsamples = g_bFast || forceFast ? NUMVERTEXNORMALS / 4 : (int)(g_flSkySampleScale * 162.0f);
     float totalDot = 0;
     LightSurfaceBegin();
     for (int j = 0; j < nsamples; j++) {
@@ -166,7 +168,7 @@ static int RoundX87(float f) { return (int)lrintf(f); }
 
 /* ConvertRGBExp32ToRGBA8888 */
 static void RGBExpToRGBA8888(const unsigned char *rgbe, unsigned char *out) {
-    float scale = (float)(ldexp(1.0, (signed char)rgbe[3]) / 255.0);
+    float scale = Power2Over255((signed char)rgbe[3]);
     float v[3];
     for (int k = 0; k < 3; k++) {
         int i = RoundX87((float)rgbe[k] * scale * 1024.0f);
@@ -305,8 +307,10 @@ typedef struct { vec3_t color; vec3_t pos; int valid; } colorvert_t;
 typedef struct { vec3_t pos, normal; int index; } badvert_t;
 
 /* one prop: its vertexes' colours, then the .vhv */
+typedef struct { unsigned char *data; int len; } vhv_t;
+
 static void LightProp(int propIndex, const unsigned char *rec, const unsigned char *mdl, int mlen, const unsigned char *vvd,
-                      int vlen, const unsigned char *vtx, int xlen) {
+                      int vlen, const unsigned char *vtx, int xlen, vhv_t *result) {
     vec3_t origin, angles, lightingOrigin;
     memcpy(origin, rec, 12), memcpy(angles, rec + 12, 12), memcpy(lightingOrigin, rec + 44, 12);
     int flags = rec[31];
@@ -436,10 +440,31 @@ static void LightProp(int propIndex, const unsigned char *rec, const unsigned ch
         at += 4 * meshn[i];
         free(meshcol[i]);
     }
-    char name[64];
-    snprintf(name, sizeof(name), g_bHDR ? "sp_hdr_%d.vhv" : "sp_%d.vhv", propIndex);
-    AddToPak(name, f, size);
-    free(f), free(meshlod), free(meshn), free(meshcol);
+    result->data = f, result->len = size;
+    free(meshlod), free(meshn), free(meshcol);
+}
+
+/* the props in parallel, each its own .vhv; then into the pak in prop order */
+static const unsigned char *sp_props, *sp_names;
+static int sp_numdict;
+static vhv_t *sp_results;
+
+static void PropWork(int i, int thread) {
+    (void)thread;
+    const unsigned char *rec = sp_props + PROP_RECORD * i;
+    if (rec[31] & STATIC_PROP_NO_PER_VERTEX_LIGHTING) return;
+    int model = U16(rec + 24);
+    if (model >= sp_numdict) return;
+    char name[129];
+    memcpy(name, sp_names + 128 * model, 128), name[128] = 0;
+    int mlen = 0, vlen = 0, xlen = 0;
+    unsigned char *mdl = ReadFileAll(name, ".mdl", &mlen), *vvd = ReadFileAll(name, ".vvd", &vlen),
+                  *vtx = ReadFileAll(name, ".dx90.vtx", &xlen);
+    if (mdl && vvd && vtx && mlen >= 240 && vlen >= 64 && xlen >= 36 && !memcmp(mdl, "IDST", 4) && !memcmp(vvd, "IDSV", 4))
+        LightProp(i, rec, mdl, mlen, vvd, vlen, vtx, xlen, &sp_results[i]);
+    else
+        Msg("Warning: static prop %d (%s): model files missing, not lit\n", i, name);
+    free(mdl), free(vvd), free(vtx);
 }
 
 void ComputeStaticPropLighting(void) {
@@ -449,32 +474,29 @@ void ComputeStaticPropLighting(void) {
     if (!g || len < 12) return;
     AmbientSetup();
     BuildVertexLightTable();
-    if (getenv("SPLOG")) splog = fopen("splog_ours.bin", "wb");
-    if (getenv("SPRAYK")) spiTarget = atoi(getenv("SPRAYK")), rayLog = fopen("sprays_ours.bin", "wb");
-    int numdict = I32(g);
-    const unsigned char *names = g + 4, *p = g + 4 + 128 * numdict;
+    int threads = g_numthreads;
+    if (getenv("SPLOG")) splog = fopen("splog_ours.bin", "wb"), g_numthreads = 1;
+    if (getenv("SPRAYK")) spiTarget = atoi(getenv("SPRAYK")), rayLog = fopen("sprays_ours.bin", "wb"), g_numthreads = 1;
+    sp_numdict = I32(g);
+    sp_names = g + 4;
+    const unsigned char *p = g + 4 + 128 * sp_numdict;
     int numleaves = I32(p);
     p += 4 + 2 * numleaves;
     int numprops = I32(p);
-    p += 4;
+    sp_props = p + 4;
     Msg("Computing static prop lighting : %d props\n", numprops);
+    sp_results = xalloc(sizeof(vhv_t) * (numprops + 1));
+    RunThreadsOn(numprops, PropWork);
+    g_numthreads = threads;
     for (int i = 0; i < numprops; i++) {
-        const unsigned char *rec = p + PROP_RECORD * i;
-        if (rec[31] & STATIC_PROP_NO_PER_VERTEX_LIGHTING) continue;
-        int model = U16(rec + 24);
-        if (model >= numdict) continue;
-        char name[129];
-        memcpy(name, names + 128 * model, 128), name[128] = 0;
-        int mlen = 0, vlen = 0, xlen = 0;
-        unsigned char *mdl = ReadFileAll(name, ".mdl", &mlen), *vvd = ReadFileAll(name, ".vvd", &vlen),
-                      *vtx = ReadFileAll(name, ".dx90.vtx", &xlen);
-        if (mdl && vvd && vtx && mlen >= 240 && vlen >= 64 && xlen >= 36 && !memcmp(mdl, "IDST", 4) && !memcmp(vvd, "IDSV", 4))
-            LightProp(i, rec, mdl, mlen, vvd, vlen, vtx, xlen);
-        else
-            Msg("Warning: static prop %d (%s): model files missing, not lit\n", i, name);
-        free(mdl), free(vvd), free(vtx);
+        if (!sp_results[i].data) continue;
+        char name[64];
+        snprintf(name, sizeof(name), g_bHDR ? "sp_hdr_%d.vhv" : "sp_%d.vhv", i);
+        AddToPak(name, sp_results[i].data, sp_results[i].len);
+        free(sp_results[i].data);
     }
+    free(sp_results);
     if (nnewfiles) WritePak();
-    if (splog) fclose(splog);
-    if (rayLog) fclose(rayLog);
+    if (splog) fclose(splog), splog = NULL;
+    if (rayLog) fclose(rayLog), rayLog = NULL;
 }

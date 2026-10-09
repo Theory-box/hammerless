@@ -660,7 +660,8 @@ static FILE *ms_dump;
 static void ScalesWork(int item, int thread) {
     (void)thread;
     static __thread transfer_t *all;
-    static __thread unsigned char *pvs, *face_tested, *disp_tested;
+    static __thread unsigned char *pvs;
+    static __thread int *face_tested, *disp_tested, stamp;       /* (tested: == this patch's stamp) */
     static __thread int pvs_cluster;
     if (!all) {
         all = xalloc(sizeof(transfer_t) * MAX_PATCHES);
@@ -669,14 +670,14 @@ static void ScalesWork(int item, int thread) {
         test_hit = xalloc(sizeof(int) * MAX_PATCHES);
         test_dist = xalloc(sizeof(float) * MAX_PATCHES);
         test_len = xalloc(sizeof(float) * MAX_PATCHES);
-        pvs = xalloc(VisRowBytes() + 1), face_tested = xalloc(numfaces + 1), disp_tested = xalloc(numfaces + 1);
+        pvs = xalloc(VisRowBytes() + 1);
+        face_tested = xalloc(sizeof(int) * (numfaces + 1)), disp_tested = xalloc(sizeof(int) * (numfaces + 1));
         pvs_cluster = -1;
     }
     int i = ms_order[item], c = ms_cluster[item];
     if (c != pvs_cluster) GetClusterPVS(c, pvs), pvs_cluster = c;
     patch_t *p = &patches[i];
-    memset(face_tested, 0, numfaces);
-    memset(disp_tested, 0, numfaces);
+    stamp++;
     ntests = 0;
     for (int j = 0; j < numclusters; j++) {
         if (!(pvs[j >> 3] & (1 << (j & 7)))) continue;
@@ -684,16 +685,16 @@ static void ScalesWork(int item, int thread) {
             const dleaf_t *leaf = &dleafs[ms_cluster_leaves[j][li]];
             for (int k = 0; k < leaf->numleaffaces; k++) {
                 int l = dleaffaces[leaf->firstleafface + k];
-                if (face_tested[l]) continue;
-                face_tested[l] = 1;
+                if (face_tested[l] == stamp) continue;
+                face_tested[l] = stamp;
                 if (p->face == l) continue;
                 TestPatchToFace(i, l);
             }
         }
         for (int k = 0; k < ncluster_disps[j]; k++) {
             int l = cluster_disps[j][k];
-            if (disp_tested[l]) continue;
-            disp_tested[l] = 1;
+            if (disp_tested[l] == stamp) continue;
+            disp_tested[l] = stamp;
             if (p->face == l) continue;
             TestPatchToFace(i, l);
         }

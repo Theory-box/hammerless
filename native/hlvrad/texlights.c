@@ -9,6 +9,9 @@ static texlight_t *texlights;
 static int num_texlights;
 static char level_name[256];
 
+char **g_noshadow;
+int g_numnoshadow;
+
 static void ReadLightFile(const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) {
@@ -29,7 +32,12 @@ static void ReadLightFile(const char *path) {
         }
         scan += strspn(scan, " \t");
         char word[1024];
-        if (sscanf(scan, "noshadow %1023s", word) == 1 || sscanf(scan, "forcetextureshadow %1023s", word) == 1) continue;
+        if (sscanf(scan, "noshadow %1023s", word) == 1) {
+            g_noshadow = realloc(g_noshadow, sizeof(char *) * (g_numnoshadow + 1));
+            g_noshadow[g_numnoshadow++] = _strdup(word);
+            continue;
+        }
+        if (sscanf(scan, "forcetextureshadow %1023s", word) == 1) continue;     /* (only with -textureshadows) */
         char name[256];
         if (sscanf(scan, "%255s ", name) != 1) continue;
         vec3_t value;
