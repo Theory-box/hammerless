@@ -44,11 +44,11 @@ def _settings(layout):
     return col
 
 
-def _hint(layout, *lines):
+def _hint(layout, *lines, icon="INFO"):
     col = layout.column(align=True)
     col.scale_y = 0.8
     for i, line in enumerate(lines):
-        col.label(text=line, icon="INFO" if i == 0 else "BLANK1")
+        col.label(text=line, icon=icon if i == 0 else "BLANK1")
 
 
 def _label(s, prop: str) -> str:
@@ -455,6 +455,9 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
             _hint(layout, "Visibility is Off: no bounced light", "(vrad lights only directly without vis)")
         if s.light_fast:
             _hint(layout, "Fast Lighting always uses Valve's vrad")
+        elif ours and s.hdr_mode != "HDR" and s.light_quality != "OFF":
+            _hint(layout, "HDR (Advanced) isn't HDR only: Valve's", "vrad lights the map (much slower, no GPU).",
+                  "L4D2 only uses HDR", icon="ERROR")
         elif not ours and s.light_quality != "OFF":
             _hint(layout, "Points, Passes, Edge Threshold, Bounce", "Method and Fix vrad's Quirks need the",
                   "Hammerless light compiler")
