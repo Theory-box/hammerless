@@ -1,13 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 (test release, 2026-10-09)
 
 - **Bounce lighting's links on the graphics card:** working out which surfaces bounce light to which (millions of visibility rays) now runs on the GPU: on a real map that step went from 0.26 s to 0.11 s; Normal lighting takes 1.0 s, Final 1.4 s, Ultra 2.2 s (RTX 4090).
 - **Smoother Normal lighting on the GPU:** Normal casts 4 times vrad's sky rays when the Hammerless light compiler uses the graphics card (measured: half the error of vrad's 1 times, for 0.07 s more). With Valve's vrad or Exact Lighting it stays at 1.
 - **Fix: big maps fell back to Valve's vrad.** The Hammerless light compiler stopped at 262,144 bounce patches (an older Source limit; L4D2's vrad takes more), so a large map quietly ran Valve's vrad instead: on a 2.6 million square foot map that was 27 s of lighting, now 4.7 s.
 - **Lighting panel:** a warning when HDR isn't *HDR only*, since the Hammerless light compiler then hands the lighting to Valve's vrad.
 - **Sky Rays** is a dropdown (1, 2, 4, 8, 16, 32, 64 times, or your own value).
-- **Ray-traced bounced light (experimental):** Lighting's new *Bounce Method* can be *Ray Traced (GPU)* instead of vrad's patches. Every luxel sends rays (*Bounce Rays*, 1024 by default) and takes the light of whatever they hit, a bounce a pass, stopping once a pass adds under 0.2% (as vrad's bounces stop): bounced light in luxel detail rather than patch-sized blotches, without patches' light leaks, and even with Visibility off. It takes the same time as vrad's way (0.15 s on a real map, RTX 4090) and gives about the same overall brightness (1.08 times). Hammerless light compiler on the GPU only (not Exact). The light compiler takes `-gi <bounces>` and `-girays <n>`.
+- **Ray-traced bounced light (experimental):** Lighting's new *Bounce Method* can be *Ray Traced (GPU)* instead of vrad's patches. Every luxel sends rays (*Bounce Rays*, 1024 by default) and takes the light of whatever they hit, a bounce a pass, stopping once a pass adds under 0.2% (as vrad's bounces stop): bounced light in luxel detail rather than patch-sized blotches, without patches' light leaks, and even with Visibility off. It is as fast as vrad's way or faster (on a 2.6 million square foot map 1.3 s against 2.6 s, RTX 4090) and gives about the same overall brightness (1.04 to 1.08 times). Hammerless light compiler on the GPU only (not Exact). The light compiler takes `-gi <bounces>` and `-girays <n>`.
 
 ## 0.10.0 (test release, 2026-10-09)
 
