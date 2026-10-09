@@ -254,7 +254,9 @@ void GPU_Gather(const gpugroup_t *groups, int n, int slot, float *out);       /*
 void GPU_WalkScene(const gpuwalk_t *w);
 void GPU_Lightmaps(void);
 void GPU_Ambient(const float *points, int n, const float skylight[4], float *out);   /* out: 18 floats per point */
-void GPU_PropIndirect(const float *points, int n, float *out);                       /* in 7, out 3 per vertex */
+void GPU_PropIndirect(const float *points, int n, float *out);
+void GPU_PatchEnds(const float *ends, int n);
+void GPU_ClearPairs(const int *pairs, int n, uint32_t *bits);                  /* (shooter, receiver) in */                       /* in 7, out 3 per vertex */
 const float *RT_Triangles(int *n);
 const float *SkyMapData(int *w, int *h);
 const vec3_t *SkyDirections(int *n);
@@ -373,6 +375,8 @@ float Luminance(const vec3_t c);
 extern int g_numthreads;
 int NumThreads(void);
 void RunThreadsOn(int count, void (*fn)(int item, int thread));
+void RunThreadsOnRange(int first, int count, void (*fn)(int item, int thread));
+double Seconds(void);
 extern int g_bStaticPropLighting, g_bStaticPropPolys;
 extern float g_flSkySampleScale;            /* (-final: 16, -extrasky n: n) */
 extern char **g_noshadow;                    /* (lights.rad "noshadow" materials) */

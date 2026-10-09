@@ -3,7 +3,8 @@
  *
  * Vulkan comes with the graphics driver (vulkan-1.dll), loaded here when asked for: without a card that can do it,
  * hlvrad lights on the CPU as usual. The GPU programs are in shaders/ (compiled into C headers there by build.py):
- * gather (direct light at points), ambient (leaf ambient cubes), propind (static props' bounced light).
+ * gather (direct light at points), ambient (leaf ambient cubes), propind (static props' bounced light), vis (the
+ * bounce transfers' patch-to-patch rays).
  * The last two find surfaces with vrad's own tree walk (walk.glsl), not the ray tracing cores: the same surfaces.
  *
  * The shadow scene: the ray tracer's triangles (the world, the sky's, the static props', apart so one prop can be
@@ -16,6 +17,7 @@
 #include "shaders/gather.spv.h"
 #include "shaders/ambient.spv.h"
 #include "shaders/propind.spv.h"
+#include "shaders/vis.spv.h"
 
 int g_bGPU;
 int g_gpuCheck;                   /* (debugging, HLGPUCHK: the GPU's answers checked against the CPU's, single threaded) */
@@ -279,7 +281,7 @@ static void Run(program_t *p, const accel_t *scene, gbuf_t *const *bufs, const v
 }
 
 /* ------------------------------------------------------------------ start */
-static program_t prog_gather, prog_ambient, prog_propind;
+static program_t prog_gather, prog_ambient, prog_propind, prog_vis;
 
 static int HasExtension(VkPhysicalDevice p, const char *name) {
     uint32_t n = 0;
@@ -398,7 +400,8 @@ static int StartGPU(void) {
     prog_gather = Program(spv_gather, sizeof(spv_gather), 8, 36);
     prog_ambient = Program(spv_ambient, sizeof(spv_ambient), 19, 36);
     prog_propind = Program(spv_propind, sizeof(spv_propind), 19, 16);
-    if (!prog_gather.ok || !prog_ambient.ok || !prog_propind.ok) {
+    prog_vis = Program(spv_vis, sizeof(spv_vis), 4, 4);
+    if (!prog_gather.ok || !prog_ambient.ok || !prog_propind.ok || !prog_vis.ok) {
         Msg("Warning: the graphics card's driver didn't take hlvrad's GPU programs: lighting on the CPU\n");
         return 0;
     }
@@ -580,6 +583,32 @@ void GPU_Ambient(const float *points, int n, const float skylight[4], float *out
         WalkBuffers(bufs, &anorms);
         Run(&prog_ambient, &shadow_tlas, bufs, &pc, sizeof(pc), (uint32_t)k);
         memcpy(out + 18 * (size_t)at, out_buf.map, 72 * (size_t)k);
+    }
+}
+
+/* the bounce patches' ray ends (origin + normal), for GPU_ClearPairs */
+static gbuf_t patch_ends;
+void GPU_PatchEnds(const float *ends, int n) {
+    FreeBuffer(&patch_ends);
+    patch_ends = Upload(ends, 16 * (size_t)(n ? n : 1));
+}
+
+/* which patch pairs (shooter, receiver) see each other, nothing in between (the sky included): a bit per pair in
+ * bits (cleared first), set when clear */
+void GPU_ClearPairs(const int *pairs, int n, uint32_t *bits) {
+    struct { int n; } pc;
+    int chunk = JobSize(1.0, RAY_BUDGET, 1 << 23) & ~31;       /* (whole words of bits a job) */
+    memset(bits, 0, 4 * (((size_t)n + 31) / 32));
+    for (int at = 0; at < n; at += chunk) {
+        int k = n - at < chunk ? n - at : chunk;
+        Ensure(&in_buf, 8 * (size_t)k);
+        Ensure(&out_buf, 4 * (((size_t)k + 31) / 32));
+        memcpy(in_buf.map, pairs + 2 * (size_t)at, 8 * (size_t)k);
+        memset(out_buf.map, 0, 4 * (((size_t)k + 31) / 32));
+        pc.n = k;
+        gbuf_t *bufs[4] = {NULL, &patch_ends, &in_buf, &out_buf};
+        Run(&prog_vis, &shadow_tlas, bufs, &pc, sizeof(pc), (uint32_t)k);
+        memcpy(bits + at / 32, out_buf.map, 4 * (((size_t)k + 31) / 32));
     }
 }
 

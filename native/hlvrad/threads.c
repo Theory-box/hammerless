@@ -72,6 +72,22 @@ static DWORD WINAPI Sampler(LPVOID arg) {
     return 0;
 }
 
+/* (a clock, in seconds) */
+double Seconds(void) {
+    LARGE_INTEGER f, c;
+    QueryPerformanceFrequency(&f), QueryPerformanceCounter(&c);
+    return (double)c.QuadPart / (double)f.QuadPart;
+}
+
+/* (items first .. first + count - 1) */
+static int range_first;
+static void (*range_fn)(int item, int thread);
+static void RangeWork(int item, int thread) { range_fn(range_first + item, thread); }
+void RunThreadsOnRange(int first, int count, void (*fn)(int item, int thread)) {
+    range_first = first, range_fn = fn;
+    RunThreadsOn(count, RangeWork);
+}
+
 void RunThreadsOn(int count, void (*fn)(int item, int thread)) {
     work_t w = {fn, count, 0};
     int n = NumThreads();

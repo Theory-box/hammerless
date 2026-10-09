@@ -1,0 +1,27 @@
+#version 460
+#extension GL_EXT_ray_query : require
+// Which patch pairs see each other (bounce.c's patch-to-patch tests: a transfer needs the receiver in sight): the ray
+// from the shooter's point (origin + normal) to the receiver's, blocked by anything, sky included, as vrad's ray
+// tracer does. In: pairs (shooter, receiver); out: one bit per pair, set when clear.
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) uniform accelerationStructureEXT scene;
+layout(set = 0, binding = 1, std430) readonly buffer Ends { vec4 ends[]; };      // per patch: origin + normal
+layout(set = 0, binding = 2, std430) readonly buffer Pairs { ivec2 pairs[]; };
+layout(set = 0, binding = 3, std430) buffer Out { uint clear[]; };
+layout(push_constant) uniform PC { int n; } pc;
+
+void main() {
+    int i = int(gl_GlobalInvocationID.x);
+    if (i >= pc.n) return;
+    vec3 o = ends[pairs[i].x].xyz;
+    vec3 d = ends[pairs[i].y].xyz - o;
+    float len = length(d);
+    bool ok = true;
+    if (len > 0.0) {
+        rayQueryEXT q;
+        rayQueryInitializeEXT(q, scene, gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, o, 0.0, d / len, len);
+        while (rayQueryProceedEXT(q)) {}
+        ok = rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT;
+    }
+    if (ok) atomicOr(clear[i >> 5], 1u << (i & 31));
+}

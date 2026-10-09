@@ -561,6 +561,7 @@ typedef struct {
 /* (per thread: the patch being shot from's rays and their results) */
 static __thread int ntests, *test_shooter, *test_receiver, *test_hit;
 static __thread float *test_dist, *test_len;
+static __thread int test_gpu;             /* (-gpu: tests only recorded, for the GPU to answer) */
 
 static void FlushStream(raystream_t *s, int m) {
     float d[3][4], len[4];
@@ -628,7 +629,7 @@ static void TestPatchToPatch(int i1, int i2) {
         VectorAdd(p2->origin, p2->normal, b);
         test_shooter[ntests] = i1;
         test_receiver[ntests] = i2;
-        AddToStream(&stream, a, b, ntests);
+        if (!test_gpu) AddToStream(&stream, a, b, ntests);
         ntests++;
     }
 }
@@ -660,6 +661,13 @@ static int total_transfer, max_transfer;
 static int **ms_cluster_leaves, *ms_nleaves, *ms_order, *ms_cluster;
 static FILE *ms_dump;
 
+/* -gpu: a batch of patches' tests at a time: recorded (receivers and segments), answered by the GPU together,
+ * then each patch's transfers made from the answers */
+typedef struct { int n, *recv; size_t first; } scaletests_t;    /* (first: its tests' place in the batch's bits) */
+static scaletests_t *gpu_tests;            /* (per item of the batch) */
+static int gpu_batch0, gpu_answered;
+static const uint32_t *gpu_bits;
+
 static void ScalesWork(int item, int thread) {
     (void)thread;
     static __thread transfer_t *all;
@@ -677,6 +685,20 @@ static void ScalesWork(int item, int thread) {
         face_tested = xalloc(sizeof(int) * (numfaces + 1)), disp_tested = xalloc(sizeof(int) * (numfaces + 1));
         pvs_cluster = -1;
     }
+    if (gpu_tests && gpu_answered) {       /* (-gpu, second pass: the answers are in) */
+        scaletests_t *g = &gpu_tests[item - gpu_batch0];
+        int i = ms_order[item];
+        patches[i].numtransfers = 0;
+        for (int t = 0; t < g->n; t++) {
+            size_t b = g->first + (size_t)t;
+            if (gpu_bits[b >> 5] & (1u << (b & 31))) MakeTransfer(i, g->recv[t], all);
+        }
+        MakeScales(i, all);
+        free(g->recv);
+        g->recv = NULL;
+        return;
+    }
+    test_gpu = gpu_tests != NULL;
     int i = ms_order[item], c = ms_cluster[item];
     if (c != pvs_cluster) GetClusterPVS(c, pvs), pvs_cluster = c;
     patch_t *p = &patches[i];
@@ -701,6 +723,13 @@ static void ScalesWork(int item, int thread) {
             if (p->face == l) continue;
             TestPatchToFace(i, l);
         }
+    }
+    if (gpu_tests) {                       /* (-gpu, first pass: the tests kept for the GPU) */
+        scaletests_t *g = &gpu_tests[item - gpu_batch0];
+        g->n = ntests;
+        g->recv = xalloc(sizeof(int) * (ntests + 1));
+        memcpy(g->recv, test_receiver, sizeof(int) * ntests);
+        return;
     }
     FinishStream(&stream);
     p->numtransfers = 0;
@@ -735,7 +764,42 @@ void MakeAllScales(void) {
     ms_dump = getenv("HLTRANSFERS") ? fopen(getenv("HLTRANSFERS"), "wb") : NULL;   /* (debugging: the lists as MakeScales gets them) */
     int threads = g_numthreads;
     if (ms_dump) g_numthreads = 1;                 /* (the dump in order) */
-    RunThreadsOn(n, ScalesWork);
+    if (g_bGPU && !ms_dump) {
+        /* (batches of patches: their tests together, a few million rays at most a batch) */
+        const int batch = 8192;
+        float *ends = xalloc(sizeof(float) * 4 * (numpatches + 1));
+        for (int i = 0; i < numpatches; i++) VectorAdd(patches[i].origin, patches[i].normal, ends + 4 * i);
+        GPU_PatchEnds(ends, numpatches);
+        free(ends);
+        gpu_tests = xalloc(sizeof(scaletests_t) * batch);
+        double tc = 0, tg = 0, tf = 0, nt = 0;   /* (HLGPUDBG: the parts' times) */
+        for (gpu_batch0 = 0; gpu_batch0 < n; gpu_batch0 += batch) {
+            int k = n - gpu_batch0 < batch ? n - gpu_batch0 : batch;
+            memset(gpu_tests, 0, sizeof(scaletests_t) * batch);
+            gpu_answered = 0;
+            double t0 = Seconds();
+            RunThreadsOnRange(gpu_batch0, k, ScalesWork);
+            double t1 = Seconds();
+            size_t total = 0;
+            for (int j = 0; j < k; j++) gpu_tests[j].first = total, total += gpu_tests[j].n;
+            int *pairs = xalloc(sizeof(int) * 2 * (total + 1));
+            uint32_t *bits = xalloc(4 * (total / 32 + 1));
+            for (int j = 0; j < k; j++) {
+                int *q = pairs + 2 * gpu_tests[j].first, shooter = ms_order[gpu_batch0 + j];
+                for (int t = 0; t < gpu_tests[j].n; t++) q[2 * t] = shooter, q[2 * t + 1] = gpu_tests[j].recv[t];
+            }
+            GPU_ClearPairs(pairs, (int)total, bits);
+            double t2 = Seconds();
+            gpu_bits = bits, gpu_answered = 1;
+            RunThreadsOnRange(gpu_batch0, k, ScalesWork);
+            tc += t1 - t0, tg += t2 - t1, tf += Seconds() - t2, nt += (double)total;
+            free(pairs), free(bits);
+        }
+        free(gpu_tests);
+        gpu_tests = NULL;
+        if (getenv("HLGPUDBG")) Msg("transfers: %.0f tests; collecting %.3f s, GPU %.3f s, making %.3f s\n", nt, tc, tg, tf);
+    } else
+        RunThreadsOn(n, ScalesWork);
     g_numthreads = threads;
     if (ms_dump) fclose(ms_dump), ms_dump = NULL;
     for (int k = 0; k < n; k++) {
