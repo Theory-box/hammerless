@@ -48,6 +48,7 @@ typedef struct {
 
 static facelight_t *facelight;
 
+
 /* ------------------------------------------------------------------ SSE helpers (Valve's estimates) */
 static float ReciprocalSSE(float a) {
     __m128 x = _mm_set_ss(a), r = _mm_rcp_ss(x);
@@ -393,6 +394,39 @@ typedef struct {
     int normalCount;
 } points4_t;
 
+/* -gpu: a face's light is worked out in rounds. A round runs the face as usual, but each group of points' lights is a
+ * question for the GPU: answered ones (from earlier rounds) are replayed in order, new ones recorded (their answer 0
+ * for now). A face with new questions stops there (before supersampling decides anything from the zeros); the GPU
+ * answers every face's questions together, and the face runs again. Supersampling's passes each need a round. */
+typedef struct {
+    gpugroup_t *pend;               /* the new questions */
+    int npend, cappend;
+    float *res;                     /* the answers so far: per question, 64 floats per style slot */
+    int nres;
+    int cursor, incomplete;         /* (this run: the next question; whether any was new) */
+} gpuface_t;
+static gpuface_t *gpufaces;
+static __thread gpuface_t *gpucur;
+static const float gpuzero[64 * 256];
+
+/* the GPU's answer for a group of points (64 floats per slot: per point 4 normals' colours and "lit"): an answer
+ * from an earlier round, or (recorded) zeros */
+static const float *GpuQuery(const points4_t *p, const int cluster[LANES], int lanes, int flags, int slot) {
+    gpuface_t *g = gpucur;
+    int R = 64 * GPU_NumSlots();
+    if (g->cursor < g->nres) return g->res + (size_t)R * g->cursor++;
+    g->cursor++;
+    g->incomplete = 1;
+    if (g->npend == g->cappend) g->cappend = g->cappend ? 2 * g->cappend : 16, g->pend = realloc(g->pend, sizeof(gpugroup_t) * g->cappend);
+    gpugroup_t *q = &g->pend[g->npend++];
+    memset(q, 0, sizeof(*q));
+    memcpy(q->pos, p->pos, sizeof(q->pos));
+    for (int n = 0; n < p->normalCount; n++) memcpy(q->nrm[n], p->normals[n], sizeof(q->nrm[n]));
+    memcpy(q->cluster, cluster, sizeof(q->cluster));
+    q->lanes = lanes, q->normalCount = p->normalCount, q->flags = flags, q->skip = -1, q->slot = slot;
+    return gpuzero;
+}
+
 static float Dot4(const float v[3][LANES], int i, const float *w) {
     return (v[0][i] * w[0] + v[1][i] * w[1]) + v[2][i] * w[2];
 }
@@ -403,6 +437,7 @@ static float Dot4(const float v[3][LANES], int i, const float *w) {
 #define GATHERLFLAGS_IGNORE_NORMALS 2
 __thread int g_gatherFlags;
 __thread int g_gatherSkipProp = -1;
+static __thread int g_gatherNoRays;            /* (-gpu: the falloff only; every point taken as seeing the light) */
 
 static void GatherSampleStandardLight4(lightout4_t *out, const directlight_t *dl, const points4_t *p) {
     float src[3][LANES], delta[3][LANES], dist[LANES], dist2[LANES], dot[LANES];
@@ -493,8 +528,8 @@ static void GatherSampleStandardLight4(lightout4_t *out, const directlight_t *dl
             out->falloff[i] = mult * out->falloff[i];
         }
     }
-    float vis[LANES];
-    TestLine4(p->pos, (const float(*)[LANES])src, g_gatherSkipProp, vis);
+    float vis[LANES] = {1, 1, 1, 1};
+    if (!g_gatherNoRays) TestLine4(p->pos, (const float(*)[LANES])src, g_gatherSkipProp, vis);
     for (int i = 0; i < LANES; i++) out->dot[0][i] = vis[i] * dot[i];
     for (int n = 1; n < p->normalCount; n++)
         for (int i = 0; i < LANES; i++) {
@@ -596,6 +631,12 @@ void BuildSkyDirections(int n) {
 }
 
 void SkyDirectionAt(int i, vec3_t out) { SkyDirection(i, out); }
+
+/* (for the GPU: the table) */
+const vec3_t *SkyDirections(int *n) {
+    *n = skytable_n;
+    return (const vec3_t *)skytable;
+}
 
 static void GatherSampleAmbientSky4(lightout4_t *out, const directlight_t *dl, const points4_t *p) {
     float sumdot[LANES] = {0}, ambient[NUM_BUMP_VECTS + 1][LANES] = {{0}}, possible[NUM_BUMP_VECTS + 1][LANES] = {{0}};
@@ -760,6 +801,44 @@ static int extrapasses = 4;
 static void ResampleLightAt4Points(const points4_t *p, const int cluster[LANES], const dface_t *f, int style, int flags,
                                    vec3_t result[LANES][NUM_BUMP_VECTS + 1]) {
     memset(result, 0, sizeof(vec3_t) * LANES * (NUM_BUMP_VECTS + 1));
+    if (g_bGPU) {
+        int slot = GPU_StyleSlot(f->styles[style]);
+        if (slot < 0) return;
+        int gf = (flags & AMBIENT_ONLY ? GPU_AMBIENT_ONLY : 0) | (flags & NON_AMBIENT_ONLY ? GPU_NON_AMBIENT_ONLY : 0);
+        const float *r = GpuQuery(p, cluster, LANES, gf, slot) + 64 * slot;
+        for (int i = 0; i < LANES; i++)
+            for (int b = 0; b < p->normalCount; b++)
+                for (int k = 0; k < 3; k++) result[i][b][k] = r[16 * i + 3 * b + k];
+        /* what vrad leaves in the stale slot: the last light's first-normal values, whose signs (all PointsInWinding
+         * reads) are its falloff's: worked out without rays (sky lights' falloffs are never negative) */
+        directlight_t *last = NULL;
+        float lastmask[LANES] = {0};
+        for (directlight_t *dl = activelights; dl; dl = dl->next) {
+            if ((flags & AMBIENT_ONLY) && dl->light.type != emit_skyambient) continue;
+            if ((flags & NON_AMBIENT_ONLY) && dl->light.type == emit_skyambient) continue;
+            if (dl->light.style != f->styles[style]) continue;
+            float mask[LANES] = {0};
+            int any = 0;
+            for (int i = 0; i < LANES; i++)
+                if (PVSCheck(dl->pvs, cluster[i])) mask[i] = 1.0f, any = 1;
+            if (any) last = dl, memcpy(lastmask, mask, sizeof(mask));
+        }
+        if (last) {
+            lightout4_t out;
+            memset(&out, 0, sizeof(out));
+            if (last->light.type == emit_skylight || last->light.type == emit_skyambient) out.falloff[0] = out.falloff[1] = out.falloff[2] = out.falloff[3] = 1.0f;
+            else {
+                g_gatherNoRays = 1;
+                GatherSampleLight4(&out, last, p);
+                g_gatherNoRays = 0;
+            }
+            for (int i = 0; i < LANES; i++) {
+                float fx = (out.dot[0][i] > 0 ? 1.0f : 0.0f) * out.falloff[i];
+                ((float *)&g_staleSlot)[i] = fx * lastmask[i];
+            }
+        }
+        return;
+    }
     for (directlight_t *dl = activelights; dl; dl = dl->next) {
         if ((flags & AMBIENT_ONLY) && dl->light.type != emit_skyambient) continue;
         if ((flags & NON_AMBIENT_ONLY) && dl->light.type == emit_skyambient) continue;
@@ -903,6 +982,7 @@ static void BuildSupersampleFaceLights(const lightinfo_t *l, int facenum, faceli
             vec3_t amb[NUM_BUMP_VECTS + 1], dir[NUM_BUMP_VECTS + 1];
             int na = SupersampleLightAtPoint(l, facenum, fl, i, style, normalCount, flatBump, amb, AMBIENT_ONLY);
             int nd = SupersampleLightAtPoint(l, facenum, fl, i, style, normalCount, flatBump, dir, NON_AMBIENT_ONLY);
+            if (gpucur && gpucur->incomplete) continue;      /* (-gpu: answers to come) */
             if (na > 0 && nd > 0) {
                 float sd = 1.0f / nd, sa = 1.0f / na;
                 for (int n = 0; n < normalCount; n++)
@@ -913,14 +993,29 @@ static void BuildSupersampleFaceLights(const lightinfo_t *l, int facenum, faceli
                 SampleIntensity(ls, i, normalCount, (int)fl->sample[i].s + (int)fl->sample[i].t * w, size, intensity);
             }
         }
+        if (gpucur && gpucur->incomplete) break;
     }
     free(done), free(gradient), free(intensity);
+}
+
+static void FreeFacelight(facelight_t *fl) {
+    for (int i = 0; i < fl->numsamples; i++)
+        if (fl->sample[i].w) FreeWinding(fl->sample[i].w);
+    free(fl->sample), free(fl->luxel), free(fl->luxelNormals);
+    for (int k = 0; k < MAXLIGHTMAPS; k++)
+        for (int n = 0; n < NUM_BUMP_VECTS + 1; n++) free(fl->light[k][n]);
+    memset(fl, 0, sizeof(*fl));
 }
 
 void BuildFacelights(int facenum) {
     g_staleSlot = _mm_setzero_ps();     /* (what's left there before a face: unknown; nothing matches vrad best) */
     dface_t *f = &g_pFaces[facenum];
     facelight_t *fl = &facelight[facenum];
+    if (g_bGPU) {                       /* (this face's questions and answers; a rerun starts afresh) */
+        gpucur = &gpufaces[facenum];
+        gpucur->cursor = 0, gpucur->incomplete = 0;
+        FreeFacelight(fl);
+    }
     f->lightofs = -1;
     memset(f->styles, 255, 4);
     if (texinfo[f->texinfo].flags & TEX_SPECIAL) return;
@@ -957,6 +1052,21 @@ void BuildFacelights(int facenum) {
                      (const float(*)[3])nin, &p, cluster, nout);
         if (!isdisp && !l.isflat)
             for (int i = 0; i < count; i++) VectorCopy(nout[i], fl->sample[group + i].normal);
+        if (g_bGPU) {               /* (all the lights at once, per style slot) */
+            const float *r = GpuQuery(&p, cluster, count, 0, -1);
+            for (int slot = 0; slot < GPU_NumSlots(); slot++) {
+                const float *rs = r + 64 * slot;
+                int nonzero = 0;
+                for (int i = 0; i < count; i++) nonzero |= rs[16 * i + 12] != 0;
+                if (!nonzero) continue;
+                int style = FindOrAllocateLightstyleSamples(f, fl, GPU_SlotStyle(slot), normalCount);
+                if (style < 0) continue;
+                for (int b = 0; b < normalCount; b++)
+                    for (int i = 0; i < count; i++)
+                        for (int k = 0; k < 3; k++) fl->light[style][b][group + i][k] += rs[16 * i + 3 * b + k];
+            }
+            continue;
+        }
         for (directlight_t *dl = activelights; dl; dl = dl->next) {
             float mask[LANES] = {0};
             int any = 0;
@@ -982,9 +1092,12 @@ void BuildFacelights(int facenum) {
                         fl->light[style][b][group + i][k] += fxdot[b][i] * (out.tinted ? out.tint[b][k][i] : dl->light.intensity[k]);
         }
     }
+    if (gpucur && gpucur->incomplete) return;            /* (-gpu: answers to come) */
     if (g_bExtra && !isdisp)
-        for (int k = 0; k < MAXLIGHTMAPS && f->styles[k] != 255; k++)
+        for (int k = 0; k < MAXLIGHTMAPS && f->styles[k] != 255; k++) {
             BuildSupersampleFaceLights(&l, facenum, fl, k, normalCount, (const vec3_t *)flatBump);
+            if (gpucur && gpucur->incomplete) return;
+        }
     /* the samples' direct light (style 0) onto the face's patches, for bouncing */
     int k0;
     for (k0 = 0; k0 < MAXLIGHTMAPS; k0++)
@@ -1567,3 +1680,48 @@ void FinalLightFace(int facenum) {
 }
 
 void AllocFacelights(void) { facelight = xalloc(sizeof(facelight_t) * (numfaces + 1)); }
+
+/* -gpu: every face's direct light in rounds (see GpuQuery) */
+static int *roundfaces;
+static void RoundWork(int i, int thread) { (void)thread; BuildFacelights(roundfaces[i]); }
+
+void BuildFacelightsGPU(void) {
+    gpufaces = xalloc(sizeof(gpuface_t) * (numfaces + 1));
+    roundfaces = xalloc(sizeof(int) * (numfaces + 1));
+    int nround = numfaces, R = 64 * GPU_NumSlots();
+    for (int i = 0; i < numfaces; i++) roundfaces[i] = i;
+    for (int round = 1; nround; round++) {
+        RunThreadsOn(nround, RoundWork);
+        /* every face's new questions, together */
+        int nq = 0, nf = 0;
+        for (int i = 0; i < nround; i++) nq += gpufaces[roundfaces[i]].npend;
+        if (!nq) break;
+        gpugroup_t *q = xalloc(sizeof(gpugroup_t) * nq);
+        float *ans = xalloc(sizeof(float) * (size_t)R * nq), *slotout = xalloc(sizeof(float) * 64 * (size_t)nq);
+        for (int i = 0, at = 0; i < nround; i++) {
+            gpuface_t *g = &gpufaces[roundfaces[i]];
+            memcpy(q + at, g->pend, sizeof(gpugroup_t) * g->npend);
+            at += g->npend;
+        }
+        for (int slot = 0; slot < GPU_NumSlots(); slot++) {
+            GPU_Gather(q, nq, slot, slotout);
+            for (int k = 0; k < nq; k++) memcpy(ans + (size_t)R * k + 64 * slot, slotout + 64 * (size_t)k, 64 * sizeof(float));
+        }
+        /* the answers to their faces; those faces run again */
+        for (int i = 0, at = 0; i < nround; i++) {
+            gpuface_t *g = &gpufaces[roundfaces[i]];
+            if (!g->npend) continue;
+            g->res = realloc(g->res, sizeof(float) * (size_t)R * (g->nres + g->npend));
+            memcpy(g->res + (size_t)R * g->nres, ans + (size_t)R * at, sizeof(float) * (size_t)R * g->npend);
+            g->nres += g->npend, at += g->npend;
+            g->npend = 0;
+            roundfaces[nf++] = roundfaces[i];
+        }
+        free(q), free(ans), free(slotout);
+        if (getenv("HLGPUDBG")) Msg("round %d: %d questions, %d faces again\n", round, nq, nf);
+        nround = nf;
+    }
+    for (int i = 0; i < numfaces; i++) free(gpufaces[i].pend), free(gpufaces[i].res);
+    free(gpufaces), free(roundfaces);
+    gpufaces = NULL;
+}

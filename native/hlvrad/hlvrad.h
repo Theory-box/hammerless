@@ -212,6 +212,53 @@ void EM_Nearest4(void *scene, const float o[3][4], const float d[3][4], const fl
 void EM_Blocked4(void *scene, const float o[3][4], const float d[3][4], const float tnear[4], const float tfar[4],
                  int (*skip)(int tri, void *data), void *data, int blocked[4]);
 
+/* gpu.c (-gpu: lighting on the GPU through Vulkan ray queries; faster, not vrad's to the bit) */
+extern int g_bGPU, g_gpuCheck;
+typedef struct {                       /* (gather.comp's Group) 4 points lit together */
+    float pos[3][4];
+    float nrm[4][3][4];                /* [normal][axis][point] */
+    int cluster[4];
+    int lanes, normalCount, flags, skip, slot, pad[3];
+} gpugroup_t;
+#define GPU_FORCE_FAST 1
+#define GPU_IGNORE_NORMALS 2
+#define GPU_AMBIENT_ONLY 4
+#define GPU_NON_AMBIENT_ONLY 8
+#define GPU_PROP_VERTEX 16
+typedef struct { float lmS[4], lmT[4]; int a[4], b[4], c[4]; float refl[4]; } gpuwface_t;   /* (walk.glsl's) */
+typedef struct { int a[4], b[4]; float bmins[4], bmaxs[4]; } gpuwdisp_t;
+typedef struct { float lo[4], hi[4]; int i[4]; } gpuwnode_t;
+typedef struct {                       /* the map as leafambient.c's surface finder walks it */
+    const float *planes; int nplanes;              /* 4 floats each */
+    const int *nodes; int nnodes;                  /* 4 ints each */
+    const int *leaves; int nleaves;                /* 4 ints each */
+    const int *leaffaces; int nleaffaces;
+    const gpuwface_t *faces; int nfaces;
+    const float *windings; int nwindings;          /* 4 floats each */
+    const gpuwdisp_t *disps; int ndisps;
+    const float *dverts; int ndverts;              /* 4 floats each */
+    const int *dtris; int ndtris;                  /* 4 ints each */
+    const gpuwnode_t *dnodes; int ndnodes;
+    const int *dorder; int ndorder;
+    const float *dlux; int ndlux;                  /* 2 floats each */
+    const int *leafdisps; int nleafdisps;
+} gpuwalk_t;
+void GPU_StartInit(void);
+int GPU_Init(void);
+void GPU_ShadowScene(void);
+void GPU_Lights(void);
+int GPU_NumSlots(void);
+int GPU_SlotStyle(int slot);
+int GPU_StyleSlot(int style);
+void GPU_Gather(const gpugroup_t *groups, int n, int slot, float *out);       /* out: 16 floats per point */
+void GPU_WalkScene(const gpuwalk_t *w);
+void GPU_Lightmaps(void);
+void GPU_Ambient(const float *points, int n, const float skylight[4], float *out);   /* out: 18 floats per point */
+void GPU_PropIndirect(const float *points, int n, float *out);                       /* in 7, out 3 per vertex */
+const float *RT_Triangles(int *n);
+const float *SkyMapData(int *w, int *h);
+const vec3_t *SkyDirections(int *n);
+
 /* raytrace.c */
 void RT_AddTriangle(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2);
 void RT_SetupAccelerationStructure(void);
@@ -292,6 +339,7 @@ const int *FaceNeighbours(int facenum, int *count);
 /* direct.c */
 void AllocFacelights(void);
 void BuildFacelights(int facenum);
+void BuildFacelightsGPU(void);
 void FinalLightFace(int facenum);
 void GetPhongNormal(int facenum, const vec3_t spot, vec3_t phongnormal);
 void GetPhongNormalScalar(int facenum, const vec3_t spot, vec3_t phongnormal);

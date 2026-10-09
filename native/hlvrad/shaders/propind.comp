@@ -1,0 +1,42 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Static prop vertexes' bounced light (spropvlight.c's IndirectLightingAtPoint): rays over the vertex's hemisphere pick
+// up the lightmap colour times reflectivity of what they find. As vrad, one surface finder is kept for all of a vertex's
+// rays (FindLightSurfaceKept): its nearest hit so far stays, so later rays only find nearer leaf faces and displacements.
+// In: per vertex pos, normal, flags (1 force fast, 2 ignore normals); out: 3 floats.
+layout(local_size_x = 64) in;
+#include "walk.glsl"
+layout(set = 0, binding = 15, std430) readonly buffer SkyMap { float skymap[]; };
+layout(set = 0, binding = 16, std430) readonly buffer Dirs { vec4 skydir[]; };
+layout(set = 0, binding = 17, std430) readonly buffer Points { float points[]; };   // 7 per vertex
+layout(set = 0, binding = 18, std430) writeonly buffer Out { float outv[]; };
+layout(push_constant) uniform PC { int npoints, nskyFull, fast, pad; } pc;
+
+const float MAX_TRACE_LENGTH = 56755.84;
+
+void main() {
+    int i = int(gl_GlobalInvocationID.x);
+    if (i >= pc.npoints) return;
+    vec3 pos = vec3(points[7 * i], points[7 * i + 1], points[7 * i + 2]);
+    vec3 normal = vec3(points[7 * i + 3], points[7 * i + 4], points[7 * i + 5]);
+    int flags = floatBitsToInt(points[7 * i + 6]);
+    int nsamples = pc.fast != 0 || (flags & 1) != 0 ? 162 / 4 : pc.nskyFull;
+    vec3 sum = vec3(0.0);
+    float totalDot = 0.0;
+    lsSurface = -1, lsHitfrac = 1.0, lsHasLuxel = false;          // (LightSurfaceBegin)
+    for (int j = 0; j < nsamples; j++) {
+        vec3 dir = skydir[j].xyz;
+        float d = (flags & 2) != 0 ? 0.35355 : (normal.x * dir.x + normal.y * dir.y) + normal.z * dir.z;
+        if (d <= 0.001) continue;
+        totalDot += d;
+        lsStart = pos, lsDelta = (pos + dir * MAX_TRACE_LENGTH) - pos;
+        int f = Walk() == 0 ? lsSurface : -1;
+        if (f < 0) continue;
+        if ((faces[f].b.w & SURF_SKY) != 0) continue;
+        if (FaceStyle(f, 0) == 255 || faces[f].a.x < 0) continue;
+        vec3 c = lsHasLuxel ? Rgbe(LuxelOffset(f, lsLuxel)) : Rgbe(faces[f].a.x - 4);
+        sum = sum + faces[f].refl.xyz * (c * 255.0);
+    }
+    if (totalDot != 0.0) sum *= 1.0 / totalDot;
+    outv[3 * i] = sum.x, outv[3 * i + 1] = sum.y, outv[3 * i + 2] = sum.z;
+}

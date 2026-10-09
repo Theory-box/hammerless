@@ -50,16 +50,19 @@ def compile_options(s) -> "cc.CompileOptions | str":
             return s.compile_preset
         import dataclasses
         return dataclasses.replace(cc.PRESETS[s.compile_preset], vis_tool=s.vis_tool, light_tool=s.light_tool,
-                                   map_tool=s.map_tool, **_cycles_options(s))
+                                   map_tool=s.map_tool, **_light_options(s))
     return cc.CompileOptions(vis=s.vis_mode, rad=s.rad_mode, hdr=s.hdr_mode,
                              static_prop_lighting=s.static_prop_lighting,
                              extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad,
                              vis_tool=s.vis_tool, light_tool=s.light_tool, map_tool=s.map_tool,
-                             **_cycles_options(s))
+                             **_light_options(s))
 
 
-def _cycles_options(s) -> dict:
-    """Cycles bake settings (only when baking with Cycles, so they don't change vrad builds' fingerprint)."""
+def _light_options(s) -> dict:
+    """Cycles bake settings (only when baking with Cycles, so they don't change vrad builds' fingerprint),
+    or whether the Hammerless light compiler matches vrad exactly (CPU) or uses the GPU."""
+    if s.light_tool == "HAMMERLESS":
+        return {"light_exact": s.light_exact}
     if s.light_tool != "CYCLES":
         return {}
     return {"cycles_samples": s.cycles_samples, "cycles_denoise": s.cycles_denoise,

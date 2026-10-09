@@ -67,7 +67,67 @@ static void SpLog(int kind, const vec3_t pos, const vec3_t n, const vec3_t out, 
     fwrite(rec, 4, 13, splog);
 }
 
+/* -gpu: the props run twice. The first time each vertex's light is a question (recorded; 0 for now: which vertexes are
+ * lit, and from where, doesn't depend on their light); the GPU answers them all; the second time they're replayed in
+ * order. Per prop: its direct questions (groups of one point) and bounced ones (7 floats), then their answers. */
+typedef struct {
+    gpugroup_t *dq;
+    float *iq, *dres, *ires;
+    int nd, ni, capd, capi;
+} gpuprop_t;
+static gpuprop_t *gpuprops;
+static int gpuprop_phase;                  /* 1 recording, 2 replaying */
+static __thread int gpuprop_cur, gpuprop_dc, gpuprop_ic;
+
+static void DirectLightingAtPoint(const vec3_t pos, const vec3_t normal, vec3_t out, int skipProp, int flags);
+static int GpuDirect(const vec3_t pos, const vec3_t normal, vec3_t out, int skipProp, int flags) {
+    gpuprop_t *g = &gpuprops[gpuprop_cur];
+    if (gpuprop_phase == 2) {
+        memcpy(out, g->dres + 64 * gpuprop_dc++, 12);      /* (each answer: a group of 4 points, 16 floats each) */
+        static int shown;      /* (debugging, HLGPUCHK: the first few that differ from the CPU's) */
+        if (g_gpuCheck && shown < 6) {
+            vec3_t c;
+            gpuprop_phase = 0;
+            DirectLightingAtPoint(pos, normal, c, skipProp, flags);
+            gpuprop_phase = 2;
+            float d = fabsf(c[0] - out[0]) + fabsf(c[1] - out[1]) + fabsf(c[2] - out[2]);
+            if (d > 0.01f * (c[0] + c[1] + c[2]) + 0.001f) {
+                shown++;
+                Msg("prop %d vertex at %.1f %.1f %.1f n %.2f %.2f %.2f skip %d flags %d: cpu %.4f %.4f %.4f gpu %.4f %.4f %.4f\n",
+                    gpuprop_cur, pos[0], pos[1], pos[2], normal[0], normal[1], normal[2], skipProp, flags, c[0], c[1], c[2],
+                    out[0], out[1], out[2]);
+            }
+        }
+        return 1;
+    }
+    if (g->nd == g->capd) g->capd = g->capd ? 2 * g->capd : 64, g->dq = realloc(g->dq, sizeof(gpugroup_t) * g->capd);
+    gpugroup_t *q = &g->dq[g->nd++];
+    memset(q, 0, sizeof(*q));
+    for (int c = 0; c < 3; c++) q->pos[c][0] = pos[c], q->nrm[0][c][0] = normal[c];
+    q->cluster[0] = ClusterFromPoint(pos);
+    q->lanes = 1, q->normalCount = 1, q->skip = skipProp, q->slot = GPU_StyleSlot(0);
+    q->flags = GPU_PROP_VERTEX | GPU_FORCE_FAST | ((flags & GATHERLFLAGS_IGNORE_NORMALS) ? GPU_IGNORE_NORMALS : 0);
+    VectorClear(out);
+    return 1;
+}
+
+static int GpuIndirect(const vec3_t pos, const vec3_t normal, vec3_t out, int forceFast, int ignoreNormals) {
+    gpuprop_t *g = &gpuprops[gpuprop_cur];
+    if (gpuprop_phase == 2) {
+        memcpy(out, g->ires + 3 * gpuprop_ic++, 12);
+        return 1;
+    }
+    if (g->ni == g->capi) g->capi = g->capi ? 2 * g->capi : 64, g->iq = realloc(g->iq, sizeof(float) * 7 * g->capi);
+    float *q = g->iq + 7 * g->ni++;
+    memcpy(q, pos, 12), memcpy(q + 3, normal, 12);
+    int f = (forceFast ? 1 : 0) | (ignoreNormals ? 2 : 0);
+    memcpy(q + 6, &f, 4);
+    VectorClear(out);
+    return 1;
+}
+
 static void DirectLightingAtPoint(const vec3_t pos, const vec3_t normal, vec3_t out, int skipProp, int flags) {
+    if (gpuprop_phase && GpuDirect(pos, normal, out, skipProp, flags)) return;
     VectorClear(out);
     int cluster = ClusterFromPoint(pos);
     for (directlight_t *dl = activelights; dl; dl = dl->next) {
@@ -104,6 +164,7 @@ static void DecodeRGBE(const unsigned char *c, vec3_t v) {
 static int spiCount, spiTarget = -1;      /* (single-threaded when logging) */      /* (debugging, SPRAYK: one call's rays, as vradhook logs vrad's) */
 static FILE *rayLog;
 static void IndirectLightingAtPoint(const vec3_t pos, const vec3_t normal, vec3_t out, int forceFast, int ignoreNormals) {
+    if (gpuprop_phase && GpuIndirect(pos, normal, out, forceFast, ignoreNormals)) return;
     int logRays = rayLog && spiCount++ == spiTarget;
     const dtexdata_t *dtexdata = (const dtexdata_t *)lumps[LUMP_TEXDATA].data;
     VectorClear(out);
@@ -452,6 +513,7 @@ static vhv_t *sp_results;
 
 static void PropWork(int i, int thread) {
     (void)thread;
+    gpuprop_cur = i, gpuprop_dc = gpuprop_ic = 0;
     const unsigned char *rec = sp_props + PROP_RECORD * i;
     if (rec[31] & STATIC_PROP_NO_PER_VERTEX_LIGHTING) return;
     int model = U16(rec + 24);
@@ -487,7 +549,36 @@ void ComputeStaticPropLighting(void) {
     sp_props = p + 4;
     Msg("Computing static prop lighting : %d props\n", numprops);
     sp_results = xalloc(sizeof(vhv_t) * (numprops + 1));
-    RunThreadsOn(numprops, PropWork);
+    if (g_bGPU) {
+        gpuprops = xalloc(sizeof(gpuprop_t) * (numprops + 1));
+        gpuprop_phase = 1;
+        RunThreadsOn(numprops, PropWork);
+        for (int i = 0; i < numprops; i++) free(sp_results[i].data);
+        memset(sp_results, 0, sizeof(vhv_t) * (numprops + 1));
+        int nd = 0, ni = 0;
+        for (int i = 0; i < numprops; i++) nd += gpuprops[i].nd, ni += gpuprops[i].ni;
+        gpugroup_t *dq = xalloc(sizeof(gpugroup_t) * (nd + 1));
+        float *iq = xalloc(sizeof(float) * 7 * (ni + 1)), *dres = xalloc(sizeof(float) * 64 * (nd + 1)),
+              *ires = xalloc(sizeof(float) * 3 * (ni + 1));
+        for (int i = 0, a = 0, b = 0; i < numprops; i++) {
+            memcpy(dq + a, gpuprops[i].dq, sizeof(gpugroup_t) * gpuprops[i].nd);
+            memcpy(iq + 7 * b, gpuprops[i].iq, sizeof(float) * 7 * gpuprops[i].ni);
+            a += gpuprops[i].nd, b += gpuprops[i].ni;
+        }
+        if (nd && GPU_StyleSlot(0) >= 0) GPU_Gather(dq, nd, GPU_StyleSlot(0), dres);
+        if (ni) GPU_PropIndirect(iq, ni, ires);
+        for (int i = 0, a = 0, b = 0; i < numprops; i++) {
+            gpuprops[i].dres = dres + 64 * a, gpuprops[i].ires = ires + 3 * b;
+            a += gpuprops[i].nd, b += gpuprops[i].ni;
+        }
+        gpuprop_phase = 2;
+        RunThreadsOn(numprops, PropWork);
+        gpuprop_phase = 0;
+        for (int i = 0; i < numprops; i++) free(gpuprops[i].dq), free(gpuprops[i].iq);
+        free(gpuprops), free(dq), free(iq), free(dres), free(ires);
+        gpuprops = NULL;
+    } else
+        RunThreadsOn(numprops, PropWork);
     g_numthreads = threads;
     for (int i = 0; i < numprops; i++) {
         if (!sp_results[i].data) continue;

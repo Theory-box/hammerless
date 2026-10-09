@@ -27,6 +27,12 @@ void LoadSkyMap(const char *path) {
 
 int HaveSkyMap(void) { return skymap != NULL; }
 
+/* (for the GPU) */
+const float *SkyMapData(int *w, int *h) {
+    *w = skymap_w, *h = skymap_h;
+    return skymap;
+}
+
 /* the light from the sky in direction dir (any length), times scale; bilinear, wrapping round the horizon */
 void SkyMapColor(const vec3_t dir, float scale, vec3_t out) {
     double len = sqrt((double)dir[0] * dir[0] + (double)dir[1] * dir[1] + (double)dir[2] * dir[2]);

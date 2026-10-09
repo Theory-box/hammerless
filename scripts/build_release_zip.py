@@ -23,6 +23,10 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for f in files:
             if f.endswith(".pyc") or f.startswith("."):
                 continue
+            # the only DLL the add-on ships is the nav library; others in core/ (embree4.dll, tbb12.dll for
+            # hlvrad's shelved -embree build) are gitignored local leftovers
+            if f.lower().endswith(".dll") and f != "_hlnav.dll":
+                continue
             full = os.path.join(folder, f)
             z.write(full, os.path.join("hammerless", os.path.relpath(full, SRC)))
             count += 1

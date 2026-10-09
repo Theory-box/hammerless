@@ -1,0 +1,263 @@
+#version 460
+#extension GL_EXT_ray_query : require
+#extension GL_GOOGLE_include_directive : require
+// Direct light at points (direct.c's GatherSampleLight4 and what its callers add up), one thread per point.
+// A group is 4 points (a face's sample group, a supersample row, or one prop vertex); this dispatch adds up the
+// lights of one style slot. Out: per point, 4 normals' colours (12 floats), then whether any light added to it.
+layout(local_size_x = 64) in;
+
+struct Group {
+    vec4 pos[3];            // [axis] = the 4 points' coordinate
+    vec4 nrm[12];           // [normal * 3 + axis]
+    ivec4 cluster;
+    int lanes, normalCount, flags, skip, slot, pad0, pad1, pad2;
+};
+struct Light {
+    vec4 origin, intensity, normal;
+    vec4 a;                 // stopdot, stopdot2, exponent, constant_attn
+    vec4 b;                 // linear_attn, quadratic_attn, start fade, end fade
+    vec4 c;                 // cap distance, sun spread (sin of its angle), 0, 0
+    ivec4 m;                // type, style slot, pvs offset (words), 0
+};
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT scene;
+layout(set = 0, binding = 1, std430) readonly buffer Groups { Group groups[]; };
+layout(set = 0, binding = 2, std430) readonly buffer Lights { Light lights[]; };
+layout(set = 0, binding = 3, std430) readonly buffer Pvs { uint pvs[]; };
+layout(set = 0, binding = 4, std430) readonly buffer SkyDirs { vec4 skydir[]; };
+layout(set = 0, binding = 5, std430) readonly buffer SkyMap { float skymap[]; };
+layout(set = 0, binding = 6, std430) readonly buffer PropIds { int propid[]; };
+layout(set = 0, binding = 7, std430) writeonly buffer Out { float outv[]; };
+layout(push_constant) uniform PC {
+    int ngroups, slot, nlights, fast;
+    int nskyFull, skymapW, skymapH, haveSkyMap;
+    float sunExtent;
+} pc;
+
+#include "skymap.glsl"
+
+#define FORCE_FAST 1
+#define IGNORE_NORMALS 2
+#define AMBIENT_ONLY 4
+#define NON_AMBIENT_ONLY 8
+#define PROP_VERTEX 16
+#define emit_surface 0
+#define emit_point 1
+#define emit_spotlight 2
+#define emit_skylight 3
+#define emit_skyambient 5
+#define CONSTANT_DOT 0.35
+#define DIST_EPSILON 0.03125
+#define EQUAL_EPSILON 0.001
+const float MAX_TRACE_LENGTH = 56755.84;
+
+// instances: 0 the world, 1 the sky, 2 the static props (not opaque: one prop's own triangles can be skipped)
+bool Blocked(vec3 o, vec3 e, int skip) {       // anything (sky too) between o and e
+    vec3 d = e - o;
+    float len = length(d);
+    if (!(len > 0.0)) return false;
+    d /= len;
+    rayQueryEXT q;
+    uint flags = gl_RayFlagsTerminateOnFirstHitEXT | (skip < 0 ? gl_RayFlagsOpaqueEXT : 0u);
+    rayQueryInitializeEXT(q, scene, flags, 0xFF, o, 0.0, d, len);
+    while (rayQueryProceedEXT(q))
+        if (propid[rayQueryGetIntersectionPrimitiveIndexEXT(q, false)] != skip) rayQueryConfirmIntersectionEXT(q);
+    return rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+}
+
+float ReachesSky(vec3 o, vec3 e, int skip) {   // 1 when the first thing met is sky (or nothing)
+    vec3 d = e - o;
+    float len = length(d);
+    if (!(len > 0.0)) return 1.0;
+    d /= len;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, scene, skip < 0 ? gl_RayFlagsOpaqueEXT : 0u, 0xFF, o, 0.0, d, len);
+    while (rayQueryProceedEXT(q))
+        if (propid[rayQueryGetIntersectionPrimitiveIndexEXT(q, false)] != skip) rayQueryConfirmIntersectionEXT(q);
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) return 1.0;
+    return rayQueryGetIntersectionInstanceCustomIndexEXT(q, true) == 1 ? 1.0 : 0.0;
+}
+
+float PowFixedPoint(float x, int exponent) {
+    float rslt = 1.0;
+    int xp = abs(exponent);
+    if ((xp & 3) != 0) {
+        float sq = sqrt(x);
+        if ((xp & 1) != 0) rslt = sqrt(sq);
+        if ((xp & 2) != 0) rslt = rslt * sq;
+    }
+    xp >>= 2;
+    float cur = x;
+    for (;;) {
+        if ((xp & 1) != 0) rslt = rslt * cur;
+        xp >>= 1;
+        if (xp != 0) cur = cur * cur;
+        else break;
+    }
+    if (exponent < 0) return 1.0 / (rslt == 0.0 ? 1.192092896e-07 : rslt);
+    return rslt;
+}
+
+vec3 Nrm(Group g, int n, int lane) { return vec3(g.nrm[n * 3][lane], g.nrm[n * 3 + 1][lane], g.nrm[n * 3 + 2][lane]); }
+
+// one light at one point: the dots (per normal), falloff, and the colour per normal
+float dots[4];
+vec3 tint[4];
+bool tinted;
+float falloff;
+
+void Standard(Light L, vec3 pos, vec3 n[4], int nc, int gflags, int skip) {
+    vec3 src = L.origin.xyz;
+    vec3 delta = src - pos;
+    float dist2 = dot(delta, delta);
+    delta *= inversesqrt(dist2);
+    float dist = sqrt(dist2);
+    float d0 = (gflags & IGNORE_NORMALS) != 0 ? CONSTANT_DOT : dot(delta, n[0]);
+    float dt = max(d0, 0.0);
+    bool hard = L.b.w > L.b.z;
+    if (hard && !(dist <= L.b.w)) dt = 0.0;
+    dist = max(dist, 1.0);
+    float evald = min(dist, L.c.x);
+    int type = L.m.x;
+    if (type == emit_point) {
+        falloff = 1.0 / ((evald * evald * L.b.y + L.b.x * evald) + L.a.w);
+    } else if (type == emit_surface) {
+        float d2 = max(-dot(delta, L.normal.xyz), 0.0);
+        falloff = (1.0 / dist2) * d2;
+        src += L.normal.xyz * DIST_EPSILON;
+    } else if (type == emit_spotlight) {
+        float d2 = -dot(delta, L.normal.xyz);
+        if (!(d2 > L.a.y)) dt = 0.0;
+        float f = (1.0 / ((evald * evald * L.b.y + L.b.x * evald) + L.a.w)) * d2;
+        float mult = clamp((1.0 / (L.a.x - L.a.y)) * (d2 - L.a.y), 0.0, 1.0);
+        if (L.a.z != 0.0 && L.a.z != 1.0) mult = PowFixedPoint(mult, int(4.0 * L.a.z));
+        if (!(d2 <= L.a.x)) mult = 1.0;
+        falloff = mult * f;
+    } else {
+        falloff = 0.0;
+    }
+    if (hard) {
+        float t = 1.0 - clamp((1.0 / (L.b.w - L.b.z)) * (dist - L.b.z), 0.0, 1.0);
+        falloff = (t * ((t * t) * ((6.0 * t - 15.0) * t + 10.0))) * falloff;
+    }
+    if (dt == 0.0 || falloff == 0.0) return;
+    dots[0] = Blocked(pos, src, skip) ? 0.0 : dt;
+    for (int k = 1; k < nc; k++) dots[k] = max((gflags & IGNORE_NORMALS) != 0 ? CONSTANT_DOT : dot(n[k], delta), 0.0);
+}
+
+void Sun(Light L, vec3 pos, vec3 n[4], int nc, int gflags, int skip) {
+    float d = (gflags & IGNORE_NORMALS) != 0 ? CONSTANT_DOT : -dot(n[0], L.normal.xyz);
+    float dt = max(d, 0.0);
+    if (dt == 0.0) return;
+    float extent = L.c.y;
+    bool fast = pc.fast != 0 || (gflags & FORCE_FAST) != 0;
+    int nsamples = extent > 0.0 ? (fast ? 7 : 30) : 1;
+    float jitter = extent * MAX_TRACE_LENGTH;
+    float see = 0.0;
+    for (int s = 0; s < nsamples; s++) {
+        vec3 delta = L.normal.xyz * -MAX_TRACE_LENGTH;
+        if (s > 0) delta = skydir[s - 1].xyz * jitter + delta;
+        see += ReachesSky(pos, pos + delta, skip);
+    }
+    see *= 1.0 / float(nsamples);
+    dots[0] = dt * see;
+    falloff = 1.0;
+    for (int k = 1; k < nc; k++) dots[k] = (gflags & IGNORE_NORMALS) != 0 ? CONSTANT_DOT : -dot(n[k], L.normal.xyz) * see;
+}
+
+// (allValid: whether any of the group's 4 points faces this direction: vrad traces for all 4 then)
+void AmbientSky(Light L, Group g, int lane, vec3 pos, vec3 n[4], int nc, int gflags, int skip) {
+    float skyscale = pc.haveSkyMap != 0 ? Luminance(L.intensity.xyz) : 0.0;
+    bool fast = pc.fast != 0 || (gflags & FORCE_FAST) != 0;
+    int nsky = fast ? 162 / 4 : pc.nskyFull;
+    bool ignore = (gflags & IGNORE_NORMALS) != 0;
+    float sumdot = 0.0, ambient[4] = float[4](0.0, 0.0, 0.0, 0.0), possible[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    vec3 colsum[4] = vec3[4](vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
+    int lanes = (gflags & PROP_VERTEX) != 0 ? 1 : 4;
+    for (int j = 0; j < nsky; j++) {
+        vec3 anorm = skydir[j].xyz;
+        bool any = false;
+        for (int i = 0; i < lanes; i++) {
+            float di = ignore ? CONSTANT_DOT : -dot(Nrm(g, 0, i), anorm);
+            if (di > EQUAL_EPSILON) any = true;
+        }
+        if (!any) continue;
+        float dd[4];
+        dd[0] = ignore ? CONSTANT_DOT : -dot(n[0], anorm);
+        bool valid = dd[0] > EQUAL_EPSILON;
+        if (!valid) dd[0] = 0.0;
+        sumdot = dd[0] + sumdot;
+        possible[0] = (valid ? 1.0 : 0.0) + possible[0];
+        bool need = valid;
+        for (int k = 1; k < nc; k++) {
+            dd[k] = ignore ? CONSTANT_DOT : -dot(n[k], anorm);
+            bool v2 = dd[k] > EQUAL_EPSILON;
+            if (!v2) dd[k] = 0.0;
+            possible[k] = (valid && v2 ? 1.0 : 0.0) + possible[k];
+            if (dd[k] != 0.0) need = true;
+        }
+        if (!need) continue;                    // (every dot 0: the ray adds nothing)
+        float frac = ReachesSky(pos, anorm * -MAX_TRACE_LENGTH + pos, skip);
+        for (int k = 0; k < nc; k++) ambient[k] = ambient[k] + frac * dd[k];
+        if (skyscale > 0.0 && frac != 0.0) {
+            vec3 c = SkyMapColor(-anorm, skyscale, pc.skymapW, pc.skymapH);
+            for (int k = 0; k < nc; k++) colsum[k] += frac * dd[k] * c;
+        }
+    }
+    falloff = 1.0;
+    for (int k = 0; k < nc; k++) {
+        float d = (possible[0] > 0.0 && sumdot != 0.0) ? 1.0 / ((1.0 / possible[0]) * possible[k] * sumdot) : 0.0;
+        dots[k] = possible[k] > 0.0 ? ambient[k] * d : 0.0;
+    }
+    if (skyscale > 0.0) {
+        tinted = true;
+        for (int k = 0; k < nc; k++) tint[k] = ambient[k] > 0.0 ? colsum[k] / ambient[k] : vec3(0.0);
+    }
+}
+
+void main() {
+    uint t = gl_GlobalInvocationID.x;
+    int gi = int(t >> 2), lane = int(t & 3u);
+    if (gi >= pc.ngroups) return;
+    Group g = groups[gi];
+    uint o = t * 16u;
+    vec3 sum[4] = vec3[4](vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
+    bool nonzero = false;
+    if (lane < g.lanes && (g.slot < 0 || g.slot == pc.slot)) {
+        int nc = g.normalCount;
+        vec3 pos = vec3(g.pos[0][lane], g.pos[1][lane], g.pos[2][lane]);
+        vec3 n[4];
+        for (int k = 0; k < 4; k++) n[k] = k < nc ? Nrm(g, k, lane) : vec3(0.0);
+        int cluster = g.cluster[lane];
+        for (int li = 0; li < pc.nlights; li++) {
+            Light L = lights[li];
+            if (L.m.y != pc.slot) continue;
+            int type = L.m.x;
+            if ((g.flags & AMBIENT_ONLY) != 0 && type != emit_skyambient) continue;
+            if ((g.flags & NON_AMBIENT_ONLY) != 0 && type == emit_skyambient) continue;
+            if (cluster >= 0 && (pvs[L.m.z + (cluster >> 5)] & (1u << (cluster & 31))) == 0u) continue;
+            vec3 p = pos;
+            if ((g.flags & PROP_VERTEX) != 0) {      // (spropvlight.c: 4 units toward the light, or out along the normal)
+                if (type == emit_skyambient) p = n[0] * 4.0 + pos;
+                else if (type == emit_skylight) p = pos + (-L.normal.xyz) * 4.0;
+                else p = pos + normalize(L.origin.xyz - pos) * 4.0;
+            }
+            for (int k = 0; k < 4; k++) dots[k] = 0.0;
+            falloff = 0.0;
+            tinted = false;
+            if (type == emit_skylight) Sun(L, p, n, nc, g.flags, g.skip);
+            else if (type == emit_skyambient) AmbientSky(L, g, lane, p, n, nc, g.flags, g.skip);
+            else Standard(L, p, n, nc, g.flags, g.skip);
+            dots[0] = max(dots[0], 0.0);
+            bool notZero = dots[0] > 0.0;
+            for (int k = 0; k < nc; k++) {
+                float d = k == 0 ? dots[0] : (notZero ? max(dots[k], 0.0) : 0.0);
+                float fx = d * falloff;
+                if (fx != 0.0) nonzero = true;
+                sum[k] += fx * (tinted ? tint[k] : L.intensity.xyz);
+            }
+        }
+    }
+    for (int k = 0; k < 4; k++) outv[o + 3 * k] = sum[k].x, outv[o + 3 * k + 1] = sum[k].y, outv[o + 3 * k + 2] = sum[k].z;
+    outv[o + 12] = nonzero ? 1.0 : 0.0;
+}

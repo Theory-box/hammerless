@@ -7,6 +7,7 @@
  * are folded into a cube of 6 directions, plus small light-emitting surfaces seen directly. Samples that
  * the others predict well are dropped. A leaf without samples points at its nearest neighbour that has. */
 #include <float.h>
+#include <windows.h>
 #include "hlvrad.h"
 
 #define MAX_SAMPLES 16
@@ -469,9 +470,11 @@ static int PointOnSurface(const vec3_t pt, const dface_t *f, lightsurf_t *ls) {
     return 1;
 }
 
+static int walkdbg;              /* (debugging, HLWALKDBG: the walk's nodes and leaves) */
 static int EnumerateNode(lightsurf_t *ls, int node, float f) {
     vec3_t pt;
     for (int k = 0; k < 3; k++) pt[k] = ls->start[k] + f * ls->delta[k];
+    if (walkdbg) Msg("  node %d at frac %.5f (%.1f %.1f %.1f), faces %d..%d\n", node, f, pt[0], pt[1], pt[2], dnodes[node].firstface, dnodes[node].firstface + dnodes[node].numfaces - 1);
     int sky = -1;
     const dnode_t *n = &dnodes[node];
     for (int i = 0; i < n->numfaces; i++) {
@@ -493,6 +496,7 @@ static int EnumerateNode(lightsurf_t *ls, int node, float f) {
 
 static int EnumerateLeaf(lightsurf_t *ls, int leaf, float start, float end) {
     int hit = 0;
+    if (walkdbg) Msg("  leaf %d %.5f..%.5f\n", leaf, start, end);
     const dleaf_t *l = &dleafs[leaf];
     for (int i = 0; i < l->numleaffaces; i++) {
         int fi = dleaffaces[l->firstleafface + i];
@@ -674,6 +678,7 @@ static unsigned char *worldlights;
 static int numworldlights;
 
 static void AddEmitSurfaceLights(const vec3_t start, vec3_t cube[6]) {
+    if (!numworldlights) return;
     for (int i = 0; i < numworldlights; i++) {
         unsigned char *wl = worldlights + 100 * i;
         int flags, type;
@@ -704,7 +709,51 @@ static void AddEmitSurfaceLights(const vec3_t start, vec3_t cube[6]) {
     }
 }
 
+/* -gpu: the leaves run twice. The first time each cube is a question (its point recorded, the cube 0 for now: where the
+ * points go doesn't depend on the cubes); the GPU answers them all; the second time each leaf's cubes are its answers,
+ * in order. The surface lights (the CPU's) are added then. */
+static int gpuamb_phase;                  /* 1 recording, 2 replaying */
+static float **gpuamb_pts, **gpuamb_res;  /* per leaf: the points (3 floats), then the cubes (18) */
+static int *gpuamb_n;
+static __thread int gpuamb_leaf, gpuamb_cursor, gpuamb_poscursor;
+
+static void AddEmitSurfaceLights(const vec3_t start, vec3_t cube[6]);
+static void AmbientFromSphericalSamples(const vec3_t start, vec3_t cube[6]);
+static int GpuAmbient(const vec3_t start, vec3_t cube[6]) {
+    if (gpuamb_phase == 1) {
+        int n = gpuamb_n[gpuamb_leaf]++;
+        gpuamb_pts[gpuamb_leaf] = realloc(gpuamb_pts[gpuamb_leaf], sizeof(float) * 3 * (n + 1));
+        memcpy(gpuamb_pts[gpuamb_leaf] + 3 * n, start, 12);
+        memset(cube, 0, sizeof(vec3_t) * 6);
+        return 1;
+    }
+    if (gpuamb_phase == 2) {
+        memcpy(cube, gpuamb_res[gpuamb_leaf] + 18 * gpuamb_cursor++, sizeof(vec3_t) * 6);
+        static volatile LONG checked;           /* (debugging, HLGPUCHK: a few cubes against the CPU's) */
+        if (g_gpuCheck) {
+            vec3_t c[6];
+            gpuamb_phase = 0;
+            AmbientFromSphericalSamples(start, c);
+            gpuamb_phase = 2;
+            float worst = 0;
+            for (int k = 0; k < 6; k++)
+                for (int j = 0; j < 3; j++) {
+                    float d = fabsf(c[k][j] - cube[k][j]) / (fabsf(c[k][j]) + 0.01f);
+                    if (d > worst) worst = d;
+                }
+            if (worst > 0.05f && InterlockedIncrement(&checked) <= 2) {
+                Msg("at %.1f %.1f %.1f (leaf %d)\n", start[0], start[1], start[2], gpuamb_leaf);
+                for (int k = 0; k < 6; k++) Msg("   cpu %8.3f %8.3f %8.3f   gpu %8.3f %8.3f %8.3f\n", c[k][0], c[k][1], c[k][2], cube[k][0], cube[k][1], cube[k][2]);
+            }
+        }
+        AddEmitSurfaceLights(start, cube);
+        return 1;
+    }
+    return 0;
+}
+
 static void AmbientFromSphericalSamples(const vec3_t start, vec3_t cube[6]) {
+    if (GpuAmbient(start, cube)) return;
     vec3_t rad[NUMVERTEXNORMALS];
     float tanTheta = (float)tan(VERTEXNORMAL_CONE_INNER_ANGLE);
     for (int i = 0; i < NUMVERTEXNORMALS; i++) {
@@ -733,6 +782,10 @@ static void AmbientFromSphericalSamples(const vec3_t start, vec3_t cube[6]) {
 typedef struct { vec3_t pos; vec3_t cube[6]; } ambsample_t;
 
 static void SamplePosition(int leaf, rng_t *rng, const plane_t *planes, int nplanes, vec3_t pos) {
+    if (gpuamb_phase == 2) {           /* (-gpu, replaying: where the recording put it) */
+        memcpy(pos, gpuamb_pts[leaf] + 3 * gpuamb_poscursor++, 12);
+        return;
+    }
     const dleaf_t *l = &dleafs[leaf];
     float dx = (float)(l->maxs[0] - l->mins[0]), dy = (float)(l->maxs[1] - l->mins[1]), dz = (float)(l->maxs[2] - l->mins[2]);
     int valid = 0;
@@ -893,6 +946,7 @@ static void LeafWork(int item, int thread) {
     static __thread plane_t *planes;
     int leaf = leaforder[item];
     (void)thread;
+    gpuamb_leaf = leaf, gpuamb_cursor = gpuamb_poscursor = 0;
     if (!planes) planes = xalloc(sizeof(plane_t) * (numnodes + 1));
     leafcounts[leaf] = AmbientForLeaf(leaf, leafresults + (MAX_SAMPLES + 1) * leaf, planes);
 }
@@ -952,6 +1006,84 @@ static int NearestNeighbourWithLight(int leaf, const unsigned short (*index)[2])
 
 void VectorToColorRGBExp32(const vec3_t v, unsigned char *c);
 
+/* -gpu: the map as the walk above sees it, for the GPU's copy of the walk (walk.glsl) */
+static void GpuWalkScene(void) {
+    gpuwalk_t w;
+    memset(&w, 0, sizeof(w));
+    float *planes = xalloc(16 * (size_t)(numplanes + 1));
+    for (int i = 0; i < numplanes; i++) memcpy(planes + 4 * i, dplanes[i].normal, 12), planes[4 * i + 3] = dplanes[i].dist;
+    int *nodes = xalloc(16 * (size_t)(numnodes + 1));
+    for (int i = 0; i < numnodes; i++) {
+        nodes[4 * i] = dnodes[i].planenum, nodes[4 * i + 1] = dnodes[i].children[0], nodes[4 * i + 2] = dnodes[i].children[1];
+        nodes[4 * i + 3] = (int)((unsigned)dnodes[i].firstface | ((unsigned)dnodes[i].numfaces << 16));
+    }
+    int nld = 0;
+    for (int i = 0; i < numleafs; i++) nld += nleafdisps[i];
+    int *leaves = xalloc(16 * (size_t)(numleafs + 1)), *ld = xalloc(4 * (size_t)(nld + 1));
+    for (int i = 0, at = 0; i < numleafs; i++) {
+        leaves[4 * i] = dleafs[i].firstleafface, leaves[4 * i + 1] = dleafs[i].numleaffaces;
+        leaves[4 * i + 2] = at, leaves[4 * i + 3] = nleafdisps[i];
+        memcpy(ld + at, leafdisps[i], 4 * (size_t)nleafdisps[i]), at += nleafdisps[i];
+    }
+    int *lf = xalloc(4 * (size_t)(numleaffaces + 1));
+    for (int i = 0; i < numleaffaces; i++) lf[i] = dleaffaces[i];
+    int nwind = 0;
+    for (int i = 0; i < numfaces; i++) nwind += facewindings[i]->numpoints;
+    gpuwface_t *faces = xalloc(sizeof(gpuwface_t) * (numfaces + 1));
+    float *wind = xalloc(16 * (size_t)(nwind + 1));
+    for (int i = 0, at = 0; i < numfaces; i++) {
+        const dface_t *f = &g_pFaces[i];
+        const texinfo_t *tx = &texinfo[f->texinfo];
+        gpuwface_t *g = &faces[i];
+        memcpy(g->lmS, tx->lightmapVecsLuxelsPerWorldUnits[0], 16), memcpy(g->lmT, tx->lightmapVecsLuxelsPerWorldUnits[1], 16);
+        g->a[0] = f->lightofs;
+        memcpy(&g->a[1], f->styles, 4);
+        g->a[2] = f->m_LightmapTextureSizeInLuxels[0] + 1, g->a[3] = f->m_LightmapTextureSizeInLuxels[1] + 1;
+        g->b[0] = f->m_LightmapTextureMinsInLuxels[0], g->b[1] = f->m_LightmapTextureMinsInLuxels[1];
+        g->b[2] = (tx->flags & SURF_BUMPLIGHT) && !(tx->flags & SURF_NOLIGHT) ? 4 : 1;
+        g->b[3] = tx->flags;
+        g->c[0] = f->planenum, g->c[1] = (f->onnode ? 1 : 0) | (f->dispinfo != -1 ? 2 : 0);
+        g->c[2] = at, g->c[3] = facewindings[i]->numpoints;
+        for (int k = 0; k < facewindings[i]->numpoints; k++, at++) memcpy(wind + 4 * at, facewindings[i]->p[k], 12);
+        memcpy(g->refl, dtexdata[tx->texdata].reflectivity, 12);
+    }
+    int nv = 0, nt = 0, nn = 0;
+    for (int i = 0; i < numdispsurfs; i++)
+        if (dcoll[i].face >= 0) nv += dispsurfs[i].numverts, nt += dcoll[i].ntris, nn += 2 * dcoll[i].ntris + 2;
+    gpuwdisp_t *disps = xalloc(sizeof(gpuwdisp_t) * (numdispsurfs + 1));
+    float *dv = xalloc(16 * (size_t)(nv + 1)), *dl = xalloc(8 * (size_t)(nv + 1));
+    int *dt = xalloc(16 * (size_t)(nt + 1)), *dor = xalloc(4 * (size_t)(nt + 1));
+    gpuwnode_t *dn = xalloc(sizeof(gpuwnode_t) * (nn + 1));
+    for (int i = 0, av = 0, at = 0, an = 0; i < numdispsurfs; i++) {
+        const dispsurf_t *d = &dispsurfs[i];
+        const dispcoll_t *c = &dcoll[i];
+        gpuwdisp_t *g = &disps[i];
+        g->a[0] = c->face;
+        if (c->face < 0) continue;
+        g->a[1] = c->ntris, g->a[2] = an, g->a[3] = (d->contents & MASK_OPAQUE) != 0;
+        g->b[0] = av, g->b[1] = at, g->b[2] = at;
+        memcpy(g->bmins, c->bmins, 12), memcpy(g->bmaxs, c->bmaxs, 12);
+        for (int k = 0; k < d->numverts; k++) memcpy(dv + 4 * (av + k), d->verts[k], 12), memcpy(dl + 2 * (av + k), c->luxel[k], 8);
+        for (int k = 0; k < c->ntris; k++) {
+            for (int j = 0; j < 3; j++) dt[4 * (at + k) + j] = c->tris[k][j];
+            dor[at + k] = c->order[k];
+        }
+        for (int k = 0; k < 2 * c->ntris + 2; k++) {
+            const dispnode_t *s = &c->nodes[k];
+            memcpy(dn[an + k].lo, s->box, 12), memcpy(dn[an + k].hi, s->box + 3, 12);
+            dn[an + k].i[0] = s->left, dn[an + k].i[1] = s->right, dn[an + k].i[2] = s->first, dn[an + k].i[3] = s->count;
+        }
+        av += d->numverts, at += c->ntris, an += 2 * c->ntris + 2;
+    }
+    w.planes = planes, w.nplanes = numplanes, w.nodes = nodes, w.nnodes = numnodes, w.leaves = leaves, w.nleaves = numleafs;
+    w.leaffaces = lf, w.nleaffaces = numleaffaces, w.faces = faces, w.nfaces = numfaces, w.windings = wind, w.nwindings = nwind;
+    w.disps = disps, w.ndisps = numdispsurfs, w.dverts = dv, w.ndverts = nv, w.dtris = dt, w.ndtris = nt, w.dnodes = dn;
+    w.ndnodes = nn, w.dorder = dor, w.ndorder = nt, w.dlux = dl, w.ndlux = nv, w.leafdisps = ld, w.nleafdisps = nld;
+    GPU_WalkScene(&w);
+    free(planes), free(nodes), free(leaves), free(ld), free(lf), free(faces), free(wind), free(disps), free(dv), free(dl);
+    free(dt), free(dor), free(dn);
+}
+
 /* what the rays need (also for detail props): the tree's parents, displacements' triangles, the sky light */
 void AmbientSetup(void) {
     static int done;
@@ -963,6 +1095,18 @@ void AmbientSetup(void) {
     BuildFaceWindings();
     for (int e = -128; e < 128; e++) power2_table[e + 128] = (float)(ldexp(1.0, e) / 255.0);
     BuildGammaTable();
+    if (g_bGPU) GpuWalkScene();
+    if (getenv("HLWALKDBG")) {
+        vec3_t s, d;
+        int has;
+        float lux[2];
+        sscanf(getenv("HLWALKDBG"), "%f %f %f %f %f %f", &s[0], &s[1], &s[2], &d[0], &d[1], &d[2]);
+        for (int k = 0; k < 3; k++) d[k] = (s[k] + d[k] * (float)(COORD_EXTENT * 1.74)) - s[k];
+        walkdbg = 1;
+        int f = FindLightSurface(s, d, &has, lux);
+        walkdbg = 0;
+        Msg("walk: face %d frac %.5f\n", f, g_lastHitFrac);
+    }
     int wlump = g_bHDR ? LUMP_WORLDLIGHTS_HDR : LUMP_WORLDLIGHTS;
     worldlights = lumps[wlump].data;
     numworldlights = lumps[wlump].len / 100;
@@ -1036,7 +1180,37 @@ void ComputePerLeafAmbientLighting(void) {
     leaforder = xalloc(sizeof(int) * (numleafs + 1));
     for (int i = 0; i < numleafs; i++) leaforder[i] = i;
     qsort(leaforder, numleafs, sizeof(int), CompareCost);
-    RunThreadsOn(numleafs, LeafWork);
+    if (g_bGPU) {
+        GPU_Lightmaps();
+        gpuamb_pts = xalloc(sizeof(float *) * (numleafs + 1));
+        gpuamb_res = xalloc(sizeof(float *) * (numleafs + 1));
+        gpuamb_n = xalloc(sizeof(int) * (numleafs + 1));
+        LARGE_INTEGER qf, q0, q1, q2, q3;     /* (HLGPUDBG: how long each part takes) */
+        QueryPerformanceFrequency(&qf), QueryPerformanceCounter(&q0);
+        gpuamb_phase = 1;
+        RunThreadsOn(numleafs, LeafWork);
+        QueryPerformanceCounter(&q1);
+        int total = 0;
+        for (int i = 0; i < numleafs; i++) total += gpuamb_n[i];
+        float *pts = xalloc(sizeof(float) * 3 * (total + 1)), *res = xalloc(sizeof(float) * 18 * (total + 1));
+        for (int i = 0, at = 0; i < numleafs; i++) memcpy(pts + 3 * at, gpuamb_pts[i], sizeof(float) * 3 * gpuamb_n[i]), at += gpuamb_n[i];
+        float sky[4] = {0, 0, 0, 0};
+        if (skylight) memcpy(sky, skylight, 12), sky[3] = 1;
+        GPU_Ambient(pts, total, sky, res);
+        QueryPerformanceCounter(&q2);
+        for (int i = 0, at = 0; i < numleafs; i++) gpuamb_res[i] = res + 18 * at, at += gpuamb_n[i];
+        gpuamb_phase = 2;
+        RunThreadsOn(numleafs, LeafWork);
+        gpuamb_phase = 0;
+        QueryPerformanceCounter(&q3);
+        if (getenv("HLGPUDBG"))
+            Msg("leaf ambient: %d points; recording %.3f s, GPU %.3f s, replaying %.3f s\n", total,
+                (double)(q1.QuadPart - q0.QuadPart) / qf.QuadPart, (double)(q2.QuadPart - q1.QuadPart) / qf.QuadPart,
+                (double)(q3.QuadPart - q2.QuadPart) / qf.QuadPart);
+        for (int i = 0; i < numleafs; i++) free(gpuamb_pts[i]);
+        free(pts), free(res), free(gpuamb_pts), free(gpuamb_res), free(gpuamb_n);
+    } else
+        RunThreadsOn(numleafs, LeafWork);
     free(leaforder);
     for (int leaf = 0; leaf < numleafs; leaf++) {
         int n = leafcounts[leaf];

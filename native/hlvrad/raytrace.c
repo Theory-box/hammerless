@@ -27,12 +27,12 @@ static int *solid_tri, *sky_tri;
 
 static void *SceneOf(int sky, int **map) {
     int n = 0;
-    for (int i = 0; i < numtris; i++) n += !(tris[i].id & TRACE_ID_SKY) != sky;
+    for (int i = 0; i < numtris; i++) n += ((tris[i].id & TRACE_ID_SKY) != 0) == sky;
     float (*v)[9] = xalloc(sizeof(float[9]) * (n + 1));
     *map = xalloc(sizeof(int) * (n + 1));
     n = 0;
     for (int i = 0; i < numtris; i++)
-        if (!(tris[i].id & TRACE_ID_SKY) != sky) memcpy(v[n], tri_verts[i], 36), (*map)[n++] = i;
+        if (((tris[i].id & TRACE_ID_SKY) != 0) == sky) memcpy(v[n], tri_verts[i], 36), (*map)[n++] = i;
     return EM_NewScene(v[0], n);
 }
 
@@ -586,6 +586,12 @@ void RT_Trace4Mask(const float o[3][4], const float d[3][4], const float tmax[4]
 
 int RT_TriangleID(int tri) { return tris[tri].id; }
 
+/* (for the GPU: every triangle's corners, 9 floats each) */
+const float *RT_Triangles(int *n) {
+    *n = numtris;
+    return tri_verts ? tri_verts[0] : NULL;
+}
+
 /* SSE's reciprocal estimate refined once (Valve's ReciprocalSIMD) */
 static float ReciprocalSSE(float a) {
     __m128 x = _mm_set_ss(a), r = _mm_rcp_ss(x);
@@ -646,6 +652,19 @@ void TestLine_DoesHitSky4(const float start[3][4], const float stop[3][4], int s
         occl = occl > 0 ? occl : 0;
         occl = occl < 1 ? occl : 1;
         frac[i] = 1.0f - occl;
+    }
+    /* (debugging, RAYDUMP=file: every 40th call's rays (start, stop, frac: 7 floats each), to replay elsewhere) */
+    static FILE *dump;
+    static int dumpchecked;
+    static __thread unsigned dumpcount;
+    if (!dumpchecked) dumpchecked = 1, dump = getenv("RAYDUMP") ? fopen(getenv("RAYDUMP"), "wb") : NULL;
+    if (dump && dumpcount++ % 40 == 0) {
+        float rec[4][7];
+        for (int i = 0; i < 4; i++) {
+            for (int c = 0; c < 3; c++) rec[i][c] = start[c][i], rec[i][3 + c] = stop[c][i];
+            rec[i][6] = frac[i];
+        }
+        fwrite(rec, sizeof(rec), 1, dump);
     }
 }
 

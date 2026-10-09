@@ -60,7 +60,8 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-lights") && i + 1 < argc) designer_lights = argv[++i];
         else if (!_stricmp(a, "-bounce") && i + 1 < argc) g_numbounce = atoi(argv[++i]);
         else if (!_stricmp(a, "-threads") && i + 1 < argc) g_numthreads = atoi(argv[++i]);
-        else if (!_stricmp(a, "-embree")) g_bEmbree = 1;         /* (Embree's tracer: faster, not vrad's to the bit) */
+        else if (!_stricmp(a, "-embree")) g_bEmbree = 1;
+        else if (!_stricmp(a, "-gpu")) g_bGPU = 1;              /* (the GPU's ray tracing: faster, not vrad's to the bit) */         /* (Embree's tracer: faster, not vrad's to the bit) */
         else if (
                  !_stricmp(a, "-chop") ||
                  !_stricmp(a, "-maxchop") || !_stricmp(a, "-dispchop")) {
@@ -99,6 +100,7 @@ int main(int argc, char **argv) {
     size_t n = strlen(path);
     if (n < 4 || _stricmp(path + n - 4, ".bsp")) strncat(path, ".bsp", sizeof(path) - n - 1);
     Stage(NULL);
+    if (g_bGPU) GPU_StartInit();
     if (skymap_path) LoadSkyMap(skymap_path);
     LoadBSPFile(path);
     MapArrays();
@@ -154,6 +156,12 @@ int main(int argc, char **argv) {
     Stage("tracer: props");
     RT_SetupAccelerationStructure();
     Stage("ray tracer");
+    if (g_bGPU && !GPU_Init()) g_bGPU = 0;
+    if (g_bGPU) {
+        GPU_ShadowScene();
+        GPU_Lights();
+        Stage("gpu: setup");
+    }
     if (getenv("RTTEST")) {       /* (debugging: trace packets of 4 rays, as vradhook does with vrad's tracer) */
         FILE *rf = fopen(getenv("RTTEST"), "rb"), *of = fopen("raysout_ours.bin", "wb");
         float pk[32];
@@ -168,7 +176,8 @@ int main(int argc, char **argv) {
         return 0;
     }
     AllocFacelights();
-    RunThreadsOn(numfaces, FacelightsWork);
+    if (g_bGPU) BuildFacelightsGPU();
+    else RunThreadsOn(numfaces, FacelightsWork);
     Stage("direct lighting (faces)");
     PrecompLightmapOffsets();
     if (g_numbounce > 0) {

@@ -432,6 +432,10 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("CYCLES", "Cycles",
          "vrad lays out the lighting, then Blender's Cycles bakes the lightmaps with the same lights (its GPU "
          "if it has one). Prop lighting and switchable lights stay vrad's")])
+    light_exact: BoolProperty(name="Exact Lighting (match vrad)", default=False,
+                              description="Off: the Hammerless light compiler uses the graphics card, much faster "
+                                          "and it looks the same (the CPU when there's no suitable card). On: it "
+                                          "reproduces vrad's lighting bit for bit on the CPU (slower)")
     cycles_samples: IntProperty(name="Samples", default=1024, min=1, max=65536, soft_max=4096,
                                 description="Cycles samples per lightmap sample: more is smoother and slower")
     cycles_stitch: BoolProperty(name="Stitch Seams", default=True,

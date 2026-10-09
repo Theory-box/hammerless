@@ -29,6 +29,7 @@ class CompileOptions:
     map_tool: str = "HAMMERLESS"  # HAMMERLESS: hlvbsp.exe (same map as vbsp) / VALVE: L4D2's vbsp.exe
     light_tool: str = "VALVE"   # VALVE: vrad's lightmaps / HAMMERLESS: hlvrad.exe (vrad's lighting, faster) /
                                 # CYCLES: Blender bakes them after vrad (bake_handler)
+    light_exact: bool = False   # hlvrad on the CPU, byte for byte vrad's (else -gpu: much faster, looks the same)
     cycles_samples: int = 1024
     cycles_stitch: bool = True     # make neighbouring faces' lightmaps agree along shared edges
     cycles_denoise: bool = False   # measured: OpenImageDenoise smears the packed bake (7.7% off vs 1.3% raw)
@@ -61,8 +62,11 @@ VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
 def _opts_rest(text: str) -> str:
     """Compile options without the visibility and lighting levels: those are tracked apart (a more
     complete vis serves a lesser one; lighting can be added to a map compiled without it). Which map,
-    vis or light compiler ran (Valve's or ours) doesn't count: they give the same map."""
+    vis or light compiler ran (Valve's or ours) doesn't count: they give the same map. Choosing Exact
+    lighting over the GPU's does, so the next build gives what was asked for (Valve's vrad ignores it)."""
     text = re.sub(r", (vis|map)_tool='\w+'", "", text)
+    if "light_tool='HAMMERLESS'" not in text:
+        text = re.sub(r", light_exact=\w+", "", text)
     text = text.replace("light_tool='HAMMERLESS'", "light_tool='VALVE'")
     return re.sub(r"(vis|rad)='\w+'", r"\1='*'", text)
 
@@ -456,8 +460,9 @@ class CompileJob:
             valve = [tools.exe("vrad")] + vrad + game + [self.base]
             if use_hlvrad(opts):
                 sky = ["-skymap", self.base + ".hlsky"] if opts.sky_key else []
-                self.steps.append(("vrad", [HLVRAD] + vrad + game + sky + ["-modeldir", self.base + ".hlvrad_models",
-                                                                           self.base]))
+                gpu = [] if opts.light_exact else ["-gpu"]   # (no capable GPU: hlvrad warns and uses the CPU)
+                self.steps.append(("vrad", [HLVRAD] + vrad + gpu + game + sky
+                                   + ["-modeldir", self.base + ".hlvrad_models", self.base]))
                 self._valve_vrad = valve
             else:
                 self.steps.append(("vrad", valve))

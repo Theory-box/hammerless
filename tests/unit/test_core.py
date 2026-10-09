@@ -1479,6 +1479,35 @@ class TestVisCompiler(unittest.TestCase):
         self.assertIn(("OK",), lines)
 
 
+class TestLightCompilerGpu(unittest.TestCase):
+    """hlvrad lights on the GPU (-gpu) unless Exact Lighting (match vrad) is on."""
+
+    def test_gpu_flag(self):
+        import sys
+        from hammerless.core import compile as cc
+        old = cc.HLVRAD, cc.HLPHYS
+        try:
+            cc.HLVRAD = cc.HLPHYS = sys.executable          # present, whether built or not
+            for exact in (False, True):
+                job = TestVisCompiler._job(self, cc.CompileOptions(light_tool="HAMMERLESS", light_exact=exact))
+                vrad = dict(job.steps)["vrad"]
+                self.assertEqual(vrad[0], cc.HLVRAD)
+                self.assertEqual("-gpu" in vrad, not exact)
+                self.assertEqual(vrad[-1], job.base)        # (options before the map)
+                self.assertNotIn("-gpu", job._valve_vrad)   # Valve's vrad never gets it
+            job = TestVisCompiler._job(self, cc.CompileOptions())
+            self.assertNotIn("-gpu", dict(job.steps)["vrad"])
+        finally:
+            cc.HLVRAD, cc.HLPHYS = old
+
+    def test_exact_choice_relights(self):
+        # Exact over the GPU counts for hlvrad (the next build relights); with Valve's vrad it does nothing
+        from hammerless.core import compile as cc
+        gpu, exact = cc.CompileOptions(light_tool="HAMMERLESS"), cc.CompileOptions(light_tool="HAMMERLESS", light_exact=True)
+        self.assertNotEqual(cc._opts_rest(repr(gpu)), cc._opts_rest(repr(exact)))
+        self.assertEqual(cc._opts_rest(repr(cc.CompileOptions())), cc._opts_rest(repr(cc.CompileOptions(light_exact=True))))
+
+
 class TestCompileSkip(unittest.TestCase):
     def test_bsp_has_lighting(self):
         # a lit map loaded into a running game switches mat_fullbright back off (the engine leaves it
