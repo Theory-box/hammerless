@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Lighting on the graphics card:** the Hammerless light compiler now lights the map on the GPU (Vulkan ray tracing: NVIDIA RTX, AMD RX 6000 and newer, Intel Arc). Direct light, supersampling, the light for moving models (leaf ambient) and static prop lighting all run there. Measured on a real map with an RTX 4090: Normal quality 2.2 s → 1.2 s, Final 7.3 s → 1.5 s. It looks the same as vrad's: 99.99% of lightmap pixels come out byte-identical (Final 99.92%; the rest are near-black pixels and single pixels on shadow edges), 99.996% of prop vertices, and the leaf ambient differs from vrad's no more than two vrad runs differ from each other. Without a capable card it lights on the CPU as before.
+- **Exact Lighting (match vrad)** (*Settings > Compile*, under Light Compiler: Hammerless): ticked, the light compiler reproduces vrad's lighting bit for bit on the CPU instead (slower). Switching it relights the next build.
+- The light compiler is now 64-bit; prop collision for shadows comes from a small helper (`hlphys.exe`) that runs the game's 32-bit physics library. The output is unchanged.
+
 ## 0.8.0 (test release, 2026-10-08)
 
 - **Sky light from the sky (World > Sky & Sun > Sky Light):** instead of one colour from every direction, each part of the sky lights the map with its own colour, taken from the map's skybox (so the light matches the sky you see: warm from a sunset horizon, blue from above) or from an HDRI image (the picked one or the World's Environment Texture, with a rotation). The overall level stays your Sky Light Brightness: a floor under open sky gets as much light as before. Bounced light, props, grass and the light on zombies and survivors follow it. Needs the Hammerless light compiler (Valve's vrad lights the sky with one colour, with a note in the log).
