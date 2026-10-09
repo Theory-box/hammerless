@@ -417,9 +417,6 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                              "Compiler: Hammerless)")])
     vis_xray: BoolProperty(name="See Through Walls", default=True, update=lambda self, c: _vis_display(self, c),
                            description="Draw over the scene instead of hidden behind its walls")
-    lightmap_progress: BoolProperty(name="Show Bake Progress", default=True,
-                                    description="While lighting bakes, show it as it goes in the view (direct light, "
-                                                "then each bounce). Hammerless light compiler only")
     show_lightmap: BoolProperty(name="Show Baked Lighting", default=True, update=lambda self, c: _light_display(self, c),
                                 description="Draw the last compile's baked lighting in the viewport")
     lightmap_mode: EnumProperty(name="Mode", default="LIGHT", update=lambda self, c: _light_display(self, c), items=[

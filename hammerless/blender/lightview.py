@@ -325,7 +325,6 @@ def draw_panel(layout, context):
         if kind == "BUSY":
             _note(layout, [message], icon="SORTTIME")
             return
-        layout.prop(s, "lightmap_progress")
         if quick:
             _note(layout, ["Lighting Quality is Off:", "choose Fast or higher above first"], icon="ERROR")
         _bake_button(layout)
@@ -345,7 +344,6 @@ def draw_panel(layout, context):
     row.prop(s, "lightmap_mode", expand=True)
     layout.prop(s, "lightmap_exposure", slider=True)
     layout.prop(s, "lightmap_xray")
-    layout.prop(s, "lightmap_progress")
     if s.lightmap_mode == "LIT":
         _note(layout, ["Best in Solid view: Lighting Flat,", "Color Texture"])
     d = _state["data"]

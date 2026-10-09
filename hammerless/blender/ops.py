@@ -1056,7 +1056,7 @@ class HL_OT_build(bpy.types.Operator):
                        "one colour"], append=True)
         from . import lightview
         s = context.scene.hammerless
-        watch = s.lightmap_progress and (self.bake or (lightview.shown() and s.show_lightmap))
+        watch = self.bake or (lightview.shown() and s.show_lightmap)      # (the view shows the bake as it goes)
         self._job = cc.CompileJob(tools, path, opts, skip_if_unchanged=True, progress=watch)
         if self._job.progress_path:
             lightview.watch(context, self._job.progress_path)
