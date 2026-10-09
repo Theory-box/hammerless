@@ -166,7 +166,8 @@ def _serves(built: str, opts: "CompileOptions") -> bool:
 PRESETS = {
     "QUICK": CompileOptions(vis="SKIP", rad="SKIP"),   # geometry only; map is fullbright
     "FAST": CompileOptions(vis="FAST", rad="FAST"),
-    "NORMAL": CompileOptions(vis="FULL", rad="NORMAL"),
+    # (props lit per vertex in the build: the game would otherwise do it at every map load)
+    "NORMAL": CompileOptions(vis="FULL", rad="NORMAL", static_prop_lighting=True),
     "FINAL": CompileOptions(vis="FULL", rad="FINAL"),
 }
 
@@ -1038,6 +1039,8 @@ class LaunchOptions:
     monitor_index: int = -1        # -1 = let the game decide
     extra: str = ""                # extra command-line options, e.g. "-novid -high"
     difficulty: str = ""           # Easy / Normal / Hard / Impossible ("" = leave as is)
+    lan: bool = True               # sv_lan 1: the map loads ~6 s faster (measured: the listen server no
+                                   # longer registers with Steam's servers), but friends can't join online
 
 
 # How long the last launch took until survivors were in the map, and the latest in-game
@@ -1140,6 +1143,87 @@ def map_mode(tools: Tools, map_name: str) -> str:
         return "coop"
 
 
+def _game_command(tools: Tools, window: LaunchOptions, extra: list[str] | None = None) -> list[str]:
+    cmd = [os.path.join(tools.root, "left4dead2.exe"), "-game", "left4dead2",
+           "-novid", "-console", "-condebug", "-windowed",
+           "-w", str(window.width), "-h", str(window.height)]
+    if window.borderless:
+        cmd.append("-noborder")
+    cmd += window.extra.split() + (extra or [])
+    if window.difficulty:
+        cmd += ["+z_difficulty", window.difficulty]
+    if window.lan:
+        cmd += ["+sv_lan", "1"]
+    return cmd
+
+
+def _move_window(window: LaunchOptions):
+    if window.monitor_index >= 0:
+        from .window import monitors, move_game_window
+        mons = monitors()
+        if window.monitor_index < len(mons):
+            move_game_window(mons[window.monitor_index])
+
+
+# Build & Play starts the game as the build begins (prestart_game), so it boots while the map compiles;
+# launch_game then sends the map to it, once it has reached its main menu.
+PRESTART: dict = {"time": None, "log_start": 0}
+MENU_MARKER = b"binkopen("          # the menu's background movie starting: commands are taken from then on
+                                    # (measured: sent then, taken 0.1 s later; no second copy of the game)
+PRESTART_WAIT = 90.0                # (then the map is sent anyway)
+
+
+def prestart_game(tools: Tools, window: LaunchOptions | None = None) -> bool:
+    """Start the game to its main menu now, if it isn't running. Returns whether it started one."""
+    import time
+    if game_running() or not steam_ready():     # (Steam still starting: the launch after the build handles it)
+        return False
+    window = window or LaunchOptions()
+    log = os.path.join(tools.gamedir, "console.log")
+    PRESTART["time"] = time.time()
+    PRESTART["log_start"] = os.path.getsize(log) if os.path.exists(log) else 0
+    subprocess.Popen(_game_command(tools, window), cwd=tools.root)
+    _move_window(window)
+    return True
+
+
+def _prestarted_booting(tools: Tools) -> bool:
+    """A game this session started ahead is still booting (it hasn't reached its menu yet)."""
+    import time
+    if PRESTART["time"] is None or time.time() - PRESTART["time"] > PRESTART_WAIT:
+        PRESTART["time"] = None
+        return False
+    if _menu_reached(tools):
+        PRESTART["time"] = None
+        return False
+    return True
+
+
+def _menu_reached(tools: Tools) -> bool:
+    log = os.path.join(tools.gamedir, "console.log")
+    try:
+        with open(log, "rb") as f:
+            f.seek(PRESTART["log_start"])
+            return MENU_MARKER in f.read().lower()
+    except OSError:
+        return False
+
+
+def _send_when_ready(tools: Tools, commands: list[str], launch_id: int):
+    """Send commands to the pre-started game once it has reached its menu (or given up waiting)."""
+    import time
+    deadline = (PRESTART["time"] or time.time()) + PRESTART_WAIT
+    while time.time() < deadline:
+        if LOAD_STATUS["launch_id"] != launch_id:
+            return                                  # a newer launch took over
+        if game_running() and _menu_reached(tools):
+            break
+        time.sleep(0.25)
+    PRESTART["time"] = None
+    if LOAD_STATUS["launch_id"] == launch_id:
+        send_commands(tools, commands)
+
+
 def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: list[str] | None = None,
                 window: LaunchOptions | None = None, analyze_nav: bool = False):
     """Load the map. Reuses a running game if there is one.
@@ -1153,25 +1237,21 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
     window = window or LaunchOptions()
     mode = map_mode(tools, map_name)
     map_cmd = f"{map_name} {mode}" if mode != "coop" else map_name
-    fresh = not game_running()
+    booting = _prestarted_booting(tools)
+    fresh = not game_running() and not booting
     if not fresh:
         # sv_cheats 0 resets every cheat cvar (nb_stop, z_common_limit, ...) left over
         # from earlier testing or play, so each build starts from a clean game.
         pre = [f"z_difficulty {window.difficulty}"] if window.difficulty else []
+        pre.append(f"sv_lan {1 if window.lan else 0}")
         if bsp_has_lighting(os.path.join(tools.maps_dir, map_name + ".bsp")):
             # the engine turns mat_fullbright on for a map without lighting (a Quick build) and leaves
             # it on for the rest of the session: a lit map loaded after one would look unlit
             pre = ["sv_cheats 1", "mat_fullbright 0"] + pre
-        proc = send_commands(tools, ["con_logfile console.log"] + pre + ["sv_cheats 0", f"map {map_cmd}"])
+        commands = ["con_logfile console.log"] + pre + ["sv_cheats 0", f"map {map_cmd}"]
+        proc = None if booting else send_commands(tools, commands)
     else:
-        cmd = [os.path.join(tools.root, "left4dead2.exe"), "-game", "left4dead2",
-               "-novid", "-console", "-condebug", "-windowed",
-               "-w", str(window.width), "-h", str(window.height)]
-        if window.borderless:
-            cmd.append("-noborder")
-        cmd += window.extra.split() + (extra or [])
-        if window.difficulty:
-            cmd += ["+z_difficulty", window.difficulty]
+        cmd = _game_command(tools, window, extra)
         cmd += ["+map", map_name] + ([mode] if mode != "coop" else [])
         proc = None
     LOAD_STATUS["launch_id"] += 1
@@ -1181,12 +1261,10 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
     launch_id = LOAD_STATUS["launch_id"]
 
     def move_window():
-        if window.monitor_index >= 0:
-            from .window import monitors, move_game_window
-            mons = monitors()
-            if window.monitor_index < len(mons):
-                move_game_window(mons[window.monitor_index])
-    if proc is None:
+        _move_window(window)
+    if booting:          # started ahead by Build & Play: the map goes to it once it reaches its menu
+        threading.Thread(target=_send_when_ready, args=(tools, commands, launch_id), daemon=True).start()
+    elif proc is None:
         if steam_ready():
             proc = subprocess.Popen(cmd, cwd=tools.root)
             move_window()

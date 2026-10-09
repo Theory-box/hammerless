@@ -453,8 +453,10 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("HDR", "HDR only", "What L4D2 uses (Valve's own maps only have HDR lighting)"),
         ("BOTH", "LDR + HDR", "Also bakes an LDR copy, which L4D2 doesn't use: twice the lighting time"),
         ("LDR", "LDR only", "Not used by L4D2: the game shows flat lighting")])
-    static_prop_lighting: BoolProperty(name="Per-vertex Prop Lighting",
-                                       description="Light static props per vertex (-StaticPropLighting)")
+    static_prop_lighting: BoolProperty(name="Per-vertex Prop Lighting", default=True,
+                                       description="Light static props per vertex in the build (-StaticPropLighting): "
+                                                   "better prop lighting, and the game doesn't have to do it at every "
+                                                   "map load. Fast lighting skips it")
     extra_vbsp: StringProperty(name="vbsp", description="Extra command-line options for vbsp")
     extra_vvis: StringProperty(name="vvis", description="Extra command-line options for vvis")
     extra_vrad: StringProperty(name="vrad", description="Extra command-line options for vrad, e.g. -bounce 50")
@@ -540,6 +542,10 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     window_height: IntProperty(name="Height", default=900, min=480, max=4320)
     window_borderless: BoolProperty(name="Borderless", default=False)
     launch_extra: StringProperty(name="Launch Options", description="Extra game options, e.g. -high")
+    fast_loading: BoolProperty(name="Fast Map Loading", default=True,
+                               description="Test as a LAN-only game (sv_lan 1): maps load about 6 seconds faster "
+                                           "because the game doesn't register with Steam's servers. Untick it to "
+                                           "let friends join your game over the internet")
     difficulty: EnumProperty(name="Difficulty", default="Normal", items=[
         ("KEEP", "Keep Current", "Don't change the game's difficulty"),
         ("Easy", "Easy", ""), ("Normal", "Normal", ""), ("Hard", "Advanced", ""),

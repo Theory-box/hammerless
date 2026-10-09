@@ -73,7 +73,7 @@ def launch_options(s) -> cc.LaunchOptions:
     monitor = next((m.index for m in monitors() if monitor_key(m) == choice), -1)   # unplugged: game decides
     return cc.LaunchOptions(width=s.window_width, height=s.window_height,
                             borderless=s.window_borderless, monitor_index=monitor, extra=s.launch_extra,
-                            difficulty="" if s.difficulty == "KEEP" else s.difficulty)
+                            difficulty="" if s.difficulty == "KEEP" else s.difficulty, lan=s.fast_loading)
 
 
 def _quoted_object(message: str) -> str:
@@ -936,6 +936,10 @@ class HL_OT_build(bpy.types.Operator):
             self.report({"ERROR"}, "This map is still compiling: wait for it to finish (see the hammerless_log "
                                    "text), then build again")
             return {"CANCELLED"}
+        if self.play and not self.bake:      # the game boots while the map exports and compiles
+            early_root = game_root(context)
+            if early_root:
+                cc.prestart_game(cc.Tools(early_root), launch_options(context.scene.hammerless))
         path, root, rep = export_vmf(self, context)
         self._export_s = time.time() - self._t0
         from .problems import store

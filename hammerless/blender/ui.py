@@ -648,6 +648,8 @@ class HL_PT_compile(_Sub, bpy.types.Panel):
             vis = {"SKIP": "no visibility", "FAST": "fast visibility", "FULL": "full visibility"}[o.vis]
             rad = {"SKIP": "no lighting", "FAST": "fast lighting", "NORMAL": "normal lighting",
                    "FINAL": "final-quality lighting"}[o.rad]
+            if o.rad in ("NORMAL", "FINAL"):
+                rad += ", prop lighting"
             _hint(layout, f"{s.compile_preset.title()}: {vis}, {rad}", "Choose Quality: Custom to set each step")
             return
         col = _settings(layout)
@@ -676,6 +678,7 @@ class HL_PT_game(_Sub, bpy.types.Panel):
         col.prop(s, "window_borderless")
         col.separator()
         col.prop(s, "difficulty")
+        col.prop(s, "fast_loading")
         col.prop(s, "launch_extra")
         _hint(self.layout, "Size applies when the game starts")
 
