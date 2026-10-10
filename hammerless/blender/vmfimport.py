@@ -323,19 +323,32 @@ def import_text(context, text: str, path: str) -> tuple[int, int]:
 
 # ---------------------------------------------------------------- writing back (Build)
 
-def _faces(obj, upm: float, materials) -> list[tuple[int | None, list, str]]:
+def _faces(obj, upm: float, materials) -> list[tuple]:
+    """(side id, corners, material, texture axes or None) per face; axes for faces painted with the texturing
+    tools (from their UVs)."""
+    from .extract import PAINTED, texture_size
     m = obj.matrix_world
     mesh = obj.data
     attr = mesh.attributes.get("hl_side")
     ids = [0] * len(mesh.polygons)
     if attr is not None and attr.domain == "FACE":
         attr.data.foreach_get("value", ids)
+    pa = mesh.attributes.get(PAINTED)
+    painted = [0] * len(mesh.polygons)
+    if pa is not None and pa.domain == "FACE":
+        pa.data.foreach_get("value", painted)
+    uv = mesh.uv_layers.active
     out = []
-    for poly, sid in zip(mesh.polygons, ids):
+    for poly, sid, pnt in zip(mesh.polygons, ids, painted):
         pts = [tuple(c * upm for c in (m @ mesh.vertices[v].co)) for v in poly.vertices]
         mat = obj.material_slots[poly.material_index].material if poly.material_index < len(obj.material_slots) else None
         path = materials.resolve(mat)[0] if materials is not None else (mat.name if mat else "")
-        out.append((sid or None, pts, path))
+        tex = None
+        if pnt and uv is not None:
+            from ..core.texalign import axes_from_uv
+            w, h = texture_size(mat)
+            tex = axes_from_uv(pts, [tuple(uv.data[li].uv) for li in poly.loop_indices], w, h)
+        out.append((sid or None, pts, path, tex))
     return out
 
 
@@ -363,9 +376,9 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
     entities = {o[INDEX]: o for o in objs if o.get(KIND) == "entity" and o.get(NAME) == o.name}
     depsgraph = context.evaluated_depsgraph_get()
 
-    def default_side(verts, material):
+    def default_side(verts, material, tex=None):
         from ..core.ir import Polygon
-        return writer.side(Polygon(list(verts), material or "tools/toolsnodraw"))
+        return writer.side(Polygon(list(verts), material or "tools/toolsnodraw", tex_axes=tex))
 
     def scale_of(material: str):
         """The lightmap scale for an imported side (Imported Brushes Too): its material's own, else the scene's."""

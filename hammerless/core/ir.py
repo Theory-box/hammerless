@@ -19,6 +19,8 @@ class Polygon:
     material: str = "tools/toolsnodraw"
     texture_scale: float = 0.25
     lightmap_scale: int = 16
+    # painted faces (texalign): ((u, ushift, uscale), (v, vshift, vscale)); None: world-aligned at texture_scale
+    tex_axes: tuple | None = None
 
 
 @dataclass

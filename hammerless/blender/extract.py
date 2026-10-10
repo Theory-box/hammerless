@@ -55,6 +55,20 @@ def detail_choice(obj) -> str:
     return "AUTO"
 
 
+PAINTED = "hl_tex_uv"      # face attribute: 1 = painted with the texturing tools (its UVs hold its alignment)
+
+
+def texture_size(mat) -> tuple[int, int]:
+    """A material's texture size in texels (the game texture's full size), for UVs <-> texture axes."""
+    if mat is not None and mat.use_nodes and mat.node_tree:
+        for n in mat.node_tree.nodes:
+            if n.type == "TEX_IMAGE" and n.image is not None:
+                w, h = n.image.get("hl_full_size", n.image.size)
+                if w and h:
+                    return int(w), int(h)
+    return 512, 512
+
+
 def _world_brushes(obj, *args, **kw) -> list:
     brushes = mesh_to_brushes(obj, *args, **kw)
     choice = detail_choice(obj)
@@ -307,13 +321,20 @@ def mesh_to_brushes(obj, depsgraph, scale: float, materials: MaterialResolver, m
                 polys = [Polygon(verts, *materials.resolve(mat)) for verts in faces]
             else:
                 polys = []
+                painted = bm.faces.layers.int.get(PAINTED)
+                uv = bm.loops.layers.uv.active
                 for f in part:
                     mat = slots[f.material_index] if f.material_index < len(slots) else None
                     path, tscale, lmscale = materials.resolve(mat)
                     verts = [tuple(v.co) for v in f.verts]
+                    tex = None
+                    if painted is not None and uv is not None and f[painted]:
+                        from ..core.texalign import axes_from_uv
+                        w, h = texture_size(mat)
+                        tex = axes_from_uv(verts, [tuple(lp[uv].uv) for lp in f.loops], w, h)
                     if mirrored:
                         verts.reverse()
-                    polys.append(Polygon(verts, path, tscale, lmscale))
+                    polys.append(Polygon(verts, path, tscale, lmscale, tex))
             brushes.append(Brush(polys, name))
     finally:
         bm.free()

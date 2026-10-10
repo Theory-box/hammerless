@@ -77,7 +77,25 @@ def apply_preview(mat, content, game_dir, units_per_meter: float) -> bool:
     update_mapping(mat, units_per_meter)
     nt.links.new(geo.outputs["Position"], mapping.inputs["Vector"])
     nt.links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
-    nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    # faces painted with the texturing tools show through their UVs (the alignment they're exported with)
+    coord = nt.nodes.new("ShaderNodeTexCoord")
+    uvtex = nt.nodes.new("ShaderNodeTexImage")
+    painted = nt.nodes.new("ShaderNodeAttribute")
+    mix = nt.nodes.new("ShaderNodeMix")
+    for n, x, y in ((coord, -900, 0), (uvtex, -450, 0), (painted, -450, 520), (mix, -200, 300)):
+        n[NODE_TAG] = True
+        n.location = (x, y)
+    uvtex.image = img
+    uvtex.interpolation = "Linear"
+    painted.attribute_type = "GEOMETRY"
+    painted.attribute_name = "hl_tex_uv"
+    mix.data_type = "RGBA"
+    nt.links.new(coord.outputs["UV"], uvtex.inputs["Vector"])
+    nt.links.new(painted.outputs["Fac"], mix.inputs["Factor"])
+    nt.links.new(tex.outputs["Color"], mix.inputs[6])
+    nt.links.new(uvtex.outputs["Color"], mix.inputs[7])
+    nt.links.new(mix.outputs[2], bsdf.inputs["Base Color"])
+    mat["hl_uvmix"] = 1
     bsdf.inputs["Roughness"].default_value = 0.9
     avg = img.get("hl_average")
     if avg:

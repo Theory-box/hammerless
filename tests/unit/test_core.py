@@ -1188,6 +1188,52 @@ class TestNavCut(unittest.TestCase):
             self.assertIsNone(check_native(text, regions))           # the DLL makes the same mesh
 
 
+class TestTexAlign(unittest.TestCase):
+    """Texture alignment: Hammer's axes from a face's UVs and back (painted faces), World / Face, justify."""
+    WALL = [(64, 0, 0), (64, 128, 0), (64, 128, 96), (64, 0, 96)]        # facing +x
+
+    def test_world_matches_hammerless(self):
+        from hammerless.core.geometry import polygon_normal, world_texture_axes
+        from hammerless.core.texalign import Alignment, axes
+        (u, _a, su), (v, _b, sv) = axes(self.WALL, Alignment())
+        wu, wv = world_texture_axes(polygon_normal(self.WALL))
+        self.assertEqual((u, v, su, sv), (wu, wv, 0.25, 0.25))
+
+    def test_uv_round_trip(self):
+        from hammerless.core.texalign import Alignment, axes, axes_from_uv, alignment_from_axes, uvs
+        for al in (Alignment(0.5, 0.25, 12, -40, 0), Alignment(0.25, 0.25, 3, 7, 30, "FACE"),
+                   Alignment(-0.5, 0.25, 0, 0, 90), Alignment(1.0, 2.0, 100, 50, 45)):
+            ua, va = axes(self.WALL, al)
+            back = axes_from_uv(self.WALL, uvs(self.WALL, ua, va, 512, 256), 512, 256)
+            for got, want in zip(back, (ua, va)):              # (axis / scale: -u at +scale is u at -scale)
+                for k in range(3):
+                    self.assertAlmostEqual(got[0][k] / got[2], want[0][k] / want[2], places=5)
+                self.assertAlmostEqual(got[1], want[1], places=3)
+            read = alignment_from_axes(self.WALL, *back, mode=al.mode)    # (read back: the same texture)
+            for got, want in zip(axes(self.WALL, read), (ua, va)):
+                for k in range(3):
+                    self.assertAlmostEqual(got[0][k] / got[2], want[0][k] / want[2], places=5)
+
+    def test_face_alignment_on_a_slope(self):
+        from hammerless.core.geometry import polygon_normal
+        from hammerless.core.texalign import Alignment, axes
+        ramp = [(0, 0, 0), (128, 0, 64), (128, 128, 64), (0, 128, 0)]
+        (u, _a, _s), (v, _b, _t) = axes(ramp, Alignment(mode="FACE"))
+        n = polygon_normal(ramp)
+        self.assertAlmostEqual(sum(a * b for a, b in zip(u, n)), 0, places=6)      # (in the face's plane)
+        self.assertAlmostEqual(sum(a * b for a, b in zip(v, n)), 0, places=6)
+
+    def test_fit(self):
+        from hammerless.core.texalign import Alignment, axes, justify, texel
+        al = justify(self.WALL, Alignment(), "FIT", 512, 512)
+        ua, va = axes(self.WALL, al)
+        s = [texel(p, ua) for p in self.WALL]
+        t = [texel(p, va) for p in self.WALL]
+        self.assertAlmostEqual(max(s) - min(s), 512, places=3)
+        self.assertAlmostEqual(min(s) % 512, 0, places=3)
+        self.assertAlmostEqual(max(t) - min(t), 512, places=3)
+
+
 class TestNoBake(unittest.TestCase):
     """No Bake Volume: hlvrad doesn't bake inside it (or, inverted, only inside it)."""
 

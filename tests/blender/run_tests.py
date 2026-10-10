@@ -1245,6 +1245,65 @@ def test_bake_area_choices():
     assert s.bake_area == "MAP"                                  # (gone: the whole map)
 
 
+def test_texture_painting():
+    # painted faces export with their own axes (from their UVs); the rest stay world-aligned; Fit; Replace;
+    # an imported map's painted face writes its new axes on its original side
+    import bmesh
+    from hammerless.blender import texturing
+    from hammerless.core.texalign import Alignment, axes
+    s = reset_scene()
+    box = add_box("box", (2, 2, 2), (0, 0, 1))
+    bpy.context.view_layer.update()
+    t = bpy.context.scene.hl_tex
+    t.active = "concrete/concretefloor001a"
+    mat = texturing.material_for(t.active)
+    # the face pointing +x
+    upm = s.units_per_meter
+    face = next(p.index for p in box.data.polygons if (box.matrix_world.to_3x3() @ p.normal).x > 0.9)
+    texturing.paint_faces(bpy.context, box, [face], mat, Alignment(0.5, 0.5, 16, 8, 90, "WORLD"))
+    blocks, log = export()
+    assert blocks is not None, log
+    sides = [sd for sol in world_solids(blocks) for sd in sol.blocks("side")]
+    painted = [sd for sd in sides if sd.get("material", "").lower() == "concrete/concretefloor001a"]
+    assert len(painted) == 1, [sd.get("material") for sd in sides]
+    poly = box.data.polygons[face]
+    pts = [tuple(c * upm for c in (box.matrix_world @ box.data.vertices[v].co)) for v in poly.vertices]
+    (u, us, uscale), (v, vs, vscale) = axes(pts, Alignment(0.5, 0.5, 16, 8, 90, "WORLD"))
+    from hammerless.core.vmfimport import parse_axis
+    pu, pus, pusc = parse_axis(painted[0].get("uaxis"))
+    pv, pvs, pvsc = parse_axis(painted[0].get("vaxis"))
+    assert all(abs(pu[i] / pusc - u[i] / uscale) < 1e-3 for i in range(3)), (pu, pusc, u, uscale)
+    assert abs(pus - us) < 0.05 and abs(pvs - vs) < 0.05, (pus, pvs)
+    others = [sd for sd in sides if sd is not painted[0]]
+    assert all(sd.get("uaxis").endswith("] 0.25") and " 0]" in sd.get("uaxis") for sd in others)  # (world-aligned)
+    # Fit: one copy covers the face
+    bpy.context.scene["hl_tex_last_obj"], bpy.context.scene["hl_tex_last_face"] = box.name, face
+    bpy.ops.hammerless.tex_justify(how="FIT")
+    assert abs(t.scale_u - 2 * upm / 512) < 1e-3, t.scale_u          # (a 2 m face, a 512-texel texture)
+    # Replace in Map
+    t.replace_from = "concrete/concretefloor001a"
+    t.active = "dev/dev_measuregeneric01b"
+    bpy.ops.hammerless.tex_replace()
+    assert any((sl.material.hammerless.source_material or "") == "dev/dev_measuregeneric01b" for sl in box.material_slots)
+    # an imported map: the painted face's side gets the new axes, the rest stay exactly as read
+    from hammerless.blender import vmfimport
+    reset_scene()
+    path = os.path.join(TMP, "small.vmf")
+    with open(path, "w", encoding="latin-1") as f:
+        f.write(SMALL_VMF)
+    vmfimport.import_text(bpy.context, SMALL_VMF, path)
+    bpy.context.scene.hammerless.map_name = "test_map"
+    brush = next(o for o in bpy.data.objects if o.get("hl_vmf_id") == 20)
+    texturing.paint_faces(bpy.context, brush, [0], None, Alignment(0.5, 0.5, 4, 4, 0, "WORLD"))
+    out = _imported_export(SMALL_VMF)
+    world = next(b for b in out if b.name == "world")
+    solid = next(sl for sl in world.blocks("solid") if sl.get("id") == "20")
+    changed = [sd for sd in solid.blocks("side") if "0.5" in sd.get("uaxis", "")]
+    assert len(changed) == 1, [sd.get("uaxis") for sd in solid.blocks("side")]
+    kept = next(sl for sl in world.blocks("solid") if sl.get("id") == "2")
+    assert _tree([kept]) == _tree([vmf.parse(SMALL_VMF)[1].blocks("solid")[0]])
+
+
 def test_sky_dropdown():
     # the sky dropdown lists the game's skies then Custom; it sets the map's skyname, Custom keeps a typed one
     from hammerless.blender.props import _sky_choice_items

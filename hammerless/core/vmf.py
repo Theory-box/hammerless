@@ -121,8 +121,13 @@ class VMFWriter:
         s.kv("id", self.new_id())
         s.kv("plane", f"({fmt_vec(p1)}) ({fmt_vec(p2)}) ({fmt_vec(p3)})")
         s.kv("material", face.material.upper())
-        s.kv("uaxis", f"[{fmt_vec(u)} 0] {fmt(face.texture_scale)}")
-        s.kv("vaxis", f"[{fmt_vec(v)} 0] {fmt(face.texture_scale)}")
+        if face.tex_axes is not None:           # (a painted face: its own axes, shift and scale)
+            (ua, ushift, uscale), (va, vshift, vscale) = face.tex_axes
+            s.kv("uaxis", f"[{fmt_vec(ua)} {fmt(ushift)}] {fmt(uscale)}")
+            s.kv("vaxis", f"[{fmt_vec(va)} {fmt(vshift)}] {fmt(vscale)}")
+        else:
+            s.kv("uaxis", f"[{fmt_vec(u)} 0] {fmt(face.texture_scale)}")
+            s.kv("vaxis", f"[{fmt_vec(v)} 0] {fmt(face.texture_scale)}")
         s.kv("rotation", 0)
         s.kv("lightmapscale", face.lightmap_scale)
         s.kv("smoothing_groups", 0)

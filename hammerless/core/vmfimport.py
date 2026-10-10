@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 import re
 
-from .vmf import Block, _plane_points, fmt_vec, parse
+from .vmf import Block, _plane_points, fmt, fmt_vec, parse
 
 Vec3 = tuple[float, float, float]
 
@@ -271,12 +271,13 @@ def entity_solids(e: Block) -> list[Block]:
 # ---------------------------------------------------------------- writing back
 
 def side_for_face(face_verts: list[Vec3], material: str, original: Block | None, new_id: int,
-                  default_side) -> Block:
+                  default_side, tex=None) -> Block:
     """The side a face is written as: the original (exactly) while the face is on its plane with the same
-    material; else the original with a new plane (and material); a face with no original: default_side()."""
+    material; else the original with a new plane (and material); a face with no original: default_side().
+    tex: a painted face's texture axes ((u, ushift, uscale), (v, vshift, vscale)): written on its side."""
     if original is not None:
         same_material = (original.get("material", "") or "").lower() == (material or "").lower()
-        if same_material and face_on_side(face_verts, original):
+        if same_material and face_on_side(face_verts, original) and (tex is None or _same_tex(original, tex)):
             return original
         side = Block("side", list(original.items))
         side.items = [it for it in side.items if not (isinstance(it, Block) and it.name.lower() == "dispinfo")]
@@ -284,10 +285,33 @@ def side_for_face(face_verts: list[Vec3], material: str, original: Block | None,
         _set(side, "plane", f"({fmt_vec(p1)}) ({fmt_vec(p2)}) ({fmt_vec(p3)})")
         if material:
             _set(side, "material", material.upper())
+        if tex is not None:
+            _set_tex(side, tex)
         return side
     side = default_side()
     _set(side, "id", str(new_id))
+    if tex is not None:
+        _set_tex(side, tex)
     return side
+
+
+def _set_tex(side: Block, tex) -> None:
+    (u, ushift, uscale), (v, vshift, vscale) = tex
+    _set(side, "uaxis", f"[{fmt_vec(u)} {fmt(ushift)}] {fmt(uscale)}")
+    _set(side, "vaxis", f"[{fmt_vec(v)} {fmt(vshift)}] {fmt(vscale)}")
+
+
+def _same_tex(side: Block, tex, eps: float = 1e-3) -> bool:
+    """The side already has these texture axes (as written, to a rounding)."""
+    try:
+        for key, (vec, shift, scale) in zip(("uaxis", "vaxis"), tex):
+            a, sh, sc = parse_axis(side.get(key, ""))
+            if (max(abs(a[i] - vec[i]) for i in range(3)) > eps or abs(sh - shift) > 0.01
+                    or abs(sc - scale) > eps):
+                return False
+    except ValueError:
+        return False
+    return True
 
 
 MAX_DISP_LUXELS = 125      # a displacement's lightmap, luxels a side (vbsp can't split one to fit; 126 errors)
@@ -342,17 +366,21 @@ def solid_block(original: Block | None, faces: list[tuple[int | None, list[Vec3]
     materials); else rebuilt face by face. faces: (side id or None, polygon, material)."""
     sides = {_id(s): s for s in original.blocks("side")} if original is not None else {}
     if original is not None:
-        kept = [sides.get(sid) for sid, _v, _m in faces]
+        faces = [f if len(f) == 4 else (*f, None) for f in faces]
+        kept = [sides.get(f[0]) for f in faces]
         if (len(faces) == len(_area_sides(original)) and all(kept)
-                and all(side_for_face(v, m, s, 0, default_side) is s for (sid, v, m), s in zip(faces, kept))):
+                and all(side_for_face(v, m, s, 0, default_side, t) is s for (sid, v, m, t), s in zip(faces, kept))):
             return original
+    faces = [f if len(f) == 4 else (*f, None) for f in faces]
     out = Block("solid")
     out.kv("id", _id(original) if original is not None else next_id())
     used = set()
-    for sid, verts, material in faces:
+    for sid, verts, material, tex in faces:
         orig = sides.get(sid) if sid not in used else None
         used.add(sid)
-        out.add(side_for_face(verts, material, orig, next_id(), lambda v=verts, m=material: default_side(v, m)))
+        out.add(side_for_face(verts, material, orig, next_id(),
+                              lambda v=verts, m=material, t=tex: default_side(v, m, t) if t is not None
+                              else default_side(v, m), tex))
     for b in (original.blocks("editor") if original is not None else []):
         out.add(b)
     return out

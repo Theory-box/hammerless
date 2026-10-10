@@ -25,7 +25,7 @@ except ImportError:
 
 
 def register():
-    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection
+    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing
     watchdog.register()
     props.register()
     quality.register()
@@ -43,12 +43,14 @@ def register():
     ops.register()
     vmfimport.register()
     mapcollection.register()
+    texturing.register()
     ui.register()
 
 
 def unregister():
-    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection
+    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing
     ui.unregister()
+    texturing.unregister()
     mapcollection.unregister()
     vmfimport.unregister()
     skyview.unregister()

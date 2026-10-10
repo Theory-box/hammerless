@@ -434,7 +434,7 @@ def _eye(layout, data, prop):
 
 class HL_PT_lighting(_Panel, bpy.types.Panel):
     bl_label = "Lighting"
-    bl_order = 3
+    bl_order = 4
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
@@ -649,7 +649,7 @@ class HL_PT_light_advanced(_Sub, bpy.types.Panel):
 
 class HL_PT_visibility(_Panel, bpy.types.Panel):
     bl_label = "Visibility"
-    bl_order = 4
+    bl_order = 5
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
@@ -677,7 +677,7 @@ class HL_PT_visibility(_Panel, bpy.types.Panel):
 
 class HL_PT_navmesh(_Panel, bpy.types.Panel):
     bl_label = "Nav Mesh"
-    bl_order = 5
+    bl_order = 6
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
@@ -718,7 +718,7 @@ class HL_PT_view_nav(_Panel, bpy.types.Panel):
 
 class HL_PT_sound(_Panel, bpy.types.Panel):
     bl_label = "Sound"
-    bl_order = 6
+    bl_order = 7
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
@@ -736,7 +736,7 @@ class HL_PT_sound(_Panel, bpy.types.Panel):
 
 class HL_PT_director(_Panel, bpy.types.Panel):
     bl_label = "AI Director"
-    bl_order = 7
+    bl_order = 8
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header(self, context):
@@ -779,7 +779,7 @@ class HL_PT_director(_Panel, bpy.types.Panel):
 
 class HL_PT_logic(_Panel, bpy.types.Panel):
     bl_label = "Logic Graphs"
-    bl_order = 8
+    bl_order = 9
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
@@ -807,7 +807,7 @@ class HL_PT_logic(_Panel, bpy.types.Panel):
 
 class HL_PT_settings(_Panel, bpy.types.Panel):
     bl_label = "Settings"
-    bl_order = 9
+    bl_order = 10
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
