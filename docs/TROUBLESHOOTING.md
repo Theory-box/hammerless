@@ -38,11 +38,11 @@ Hammerless sends the load command to an already-running L4D2. If the game didn't
 
 ## The game doesn't start
 
-If Steam isn't running, Build & Play starts it and waits up to two minutes for it to sign in. If Steam asks you to log in, do that, then press **Play**. If L4D2 isn't found at all, set its folder in the add-on's Preferences (or per file, under Settings > Folders & Game Data > L4D2 Folder): the folder that contains `left4dead2.exe`.
+If Steam isn't running, Build & Play starts it and waits up to two minutes for it to sign in. If Steam asks you to log in, do that, then press **Play**. If L4D2 isn't found at all, set its folder in the add-on's Preferences (or per file, under Settings > Game & Folders > L4D2 Folder): the folder that contains `left4dead2.exe`.
 
 ## The map leaks
 
-With *Settings > Scene > Auto Seal (skybox shell)* on (the default) a map can't leak. If you turned it off, **Load Leak** draws a red line to the hole.
+With *Settings > Map Defaults > Auto Seal (skybox shell)* on (the default) a map can't leak. If you turned it off, **Load Leak** draws a red line to the hole.
 
 ## Compiler errors
 

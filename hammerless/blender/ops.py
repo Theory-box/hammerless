@@ -386,7 +386,7 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
     try:
         path = os.path.join(work_dir(context), f"{s.map_name}.vmf")
     except OSError as ex:
-        rep2.errors.append(f"Can't create the build folder ({ex}): set Settings > Folders & Game Data > Work Folder to a folder you can "
+        rep2.errors.append(f"Can't create the build folder ({ex}): set Settings > Game & Folders > Work Folder to a folder you can "
                            "write to")
         return None, root, rep2
     if not bpy.data.filepath and not os.path.isabs(bpy.path.abspath(s.output_dir or "//")):
@@ -397,7 +397,7 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
     except (UnicodeEncodeError, LookupError):
         rep2.warnings.append(f"The build folder '{os.path.dirname(path)}' has characters the map compilers can't "
                              "read; if the compile fails, save the .blend in a folder with plain (English) "
-                             "letters or set Settings > Folders & Game Data > Work Folder")
+                             "letters or set Settings > Game & Folders > Work Folder")
     import json
     from . import vmfimport
     imported = vmfimport.imported(context.scene)
@@ -410,7 +410,7 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
         with open(cc.sources_path(path), "w", encoding="utf-8") as f:
             json.dump({str(k): v for k, v in rep2.solid_sources.items()}, f)
     except OSError as ex:
-        rep2.errors.append(f"Can't write the map file ({ex}): set Settings > Folders & Game Data > Work Folder to a folder you can write to")
+        rep2.errors.append(f"Can't write the map file ({ex}): set Settings > Game & Folders > Work Folder to a folder you can write to")
         return None, root, rep2
     rep2.info.append(f"Wrote {path}")
     if gamedir:
@@ -1030,7 +1030,7 @@ class HL_OT_build(bpy.types.Operator):
             return ("Build the map (walls, visibility, lighting, nav mesh), then start Left 4 Dead 2 on it. "
                     "Only what changed is redone")
         return ("Build the map without starting the game: walls, visibility, baked lighting and the nav mesh. "
-                "Only what changed is redone. Then Play starts it, and Lighting > Baked Lighting can show it")
+                "Only what changed is redone. Then Play starts it, and Viewport > Baked Lighting shows it")
 
     play: BoolProperty(name="Play", default=True)
     bake: BoolProperty(name="Bake Lighting", default=False, options={"HIDDEN", "SKIP_SAVE"},
@@ -1069,7 +1069,7 @@ class HL_OT_build(bpy.types.Operator):
         if not path:
             return {"CANCELLED"}
         if not root:
-            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Folders & Game Data > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
+            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Game & Folders > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
             return {"CANCELLED"}
         tools = cc.Tools(root)
         if tools.missing():
@@ -1084,7 +1084,7 @@ class HL_OT_build(bpy.types.Operator):
             import dataclasses
             opts = cc.PRESETS[opts] if isinstance(opts, str) else opts
             if opts.rad == "SKIP":
-                self.report({"ERROR"}, "Lighting Quality is Off: choose Fast or higher in the Lighting panel")
+                self.report({"ERROR"}, "Lighting Quality is Off: choose Fast or higher in Lighting")
                 return {"CANCELLED"}
             opts = dataclasses.replace(opts, vis="FAST" if opts.vis != "SKIP" else "SKIP")
             self.play = False
@@ -1105,7 +1105,7 @@ class HL_OT_build(bpy.types.Operator):
                 self.report({"ERROR"}, "Bake View needs a 3D viewport")
                 return {"CANCELLED"}
             if not cc.use_hlvrad(opts):
-                self.report({"ERROR"}, "Bake View needs the Hammerless light compiler (Lighting > Light Compiler)")
+                self.report({"ERROR"}, "Bake View needs the Hammerless light compiler (Settings > Compilers > Lighting)")
                 return {"CANCELLED"}
             no_bake += vol
         if no_bake and opts.rad != "SKIP":
@@ -1385,7 +1385,7 @@ class HL_OT_launch(bpy.types.Operator):
         import time
         root = game_root(context)
         if not root:
-            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Folders & Game Data > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
+            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Game & Folders > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
             return {"CANCELLED"}
         s = context.scene.hammerless
         if not os.path.exists(os.path.join(cc.Tools(root).maps_dir, f"{s.map_name}.bsp")):
@@ -1617,7 +1617,7 @@ class HL_OT_load_game_data(bpy.types.Operator):
     def execute(self, context):
         root = game_root(context)
         if not game_content(root):
-            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Folders & Game Data > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
+            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Game & Folders > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
             return {"CANCELLED"}
         from .props import SURFACE_ITEMS
         self.report({"INFO"}, f"Loaded {len(SURFACE_ITEMS) - 1} surfaces")

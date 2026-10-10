@@ -26,7 +26,7 @@ COLLECTION_ROLES = [
 ]
 
 DETAIL_CHOICES = [
-    ("AUTO", "Auto", "Follow the map's Auto Detail setting (Visibility panel)"),
+    ("AUTO", "Auto", "Follow the map's Auto Detail setting (Settings > Map Defaults)"),
     ("DETAIL", "Detail", "Always func_detail: doesn't slow down vvis, but doesn't block visibility or "
                          "seal the map. For furniture, trim, overlapping boxes"),
     ("WORLD", "World", "Never func_detail: blocks visibility, so the game skips drawing what's behind it. "

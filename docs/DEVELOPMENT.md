@@ -51,7 +51,7 @@ the lessons learned. Every logic example is played and checked by:
 python tests/ingame/test_examples.py
 ```
 
-The demo .blend contains no game content: open it with the add-on and press *Settings > Folders & Game Data > Refresh Previews* to see the game's textures and models (read from your own L4D2 install).
+The demo .blend contains no game content: open it with the add-on and press *Settings > Game & Folders > Refresh Previews* to see the game's textures and models (read from your own L4D2 install).
 
 ## Native code
 
@@ -67,7 +67,7 @@ python native/build.py            # both; or: python native/build.py hlvvis
 python tests/compile/compare_vis.py path/to/map.vmf
 ```
 
-`core/hlvbsp.exe` is Hammerless's map compiler (*Settings > Compile > Map Compiler*, the default), a drop-in for L4D2's `vbsp.exe` (sources in `native/hlvbsp/`, built 32-bit so it can load the game's `vphysics.dll`). It follows the Quake 2 tools' method (GPL) with every detail matched to L4D2's vbsp, several of them read from its binary where L4D2 differs from the 2013 SDK (see each file's top comment). Python writes the tables it reads from the game (materials, surface properties, prop models, detail.vbsp, cubemap and blend-material patches: `core/mapcompiler.py`, `core/cubemappatch.py`). Maps with water overlays or instances, and any failure, go to Valve's vbsp. After changing it, run the suite: 20 generated maps compiled by both, compared lump by lump and by portal file (needs the Authoring Tools):
+`core/hlvbsp.exe` is Hammerless's map compiler (*Settings > Compilers > Map*, the default), a drop-in for L4D2's `vbsp.exe` (sources in `native/hlvbsp/`, built 32-bit so it can load the game's `vphysics.dll`). It follows the Quake 2 tools' method (GPL) with every detail matched to L4D2's vbsp, several of them read from its binary where L4D2 differs from the 2013 SDK (see each file's top comment). Python writes the tables it reads from the game (materials, surface properties, prop models, detail.vbsp, cubemap and blend-material patches: `core/mapcompiler.py`, `core/cubemappatch.py`). Maps with water overlays or instances, and any failure, go to Valve's vbsp. After changing it, run the suite: 20 generated maps compiled by both, compared lump by lump and by portal file (needs the Authoring Tools):
 
 ```bash
 python tests/compile/mapcompiler_suite.py          # or: ... water cubemaps (names containing these)

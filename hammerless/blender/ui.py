@@ -67,7 +67,7 @@ def _status(layout, text, alert=False):
 # ---------------------------------------------------------------- Build & Play
 
 class HL_PT_build(_Panel, bpy.types.Panel):
-    bl_label = "Build & Play"
+    bl_label = "Map"
     bl_order = 0
 
     def draw_header_preset(self, context):
@@ -76,6 +76,10 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         if bake_status(context)[0] == "BUSY":
             vis = BUILD_PROGRESS["vis"]
             _status(self.layout, "Vis " + vis[4:] if vis else "Building...")
+            return
+        built = _built_ago(context)
+        if built:
+            _status(self.layout, built)
 
     def draw(self, context):
         s = context.scene.hammerless
@@ -90,18 +94,19 @@ class HL_PT_build(_Panel, bpy.types.Panel):
             if problem[0].startswith("Left 4 Dead 2"):
                 box.prop(s, "game_root", text="L4D2 Folder")
             layout.separator()
-        col = _settings(layout)
-        col.prop(s, "map_name")
         from .mapcollection import map_collection
+        col = _settings(layout)
         row = col.row(align=True)
-        coll = map_collection(context.scene)
-        row.operator("hammerless.organize_scene", icon="OUTLINER_COLLECTION",
-                     text="Organize Scene" if coll is not None else "Organize Scene (make the map collection)")
-        if coll is None:
-            _hint(layout, "The whole scene is the map. Organize Scene puts it", "in a collection: only that is built")
+        row.prop(s, "map_name")
+        organized = map_collection(context.scene) is not None
+        org = row.row(align=True)
+        org.alert = not organized          # (not organized yet: the whole scene is the map)
+        org.operator("hammerless.organize_scene", text="", icon="OUTLINER_COLLECTION")
         col.prop(s, "compile_preset", text="Quality")
         if s.compile_preset == "CUSTOM":
-            _hint(layout, f"Lighting {_label(s, 'light_quality')}, Visibility {_label(s, 'vis_mode')}")
+            sub = col.column(align=True)
+            sub.prop(s, "light_quality", text="Lighting")
+            sub.prop(s, "vis_mode", text="Visibility")
         layout.separator()
         big = layout.row()
         big.scale_y = 1.6
@@ -109,6 +114,8 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         row = layout.row(align=True)
         row.scale_y = 1.2
         row.operator("hammerless.build", text="Build", icon="FILE_REFRESH").play = False
+        bake = row.operator("hammerless.build", text="Bake Lighting", icon="LIGHT_SUN")
+        bake.play, bake.bake = False, True
         row.operator("hammerless.launch", text="Play", icon="URL")
         if _leaked(context):
             layout.separator()
@@ -167,6 +174,23 @@ def setup_problem(context):
         value = None
     _setup_cache.update(key=key, time=now, value=value)
     return value
+
+
+def _built_ago(context) -> str:
+    """'Built 3 min ago' for the map's last build ('' if none)."""
+    import time
+    from .ops import work_dir
+    try:
+        t = os.path.getmtime(os.path.join(work_dir(context), context.scene.hammerless.map_name + ".bsp"))
+    except (OSError, AttributeError):
+        return ""
+    mins = int((time.time() - t) // 60)
+    if mins < 1:
+        return "Built just now"
+    if mins < 60:
+        return f"Built {mins} min ago"
+    hours = mins // 60
+    return f"Built {hours} h ago" if hours < 48 else "Built " + time.strftime("%b %d", time.localtime(t))
 
 
 def _leaked(context) -> bool:
@@ -236,10 +260,8 @@ class HL_PT_object(_Panel, bpy.types.Panel):
             return
         draw_part(layout, obj)
         col = _settings(layout)
-        col.prop(hs, "role")
         eff = effective_role(obj)
-        if hs.role == "AUTO":
-            col.label(text=f"Exports as: {eff.replace('_', ' ').title()}")
+        _enum_menu(col, hs, "role", "Kind", f"Auto ({_ROLE_NAMES.get(eff, eff.title())})" if hs.role == "AUTO" else None)
         if eff in ("ENTITY", "BRUSH_ENTITY"):
             row = col.row(align=True)
             row.prop(hs, "classname", text="Class")
@@ -253,9 +275,8 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                 for line in _wrap(d.description, 44):
                     box.label(text=line)
         if eff == "BRUSH":
-            col.prop(hs, "brush_detail")
-            if hs.brush_detail == "AUTO":
-                col.label(text=_detail_note(context, obj))
+            _enum_menu(col, hs, "brush_detail", "Detail",
+                       f"Auto ({_detail_note(context, obj)})" if hs.brush_detail == "AUTO" else None)
         if eff in ("BRUSH", "BRUSH_ENTITY"):
             col.prop(hs, "use_convex_hull")
         if eff == "MODEL":
@@ -269,16 +290,33 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                 col.label(text="Name it (Keyvalues: targetname) to use it from logic", icon="INFO")
 
 
+_ROLE_NAMES = {"BRUSH": "World Brush", "BRUSH_ENTITY": "Brush Entity", "ENTITY": "Entity", "TERRAIN": "Terrain",
+               "LIGHT": "Light", "MODEL": "Custom Model", "IGNORE": "Not Exported"}
+
+
+def _enum_menu(col, data, prop, label, text=None):
+    """An enum setting as a dropdown whose button can say more than the choice's name (what Auto means)."""
+    if text is None:
+        col.prop(data, prop, text=label)
+        return
+    row = col.row(align=True)
+    split = row.split(factor=0.4, align=True)
+    left = split.row()
+    left.alignment = "RIGHT"
+    left.label(text=label)
+    split.prop_menu_enum(data, prop, text=text)
+
+
 def _detail_note(context, obj) -> str:
     """What Auto means for this brush right now."""
     from .extract import detail_choice
     choice = detail_choice(obj)
     if choice != "AUTO":
-        return f"From its collection: {choice.title()}"
+        return f"{choice.title()}, from its collection"
     s = context.scene.hammerless
     if not s.auto_seal or s.auto_detail == "OFF":
-        return "Map setting: World (Auto Detail is off)"
-    return "Map setting: " + ("Detail" if s.auto_detail == "ALL" else "Detail if round or small")
+        return "World"
+    return "Detail" if s.auto_detail == "ALL" else "Detail if round or small"
 
 
 def _obj_role(context) -> str:
@@ -320,14 +358,10 @@ class HL_PT_obj_material(_Panel, bpy.types.Panel):
         row = col.row(align=True)
         row.prop(mat.hammerless, "source_material")
         row.operator("hammerless.pick_material", text="", icon="VIEWZOOM")
-        if not mat.hammerless.source_material:
-            col.label(text="Empty: your image texture is converted")
         col.separator()
         col.prop(mat.hammerless, "surface")
         col.prop(mat.hammerless, "texture_scale")
         col.prop(mat.hammerless, "lightmap_scale")
-        self.layout.separator()
-        self.layout.operator("hammerless.refresh_previews", icon="SHADING_TEXTURE")
 
 
 class HL_PT_obj_terrain(_Panel, bpy.types.Panel):
@@ -343,7 +377,6 @@ class HL_PT_obj_terrain(_Panel, bpy.types.Panel):
         col = _settings(self.layout)
         col.prop(hs, "terrain_power")
         col.prop(hs, "terrain_patch_size")
-        _hint(self.layout, "Vertex colour red blends to the", "material's second texture")
 
 
 class HL_PT_obj_keyvalues(_Panel, bpy.types.Panel):
@@ -381,7 +414,6 @@ class HL_PT_obj_outputs(_Panel, bpy.types.Panel):
     def draw(self, context):
         hs = context.object.hammerless
         layout = self.layout
-        _hint(layout, "When something happens here, tell", "another object to do something")
         row = layout.row()
         row.template_list("HL_UL_outputs", "", hs, "outputs", hs, "outputs_index", rows=2)
         side = row.column(align=True)
@@ -400,153 +432,36 @@ class HL_PT_obj_outputs(_Panel, bpy.types.Panel):
             col.prop(o, "only_once")
 
 
-# ---------------------------------------------------------------- World
+# ---------------------------------------------------------------- Viewport
 
-# ---------------------------------------------------------------- Lighting
-
-class HL_PT_lighting(_Panel, bpy.types.Panel):
-    bl_label = "Lighting"
+class HL_PT_viewport(_Panel, bpy.types.Panel):
+    bl_label = "Viewport"
     bl_order = 3
-    bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
+        from . import lightview, navview, sound
         s = context.scene.hammerless
-        _status(self.layout, _label(s, "light_quality"))
+        n = sum((lightview.shown() and s.show_lightmap, s.show_sky, s.vis_view != "OFF",
+                 navview._state["mesh"] is not None and s.show_nav, bool(sound._state["spots"]) and s.show_sound))
+        if n:
+            _status(self.layout, f"{n} shown")
 
     def draw(self, context):
-        s = context.scene.hammerless
-        layout = self.layout
-        ours = s.light_tool == "HAMMERLESS"
-        col = _settings(layout)
-        col.prop(s, "light_tool")
-        if ours:
-            col.prop(s, "light_exact")
-        if s.light_tool == "CYCLES":
-            col.prop(s, "cycles_samples")
-            col.prop(s, "cycles_stitch")
-            col.prop(s, "cycles_denoise")
-        col.separator()
-        col.prop(s, "light_quality")
-        on = col.column()
-        on.enabled = s.light_quality != "OFF"
-        on.prop(s, "light_fast")
-        full = on.column()
-        full.enabled = not s.light_fast
-        full.prop(s, "light_sky_rays_pick")
-        if s.light_sky_rays_pick == "OTHER":
-            full.prop(s, "light_sky_rays", text="Times")
-        full.prop(s, "light_supersample")
-        ss = full.column(align=True)
-        ss.enabled = s.light_supersample and ours
-        ss.prop(s, "light_ss_points")
-        ss.prop(s, "light_ss_passes")
-        ss.prop(s, "light_ss_threshold")
-        full.prop(s, "light_bounces")
-        gi_ok = ours and not s.light_exact
-        bm = full.column()
-        bm.enabled = gi_ok
-        bm.prop(s, "light_bounce_method")
-        gi = gi_ok and s.light_bounce_method == "GI" and not s.light_fast
-        if gi:
-            full.prop(s, "light_gi_rays")
-        else:
-            full.prop(s, "light_patch_size")
-        on.prop(s, "static_prop_lighting")
-        on.prop(s, "light_prop_polys")
-        q = full.column()
-        q.enabled = ours
-        q.prop(s, "light_fix_quirks")
-        col.separator()
-        col.prop(s, "lightmap_scale", text="Lightmap Scale")
-        from .vmfimport import imported as _imported
-        if _imported(context.scene):
-            col.prop(s, "lightmap_scale_imported")
-        if s.vis_mode == "SKIP" and s.light_quality != "OFF" and not gi:
-            _hint(layout, "Visibility is Off: no bounced light", "(vrad lights only directly without vis)")
-        if s.light_fast:
-            _hint(layout, "Fast Lighting always uses Valve's vrad")
-        elif ours and s.hdr_mode != "HDR" and s.light_quality != "OFF":
-            _hint(layout, "HDR (Advanced) isn't HDR only: Valve's", "vrad lights the map (much slower, no GPU).",
-                  "L4D2 only uses HDR", icon="ERROR")
-        elif not ours and s.light_quality != "OFF":
-            _hint(layout, "Points, Passes, Edge Threshold, Bounce", "Method and Fix vrad's Quirks need the",
-                  "Hammerless light compiler")
-        _hint(layout, "Smaller lightmap scale: sharper shadows,", "slower. Materials can override it")
+        pass
 
 
-class HL_PT_light_advanced(_Sub, bpy.types.Panel):
-    bl_label = "Advanced"
-    bl_parent_id = "HL_PT_lighting"
-
-    def draw(self, context):
-        s = context.scene.hammerless
-        col = _settings(self.layout)
-        col.prop(s, "hdr_mode")
-        col.prop(s, "extra_vrad", text="Extra vrad Options")
+def _eye(layout, data, prop):
+    layout.prop(data, prop, text="", icon="HIDE_OFF" if getattr(data, prop) else "HIDE_ON", emboss=False)
 
 
-def _note_lines(layout, lines):
-    col = layout.column(align=True)
-    col.scale_y = 0.8
-    for line in lines:
-        col.label(text=line)
-
-
-class HL_PT_sky(_Sub, bpy.types.Panel):
-    bl_label = "Sky & Sun"
-    bl_parent_id = "HL_PT_lighting"
-
-    def draw(self, context):
-        s = context.scene.hammerless
-        col = _settings(self.layout)
-        col.prop(s, "sky_choice")
-        if s.sky_choice == "CUSTOM":
-            col.prop(s, "skyname", text="Name")
-        row = col.row(align=True)
-        row.prop(s, "show_sky")
-        if s.show_sky:
-            row.prop(s, "sky_view_exposure")
-            from .skyview import error
-            if error():
-                col.label(text=f"Sky: {error()}", icon="ERROR")
-        col.separator()
-        from .mapcollection import map_objects
-        inside = map_objects(context.scene)
-        own = [o for o in context.scene.objects if o.name in inside
-               and o.type != "LIGHT" and o.hammerless.classname == "light_environment" and o.visible_get()]
-        if own:                       # (an imported map's own sun: the settings below don't touch it)
-            box = col.box()
-            box.label(text="This map has its own sun:", icon="LIGHT_SUN")
-            for o in own[:4]:
-                row = box.row()
-                row.label(text=o.name)
-                row.operator("hammerless.select_object", text="Select", icon="RESTRICT_SELECT_OFF").name = o.name
-            _note_lines(box, ["It lights the map: change its _light / _ambient", "keys, or delete it. The settings",
-                              "below only make a sun for maps without one"])
-        col.prop(s, "auto_sun")
-        sub = col.column()
-        sub.enabled = s.auto_sun and not own
-        sub.prop(s, "sun_color")
-        sub.prop(s, "sun_brightness")
-        sub.prop(s, "sun_pitch")
-        sub.prop(s, "sun_yaw")
-        if s.sky_light == "FLAT":
-            sub.prop(s, "ambient_color")
-        sub.prop(s, "ambient_brightness")
-        col.separator()
-        # (the sky's colours go on whatever sun the map has, the added one or its own: not tied to Add Sun)
-        col.prop(s, "sky_light")
-        if s.sky_light == "IMAGE":
-            col.template_ID(s, "sky_image", open="image.open")
-            col.prop(s, "sky_rotation")
-        _hint(self.layout, "A Blender Sun lamp in the scene", "overrides these")
-        if s.sky_light != "FLAT" and s.light_tool != "HAMMERLESS":
-            _hint(self.layout, "Sky Light from the sky needs", "Light Compiler: Hammerless")
-
-
-class HL_PT_view_light(_Sub, bpy.types.Panel):
+class HL_PT_vp_light(_Panel, bpy.types.Panel):
     bl_label = "Baked Lighting"
-    bl_parent_id = "HL_PT_lighting"
+    bl_parent_id = "HL_PT_viewport"
+
+    def draw_header(self, context):
+        from .lightview import shown
+        if shown():
+            _eye(self.layout, context.scene.hammerless, "show_lightmap")
 
     def draw_header_preset(self, context):
         from .lightview import header_status
@@ -558,29 +473,26 @@ class HL_PT_view_light(_Sub, bpy.types.Panel):
         draw_panel(self.layout, context)
 
 
-# ---------------------------------------------------------------- Visibility
+class HL_PT_vp_sky(_Sub, bpy.types.Panel):
+    bl_label = "Sky"
+    bl_parent_id = "HL_PT_viewport"
 
-class HL_PT_visibility(_Panel, bpy.types.Panel):
-    bl_label = "Visibility"
-    bl_order = 4
-    bl_options = {"DEFAULT_CLOSED"}
-
-    def draw_header_preset(self, context):
-        _status(self.layout, _label(context.scene.hammerless, "vis_mode"))
+    def draw_header(self, context):
+        _eye(self.layout, context.scene.hammerless, "show_sky")
 
     def draw(self, context):
         s = context.scene.hammerless
         col = _settings(self.layout)
-        col.prop(s, "vis_mode")
-        col.prop(s, "vis_tool")
-        col.prop(s, "auto_detail")
-        col.prop(s, "extra_vvis", text="Extra vvis Options")
-        _hint(self.layout, "What the game skips drawing when it", "can't be seen: better frame rates")
+        col.active = s.show_sky
+        col.prop(s, "sky_view_exposure")
+        from .skyview import error
+        if s.show_sky and error():
+            _hint(self.layout, f"Sky: {error()}", icon="ERROR")
 
 
-class HL_PT_view_vis(_Sub, bpy.types.Panel):
-    bl_label = "View"
-    bl_parent_id = "HL_PT_visibility"
+class HL_PT_vp_vis(_Sub, bpy.types.Panel):
+    bl_label = "Visibility"
+    bl_parent_id = "HL_PT_viewport"
 
     def draw_header_preset(self, context):
         from .visview import header_status
@@ -593,12 +505,223 @@ class HL_PT_view_vis(_Sub, bpy.types.Panel):
         draw_panel(self.layout, context)
 
 
-# ---------------------------------------------------------------- Nav Mesh
-
-class HL_PT_navmesh(_Panel, bpy.types.Panel):
+class HL_PT_vp_nav(_Sub, bpy.types.Panel):
     bl_label = "Nav Mesh"
+    bl_parent_id = "HL_PT_viewport"
+
+    def draw_header(self, context):
+        _eye(self.layout, context.scene.hammerless, "show_nav")
+
+    def draw(self, context):
+        from .navview import draw_panel
+        draw_panel(self.layout, context)
+
+
+class HL_PT_vp_sound(_Sub, bpy.types.Panel):
+    bl_label = "Sound"
+    bl_parent_id = "HL_PT_viewport"
+
+    def draw_header(self, context):
+        _eye(self.layout, context.scene.hammerless, "show_sound")
+
+    def draw(self, context):
+        from .sound import draw_panel
+        draw_panel(self.layout, context)
+
+
+# ---------------------------------------------------------------- Lighting
+
+class HL_PT_lighting(_Panel, bpy.types.Panel):
+    bl_label = "Lighting"
+    bl_order = 4
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw_header_preset(self, context):
+        _status(self.layout, _label(context.scene.hammerless, "light_quality"))
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        layout = self.layout
+        ours = s.light_tool == "HAMMERLESS"
+        col = _settings(layout)
+        col.prop(s, "light_quality", text="Quality")
+        on = col.column()
+        on.enabled = s.light_quality != "OFF"
+        on.prop(s, "lightmap_scale", text="Lightmap Scale")
+        from .vmfimport import imported as _imported
+        if _imported(context.scene):
+            on.prop(s, "lightmap_scale_imported")
+        on.prop(s, "static_prop_lighting")
+        bm = on.column()
+        bm.enabled = ours and not s.light_exact and not s.light_fast
+        bm.prop(s, "light_bounce_method", text="Bounce")
+        row = layout.row(align=True)
+        row.enabled = ours and s.light_quality != "OFF"
+        op = row.operator("hammerless.build", text="Bake View", icon="HIDE_OFF")
+        op.play, op.bake, op.view = False, True, True
+        row.prop(s, "light_view_distance", text="")
+        # (only what needs acting on: explanations are the settings' tooltips)
+        if s.light_quality != "OFF":
+            if s.light_fast and ours:
+                _hint(layout, "Fast Lighting always uses Valve's vrad", icon="ERROR")
+            elif ours and s.hdr_mode != "HDR":
+                _hint(layout, "HDR (Advanced) isn't HDR only: Valve's", "vrad lights the map (much slower)",
+                      icon="ERROR")
+            if s.vis_mode == "SKIP" and not (ours and s.light_bounce_method == "GI"):
+                _hint(layout, "Visibility is Off: no bounced light", icon="ERROR")
+
+
+class HL_PT_light_quality(_Sub, bpy.types.Panel):
+    bl_label = "Quality Details"
+    bl_parent_id = "HL_PT_lighting"
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        ours = s.light_tool == "HAMMERLESS"
+        col = _settings(self.layout)
+        col.enabled = s.light_quality != "OFF"
+        col.prop(s, "light_fast")
+        full = col.column()
+        full.enabled = not s.light_fast
+        full.prop(s, "light_sky_rays_pick")
+        if s.light_sky_rays_pick == "OTHER":
+            full.prop(s, "light_sky_rays", text="Times")
+        full.prop(s, "light_supersample")
+        ss = full.column(align=True)
+        ss.enabled = s.light_supersample and ours
+        ss.prop(s, "light_ss_points")
+        ss.prop(s, "light_ss_passes")
+        ss.prop(s, "light_ss_threshold")
+        full.prop(s, "light_bounces")
+        if ours and not s.light_exact and s.light_bounce_method == "GI":
+            full.prop(s, "light_gi_rays")
+        else:
+            full.prop(s, "light_patch_size")
+        col.prop(s, "light_prop_polys")
+
+
+class HL_PT_light_advanced(_Sub, bpy.types.Panel):
+    bl_label = "Advanced"
+    bl_parent_id = "HL_PT_lighting"
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = _settings(self.layout)
+        col.prop(s, "hdr_mode")
+        q = col.column()
+        q.enabled = s.light_tool == "HAMMERLESS"
+        q.prop(s, "light_fix_quirks")
+
+
+# ---------------------------------------------------------------- Environment
+
+class HL_PT_environment(_Panel, bpy.types.Panel):
+    bl_label = "Environment"
     bl_order = 5
     bl_options = {"DEFAULT_CLOSED"}
+
+    def draw_header_preset(self, context):
+        _status(self.layout, context.scene.hammerless.skyname)
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = _settings(self.layout)
+        col.prop(s, "sky_choice")
+        if s.sky_choice == "CUSTOM":
+            col.prop(s, "skyname", text="Name")
+        col.prop(s, "sky_light")
+        if s.sky_light == "IMAGE":
+            col.template_ID(s, "sky_image", open="image.open")
+            col.prop(s, "sky_rotation")
+        if s.sky_light != "FLAT" and s.light_tool != "HAMMERLESS":
+            _hint(self.layout, "Sky Light from the sky needs the", "Hammerless light compiler", icon="ERROR")
+
+
+def _own_suns(context) -> list:
+    from .mapcollection import map_objects
+    inside = map_objects(context.scene)
+    return [o for o in context.scene.objects if o.name in inside
+            and o.type != "LIGHT" and o.hammerless.classname == "light_environment" and o.visible_get()]
+
+
+class HL_PT_sun(_Sub, bpy.types.Panel):
+    bl_label = "Sun"
+    bl_parent_id = "HL_PT_environment"
+
+    def draw_header_preset(self, context):
+        if _own_suns(context):
+            _status(self.layout, "the map's own")
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        layout = self.layout
+        own = _own_suns(context)
+        if own:                       # (an imported map's own sun: the settings below don't touch it)
+            col = layout.column(align=True)
+            for o in own[:4]:
+                row = col.row(align=True)
+                row.label(text=o.name, icon="LIGHT_SUN")
+                row.operator("hammerless.select_object", text="Select", icon="RESTRICT_SELECT_OFF").name = o.name
+            _hint(layout, "The map's own sun lights it: change its", "_light / _ambient keys, or delete it")
+            layout.separator()
+        col = _settings(layout)
+        col.prop(s, "auto_sun")
+        sub = col.column()
+        sub.enabled = s.auto_sun and not own
+        sub.prop(s, "sun_color")
+        sub.prop(s, "sun_brightness")
+        sub.prop(s, "sun_pitch")
+        sub.prop(s, "sun_yaw")
+        sub.separator()
+        if s.sky_light == "FLAT":
+            sub.prop(s, "ambient_color")
+        sub.prop(s, "ambient_brightness")
+
+
+class HL_PT_fog(_Sub, bpy.types.Panel):
+    bl_label = "Fog"
+    bl_parent_id = "HL_PT_environment"
+
+    def draw_header(self, context):
+        self.layout.prop(context.scene.hammerless, "fog_enabled", text="")
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = _settings(self.layout)
+        col.enabled = s.fog_enabled
+        col.prop(s, "fog_color")
+        col.separator()
+        col.prop(s, "fog_start")
+        col.prop(s, "fog_end")
+        col.prop(s, "fog_max_density")
+
+
+class HL_PT_sound(_Sub, bpy.types.Panel):
+    bl_label = "Sound"
+    bl_parent_id = "HL_PT_environment"
+
+    def draw_header_preset(self, context):
+        _status(self.layout, _label(context.scene.hammerless, "sound_mode"))
+
+    def draw(self, context):
+        col = _settings(self.layout)
+        col.prop(context.scene.hammerless, "sound_mode")
+
+
+# ---------------------------------------------------------------- Gameplay
+
+class HL_PT_gameplay(_Panel, bpy.types.Panel):
+    bl_label = "Gameplay"
+    bl_order = 6
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        pass
+
+
+class HL_PT_navmesh(_Sub, bpy.types.Panel):
+    bl_label = "Nav Mesh"
+    bl_parent_id = "HL_PT_gameplay"
 
     def draw_header_preset(self, context):
         short, _long = _nav_status(context)
@@ -615,88 +738,20 @@ class HL_PT_navmesh(_Panel, bpy.types.Panel):
         col.prop(s, "generate_nav", text="Rebuild Nav Next Time")
 
 
-class HL_PT_view_nav(_Sub, bpy.types.Panel):
-    bl_label = "View"
-    bl_parent_id = "HL_PT_navmesh"
-
-    def draw(self, context):
-        from .navview import draw_panel
-        _hint(self.layout, _nav_status(context)[1])
-        self.layout.separator()
-        draw_panel(self.layout, context)
-
-
-# ---------------------------------------------------------------- Sound
-
-class HL_PT_sound(_Panel, bpy.types.Panel):
-    bl_label = "Sound"
-    bl_order = 6
-    bl_options = {"DEFAULT_CLOSED"}
-
-    def draw_header_preset(self, context):
-        _status(self.layout, _label(context.scene.hammerless, "sound_mode"))
-
-    def draw(self, context):
-        s = context.scene.hammerless
-        col = _settings(self.layout)
-        col.prop(s, "sound_mode")
-        if s.sound_mode == "OFF":
-            _hint(self.layout, "No room reverb: the map sounds dry")
-        else:
-            _hint(self.layout, "Build ray traces the map from every floor", "and adds soundscapes (see View below)")
-
-
-class HL_PT_view_sound(_Sub, bpy.types.Panel):
-    bl_label = "View"
-    bl_parent_id = "HL_PT_sound"
-
-    def draw(self, context):
-        from .sound import draw_panel
-        draw_panel(self.layout, context)
-
-
-# ---------------------------------------------------------------- World
-
-class HL_PT_world(_Panel, bpy.types.Panel):
-    bl_label = "World"
-    bl_order = 7
-    bl_options = {"DEFAULT_CLOSED"}
-
-    def draw(self, context):
-        _hint(self.layout, "Fog, the AI Director", "and the map's logic graphs")
-
-
-class HL_PT_fog(_Sub, bpy.types.Panel):
-    bl_label = "Fog"
-    bl_parent_id = "HL_PT_world"
-
-    def draw_header(self, context):
-        self.layout.prop(context.scene.hammerless, "fog_enabled", text="")
-
-    def draw(self, context):
-        s = context.scene.hammerless
-        col = _settings(self.layout)
-        col.enabled = s.fog_enabled
-        col.prop(s, "fog_color")
-        col.separator()
-        col.prop(s, "fog_start")
-        col.prop(s, "fog_end")
-        col.prop(s, "fog_max_density")
-
-
 class HL_PT_director(_Sub, bpy.types.Panel):
     bl_label = "AI Director"
-    bl_parent_id = "HL_PT_world"
+    bl_parent_id = "HL_PT_gameplay"
 
     def draw_header(self, context):
         self.layout.prop(context.scene.hammerless, "director_enabled", text="")
 
+    def draw_header_preset(self, context):
+        if not context.scene.hammerless.director_enabled:
+            _status(self.layout, "game default")
+
     def draw(self, context):
         s = context.scene.hammerless
         layout = self.layout
-        if not s.director_enabled:
-            _hint(layout, "Off: the game's normal Director.", "Tick the box above to customise it")
-            layout.separator()
         col = _settings(layout)
         col.enabled = s.director_enabled
         col.prop(s, "dir_common_limit")
@@ -721,12 +776,11 @@ class HL_PT_director(_Sub, bpy.types.Panel):
         grid = box.grid_flow(columns=2, align=True)
         for t in ("tank", "witch", "smoker", "boomer", "hunter", "charger", "jockey", "spitter"):
             grid.prop(s, f"dir_spawn_{t}", toggle=True)
-        _hint(box, "Off: only your logic graph spawns it")
 
 
 class HL_PT_logic(_Sub, bpy.types.Panel):
     bl_label = "Logic Graphs"
-    bl_parent_id = "HL_PT_world"
+    bl_parent_id = "HL_PT_gameplay"
 
     def draw_header_preset(self, context):
         from .logic import logic_trees
@@ -744,62 +798,29 @@ class HL_PT_logic(_Sub, bpy.types.Panel):
                 row = col.row(align=True)
                 row.label(text=t.name)
                 row.prop_search(t, "scene_name", bpy.data, "scenes", text="")
-        else:
-            layout.label(text="No logic graph yet")
-        layout.separator()
         col = layout.column(align=True)
         col.operator("hammerless.logic_new", icon="ADD")
         col.operator("hammerless.logic_from_outputs", icon="NODE")
-        layout.separator()
-        _hint(layout, "Open any editor as 'L4D2 Logic' to edit.", "Shift+A adds nodes, like the shader editor")
 
 
 # ---------------------------------------------------------------- Settings
 
 class HL_PT_settings(_Panel, bpy.types.Panel):
     bl_label = "Settings"
-    bl_order = 8
+    bl_order = 7
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
-        _hint(self.layout, "The map and model compilers, the game", "window, folders, scene scale, debugging")
-
-
-class HL_PT_compile(_Sub, bpy.types.Panel):
-    bl_label = "Compile"
-    bl_parent_id = "HL_PT_settings"
-
-    def draw(self, context):
-        s = context.scene.hammerless
-        col = _settings(self.layout)
-        col.prop(s, "map_tool")
-        col.prop(s, "model_compiler")
-        col.prop(s, "extra_vbsp", text="Extra vbsp Options")
-        _hint(self.layout, "Lighting and Visibility have their own", "panels (compiler, quality, options)")
-
-
-class HL_PT_game(_Sub, bpy.types.Panel):
-    bl_label = "Game Window"
-    bl_parent_id = "HL_PT_settings"
-
-    def draw(self, context):
-        s = context.scene.hammerless
-        col = _settings(self.layout)
-        col.prop(s, "window_monitor")
-        sub = col.column(align=True)
-        sub.prop(s, "window_width")
-        sub.prop(s, "window_height")
-        col.prop(s, "window_borderless")
-        col.separator()
-        col.prop(s, "difficulty")
-        col.prop(s, "fast_loading")
-        col.prop(s, "launch_extra")
-        _hint(self.layout, "Size applies when the game starts")
+        pass
 
 
 class HL_PT_folders(_Sub, bpy.types.Panel):
-    bl_label = "Folders & Game Data"
+    bl_label = "Game & Folders"
     bl_parent_id = "HL_PT_settings"
+
+    def draw_header_preset(self, context):
+        if setup_problem(context) is None:
+            _status(self.layout, "L4D2 found")
 
     def draw(self, context):
         s = context.scene.hammerless
@@ -816,19 +837,71 @@ class HL_PT_folders(_Sub, bpy.types.Panel):
         layout.operator("hammerless.start_fresh", text="Start Fresh (delete this map's build)", icon="TRASH")
 
 
+class HL_PT_compilers(_Sub, bpy.types.Panel):
+    bl_label = "Compilers"
+    bl_parent_id = "HL_PT_settings"
+
+    def draw_header_preset(self, context):
+        s = context.scene.hammerless
+        if (s.map_tool, s.vis_tool, s.light_tool) == ("HAMMERLESS",) * 3:
+            _status(self.layout, "all Hammerless")
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = _settings(self.layout)
+        col.prop(s, "map_tool", text="Map")
+        col.prop(s, "vis_tool", text="Visibility")
+        col.prop(s, "light_tool", text="Lighting")
+        if s.light_tool == "HAMMERLESS":
+            col.prop(s, "light_exact")
+        if s.light_tool == "CYCLES":
+            col.prop(s, "cycles_samples")
+            col.prop(s, "cycles_stitch")
+            col.prop(s, "cycles_denoise")
+        col.prop(s, "model_compiler", text="Models")
+        col.separator()
+        col.prop(s, "extra_vbsp", text="Extra vbsp Options")
+        col.prop(s, "extra_vvis", text="Extra vvis Options")
+        col.prop(s, "extra_vrad", text="Extra vrad Options")
+
+
 class HL_PT_scene(_Sub, bpy.types.Panel):
-    bl_label = "Scene"
+    bl_label = "Map Defaults"
     bl_parent_id = "HL_PT_settings"
 
     def draw(self, context):
         s = context.scene.hammerless
         col = _settings(self.layout)
+        col.prop(s, "auto_seal")
+        col.prop(s, "auto_detail")
+        col.separator()
         col.prop(s, "units_per_meter")
         col.prop(s, "default_material")
         col.separator()
-        col.prop(s, "auto_seal")
         col.prop(s, "check_game_content")
         col.prop(s, "model_previews")
+
+
+class HL_PT_game(_Sub, bpy.types.Panel):
+    bl_label = "Game Window"
+    bl_parent_id = "HL_PT_settings"
+
+    def draw_header_preset(self, context):
+        s = context.scene.hammerless
+        _status(self.layout, f"{s.window_width}×{s.window_height}")
+
+    def draw(self, context):
+        s = context.scene.hammerless
+        col = _settings(self.layout)
+        col.prop(s, "window_monitor")
+        sub = col.column(align=True)
+        sub.prop(s, "window_width")
+        sub.prop(s, "window_height")
+        col.prop(s, "window_borderless")
+        col.separator()
+        col.prop(s, "difficulty")
+        col.prop(s, "fast_loading")
+        col.prop(s, "launch_extra")
 
 
 class HL_PT_debug(_Sub, bpy.types.Panel):
@@ -844,7 +917,6 @@ class HL_PT_debug(_Sub, bpy.types.Panel):
         sub.prop(s, "debug_interval")
         col.separator()
         col.prop(s, "autotest")
-        _hint(self.layout, "The log goes to left4dead2/console.log")
 
 
 class HL_PT_collection(bpy.types.Panel):
@@ -921,10 +993,11 @@ def _add_menu(self, context):
 CLASSES = (HL_UL_keyvalues, HL_UL_outputs,
            HL_PT_build, HL_PT_problems,
            HL_PT_object, HL_PT_obj_model, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
-           HL_PT_lighting, HL_PT_sky, HL_PT_view_light, HL_PT_light_advanced,
-           HL_PT_visibility, HL_PT_view_vis, HL_PT_navmesh, HL_PT_view_nav, HL_PT_sound, HL_PT_view_sound,
-           HL_PT_world, HL_PT_fog, HL_PT_director, HL_PT_logic,
-           HL_PT_settings, HL_PT_compile, HL_PT_game, HL_PT_folders, HL_PT_scene, HL_PT_debug,
+           HL_PT_viewport, HL_PT_vp_light, HL_PT_vp_sky, HL_PT_vp_vis, HL_PT_vp_nav, HL_PT_vp_sound,
+           HL_PT_lighting, HL_PT_light_quality, HL_PT_light_advanced,
+           HL_PT_environment, HL_PT_sun, HL_PT_fog, HL_PT_sound,
+           HL_PT_gameplay, HL_PT_navmesh, HL_PT_director, HL_PT_logic,
+           HL_PT_settings, HL_PT_folders, HL_PT_compilers, HL_PT_scene, HL_PT_game, HL_PT_debug,
            HL_PT_collection, *CATEGORY_MENUS, HL_MT_add)
 
 

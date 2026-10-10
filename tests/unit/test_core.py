@@ -1561,7 +1561,7 @@ class TestVisData(unittest.TestCase):
 
 
 class TestVisCompiler(unittest.TestCase):
-    """Settings > Compile > Vis Compiler: our hlvvis.exe in place of vvis.exe, falling back to vvis."""
+    """Settings > Compilers > Visibility: our hlvvis.exe in place of vvis.exe, falling back to vvis."""
 
     def _job(self, opts):
         import tempfile

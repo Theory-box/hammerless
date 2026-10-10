@@ -419,7 +419,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         from .ops import compile_options, export_vmf, game_root, surface_report, work_dir
         root = game_root(context)
         if not root:
-            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Folders & Game Data > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
+            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Game & Folders > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
             return {"CANCELLED"}
         base = os.path.join(work_dir(context), context.scene.hammerless.map_name)
         tools = cc.Tools(root)

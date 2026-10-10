@@ -323,10 +323,6 @@ def _bake_button(layout, text="Bake Lighting"):
     row.scale_y = 1.3
     op = row.operator("hammerless.build", text=text, icon="LIGHT_SUN")
     op.play, op.bake = False, True
-    row = layout.row(align=True)
-    op = row.operator("hammerless.build", text="Bake View", icon="HIDE_OFF")
-    op.play, op.bake, op.view = False, True, True
-    row.prop(bpy.context.scene.hammerless, "light_view_distance")
 
 
 def _note(layout, lines, icon="INFO"):
@@ -341,34 +337,27 @@ def draw_panel(layout, context):
     kind, message = bake_status(context)
     quick = s.light_quality == "OFF"
     if not shown():
-        _note(layout, ["See your map's baked light and shadows,", "as the game lights it (from the last build)"])
         if kind == "BUSY":
             _note(layout, [message], icon="SORTTIME")
             return
-        if quick:
-            _note(layout, ["Lighting Quality is Off:", "choose Fast or higher above first"], icon="ERROR")
-        _bake_button(layout)
         if kind == "READY":
             row = layout.row(align=True)
+            row.scale_y = 1.2
             row.operator("hammerless.lightmap_show", text="Show the Last Build's Lighting", icon="HIDE_OFF")
-            row.operator("hammerless.lightmap_delete", text="Clear Bake", icon="X")
+            row.operator("hammerless.lightmap_delete", text="", icon="TRASH")
         else:
-            _note(layout, [message + "."])
-        _note(layout, ["Bake Lighting is quicker than a Build,", "and Build & Play reuses it"])
+            _note(layout, [message])
+            if quick:
+                _note(layout, ["Lighting Quality is Off"], icon="ERROR")
         return
-    big = layout.row(align=True)
-    big.scale_y = 1.3
-    big.operator("hammerless.lightmap_clear", text="Hide Baked Lighting", icon="HIDE_ON")
-    big.operator("hammerless.lightmap_delete", text="Clear Bake", icon="X")
     row = layout.row(align=True)
     row.prop(s, "lightmap_mode", expand=True)
     layout.prop(s, "lightmap_exposure", slider=True)
-    layout.prop(s, "lightmap_xray")
-    layout.prop(s, "lightmap_props")
-    if s.lightmap_mode == "LIT":
-        _note(layout, ["Best in Solid view: Lighting Flat,", "Color Texture"])
-    elif s.lightmap_mode == "GAME":
-        _note(layout, ["The game's textures and baked light,", "from the last build (not your edits since)"])
+    row = layout.row(align=True)
+    row.prop(s, "lightmap_props", toggle=True)
+    row.prop(s, "lightmap_xray", toggle=True)
+    row.operator("hammerless.lightmap_clear", text="", icon="X")
+    row.operator("hammerless.lightmap_delete", text="", icon="TRASH")
     d = _state["data"]
     mins = int((time.time() - _state["mtime"]) // 60) if _state["mtime"] else 0
     _note(layout, [f"Built {mins} min ago" if mins else "Built just now",
