@@ -430,6 +430,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                      description="Brighten or darken the view, in stops (+1 = twice as bright)")
     lightmap_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _light_display(self, c),
                                 description="Draw the baked lighting through walls")
+    lightmap_props: BoolProperty(name="Props", default=True, update=lambda self, c: _light_display(self, c),
+                                 description="Draw static props with the light baked at their vertexes (Prop "
+                                             "Lighting): the compiled map's props, from the game's model files")
     show_problem_markers: BoolProperty(name="Show Markers", default=True,
                                        description="Draw numbered markers in the viewport where problems are")
     spawn_index: IntProperty(default=-1, update=_on_spawn_index)

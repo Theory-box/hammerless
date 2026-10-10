@@ -1240,6 +1240,43 @@ class TestNoBake(unittest.TestCase):
             self.assertEqual(f.read(), vol)
 
 
+class TestPropLighting(unittest.TestCase):
+    """Static props' baked vertex light read back for the lighting view."""
+
+    def test_vertex_light_gamma(self):
+        import struct
+        from hammerless.core.proplight import _vhv_colors
+        light = 0.7                                                  # (the light compiler: light^(1/2.2) / 2)
+        c = round(255 * light ** (1 / 2.2) * 0.5)
+        hdr = struct.pack("<6i", 2, 0, 4, 4, 1, 1) + b"\0" * 16 + struct.pack("<3i", 0, 1, 512)
+        vhv = hdr.ljust(512, b"\0") + bytes([c, c, c, 255])
+        got = _vhv_colors(vhv)[0][0]
+        self.assertAlmostEqual(float(got[0]), light, delta=0.01)
+
+    def test_map_without_props(self):
+        import zipfile
+        from hammerless.core.proplight import read_prop_lighting
+        z = zipfile.ZipFile(os.path.join(os.path.dirname(__file__), "..", "fixtures", "vis", "rooms_portal.zip"))
+        r = read_prop_lighting(z.read("rooms_portal.bsp"), None)
+        self.assertEqual((r.props, r.missing, len(r.positions)), (0, 0, 0))
+
+    def test_valve_sample_map(self):
+        """(needs L4D2: Valve's styleguide_urban as shipped, its props lit by vrad)"""
+        from hammerless.core.compile import find_game_root
+        from hammerless.core.proplight import read_prop_lighting
+        from hammerless.core.vpk import GameContent
+        root = find_game_root()
+        path = root and os.path.join(root, "left4dead2", "maps", "styleguide_urban.bsp")
+        if not path or not os.path.exists(path):
+            self.skipTest("L4D2's styleguide_urban.bsp not found")
+        with open(path, "rb") as f:
+            r = read_prop_lighting(f.read(), GameContent(root))
+        self.assertGreater(r.props, 400)
+        self.assertEqual(r.missing, 0)
+        self.assertEqual(r.positions.shape, r.colors.shape)
+        self.assertTrue(0.01 < float(r.colors.mean()) < 1.0)
+
+
 class TestNavPredict(unittest.TestCase):
     """The nav mesh our generator predicts, marked and analysed like the game's."""
 

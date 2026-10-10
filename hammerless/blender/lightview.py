@@ -2,7 +2,8 @@
 
 Like the nav view, it's drawn by the add-on (no objects): nothing is added to the scene, saved or
 exported, and turning it off frees it. It shows the compiled map's own faces, so after moving a
-wall the light stays where the compiled wall was until the next compile.
+wall the light stays where the compiled wall was until the next compile. Static props are drawn from the
+compiled map too, with the light baked at their vertexes (Prop Lighting).
 """
 import os
 import time
@@ -15,10 +16,45 @@ from gpu_extras.batch import batch_for_shader
 from ..core.lightmap import read_lightmaps
 
 _state = {"path": None, "mtime": None, "data": None, "batch": None, "texture": None, "scale": None,
-          "error": None, "loaded_at": None, "checked": 0.0, "edited": False}
+          "error": None, "loaded_at": None, "checked": 0.0, "edited": False, "props": None, "pbatch": None}
 _status = {"key": None, "time": 0.0, "value": ("NONE", "")}
 _handlers = []
 _SHADER = None
+_PSHADER = None
+
+
+def _prop_shader():
+    """The props' baked vertex light: the lightmaps' shader with a colour per vertex instead of a texture."""
+    global _PSHADER
+    if _PSHADER is not None:
+        return _PSHADER
+    iface = gpu.types.GPUStageInterfaceInfo("hl_proplight_iface")
+    iface.smooth("VEC3", "colInterp")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant("MAT4", "ModelViewProjectionMatrix")
+    info.push_constant("FLOAT", "exposure")
+    info.push_constant("FLOAT", "bias")
+    info.vertex_in(0, "VEC3", "pos")
+    info.vertex_in(1, "VEC3", "col")
+    info.vertex_out(iface)
+    info.fragment_out(0, "VEC4", "fragColor")
+    info.vertex_source(
+        "void main() {"
+        "  colInterp = col;"
+        "  gl_Position = ModelViewProjectionMatrix * vec4(pos, 1.0);"
+        "  gl_Position.z -= bias * gl_Position.w;"
+        "}")
+    info.fragment_source(
+        "float to_srgb(float c) {"
+        "  c = clamp(c, 0.0, 1.0);"
+        "  return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;"
+        "}"
+        "void main() {"
+        "  vec3 light = colInterp * exposure;"
+        "  fragColor = vec4(to_srgb(light.r), to_srgb(light.g), to_srgb(light.b), 1.0);"
+        "}")
+    _PSHADER = gpu.shader.create_from_info(info)
+    return _PSHADER
 
 
 def _shader():
@@ -71,20 +107,30 @@ def load(context, path: str | None = None) -> str | None:
         return "This map hasn't been built yet: press Build first (it bakes the lighting)"
     try:
         with open(path, "rb") as f:
-            data = read_lightmaps(f.read())
+            raw = f.read()
+        data = read_lightmaps(raw)
     except Exception as ex:          # (a map being written, or cut short: never an error out of the draw callback)
         return f"Couldn't read the compiled map: {ex}"
     if data.faces == 0:
         return "The last build has no baked lighting (Lighting Quality was Off): choose Fast or higher and Build"
+    props = None
+    try:                             # (the props' models come from the game: without it, the faces alone)
+        from ..core.proplight import read_prop_lighting
+        from .ops import game_content, game_root
+        content = game_content(game_root(context))
+        if content is not None:
+            props = read_prop_lighting(raw, content)
+    except Exception:
+        props = None
     _state.update(path=path, mtime=os.path.getmtime(path), data=data, batch=None, texture=None, scale=None,
-                  error=None, loaded_at=time.time(), edited=False)
+                  error=None, loaded_at=time.time(), edited=False, props=props, pbatch=None)
     _redraw()
     return None
 
 
 def clear() -> None:
     _state.update(path=None, mtime=None, data=None, batch=None, texture=None, scale=None, error=None,
-                  loaded_at=None)
+                  loaded_at=None, props=None, pbatch=None)
     _redraw()
 
 
@@ -95,6 +141,11 @@ def _build(scale: float):
     _state["texture"] = gpu.types.GPUTexture((w, h), format="RGBA16F", data=buf)
     pos = data.positions / scale
     _state["batch"] = batch_for_shader(_shader(), "TRIS", {"pos": pos.astype(np.float32), "uv": data.uvs})
+    props = _state["props"]
+    _state["pbatch"] = None
+    if props is not None and len(props.positions):
+        _state["pbatch"] = batch_for_shader(_prop_shader(), "TRIS", {"pos": (props.positions / scale).astype(np.float32),
+                                                                     "col": props.colors})
     _state["scale"] = scale
 
 
@@ -139,6 +190,13 @@ def _draw():
     gpu.state.depth_test_set("LESS_EQUAL" if not s.lightmap_xray else "NONE")
     gpu.state.face_culling_set("NONE")
     _state["batch"].draw(shader)
+    if _state["pbatch"] is not None and s.lightmap_props:
+        ps = _prop_shader()
+        ps.bind()
+        ps.uniform_float("ModelViewProjectionMatrix", gpu.matrix.get_projection_matrix() @ gpu.matrix.get_model_view_matrix())
+        ps.uniform_float("exposure", 0.5 * 2.0 ** s.lightmap_exposure)
+        ps.uniform_float("bias", 0.0 if s.lightmap_xray else 2e-5)
+        _state["pbatch"].draw(ps)
     gpu.state.depth_test_set("NONE")
     gpu.state.blend_set("NONE")
 
@@ -285,12 +343,21 @@ def draw_panel(layout, context):
     row.prop(s, "lightmap_mode", expand=True)
     layout.prop(s, "lightmap_exposure", slider=True)
     layout.prop(s, "lightmap_xray")
+    layout.prop(s, "lightmap_props")
     if s.lightmap_mode == "LIT":
         _note(layout, ["Best in Solid view: Lighting Flat,", "Color Texture"])
     d = _state["data"]
     mins = int((time.time() - _state["mtime"]) // 60) if _state["mtime"] else 0
     _note(layout, [f"Built {mins} min ago" if mins else "Built just now",
                    f"{d.faces:,} faces, {d.luxels:,} light samples"], icon="TIME")
+    p = _state["props"]
+    if s.lightmap_props:
+        if p is None:
+            _note(layout, ["Props: the game's files couldn't be read"], icon="ERROR")
+        elif p.props == 0:
+            _note(layout, ["Props: no baked prop light in this build", "(turn on Prop Lighting and bake)"])
+        elif p.missing:
+            _note(layout, [f"{p.props:,} props, {p.missing:,} without their model files"], icon="ERROR")
     if kind == "BUSY":
         _note(layout, ["Building... the view updates when it's done"], icon="SORTTIME")
     elif _state["edited"]:
