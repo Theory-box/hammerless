@@ -1275,6 +1275,15 @@ class TestPropLighting(unittest.TestCase):
         self.assertEqual(r.missing, 0)
         self.assertEqual(r.positions.shape, r.colors.shape)
         self.assertTrue(0.01 < float(r.colors.mean()) < 1.0)
+        self.assertEqual(len(r.tex_uvs), len(r.positions))           # (Textured view: each prop's own textures)
+        self.assertEqual(len(r.tri_material) * 3, len(r.positions))
+        self.assertTrue(all(r.materials))
+        from hammerless.core.lightmap import read_lightmaps
+        with open(path, "rb") as f:
+            lm = read_lightmaps(f.read())
+        self.assertIn("concrete/curba", lm.materials)               # (and each face's material, as the map names it)
+        self.assertEqual(len(lm.tex_uvs), len(lm.positions))
+        self.assertEqual(len(lm.tri_material) * 3, len(lm.positions))
 
 
 class TestNavPredict(unittest.TestCase):

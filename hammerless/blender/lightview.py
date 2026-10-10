@@ -16,7 +16,8 @@ from gpu_extras.batch import batch_for_shader
 from ..core.lightmap import read_lightmaps
 
 _state = {"path": None, "mtime": None, "data": None, "batch": None, "texture": None, "scale": None,
-          "error": None, "loaded_at": None, "checked": 0.0, "edited": False, "props": None, "pbatch": None}
+          "error": None, "loaded_at": None, "checked": 0.0, "edited": False, "props": None, "pbatch": None,
+          "tbatches": None, "content": None, "game_dir": None}
 _status = {"key": None, "time": 0.0, "value": ("NONE", "")}
 _handlers = []
 _SHADER = None
@@ -113,24 +114,27 @@ def load(context, path: str | None = None) -> str | None:
         return f"Couldn't read the compiled map: {ex}"
     if data.faces == 0:
         return "The last build has no baked lighting (Lighting Quality was Off): choose Fast or higher and Build"
-    props = None
+    props = content = game_dir = None
     try:                             # (the props' models come from the game: without it, the faces alone)
         from ..core.proplight import read_prop_lighting
         from .ops import game_content, game_root
-        content = game_content(game_root(context))
+        root = game_root(context)
+        content = game_content(root)
+        game_dir = os.path.join(root, "left4dead2") if root else None
         if content is not None:
             props = read_prop_lighting(raw, content)
     except Exception:
         props = None
     _state.update(path=path, mtime=os.path.getmtime(path), data=data, batch=None, texture=None, scale=None,
-                  error=None, loaded_at=time.time(), edited=False, props=props, pbatch=None)
+                  error=None, loaded_at=time.time(), edited=False, props=props, pbatch=None, tbatches=None,
+                  content=content, game_dir=game_dir)
     _redraw()
     return None
 
 
 def clear() -> None:
     _state.update(path=None, mtime=None, data=None, batch=None, texture=None, scale=None, error=None,
-                  loaded_at=None, props=None, pbatch=None)
+                  loaded_at=None, props=None, pbatch=None, tbatches=None)
     _redraw()
 
 
@@ -146,6 +150,7 @@ def _build(scale: float):
     if props is not None and len(props.positions):
         _state["pbatch"] = batch_for_shader(_prop_shader(), "TRIS", {"pos": (props.positions / scale).astype(np.float32),
                                                                      "col": props.colors})
+    _state["tbatches"] = None        # (Textured mode's: made when first shown)
     _state["scale"] = scale
 
 
@@ -180,6 +185,18 @@ def _draw():
     _follow_compiles()
     if _state["batch"] is None or _state["scale"] != s.units_per_meter:
         _build(s.units_per_meter)
+    if s.lightmap_mode == "GAME":
+        from . import lighttextures
+        if _state["tbatches"] is None:
+            _state["tbatches"] = lighttextures.build(_state["data"], _state["props"], s.units_per_meter,
+                                                     _state["content"], _state["game_dir"])
+        gpu.state.blend_set("NONE")
+        gpu.state.depth_test_set("LESS_EQUAL" if not s.lightmap_xray else "NONE")
+        gpu.state.face_culling_set("NONE")
+        lighttextures.draw(_state["tbatches"], _state["texture"], 2.0 ** s.lightmap_exposure,
+                           0.0 if s.lightmap_xray else 2e-5, s.lightmap_props)
+        gpu.state.depth_test_set("NONE")
+        return
     shader = _shader()
     shader.bind()
     shader.uniform_float("ModelViewProjectionMatrix", gpu.matrix.get_projection_matrix() @ gpu.matrix.get_model_view_matrix())
@@ -346,6 +363,8 @@ def draw_panel(layout, context):
     layout.prop(s, "lightmap_props")
     if s.lightmap_mode == "LIT":
         _note(layout, ["Best in Solid view: Lighting Flat,", "Color Texture"])
+    elif s.lightmap_mode == "GAME":
+        _note(layout, ["The game's textures and baked light,", "from the last build (not your edits since)"])
     d = _state["data"]
     mins = int((time.time() - _state["mtime"]) // 60) if _state["mtime"] else 0
     _note(layout, [f"Built {mins} min ago" if mins else "Built just now",

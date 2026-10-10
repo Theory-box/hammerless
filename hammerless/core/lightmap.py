@@ -34,6 +34,9 @@ class Lightmaps:
     faces: int                  # lit faces read
     luxels: int                 # lightmap samples read
     hdr: bool                   # read from the HDR lighting (else LDR)
+    tex_uvs: np.ndarray = None  # (n*3, 2) float32 texture coordinates (0..1 across the texture, v down as stored)
+    tri_material: np.ndarray = None   # (n,) int32: each triangle's material (an index into materials)
+    materials: list = None      # material paths, as the map names them (lower case)
 
 
 def _lumps(data: bytes):
@@ -101,6 +104,9 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
     surfedges = np.frombuffer(lump(13), dtype="<i4")
     texinfo, dispinfo, dispverts, models = lump(6), lump(26), lump(33), lump(14)
     origins = _entity_origins(lump(0))
+    texdata, names_data, names_table = lump(2), lump(43), lump(44)
+    materials: list[str] = []
+    material_of: dict[int, int] = {}
 
     # which brush model each face belongs to (for the entity origin offset)
     model_of = {}
@@ -125,6 +131,20 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
         if flags & (SURF_SKY | SURF_SKY2D | SURF_NOLIGHT):
             continue
         lvecs = np.array(struct.unpack_from("<8f", texinfo, TEXINFO_SIZE * ti + 32), dtype=np.float64).reshape(2, 4)
+        tvecs = np.array(struct.unpack_from("<8f", texinfo, TEXINFO_SIZE * ti), dtype=np.float64).reshape(2, 4)
+        td = struct.unpack_from("<i", texinfo, TEXINFO_SIZE * ti + 68)[0]
+        tw = th = 1
+        if 0 <= td < len(texdata) // 32:
+            tw, th = struct.unpack_from("<2i", texdata, 32 * td + 16)
+            if td not in material_of:
+                name_id = struct.unpack_from("<i", texdata, 32 * td + 12)[0]
+                name = ""
+                if 0 <= name_id < len(names_table) // 4:
+                    at = struct.unpack_from("<i", names_table, 4 * name_id)[0]
+                    name = names_data[at:names_data.find(b"\0", at)].decode("latin-1").lower().replace("\\", "/")
+                material_of[td] = len(materials)
+                materials.append(name)
+        mat = material_of.get(td, -1)
         w, h = size[0] + 1, size[1] + 1
         per_style = w * h * (4 if flags & SURF_BUMPLIGHT else 1)      # bumped: flat + 3 directions
         start = light_ofs + 4 * per_style * styles.index(style)
@@ -141,16 +161,19 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
             pos, flat = corners, corners
             tris = np.array([(0, i, i + 1) for i in range(1, num_edges - 1)], dtype=np.int64)
         lux = flat @ lvecs[:, :3].T + lvecs[:, 3] - np.array(mins, dtype=np.float64)
+        tex = (flat @ tvecs[:, :3].T + tvecs[:, 3]) / np.array([max(tw, 1), max(th, 1)], dtype=np.float64)
         if offset is not None:
             pos = pos + np.array(offset)
-        blocks.append((pos, lux, tris, (w, h), decode_luxels(raw).reshape(h, w, 3)))
+        blocks.append((pos, lux, tris, (w, h), decode_luxels(raw).reshape(h, w, 3), tex, mat))
         luxels += w * h
 
     at, width, height = _pack([blk[3] for blk in blocks])
     atlas = np.zeros((max(height, 1), width, 4), dtype=np.float32)
     atlas[..., 3] = 1.0
-    positions, uvs = [], []
-    for (pos, lux, tris, (w, h), samples), (x, y) in zip(blocks, at):
+    positions, uvs, tex_uvs, tri_mats = [], [], [], []
+    for (pos, lux, tris, (w, h), samples, tex, mat), (x, y) in zip(blocks, at):
+        tex_uvs.append(tex[tris].reshape(-1, 2))
+        tri_mats.append(np.full(len(tris), mat, np.int32))
         atlas[y:y + h, x:x + w, :3] = samples
         uv = np.empty_like(lux)
         uv[:, 0] = (x + lux[:, 0] + 0.5) / width
@@ -160,7 +183,9 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
     return Lightmaps(
         positions=np.concatenate(positions).astype(np.float32) if positions else np.zeros((0, 3), np.float32),
         uvs=np.concatenate(uvs).astype(np.float32) if uvs else np.zeros((0, 2), np.float32),
-        atlas=atlas, faces=len(blocks), luxels=luxels, hdr=hdr)
+        atlas=atlas, faces=len(blocks), luxels=luxels, hdr=hdr,
+        tex_uvs=np.concatenate(tex_uvs).astype(np.float32) if tex_uvs else np.zeros((0, 2), np.float32),
+        tri_material=np.concatenate(tri_mats) if tri_mats else np.zeros(0, np.int32), materials=materials)
 
 
 def _displacement(corners: np.ndarray, dispinfo: bytes, dispverts: bytes, di: int):

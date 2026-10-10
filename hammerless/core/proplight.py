@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .mdl import VVD_VERTEX_SIZE, read_vvd
+from .mdl import VVD_VERTEX_SIZE, _cstr, read_vvd
 
 PROP_RECORD = 72          # L4D2's static prop record (sprp version 8 and 9)
 
@@ -27,6 +27,9 @@ class PropLighting:
     colors: np.ndarray        # (n*3, 3) float32 linear light (lightmap units: 2.0 shows white)
     props: int                # props drawn
     missing: int              # props with baked light whose model couldn't be read
+    tex_uvs: np.ndarray = None      # (n*3, 2) float32 texture coordinates (v down as stored)
+    tri_material: np.ndarray = None  # (n,) int32: each triangle's material (an index into materials)
+    materials: list = None          # material paths ("" where the model's couldn't be found)
 
 
 def _i32(b: bytes, o: int) -> int:
@@ -89,13 +92,28 @@ def _vhv_colors(vhv: bytes) -> list[np.ndarray]:
     return out
 
 
+def _model_textures(mdl: bytes):
+    """The model's texture names for skin 0 (by mesh material index) and its material folders."""
+    num_tex, tex_idx, num_cd, cd_idx = struct.unpack_from("<4i", mdl, 204)
+    num_skinref, _families, skin_idx = struct.unpack_from("<3i", mdl, 220)
+    names = [_cstr(mdl, tex_idx + 64 * t + _i32(mdl, tex_idx + 64 * t)).replace("\\", "/").lower()
+             for t in range(num_tex)]
+    dirs = [_cstr(mdl, _i32(mdl, cd_idx + 4 * c)).replace("\\", "/").lower() for c in range(num_cd)]
+    skin0 = list(struct.unpack_from(f"<{num_skinref}h", mdl, skin_idx)) if num_skinref else []
+    return [names[skin0[i]] if i < len(skin0) and skin0[i] < len(names) else (names[i] if i < len(names) else "")
+            for i in range(max(len(skin0), len(names)))], dirs
+
+
 def _prop_triangles(mdl: bytes, vvd: bytes, vtx: bytes, colors: list[np.ndarray]):
-    """The prop's LOD-0 triangles (model space) with their vertexes' colours, walking the .vtx as the light
-    compiler wrote the .vhv (every model, LOD, mesh and strip group in order)."""
-    positions, _uv = read_vvd(vvd)
+    """The prop's LOD-0 triangles (model space) with their vertexes' colours, texture coordinates and texture
+    names, walking the .vtx as the light compiler wrote the .vhv (every model, LOD, mesh and strip group in
+    order)."""
+    positions, uv = read_vvd(vvd)
+    uv = np.stack([uv[:, 0], 1.0 - uv[:, 1]], axis=1)          # (as stored: v down)
+    textures, _dirs = _model_textures(mdl)
     num_bp, bp_index = struct.unpack_from("<ii", mdl, 232)
     vtx_lods, vtx_bp = _i32(vtx, 20), _i32(vtx, 32)
-    tris, cols = [], []
+    tris, cols, uvs, names = [], [], [], []
     k = 0                                    # the .vhv mesh
     for b in range(num_bp):
         bp = bp_index + 16 * b
@@ -110,11 +128,13 @@ def _prop_triangles(mdl: bytes, vvd: bytes, vtx: bytes, colors: list[np.ndarray]
                 xlod = xmodel + _i32(vtx, xmodel + 4) + 12 * lod
                 for mm in range(nm):
                     vofs = _i32(mdl, sub + mesh_index + 116 * mm + 12)
+                    mat = _i32(mdl, sub + mesh_index + 116 * mm)
+                    tex = textures[mat] if 0 <= mat < len(textures) else ""
                     xmesh = xlod + _i32(vtx, xlod + 4) + 9 * mm
                     ngroups = _i32(vtx, xmesh)
                     for g in range(ngroups):
                         if k >= len(colors):
-                            return tris, cols
+                            return tris, cols, uvs, names
                         c = colors[k]
                         k += 1
                         if m or lod:
@@ -129,12 +149,15 @@ def _prop_triangles(mdl: bytes, vvd: bytes, vtx: bytes, colors: list[np.ndarray]
                                 continue
                             tris.append(positions[ids])
                             cols.append(c[list(tri)])
-    return tris, cols
+                            uvs.append(uv[ids])
+                            names.append(tex)
+    return tris, cols, uvs, names
 
 
 def read_prop_lighting(bsp: bytes, content) -> PropLighting:
     """content: vpk.GameContent (the props' models)."""
-    empty = PropLighting(np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32), 0, 0)
+    empty = PropLighting(np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32), 0, 0,
+                         np.zeros((0, 2), np.float32), np.zeros(0, np.int32), [])
     _ver, ofs, ln, _cc = struct.unpack_from("<iiii", bsp, 8 + 16 * 40)
     if ln < 22:
         return empty
@@ -144,7 +167,10 @@ def read_prop_lighting(bsp: bytes, content) -> PropLighting:
     except zipfile.BadZipFile:
         return empty
     models: dict[str, tuple | None] = {}
-    all_pos, all_col = [], []
+    all_pos, all_col, all_uv, all_mat = [], [], [], []
+    materials: list[str] = []
+    material_of: dict[tuple, int] = {}
+    dirs_of: dict[str, list] = {}
     drawn = missing = 0
     for i, (name, origin, angles) in enumerate(_static_props(bsp)):
         vhv = names.get(f"sp_hdr_{i}.vhv") or names.get(f"sp_{i}.vhv")
@@ -160,7 +186,9 @@ def read_prop_lighting(bsp: bytes, content) -> PropLighting:
             missing += 1
             continue
         try:
-            tris, cols = _prop_triangles(*files, _vhv_colors(pak.read(vhv)))
+            tris, cols, uvs, tex_names = _prop_triangles(*files, _vhv_colors(pak.read(vhv)))
+            if name not in dirs_of:
+                dirs_of[name] = _model_textures(files[0])[1]
         except (struct.error, ValueError, IndexError):
             missing += 1
             continue
@@ -170,7 +198,27 @@ def read_prop_lighting(bsp: bytes, content) -> PropLighting:
         pos = pos @ _angle_matrix(angles).T + np.array(origin)
         all_pos.append(pos.astype(np.float32))
         all_col.append(np.concatenate(cols).astype(np.float32))
+        all_uv.append(np.concatenate(uvs).astype(np.float32))
+        mats = []
+        for tex in tex_names:
+            key = (tex, tuple(dirs_of[name]))
+            if key not in material_of:
+                material_of[key] = len(materials)
+                materials.append(_resolve_material(content, tex, dirs_of[name]))
+            mats.append(material_of[key])
+        all_mat.append(np.array(mats, np.int32))
         drawn += 1
     if not all_pos:
-        return PropLighting(empty.positions, empty.colors, 0, missing)
-    return PropLighting(np.concatenate(all_pos), np.concatenate(all_col), drawn, missing)
+        return PropLighting(empty.positions, empty.colors, 0, missing, np.zeros((0, 2), np.float32),
+                            np.zeros(0, np.int32), [])
+    return PropLighting(np.concatenate(all_pos), np.concatenate(all_col), drawn, missing,
+                        np.concatenate(all_uv), np.concatenate(all_mat), materials)
+
+
+def _resolve_material(content, texture: str, dirs: list) -> str:
+    """A model texture name against its material folders: the material path the game uses, or ""."""
+    for d in dirs or [""]:
+        path = (d.strip("/") + "/" + texture).strip("/").lower()
+        if content.has_material(path):
+            return path
+    return ""
