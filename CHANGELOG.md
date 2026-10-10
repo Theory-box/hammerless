@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fix: imported maps ignored the Sky setting:** they wrote back the map's own `skyname`, so a different sky never reached the built map (nor the sky light). Import now sets Sky to the map's sky, and Build writes the Sky setting.
 - **Sky dropdown and the sky in the viewport:** Sky & Sun's Sky is a dropdown of every skybox in Left 4 Dead 2, plus *Custom* to type a name. *Show in Viewport* draws the sky behind the scene in the 3D viewport (any shading mode, with a Brightness setting), oriented as the game shows it. Nothing is added to the .blend.
 - **Lightmap Scale on imported maps:** an imported map's brushes keep the lightmap scale each face had in the map, so the Lightmap Scale setting didn't change them. New option under it, *Imported Brushes Too*: uses the scene's Lightmap Scale (or a material's own) for the imported brushes as well. Off by default, so an unchanged map still builds exactly as it was. A displacement too big for the scale (its lightmap is at most 125 luxels a side, and it can't be split like a brush face) gets the finest scale that fits instead of failing the build.
 - **Bake View** (Lighting > Baked Lighting): bakes only what the 3D viewport sees, out to a distance you set (its view as a *Bake only inside* volume); the rest gets the flat ambient colour. For a quick look at one spot: on a real map, a view holding a quarter of the map's surfaces lit in 1.6 s instead of 3.2 s. Build & Play bakes the whole map again (a view bake is never reused for it).

@@ -277,6 +277,10 @@ def import_text(context, text: str, path: str) -> tuple[int, int]:
     src.from_string(text)
     context.scene[SOURCE_KEY] = src.name
     context.scene["hl_vmf_path"] = path
+    sky = (doc.world.get("skyname") or "").strip()
+    if sky:                                     # (the Sky setting shows the map's, and writes it back)
+        s.skyname = sky
+        s.sky_custom = False
     top = bpy.data.collections.new(f"VMF {base}")
     context.scene.collection.children.link(top)
     world = bpy.data.collections.new(f"{base} world")
@@ -396,8 +400,15 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
 
     wobj = next((o for o in objs if o.get(KIND) == "world"), None)
     world = doc.world
+    sky = s.skyname.strip()                     # (the Sky setting is the map's sky)
     if wobj is not None:
-        world = vi.set_entity_values(world, {"classname": "worldspawn", **object_keyvalues(wobj)}, None)
+        values = {"classname": "worldspawn", **object_keyvalues(wobj)}
+        if sky:
+            values["skyname"] = sky
+        world = vi.set_entity_values(world, values, None)
+    elif sky and sky != (world.get("skyname") or "").strip():
+        keep = {it[0]: it[1] for it in world.items if isinstance(it, tuple) and it[0].lower() != "id"}
+        world = vi.set_entity_values(world, {**keep, "skyname": sky}, None)
     world = vi.with_solids(world, [b for b in (solid(x) for x in doc.world.blocks("solid")) if b is not None])
     out_ents = []
     for k, e in enumerate(doc.entities):

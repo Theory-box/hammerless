@@ -1097,6 +1097,23 @@ def test_vmf_import_lightmap_scale():
     assert scales() == {"32", "4"}, scales()
 
 
+def test_vmf_import_sky():
+    # an imported map's sky is the Sky setting: set from the map on import, written back from it
+    from hammerless.blender import vmfimport
+    reset_scene()
+    path = os.path.join(TMP, "small.vmf")
+    with open(path, "w", encoding="latin-1") as f:
+        f.write(SMALL_VMF)
+    vmfimport.import_text(bpy.context, SMALL_VMF, path)
+    s = bpy.context.scene.hammerless
+    s.map_name = "test_map"
+    assert s.skyname == "sky_l4d_rural02_hdr", s.skyname
+    assert _tree(_imported_export(SMALL_VMF)) == _tree(vmf.parse(SMALL_VMF))     # (unchanged: exactly as read)
+    s.skyname = "sky_l4d_c1_2_hdr"
+    world = next(b for b in _imported_export(SMALL_VMF) if b.name == "world")
+    assert world.get("skyname") == "sky_l4d_c1_2_hdr"
+
+
 def test_sky_dropdown():
     # the sky dropdown lists the game's skies then Custom; it sets the map's skyname, Custom keeps a typed one
     from hammerless.blender.props import _sky_choice_items
