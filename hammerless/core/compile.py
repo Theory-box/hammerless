@@ -49,6 +49,7 @@ class CompileOptions:
     cycles_denoise: bool = False   # measured: OpenImageDenoise smears the packed bake (7.7% off vs 1.3% raw)
     sky_key: str = ""              # sky light from a picture of the sky (<map>.hlsky_src.npy): its fingerprint
     no_bake: str = ""              # No Bake Volumes (lightvolumes.no_bake_text): hlvrad -nobake <map>.hlnobake
+    keep_light: bool = False       # what isn't baked keeps the last build's lighting (hlvrad -keeplight <map>.keep.bsp)
 
     def vbsp_args(self) -> list[str]:
         return self.extra_vbsp.split()
@@ -115,9 +116,9 @@ VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
 _LIGHT_FIELDS = ("hdr", "static_prop_lighting", "extra_vrad", "prop_polys")
 _NORMAL_FIELDS = ("sky_rays", "supersample", "bounces", "patch_size")
 _HLVRAD_FIELDS = ("light_exact", "ss_points", "ss_passes", "ss_threshold", "fix_quirks", "sky_key", "gi", "gi_rays",
-                  "no_bake")
+                  "no_bake", "keep_light")
 # (settings added later: a build from before them was baked as their default)
-_FIELD_DEFAULTS = {"gi": "False", "gi_rays": "1024", "no_bake": "''"}
+_FIELD_DEFAULTS = {"gi": "False", "gi_rays": "1024", "no_bake": "''", "keep_light": "False"}
 _CYCLES_FIELDS = ("cycles_samples", "cycles_denoise", "cycles_stitch")
 _ALL_LIGHT_FIELDS = _LIGHT_FIELDS + _NORMAL_FIELDS + _HLVRAD_FIELDS + _CYCLES_FIELDS
 
@@ -574,6 +575,10 @@ class CompileJob:
                     with open(self.base + ".hlnobake", "w", encoding="utf-8") as f:
                         f.write(opts.no_bake)
                     sky += ["-nobake", self.base + ".hlnobake"]
+                    if opts.keep_light and os.path.exists(self.base + ".bsp"):
+                        # (the last build, before this one replaces it: its lighting where nothing is baked now)
+                        shutil.copy2(self.base + ".bsp", self.base + ".keep.bsp")
+                        sky += ["-keeplight", self.base + ".keep.bsp"]
                 self.steps.append(("vrad", [HLVRAD] + vrad + opts.hlvrad_args() + game + sky
                                    + ["-modeldir", self.base + ".hlvrad_models", self.base]))
                 self._valve_vrad = valve
@@ -1241,7 +1246,8 @@ def clear_build(tools: Tools | None, work_base: str, map_name: str) -> list[str]
     if tools is not None:
         paths.append(os.path.join(tools.maps_dir, map_name + ".bsp"))
     shutil.rmtree(work_base + ".hlvrad_models", ignore_errors=True)    # (models copied for hlvrad)
-    paths += [work_base + ".hlsky", work_base + ".hlsky.key", work_base + ".hlsky_src.npy", work_base + ".hlnobake"]
+    paths += [work_base + ".hlsky", work_base + ".hlsky.key", work_base + ".hlsky_src.npy", work_base + ".hlnobake",
+              work_base + ".keep.bsp"]
     return _remove(paths)
 
 

@@ -995,6 +995,36 @@ def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False, 
     return box
 
 
+def _selection_volume(context) -> str:
+    """The selected objects' bounds (each its own box, turned with it) as "bake only inside" volumes ("" if none)."""
+    from mathutils import Vector
+    from ..core.lightvolumes import box_volume
+    from .mapcollection import map_objects
+    upm = context.scene.hammerless.units_per_meter
+    inside = map_objects(context.scene)
+    out = []
+    for o in context.selected_objects:
+        if o.name not in inside or o.type not in ("MESH", "EMPTY", "CURVE"):
+            continue
+        objs = [o] + [c for c in o.children_recursive if c.type == "MESH"]    # (a preset: its parts)
+        for x in objs:
+            if x.type == "EMPTY" and not x.children:
+                continue
+            m = x.matrix_world
+            corners = [Vector(c) for c in x.bound_box]
+            lo = Vector([min(c[i] for c in corners) for i in range(3)])
+            hi = Vector([max(c[i] for c in corners) for i in range(3)])
+            center = m @ ((lo + hi) / 2)
+            axes, half = [], []
+            for i in range(3):
+                col = m.to_3x3().col[i]
+                length = col.length or 1.0
+                axes.append(tuple(col / length))
+                half.append(max((hi[i] - lo[i]) / 2 * length, 1e-3) * upm)
+            out.append(box_volume(tuple(center * upm), axes, half))
+    return "".join(out)
+
+
 def _view_volume(context) -> str | None:
     """The 3D viewport's view (this one, else the largest on screen) as a "bake only inside" volume."""
     from ..core.lightvolumes import view_volume
@@ -1022,6 +1052,9 @@ class HL_OT_build(bpy.types.Operator):
         if properties.vis_only:
             return ("Compile the map and work out its visibility, without lighting or the nav mesh. Build and "
                     "Build & Play then reuse it and only add what's missing")
+        if properties.bake and properties.selected:
+            return ("Bake only around the selected objects (when they've changed): the rest of the map keeps its "
+                    "last bake. Build & Play bakes the whole map again")
         if properties.bake and properties.volume:
             return (f"Bake only inside '{properties.volume}' (a quick look at that area): the rest gets the flat "
                     "ambient colour. Build & Play bakes the whole map again")
@@ -1041,6 +1074,8 @@ class HL_OT_build(bpy.types.Operator):
     play: BoolProperty(name="Play", default=True)
     bake: BoolProperty(name="Bake Lighting", default=False, options={"HIDDEN", "SKIP_SAVE"},
                        description="Lighting only: fast visibility, no nav mesh, then show the lighting")
+    selected: BoolProperty(name="Bake Selected", default=False, options={"HIDDEN", "SKIP_SAVE"},
+                           description="With Bake Lighting: bake only around the selected objects")
     volume: StringProperty(name="Bake Volume", default="", options={"HIDDEN", "SKIP_SAVE"},
                            description="With Bake Lighting: bake only inside this No Bake Volume (Bake only inside)")
     vis_only: BoolProperty(name="Compute Visibility", default=False, options={"HIDDEN", "SKIP_SAVE"},
@@ -1136,6 +1171,18 @@ class HL_OT_build(bpy.types.Operator):
                 self.report({"ERROR"}, "Baking part of the map needs the Hammerless light compiler (Lighting > Advanced)")
                 return {"CANCELLED"}
             no_bake += vol
+        if self.bake and self.selected:
+            vol = _selection_volume(context)
+            if not vol:
+                self.report({"ERROR"}, "Select the objects to bake first")
+                return {"CANCELLED"}
+            if not cc.use_hlvrad(opts):
+                self.report({"ERROR"}, "Baking part of the map needs the Hammerless light compiler (Lighting > Advanced)")
+                return {"CANCELLED"}
+            no_bake += vol
+        if self.bake and (self.view or self.volume or self.selected):
+            import dataclasses
+            opts = dataclasses.replace(opts, keep_light=True)    # (the rest keeps the last bake)
         if no_bake and opts.rad != "SKIP":
             import dataclasses
             if cc.use_hlvrad(opts):

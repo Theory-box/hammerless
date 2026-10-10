@@ -1275,6 +1275,18 @@ void ComputePerLeafAmbientLighting(void) {
     free(leaforder);
     for (int leaf = 0; leaf < numleafs; leaf++) {
         int n = leafcounts[leaf];
+        if (g_bKeep && !(dleafs[leaf].contents & CONTENTS_SOLID)) {    /* (the last bake's, where not baked) */
+            float mins[3], maxs[3];
+            for (int k = 0; k < 3; k++) mins[k] = dleafs[leaf].mins[k], maxs[k] = dleafs[leaf].maxs[k];
+            const unsigned char *old;
+            int kn = NoBakeBox(mins, maxs) ? KeepLeaf(leaf, &old) : -1;
+            if (kn > 0 && nout + kn <= 65536) {
+                index[leaf][0] = (unsigned short)kn, index[leaf][1] = (unsigned short)nout;
+                memcpy(out + 28 * nout, old, 28 * (size_t)kn);
+                nout += kn;
+                continue;
+            }
+        }
         const ambsample_t *list = leafresults + (MAX_SAMPLES + 1) * leaf;
         index[leaf][0] = (unsigned short)n;
         if (n && nout + n > 65536) Error("too many leaf ambient samples (over 65536): the map is too big for them");

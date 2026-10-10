@@ -1706,6 +1706,7 @@ void FinalLightFace(int facenum) {
         NoBakeColor(amb);
     }
     int allskip = fl->numluxels > 0 && nlskip == fl->numluxels;
+    int oldf = nlskip ? KeepFace(facenum) : -1;         /* (the last bake's same face: its light where not baked) */
     for (int k = 0; k < nstyles; k++) {
         int isdisp = f->dispinfo != -1;
         radial_t *rad = allskip ? NULL : isdisp ? BuildDispLuxelRadial(facenum, k) : BuildLuxelRadial(facenum, k);
@@ -1730,7 +1731,11 @@ void FinalLightFace(int facenum) {
             }
             if (luxskip && luxskip[j]) {
                 for (int b = 0; b < bumpCount; b++) {
-                    if (f->styles[k] == 0) VectorCopy(amb, lb[b]);
+                    if (oldf >= 0) {
+                        const unsigned char *c = KeepLuxel(oldf, k, b, bumpCount, j);
+                        float sc = ldexpf(1.0f, (signed char)c[3]) / 255.0f;
+                        lb[b][0] = c[0] * sc, lb[b][1] = c[1] * sc, lb[b][2] = c[2] * sc;
+                    } else if (f->styles[k] == 0) VectorCopy(amb, lb[b]);
                     else lb[b][0] = lb[b][1] = lb[b][2] = 0;
                 }
                 ok = 1;
@@ -1744,6 +1749,7 @@ void FinalLightFace(int facenum) {
                     avgCount++;
                 }
                 VectorToColorRGBExp32(lb[b], pdata[b]);
+                if (oldf >= 0 && luxskip[j]) memcpy(pdata[b], KeepLuxel(oldf, k, b, bumpCount, j), 4);   /* (exactly) */
                 pdata[b] += 4;
             }
         }
@@ -1761,6 +1767,7 @@ void FinalLightFace(int facenum) {
             median[2] = blues[avgCount >> 1];
         }
         VectorToColorRGBExp32(median, avg);
+        if (allskip && oldf >= 0) memcpy(avg, KeepAverage(oldf, k), 4);
     }
     free(reds);
     free(greens);

@@ -85,7 +85,7 @@ static void TakeVis(void) {
 static void FinalLightWork(int face, int thread) { (void)thread; FinalLightFace(face); }
 
 int main(int argc, char **argv) {
-    const char *map = NULL, *designer_lights = NULL, *skymap_path = NULL, *nobake_path = NULL;
+    const char *map = NULL, *designer_lights = NULL, *skymap_path = NULL, *nobake_path = NULL, *keep_path = NULL;
     Msg("Hammerless hlvrad\n");
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -118,6 +118,8 @@ int main(int argc, char **argv) {
             g_bFast = 1;
         } else if (!_stricmp(a, "-nobake") && i + 1 < argc) {       /* (No Bake Volumes: Hammerless's own) */
             nobake_path = argv[++i];
+        } else if (!_stricmp(a, "-keeplight") && i + 1 < argc) {    /* (the last bake, where nothing is baked) */
+            keep_path = argv[++i];
         } else if (!_stricmp(a, "-skymap") && i + 1 < argc) {
             skymap_path = argv[++i];
         } else if (!_stricmp(a, "-final")) {
@@ -189,6 +191,7 @@ int main(int argc, char **argv) {
     }
     ParseEntities();
     if (nobake_path) LoadNoBake(nobake_path);
+    if (keep_path && g_bNoBake) LoadKeepLight(keep_path);
     FindFacePatches();
     LoadDisplacements();
     LoadTexLights(g_gamedir, path, designer_lights);

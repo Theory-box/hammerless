@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Bake Selected Objects, and partial bakes keep the rest:** Lighting's Bake dropdown has *Selected Objects* (re-bake around what you changed). Every partial bake (the view, the selection, a Bake-only volume) now keeps the last bake's lighting everywhere else instead of a flat colour: the light compiler copies it from the previous build for each face, room and prop that's unchanged (matched by its exact geometry, so a recompile doesn't lose it). On a real map: 6,410 faces outside the area kept exactly, lighting in 1.7 s. Bounce inside the area now comes from the real lighting around it.
 - **Bake choices:** Lighting's Bake dropdown lists Whole Map, What the View Sees, and every No Bake Volume set to *Bake only inside* (by name). Those volumes now apply only when picked there: Build and Build & Play always bake the whole map, so a test volume can't cut a real build short.
 - **Compute Visibility** (Visibility panel): compiles and works out visibility without lighting or the nav mesh; Build and Build & Play then reuse it.
 - **Nav Mesh preview tidied:** *From the Scene* / *The Game's* side by side (a bin button clears the nav mesh), Analyze with its own clear button, a shorter summary and legend; what's shown is in the Preview header, the nav mesh's state under the settings.

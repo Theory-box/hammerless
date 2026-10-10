@@ -1250,6 +1250,36 @@ class TestNoBake(unittest.TestCase):
         old = repr(whole).replace(", no_bake=''", "")              # (a build from before the volumes)
         self.assertTrue(cc._serves(old, whole))
 
+    def test_keep_light_passes_last_build(self):
+        """A partial bake keeps the last build's lighting outside its area: hlvrad -keeplight <copy of it>."""
+        import tempfile
+        from hammerless.core import compile as cc
+        if not os.path.exists(cc.HLVRAD):
+            self.skipTest("hlvrad.exe not built")
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "left4dead2", "maps"))
+        work = tempfile.mkdtemp()
+        vmf = os.path.join(work, "m.vmf")
+        with open(vmf, "w") as f:
+            f.write("world {}")
+        with open(os.path.join(work, "m.bsp"), "wb") as f:
+            f.write(b"VBSP last build")
+        vol = "1 6 1 0 0 1 -1 0 0 1 0 1 0 1 0 -1 0 1 0 0 1 1 0 0 -1 1\n"
+        job = cc.CompileJob(cc.Tools(root), vmf, cc.CompileOptions(light_tool="HAMMERLESS", no_bake=vol, keep_light=True),
+                            copy_to_game=False)
+        cmd = dict(job.steps)["vrad"]
+        keep = cmd[cmd.index("-keeplight") + 1]
+        with open(keep, "rb") as f:
+            self.assertEqual(f.read(), b"VBSP last build")
+        whole = cc.CompileOptions(light_tool="HAMMERLESS")
+        self.assertFalse(cc._serves(repr(cc.CompileOptions(light_tool="HAMMERLESS", no_bake=vol, keep_light=True)), whole))
+
+    def test_box_volume(self):
+        from hammerless.core.lightvolumes import box_volume, in_volume
+        v = box_volume((0, 0, 0), ((1, 0, 0), (0, 1, 0), (0, 0, 1)), (10, 10, 10), pad=0)
+        self.assertFalse(in_volume(v, (5, 5, 5)))
+        self.assertTrue(in_volume(v, (20, 0, 0)))
+
     def test_passed_to_hlvrad(self):
         import tempfile
         from hammerless.core import compile as cc

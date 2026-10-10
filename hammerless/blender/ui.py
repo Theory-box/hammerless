@@ -466,6 +466,7 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
         op = row.operator("hammerless.build", text="Bake Lighting", icon="LIGHT_SUN")
         op.play, op.bake, op.view = False, True, view
         op.volume = area[4:] if area.startswith("VOL:") else ""
+        op.selected = area == "SELECTED"
         row.prop(s, "bake_area", text="")
         if view:
             dist = layout.row(align=True)

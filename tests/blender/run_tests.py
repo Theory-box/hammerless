@@ -1225,7 +1225,19 @@ def test_bake_area_choices():
     skip.hammerless.role, skip.hammerless.classname = "BRUSH_ENTITY", "hammerless_no_bake"
     from hammerless.blender.props import _bake_area_items
     ids = [it[0] for it in _bake_area_items(s, bpy.context)]
-    assert ids == ["MAP", "VIEW", "VOL:test area"], ids        # (a Don't-bake volume isn't a choice)
+    assert ids == ["MAP", "VIEW", "SELECTED", "VOL:test area"], ids   # (a Don't-bake volume isn't a choice)
+    # Selected Objects: the selection's bounds, turned with it
+    from hammerless.blender.ops import _selection_volume
+    from hammerless.core.lightvolumes import in_volume
+    for o in bpy.context.selected_objects:
+        o.select_set(False)
+    floor = bpy.data.objects["floor"]
+    floor.select_set(True)
+    sel = _selection_volume(bpy.context)
+    upm = s.units_per_meter
+    assert sel.startswith("1 6 ")
+    assert not in_volume(sel, (0, 0, -0.25 * upm))              # (inside the floor's box: baked)
+    assert in_volume(sel, (0, 0, 3 * upm))                      # (above it: kept)
     assert s.bake_area == "MAP"
     s.bake_area = "VOL:test area"
     assert s.bake_area == "VOL:test area" and s.bake_area_name == "VOL:test area"

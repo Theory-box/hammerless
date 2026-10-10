@@ -373,6 +373,15 @@ void LoadNoBake(const char *path);
 int NoBakePoint(const float *p);
 int NoBakeBox(const float *mins, const float *maxs);
 void NoBakeColor(vec3_t out);
+/* keeping the last bake where nothing is baked (keeplight.c, -keeplight <old map>) */
+extern int g_bKeep;
+void LoadKeepLight(const char *path);
+int KeepFace(int facenum);
+const unsigned char *KeepLuxel(int oldface, int k, int b, int bumpCount, int j);
+const unsigned char *KeepAverage(int oldface, int k);
+int KeepLeaf(int leaf, const unsigned char **samples);
+const unsigned char *KeepProp(int i, const unsigned char *rec, int reclen, const char *model, const char *vhvname,
+                              int *len);
 extern float maxchop, minchop;                     /* (bounce patches' sizes, in luxels) */
 void ExportDirectLightsToWorldLights(void);
 void ComputePerLeafAmbientLighting(void);

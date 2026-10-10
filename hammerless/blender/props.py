@@ -108,10 +108,12 @@ def bake_only_objects(scene) -> list:
 def _bake_area_items(self, context):
     scene = context.scene if context else bpy.context.scene
     items = [("MAP", "Whole Map", "Bake the whole map's lighting", "WORLD", 0),
-             ("VIEW", "What the View Sees", "Only what the 3D viewport sees, out to View Distance (needs the "
-                                            "Hammerless light compiler)", "HIDE_OFF", 1)]
+             ("VIEW", "What the View Sees", "Only what the 3D viewport sees, out to View Distance; the rest keeps "
+                                            "the last bake's lighting", "HIDE_OFF", 1)]
+    items.append(("SELECTED", "Selected Objects", "Bake only around the selected objects (their bounds); the rest "
+                                                  "keeps the last bake's lighting", "RESTRICT_SELECT_OFF", 2))
     for i, name in enumerate(bake_only_objects(scene)):
-        items.append(("VOL:" + name, name, f"Only inside the volume '{name}' (Bake only inside)", "MESH_CUBE", i + 2))
+        items.append(("VOL:" + name, name, f"Only inside the volume '{name}' (Bake only inside)", "MESH_CUBE", i + 3))
     if [it[0] for it in items] != [it[0] for it in _BAKE_AREAS]:
         _BAKE_AREAS.clear()
         _BAKE_AREAS.extend(items)
@@ -521,9 +523,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     lightmap_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _light_display(self, c),
                                 description="Draw the baked lighting through walls")
     bake_area: EnumProperty(name="Bake", items=_bake_area_items, get=_bake_area_get, set=_bake_area_set,
-                            description="What Bake Lighting bakes: the whole map, what the 3D viewport sees, or a "
-                                        "No Bake Volume set to Bake only inside (the rest gets the flat ambient "
-                                        "colour). Builds always bake the whole map")
+                            description="What Bake Lighting bakes: the whole map, what the 3D viewport sees, the "
+                                        "selected objects, or a No Bake Volume set to Bake only inside. The rest "
+                                        "keeps the last bake's lighting. Builds always bake the whole map")
     bake_area_name: StringProperty(default="MAP", options={"HIDDEN"})
     light_view_distance: FloatProperty(name="Distance", default=3000.0, min=64.0, soft_max=20000.0, step=1000,
                                        precision=0, description="Bake View: how far from the viewport to bake, in "

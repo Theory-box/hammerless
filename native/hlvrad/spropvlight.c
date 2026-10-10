@@ -370,7 +370,7 @@ typedef struct { vec3_t color; vec3_t pos; int valid; } colorvert_t;
 typedef struct { vec3_t pos, normal; int index; } badvert_t;
 
 /* one prop: its vertexes' colours, then the .vhv */
-typedef struct { unsigned char *data; int len; } vhv_t;
+typedef struct { unsigned char *data; int len, nskip, ntotal; } vhv_t;   /* (No Bake: vertexes not lit, all) */
 
 static void LightProp(int propIndex, const unsigned char *rec, const unsigned char *mdl, int mlen, const unsigned char *vvd,
                       int vlen, const unsigned char *vtx, int xlen, vhv_t *result) {
@@ -408,7 +408,9 @@ static void LightProp(int propIndex, const unsigned char *rec, const unsigned ch
                     VectorTransform((const float *)(vert + 16), matPos, pos);
                     VectorTransform((const float *)(vert + 28), matNormal, normal);
                     if (n >= numverts) continue;
+                    result->ntotal++;
                     if (NoBakePoint(pos)) {               /* (No Bake Volumes: the ambient colour, not lit) */
+                        result->nskip++;
                         cv[n].valid = 1;
                         VectorCopy(pos, cv[n].pos);
                         NoBakeColor(cv[n].color);
@@ -531,8 +533,22 @@ static void PropWork(int i, int thread) {
     unsigned char *mdl = ReadFileAll(name, ".mdl", &mlen), *vvd = ReadFileAll(name, ".vvd", &vlen),
                   *vtx = ReadFileAll(name, ".dx90.vtx", &xlen);
     if (mdl && vvd && vtx && mlen >= 240 && vlen >= 64 && xlen >= 36 && !memcmp(mdl, "IDST", 4) && !memcmp(vvd, "IDSV", 4))
+    {
         LightProp(i, rec, mdl, mlen, vvd, vlen, vtx, xlen, &sp_results[i]);
-    else
+        vhv_t *r = &sp_results[i];
+        if (g_bKeep && r->ntotal && r->nskip == r->ntotal) {      /* (not baked at all: the last bake's colours) */
+            char vhv[64];
+            snprintf(vhv, sizeof(vhv), g_bHDR ? "sp_hdr_%d.vhv" : "sp_%d.vhv", i);
+            int len = 0;
+            const unsigned char *old = KeepProp(i, rec, PROP_RECORD, name, vhv, &len);
+            if (old && len > 0) {
+                free(r->data);
+                r->data = xalloc(len + 1);
+                memcpy(r->data, old, len);
+                r->len = len;
+            }
+        }
+    } else
         Msg("Warning: static prop %d (%s): model files missing, not lit\n", i, name);
     free(mdl), free(vvd), free(vtx);
     if (gpuprop_phase == 2 && !g_gpuCheck && (gpuprop_dc != gpuprops[i].nd || gpuprop_ic != gpuprops[i].ni))

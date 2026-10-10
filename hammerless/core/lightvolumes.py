@@ -82,3 +82,14 @@ def view_volume(clip, eye, forward, distance: float, units_per_meter: float) -> 
     e = [float(v) * units_per_meter for v in eye]
     planes.append((f[0], f[1], f[2], sum(f[i] * e[i] for i in range(3)) + distance))      # far
     return f"1 {len(planes)} " + " ".join("%.6f %.6f %.6f %.3f" % p for p in planes) + "\n"
+
+
+def box_volume(center, axes, half, pad: float = 8.0) -> str:
+    """A "bake only inside" volume line for a box (an object's bounds): its centre, three unit axes and half sizes,
+    in Hammer units, grown by pad so the faces on it are inside."""
+    planes = []
+    for a, h in zip(axes, half):
+        d = sum(a[i] * center[i] for i in range(3))
+        planes.append((a[0], a[1], a[2], d + h + pad))
+        planes.append((-a[0], -a[1], -a[2], -d + h + pad))
+    return "1 6 " + " ".join("%.6f %.6f %.6f %.3f" % p for p in planes) + "\n"
