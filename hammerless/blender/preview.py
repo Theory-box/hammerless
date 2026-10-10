@@ -95,6 +95,26 @@ def apply_preview(mat, content, game_dir, units_per_meter: float) -> bool:
     nt.links.new(tex.outputs["Color"], mix.inputs[6])
     nt.links.new(uvtex.outputs["Color"], mix.inputs[7])
     nt.links.new(mix.outputs[2], bsdf.inputs["Base Color"])
+    # fences, glass and foliage ($alphatest / $translucent): see-through where the texture is
+    from ..core.gamematerials import read_vmt
+    vmt = read_vmt(content, path, game_dir)
+    cut = str(vmt.get("$alphatest", "0")).strip() not in ("0", "")
+    clear = str(vmt.get("$translucent", "0")).strip() not in ("0", "")
+    if cut or clear:
+        amix = nt.nodes.new("ShaderNodeMix")
+        amix[NODE_TAG] = True
+        amix.location = (-200, 0)
+        amix.data_type = "FLOAT"
+        nt.links.new(painted.outputs["Fac"], amix.inputs["Factor"])
+        nt.links.new(tex.outputs["Alpha"], amix.inputs[2])
+        nt.links.new(uvtex.outputs["Alpha"], amix.inputs[3])
+        nt.links.new(amix.outputs[0], bsdf.inputs["Alpha"])
+        for attr, value in (("surface_render_method", "BLENDED" if clear and not cut else "DITHERED"),
+                            ("blend_method", "BLEND" if clear and not cut else "CLIP")):
+            try:
+                setattr(mat, attr, value)
+            except (AttributeError, TypeError):
+                pass
     mat["hl_uvmix"] = 1
     bsdf.inputs["Roughness"].default_value = 0.9
     avg = img.get("hl_average")

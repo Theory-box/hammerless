@@ -1067,6 +1067,10 @@ class CompileJob:
             built_inst = ""
         if kind != "full" and built_inst != self._instances_hash(self._vmf_bytes):
             kind, why = "full", "an instance file changed"
+        if kind != "full" and old:
+            from .buildplan import any_in_solid, new_entity_points
+            if any_in_solid(self.base + ".bsp", new_entity_points(old, self._vmf_bytes.decode("utf-8", "replace"))):
+                kind, why = "full", "an entity is now where the map was solid (a room no entity reached before)"
         if kind == "full":
             self.plan = "full"
             return self.steps

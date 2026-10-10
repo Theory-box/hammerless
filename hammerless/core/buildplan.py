@@ -106,6 +106,54 @@ def plan(old_text: str | None, new_text: str) -> tuple[str, str]:
     return "same", "nothing that reaches the map changed"
 
 
+def new_entity_points(old_text: str, new_text: str) -> list[tuple[float, float, float]]:
+    """Origins of point entities that are new or moved (as vbsp floods from them: 1 unit up)."""
+    def origins(text):
+        out = set()
+        for b in parse(text):
+            if b.name.lower() == "entity" and not b.blocks("solid") and b.get("origin"):
+                try:
+                    x, y, z = (float(c) for c in b.get("origin").split()[:3])
+                except ValueError:
+                    continue
+                out.add((x, y, z + 1.0))
+        return out
+    return sorted(origins(new_text) - origins(old_text))
+
+
+def any_in_solid(bsp_path: str, points) -> bool:
+    """Whether any point is in a solid leaf of the compiled map: vbsp fills rooms no entity reaches, so an
+    entity put in such a room needs the geometry compiled again (an entities-only build would keep it filled)."""
+    import struct
+    if not points:
+        return False
+    try:
+        with open(bsp_path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return True
+
+    def lump(i):
+        _v, off, ln, _c = struct.unpack_from("<iiii", data, 8 + 16 * i)
+        return data[off:off + ln]
+    nodes, planes, leafs = lump(5), lump(1), lump(10)
+    if len(nodes) < 32 or not leafs:
+        return True
+    for p in points:
+        node = 0
+        for _ in range(8192):
+            plane, c0, c1 = struct.unpack_from("<3i", nodes, 32 * node)
+            nx, ny, nz, dist = struct.unpack_from("<4f", planes, 20 * plane)
+            child = c0 if nx * p[0] + ny * p[1] + nz * p[2] - dist >= 0 else c1
+            if child < 0:
+                leaf = -1 - child
+                if 32 * leaf + 4 <= len(leafs) and struct.unpack_from("<i", leafs, 32 * leaf)[0] & 1:   # (SOLID)
+                    return True
+                break
+            node = child
+    return False
+
+
 PAK_LUMP = 40
 
 

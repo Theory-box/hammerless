@@ -129,7 +129,9 @@ def read_vtf(data: bytes, max_size: int = 512) -> tuple[int, int, np.ndarray]:
     w, h, flags, frames, first_frame = struct.unpack_from("<HHIHH", data, 16)
     fmt, mips, lr_fmt, lr_w, lr_h = struct.unpack_from("<iBiBB", data, 52)
     depth = struct.unpack_from("<H", data, 63)[0] if minor >= 2 else 1
-    faces = 6 if flags & 0x4000 else 1  # environment map
+    faces = 1
+    if flags & 0x4000:                  # environment map: 6 faces, and before 7.5 a 7th (a sphere map) unless
+        faces = 7 if (major, minor) < (7, 5) and first_frame != 0xFFFF else 6     # first_frame says none
     if fmt not in FORMATS:
         raise ValueError(f"unsupported VTF format id {fmt}")
 
@@ -141,7 +143,7 @@ def read_vtf(data: bytes, max_size: int = 512) -> tuple[int, int, np.ndarray]:
             if tag == b"\x30\x00\x00":
                 image_offset = off
     if image_offset is None:
-        lr_size = _mip_size(13, lr_w, lr_h) if lr_fmt == 13 and lr_w else 0
+        lr_size = _mip_size(lr_fmt, lr_w, lr_h) if lr_fmt in FORMATS and lr_w else 0   # (the low-res thumbnail)
         image_offset = header_size + lr_size
 
     # mips are stored smallest first; each mip holds frames x faces x slices.
@@ -152,7 +154,7 @@ def read_vtf(data: bytes, max_size: int = 512) -> tuple[int, int, np.ndarray]:
         mw, mh = max(1, w >> level), max(1, h >> level)
         if chosen is None or max(mw, mh) <= max_size:
             chosen = (offset, mw, mh)
-        offset += _mip_size(fmt, mw, mh) * frames * faces * max(1, depth)
+        offset += _mip_size(fmt, mw, mh) * frames * faces * max(1, depth >> level)   # (volume: halves too)
     off, mw, mh = chosen
     blob = data[off:off + _mip_size(fmt, mw, mh)]
     img = _decode_dxt(blob, fmt, mw, mh) if fmt in BLOCK_FORMATS else _decode_plain(blob, fmt, mw, mh)

@@ -199,6 +199,8 @@ def organize(context) -> dict:
         coll.children.link(top)
     removed = _drop_empty(scene, coll)
     _known[scene.name] = {o.session_uid for o in scene.objects}
+    for o in scene.objects:
+        _sigs[o.session_uid] = _sig(o)
     # new objects (Shift+A, the Add panel) land in the map
     lc = _layer_collection(context.view_layer.layer_collection, coll)
     if lc is not None:
@@ -251,6 +253,15 @@ _known_colls: dict = {}       # scene name -> its collections already seen (an a
 _pending: dict = {}           # object session id -> True when new (else: its kind may have changed)
 _timer = [False]
 _new_colls: dict = {}         # scene name -> collections that appeared since the last sort
+_sigs: dict = {}              # object session id -> its kind settings when last seen (see _sig)
+
+
+def _sig(obj) -> tuple:
+    """What an object's kind (_category) comes from on the object itself: an update that leaves these alone
+    (selecting, moving, editing the mesh) can't change where it goes. Cheap: no collection lookups."""
+    hs = obj.hammerless
+    return (hs.role, hs.classname, hs.preset, hs.brush_detail, obj.type, obj.instance_type,
+            obj.instance_collection.name if obj.instance_collection is not None else "")
 
 
 @bpy.app.handlers.persistent
@@ -260,6 +271,7 @@ def _on_undo(*_args):
     _known_colls.clear()
     _pending.clear()
     _new_colls.clear()
+    _sigs.clear()
 
 
 def _sorted_place(coll, c) -> bool:
@@ -385,14 +397,21 @@ def _on_depsgraph(scene, depsgraph):
     known_colls = _known_colls.get(scene.name)
     _known_colls[scene.name] = colls
     if known is None:
-        return                        # (first look at this scene: what's there stays where it is)
+        for o in ids.values():        # (first look at this scene: what's there stays where it is)
+            _sigs[o.session_uid] = _sig(o)
+        return
     if known_colls is not None and colls - known_colls:
         _new_colls.setdefault(scene.name, set()).update(colls - known_colls)
     for uid in ids.keys() - known:
         _pending[uid] = True
+        _sigs[uid] = _sig(ids[uid])
     for u in depsgraph.updates:
         if isinstance(u.id, bpy.types.Object) and not u.is_updated_transform:
-            _pending.setdefault(u.id.original.session_uid, False)
+            o = u.id.original
+            sig = _sig(o)
+            if _sigs.get(o.session_uid) != sig:     # (its kind settings changed: maybe it goes elsewhere now)
+                _sigs[o.session_uid] = sig
+                _pending.setdefault(o.session_uid, False)
     if _pending and not _timer[0]:
         _timer[0] = True
         bpy.app.timers.register(_apply_pending, first_interval=0.0)

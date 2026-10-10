@@ -262,6 +262,26 @@ def _physics_classes():
     return _PHYSICS_CLASSES
 
 
+def _physics_class_get(self):
+    """The class by name (physics_class_name): a list position would read back as another class when the list
+    changes (the game found or not). Older files kept only the position: read as it was."""
+    items = _physics_classes()
+    name = self.physics_class_name
+    if name:
+        for i, it in enumerate(items):
+            if it[0] == name:
+                return i
+        return 0
+    old = self.get("physics_class")
+    return old if isinstance(old, int) and 0 <= old < len(items) else 0
+
+
+def _physics_class_set(self, value):
+    items = _physics_classes()
+    if 0 <= value < len(items):
+        self.physics_class_name = items[value][0]
+
+
 class HL_ObjectSettings(bpy.types.PropertyGroup):
     role: EnumProperty(name="Role", items=OBJECT_ROLES, default="AUTO")
     classname: StringProperty(name="Class", description="Entity classname",
@@ -281,7 +301,9 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
     model_collision: EnumProperty(name="Collision", default="HULLS", items=[
         ("HULLS", "Convex Pieces", "Solid: each loose part of the mesh wrapped in its convex hull"),
         ("NONE", "None", "Players and zombies walk through it (not for Physics props)")])
+    physics_class_name: StringProperty(options={"HIDDEN"})
     physics_class: EnumProperty(name="Physics Class", items=lambda self, context: _physics_classes(),
+                                get=_physics_class_get, set=_physics_class_set,
                                 description="How it behaves when hit: the game's own classes (scripts/propdata.txt): "
                                             "weight feel, health, breaking. A broken prop with no gibs just disappears")
     model_mass: FloatProperty(name="Mass", default=0.0, min=0.0, soft_max=1000.0, unit="MASS",

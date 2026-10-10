@@ -97,14 +97,24 @@ def _listing(context) -> list[str]:
     return names
 
 
+_thumb_failed: dict = {}       # material -> when its picture couldn't be made (tried again a little later)
+
+
 def thumbnail(context, path: str) -> int:
-    """A small picture of a material's texture (icon id), made once."""
+    """A small picture of a material's texture (icon id), made once (again later if it couldn't be: the game
+    not found yet)."""
+    import time
     if _previews["coll"] is None:
         _previews["coll"] = bpy.utils.previews.new()
     coll = _previews["coll"]
     if path in coll:
-        return coll[path].icon_id
-    prev = coll.new(path)
+        prev = coll[path]
+        when = _thumb_failed.get(path)
+        if when is None or time.monotonic() - when < 5.0:
+            return prev.icon_id
+    else:
+        prev = coll.new(path)
+    _thumb_failed[path] = time.monotonic()
     try:
         import numpy as np
         from ..core.gamematerials import base_texture, read_texture_bytes
@@ -123,6 +133,7 @@ def thumbnail(context, path: str) -> int:
             xs = (np.arange(32) * w // 32).clip(0, w - 1)
             prev.icon_size = (32, 32)
             prev.icon_pixels_float = px[ys][:, xs].ravel()
+            _thumb_failed.pop(path, None)
     except Exception:
         pass
     return prev.icon_id
