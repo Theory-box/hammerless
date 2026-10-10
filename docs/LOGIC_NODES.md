@@ -4,7 +4,7 @@ Map logic (events, timers, buttons, gates, spawns, Director changes) is built as
 
 ## Getting started
 
-1. *Gameplay > Logic Graphs > **New Logic Graph*** (or **Graph from Outputs** to turn existing entity outputs into a graph).
+1. *Logic Graphs > **New Logic Graph*** (or **Graph from Outputs** to turn existing entity outputs into a graph).
 2. Switch any editor to **L4D2 Logic**.
 3. **Shift+A** adds nodes. Connect outputs to inputs.
 
@@ -129,7 +129,7 @@ Settings: direction, distance (*auto* = the object's own size in that direction)
 
 ## Director control
 
-*Gameplay > AI Director > Director Spawns* (with the AI Director box ticked) switches a type (Tank, Witch, each special) off for the Director, so only your graph spawns it.
+*AI Director > Director Spawns* (with the AI Director box ticked) switches a type (Tank, Witch, each special) off for the Director, so only your graph spawns it.
 
 ## Debugging
 

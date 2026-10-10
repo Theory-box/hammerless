@@ -93,7 +93,7 @@ def trace(context, starts=None):
 
 
 def add_acoustics(context, ir, rep) -> None:
-    """On export: the soundscapes (file + entities) for the map, per the Environment > Sound setting."""
+    """On export: the soundscapes (file + entities) for the map, per the Sound panel's setting."""
     s = context.scene.hammerless
     if s.sound_mode == "OFF":
         return

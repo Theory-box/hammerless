@@ -476,6 +476,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                      description="Brighten or darken the view, in stops (+1 = twice as bright)")
     lightmap_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _light_display(self, c),
                                 description="Draw the baked lighting through walls")
+    bake_area: EnumProperty(name="Bake", default="MAP", items=[
+        ("MAP", "Whole Map", "Bake the whole map's lighting"),
+        ("VIEW", "What the View Sees", "Bake only what the 3D viewport sees, out to a distance (a quick look at one "
+                                       "spot; the rest gets the flat ambient colour). Needs the Hammerless light "
+                                       "compiler. Build & Play always bakes the whole map")])
     light_view_distance: FloatProperty(name="Distance", default=3000.0, min=64.0, soft_max=20000.0, step=1000,
                                        precision=0, description="Bake View: how far from the viewport to bake, in "
                                        "Hammer units (beyond it and outside the view get the flat ambient colour)")

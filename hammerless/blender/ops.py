@@ -1030,7 +1030,7 @@ class HL_OT_build(bpy.types.Operator):
             return ("Build the map (walls, visibility, lighting, nav mesh), then start Left 4 Dead 2 on it. "
                     "Only what changed is redone")
         return ("Build the map without starting the game: walls, visibility, baked lighting and the nav mesh. "
-                "Only what changed is redone. Then Play starts it, and Viewport > Baked Lighting shows it")
+                "Only what changed is redone. Then Play starts it, and Lighting > Baked Lighting shows it")
 
     play: BoolProperty(name="Play", default=True)
     bake: BoolProperty(name="Bake Lighting", default=False, options={"HIDDEN", "SKIP_SAVE"},
@@ -1105,7 +1105,7 @@ class HL_OT_build(bpy.types.Operator):
                 self.report({"ERROR"}, "Bake View needs a 3D viewport")
                 return {"CANCELLED"}
             if not cc.use_hlvrad(opts):
-                self.report({"ERROR"}, "Bake View needs the Hammerless light compiler (Settings > Compilers > Lighting)")
+                self.report({"ERROR"}, "Baking what the view sees needs the Hammerless light compiler (Lighting > Advanced)")
                 return {"CANCELLED"}
             no_bake += vol
         if no_bake and opts.rad != "SKIP":

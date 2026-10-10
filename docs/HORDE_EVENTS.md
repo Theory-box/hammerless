@@ -108,7 +108,7 @@ A **Relay** (*Logic > Relay*) passes a signal on. Point several things at it, an
 | **Gauntlet** | Endless horde while survivors run a stretch |
 | **Finale** | `trigger_finale` plus a rescue vehicle; waves of hordes and Tanks |
 
-Already available: **crescendos** (recipe above) and **map-wide Director settings** (*Gameplay > AI Director*, after ticking the box in its header: common limit, horde size and frequency, specials, Tanks, Witches). A crescendo keeps the map's Director limits while it runs.
+Already available: **crescendos** (recipe above) and **map-wide Director settings** (the *AI Director* panel, after ticking the box in its header: common limit, horde size and frequency, specials, Tanks, Witches). A crescendo keeps the map's Director limits while it runs.
 
 ## 5. Testing tips
 

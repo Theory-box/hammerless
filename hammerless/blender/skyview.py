@@ -1,4 +1,4 @@
-"""The map's skybox drawn behind the scene in the 3D viewport (Viewport > Sky).
+"""The map's skybox drawn behind the scene in the 3D viewport (Lighting > Environment > Show in Viewport).
 
 Drawn by the add-on, like the lighting view: nothing is added to the scene or saved. The sky's six faces are made
 into a panorama once per sky (the same faces and orientation the sky light uses, skylight.from_skybox) and drawn

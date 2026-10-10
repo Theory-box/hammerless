@@ -2,7 +2,7 @@
 
 Bots, zombies and the AI Director all run on the **nav mesh**, the game's map of walkable areas. Hammerless builds it for you and lets you see it in Blender. For how the Director decides *what* to spawn (wanderers, mobs, hordes, specials) see [Hordes & Events](HORDE_EVENTS.md).
 
-## Settings (Gameplay > Nav Mesh)
+## Settings (Nav Mesh panel)
 
 | Setting | Options |
 |---|---|
