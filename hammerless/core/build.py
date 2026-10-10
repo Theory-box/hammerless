@@ -433,12 +433,15 @@ def seal_brushes(ir: MapIR):
     return [g.box_brush(a, b, sky, "auto_seal") for a, b in boxes]
 
 
-def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
+def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
+    """The map as VMF text. base: an imported map (core/vmfimport): (document, world block, entity blocks,
+    writer): it is written back as it was, with what ir adds (the scene's own objects) after it; the map
+    brings its own sky, sun, spawns and Director, so none are made up for it."""
     report = validate(ir, content)
     if not report.ok:
         return None, report
-    if not ir.brushes and not ir.terrains and not any(e.brushes for e in ir.entities
-                                                       if e.classname in ("func_detail", "func_brush")):
+    if base is None and not ir.brushes and not ir.terrains and not any(
+            e.brushes for e in ir.entities if e.classname in ("func_detail", "func_brush")):
         report.warnings.append("Nothing to stand on: the map has no brushes or terrain, so players spawn into a "
                                "void (add some floors and walls)")
     snap_spawns_to_floor(ir, report)
@@ -450,15 +453,18 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
         lm.keyvalues = {**lm.keyvalues, "targetname": new}
         cl.keyvalues = {**cl.keyvalues, "landmark": new}
 
-    w = VMFWriter()
     s = ir.settings
-    world = Block("world")
-    world.kv("id", w.new_id()).kv("mapversion", 1).kv("classname", "worldspawn")
-    world.kv("skyname", s.skyname).kv("detailmaterial", s.detail_material)
-    world.kv("detailvbsp", s.detail_vbsp).kv("maxpropscreenwidth", -1)
+    if base is not None:
+        doc, world, base_entities, w = base
+    else:
+        w = VMFWriter()
+        world = Block("world")
+        world.kv("id", w.new_id()).kv("mapversion", 1).kv("classname", "worldspawn")
+        world.kv("skyname", s.skyname).kv("detailmaterial", s.detail_material)
+        world.kv("detailvbsp", s.detail_vbsp).kv("maxpropscreenwidth", -1)
 
     # detail only when the map is sealed by the automatic shell (func_detail doesn't seal)
-    mode = s.auto_detail if s.auto_seal else "OFF"
+    mode = s.auto_detail if s.auto_seal and base is None else "OFF"
     portals = [g.bounds([v for f in b.faces for v in f.verts]) for e in ir.entities
                if e.classname in ("func_areaportal", "func_areaportalwindow") for b in e.brushes]
     detail = [b for b in ir.brushes if is_detail(b, mode) and not _touches_any(b, portals)]
@@ -496,7 +502,7 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
         report.errors.append(f"{n_patches} terrain patches: the game allows {MAX_DISPLACEMENTS}. Use a bigger Patch "
                              f"Size on the terrain objects")
         return None, report
-    if s.auto_seal:
+    if s.auto_seal and base is None:
         for b in seal_brushes(ir):
             world.add(w.solid(b))
         report.info.append("Sealed the map in an automatic skybox shell.")
@@ -524,10 +530,12 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     entities = [zombie_ladder_entity(e, report) if e.classname == "func_ladder" else e for e in entities]
     entities = [mover_entity(e, report) if e.classname == "func_movelinear" else e for e in entities]
     classes = {e.classname for e in entities}
-    if s.auto_director and "info_director" not in classes:
+    if base is not None:
+        classes |= {(b.get("classname") or "") for b in base_entities if b is not None}
+    if s.auto_director and base is None and "info_director" not in classes:
         entities.append(Entity("info_director", (0, 0, 0), (0, 0, 0), default_keyvalues("info_director")))
         report.info.append("Added info_director.")
-    if s.auto_light_environment and "light_environment" not in classes:
+    if s.auto_light_environment and base is None and "light_environment" not in classes:
         kv = {"_light": "{} {} {} {}".format(*s.sun_color, s.sun_brightness),
               "_ambient": "{} {} {} {}".format(*s.ambient_color, s.ambient_brightness),
               "pitch": f"{s.sun_pitch:g}"}
@@ -558,12 +566,12 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
         entities.append(Entity("logic_auto", HELPER_SPOT, (0, 0, 0), {"spawnflags": "1"}, outputs=[
             Output("OnMapSpawn", "director", "BeginScript", director_input_script(s.name, "director"), 1.0, 1)]))
         # (a crescendo's options stay in force after it ends, measured; they repeat the map-wide ones)
-    if "info_player_start" not in classes:
+    if "info_player_start" not in classes and base is None:
         first = next((e for e in entities if e.classname == "info_survivor_position"), None)
         origin = clear_spawn_spot(ir, entities, first.origin) if first else (0.0, 0.0, 0.0)
         entities.append(Entity("info_player_start", origin, first.angles if first else (0, 0, 0), {}))
 
-    if not any(e.classname == "info_landmark" for e in entities):
+    if base is None and not any(e.classname == "info_landmark" for e in entities):
         # nav_generate grows the nav mesh from item spawns and landmarks, not from player
         # spawns (verified in-game: a map with only survivor/player spawns fails with "No
         # valid walkable seed positions"; adding one info_landmark fixes it). Valve's maps
@@ -579,4 +587,7 @@ def build_vmf(ir: MapIR, content=None) -> tuple[str | None, Report]:
     report.info.append(
         f"{len(ir.brushes)} brushes, {n_patches} terrain patches, {len(entities)} entities.")
     report.solid_sources = dict(w.solid_sources)
+    if base is not None:
+        from .vmfimport import write_document
+        return write_document(doc, world, base_entities, ent_blocks), report
     return w.document(world, ent_blocks), report

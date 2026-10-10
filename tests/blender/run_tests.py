@@ -954,6 +954,126 @@ def test_logic_examples_build():
     assert not bad, "\n".join(bad)
 
 
+SMALL_VMF = """versioninfo
+{
+\t"editorversion" "400"
+\t"mapversion" "7"
+}
+world
+{
+\t"id" "1"
+\t"mapversion" "7"
+\t"classname" "worldspawn"
+\t"skyname" "sky_l4d_rural02_hdr"
+\tsolid
+\t{
+\t\t"id" "2"
+\t\tside { "id" "3" "plane" "(-64 64 0) (64 64 0) (64 -64 0)" "material" "DEV/DEV_MEASUREGENERIC01B" "uaxis" "[1 0 0 7] 0.25" "vaxis" "[0 -1 0 3] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "4" "plane" "(-64 -64 -16) (64 -64 -16) (64 64 -16)" "material" "TOOLS/TOOLSNODRAW" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "5" "plane" "(-64 64 0) (-64 -64 0) (-64 -64 -16)" "material" "DEV/DEV_MEASUREGENERIC01B" "uaxis" "[0 1 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "6" "plane" "(64 64 -16) (64 -64 -16) (64 -64 0)" "material" "DEV/DEV_MEASUREGENERIC01B" "uaxis" "[0 1 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "7" "plane" "(64 64 0) (-64 64 0) (-64 64 -16)" "material" "DEV/DEV_MEASUREGENERIC01B" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "8" "plane" "(64 -64 -16) (-64 -64 -16) (-64 -64 0)" "material" "DEV/DEV_MEASUREGENERIC01B" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\teditor { "color" "0 255 0" "visgroupshown" "1" }
+\t}
+\tsolid
+\t{
+\t\t"id" "20"
+\t\tside { "id" "21" "plane" "(0 48 64) (48 48 32) (48 0 32)" "material" "BRICK/BRICKWALL01" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" "rotation" "0" "lightmapscale" "8" "smoothing_groups" "1" }
+\t\tside { "id" "22" "plane" "(0 0 0) (48 0 0) (48 48 0)" "material" "TOOLS/TOOLSNODRAW" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "23" "plane" "(0 48 64) (0 0 64) (0 0 0)" "material" "BRICK/BRICKWALL01" "uaxis" "[0 1 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "24" "plane" "(48 48 0) (48 0 0) (48 0 32)" "material" "BRICK/BRICKWALL01" "uaxis" "[0 1 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "25" "plane" "(48 48 32) (0 48 64) (0 48 0)" "material" "BRICK/BRICKWALL01" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "26" "plane" "(48 0 0) (0 0 0) (0 0 64)" "material" "BRICK/BRICKWALL01" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t}
+\thidden
+\t{
+\t\tsolid { "id" "90" }
+\t}
+}
+entity
+{
+\t"id" "30"
+\t"classname" "light"
+\t"targetname" "lamp"
+\t"_light" "255 240 200 300"
+\t"origin" "8 16 48"
+\tconnections
+\t{
+\t\t"OnUser1" "lamp,TurnOff,,2.5,3"
+\t}
+}
+hidden
+{
+\tentity { "id" "40" "classname" "info_target" "origin" "0 0 0" }
+}
+entity
+{
+\t"id" "50"
+\t"classname" "func_detail"
+\tsolid
+\t{
+\t\t"id" "51"
+\t\tside { "id" "52" "plane" "(-32 32 16) (32 32 16) (32 -32 16)" "material" "WOOD/WOODWALL009A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "53" "plane" "(-32 -32 0) (32 -32 0) (32 32 0)" "material" "WOOD/WOODWALL009A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "54" "plane" "(-32 32 16) (-32 -32 16) (-32 -32 0)" "material" "WOOD/WOODWALL009A" "uaxis" "[0 1 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "55" "plane" "(32 32 0) (32 -32 0) (32 -32 16)" "material" "WOOD/WOODWALL009A" "uaxis" "[0 1 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "56" "plane" "(32 32 16) (-32 32 16) (-32 32 0)" "material" "WOOD/WOODWALL009A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t\tside { "id" "57" "plane" "(32 -32 0) (-32 -32 0) (-32 -32 16)" "material" "WOOD/WOODWALL009A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" "rotation" "0" "lightmapscale" "16" "smoothing_groups" "0" }
+\t}
+}
+cameras
+{
+\t"activecamera" "-1"
+}
+"""
+
+
+def _tree(blocks):
+    def t(b):
+        return (b.name.lower(), [t(i) if not isinstance(i, tuple) else i for i in b.items])
+    return [t(b) for b in blocks]
+
+
+def _imported_export(text):
+    """Export the scene and return its blocks without Build's own helper entities (ids it made up)."""
+    blocks, log = export()
+    assert blocks is not None, log
+    ids = {b.get("id") for b in vmf.parse(text)}
+    return [b for b in blocks if not (b.name == "entity" and b.get("id") not in ids)]
+
+
+def test_vmf_import_roundtrip():
+    # a Hammer map imported and exported unchanged comes back exactly (Build only adds its helper script);
+    # a moved brush gets new planes (the rest of its sides kept), a deleted entity is gone
+    from hammerless.blender import vmfimport
+    reset_scene()
+    path = os.path.join(TMP, "small.vmf")
+    with open(path, "w", encoding="latin-1") as f:
+        f.write(SMALL_VMF)
+    nb, ne = vmfimport.import_text(bpy.context, SMALL_VMF, path)
+    bpy.context.scene.hammerless.map_name = "test_map"
+    assert (nb, ne) == (3, 2), (nb, ne)
+    original = _tree(vmf.parse(SMALL_VMF))
+    assert _tree(_imported_export(SMALL_VMF)) == original
+    lamp = next(o for o in bpy.data.objects if o.get("hl_vmf_kind") == "entity" and o.hammerless.classname == "light")
+    assert lamp.hammerless.outputs[0].target == "lamp"
+    brush = next(o for o in bpy.data.objects if o.get("hl_vmf_id") == 20)
+    brush.location.z += 32 / bpy.context.scene.hammerless.units_per_meter
+    bpy.data.objects.remove(lamp)
+    bpy.context.view_layer.update()
+    out = _imported_export(SMALL_VMF)
+    assert not [b for b in out if b.name == "entity" and b.get("classname") == "light"]
+    world = next(b for b in out if b.name == "world")
+    moved = next(s for s in world.blocks("solid") if s.get("id") == "20")
+    top = next(s for s in moved.blocks("side") if s.get("id") == "21")
+    assert top.get("plane") != "(0 48 64) (48 48 32) (48 0 32)" and top.get("lightmapscale") == "8"
+    assert top.get("smoothing_groups") == "1" and top.get("uaxis") == "[1 0 0 0] 0.25"
+    kept = next(s for s in world.blocks("solid") if s.get("id") == "2")
+    assert _tree([kept]) == _tree([vmf.parse(SMALL_VMF)[1].blocks("solid")[0]])
+    assert world.blocks("hidden"), "the world's hidden blocks stay"
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

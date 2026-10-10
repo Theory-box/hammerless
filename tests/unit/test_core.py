@@ -2488,6 +2488,42 @@ class TestInstances(unittest.TestCase):
             self.assertLess(j, i)                                          # (in the first one's place)
 
 
+class TestVmfImport(unittest.TestCase):
+    """Hammer maps in: brush polygons from their sides' planes, written back exactly when unchanged."""
+    BOX = ('solid { "id" "2" '
+           'side { "id" "3" "plane" "(-64 64 0) (64 64 0) (64 -64 0)" "material" "A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" } '
+           'side { "id" "4" "plane" "(-64 -64 -16) (64 -64 -16) (64 64 -16)" "material" "B" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" } '
+           'side { "id" "5" "plane" "(-64 64 0) (-64 -64 0) (-64 -64 -16)" "material" "A" "uaxis" "[0 1 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" } '
+           'side { "id" "6" "plane" "(64 64 -16) (64 -64 -16) (64 -64 0)" "material" "A" "uaxis" "[0 1 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" } '
+           'side { "id" "7" "plane" "(64 64 0) (-64 64 0) (-64 64 -16)" "material" "A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" } '
+           'side { "id" "8" "plane" "(64 -64 -16) (-64 -64 -16) (-64 -64 0)" "material" "A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" } }')
+
+    def test_box(self):
+        from hammerless.core import vmfimport as vi
+        from hammerless.core.vmf import parse
+        solid = parse(self.BOX)[0]
+        faces = vi.solid_faces(solid)
+        self.assertEqual(len(faces), 6)
+        for side, verts in faces:
+            n, _d = vi.plane_of(*vi.parse_plane(side.get("plane")))
+            self.assertEqual(len(verts), 4)
+            self.assertGreater(vi._dot(vi._newell(verts), n), 0)          # (counter-clockwise from outside)
+            self.assertTrue(vi.face_on_side(verts, side))
+        top_side, top = next((s, v) for s, v in faces if s.get("id") == "3")
+        self.assertEqual({round(p[2]) for p in top}, {0})
+        moved = [(p[0], p[1], p[2] + 8) for p in top]
+        self.assertFalse(vi.face_on_side(moved, top_side))
+        ids = iter(range(100, 200))
+        same = vi.solid_block(solid, [(int(s.get("id")), v, s.get("material")) for s, v in faces], lambda: next(ids), None)
+        self.assertIs(same, solid)
+        changed = vi.solid_block(solid, [(int(s.get("id")), moved if s is top_side else v, s.get("material"))
+                                         for s, v in faces], lambda: next(ids), None)
+        self.assertIsNot(changed, solid)
+        new_top = next(s for s in changed.blocks("side") if s.get("id") == "3")
+        self.assertIn("8)", new_top.get("plane"))
+        self.assertEqual(new_top.get("uaxis"), "[1 0 0 0] 0.25")
+
+
 class TestStringtableDictionary(unittest.TestCase):
     """The game's stringtable dictionary is carried from one build to the next (it saves ~10 s of map load)."""
 

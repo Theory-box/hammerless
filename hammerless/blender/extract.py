@@ -653,6 +653,9 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
 
     hidden = []
     for obj in context.scene.objects:
+        if obj.get("hl_vmf_kind") is not None or (obj.parent is not None and obj.parent.get("hl_vmf_kind")
+                                                   and obj.type == "MESH"):
+            continue                  # (an imported map's: Build writes those back itself, blender/vmfimport.py)
         if not obj.visible_get():
             # hidden (H, the eye or monitor icon) or in an excluded / hidden collection: left out of
             # the map, like everything you can't see. Ones hidden by hand are listed

@@ -260,7 +260,14 @@ def build_map_text(context, root: str | None):
     compile_logic(context, ir, rep)
     from .sound import add_acoustics
     add_acoustics(context, ir, rep)
-    text, rep2 = build_vmf(ir, content if s.check_game_content else None)
+    base = None
+    from . import vmfimport
+    if vmfimport.imported(context.scene):
+        from ..core.vmf import VMFWriter
+        writer = VMFWriter()
+        doc, world, ents = vmfimport.rebuild(context, writer, _mats, rep)
+        base = (doc, world, ents, writer)
+    text, rep2 = build_vmf(ir, content if s.check_game_content else None, base)
     rep2.errors[:0] = rep.errors
     rep2.warnings[:0] = rep.warnings
     return ir, text, rep2
@@ -385,9 +392,14 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
                              "read; if the compile fails, save the .blend in a folder with plain (English) "
                              "letters or set Settings > Folders & Game Data > Work Folder")
     import json
+    from . import vmfimport
+    imported = vmfimport.imported(context.scene)
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        # (an imported map keeps the bytes it was read with)
+        with open(path, "w", encoding="latin-1" if imported else "utf-8", errors="replace") as f:
             f.write(text)
+        if imported and "func_instance" in text:
+            vmfimport.copy_instances(context.scene, os.path.dirname(path), rep2)
         with open(cc.sources_path(path), "w", encoding="utf-8") as f:
             json.dump({str(k): v for k, v in rep2.solid_sources.items()}, f)
     except OSError as ex:
