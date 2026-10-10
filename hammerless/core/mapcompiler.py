@@ -201,8 +201,7 @@ def write_cubemap_materials(path: str, vmf_path: str, content, game_dir: str | N
     """For env_cubemap: which materials are specular and their patch .vmt templates (core/cubemappatch)."""
     from .cubemappatch import write_cubemap_table
     from .gamematerials import _read_text
-    with open(vmf_path, encoding="latin-1") as f:      # (bytes as they are: hlvbsp reads them raw)
-        names = vmf_materials(f.read())
+    names = vmf_materials(read_vmf_with_instances(vmf_path))
     return write_cubemap_table(path, names, lambda n: _read_text(content, f"materials/{n}.vmt", game_dir))
 
 
@@ -312,8 +311,7 @@ def detail_models(detail_text: str, vmf_text: str) -> list[str]:
 
 def write_detail_file(path: str, vmf_path: str, content, game_dir: str | None) -> str:
     """The game's detail kinds (detail.vbsp, or the map's own choice) for hlvbsp; returns its text."""
-    with open(vmf_path, encoding="latin-1") as f:      # (bytes as they are: hlvbsp reads them raw)
-        name = detail_vbsp_name(f.read())
+    name = detail_vbsp_name(read_vmf_with_instances(vmf_path))
     data = _model_bytes(content, name, game_dir) or b""
     with open(path, "wb") as f:
         f.write(data)
@@ -321,8 +319,7 @@ def write_detail_file(path: str, vmf_path: str, content, game_dir: str | None) -
 
 
 def write_prop_table(path: str, vmf_path: str, content, game_dir: str | None, detail_text: str = "") -> int:
-    with open(vmf_path, encoding="latin-1") as f:      # (bytes as they are: hlvbsp reads them raw)
-        text = f.read()
+    text = read_vmf_with_instances(vmf_path)
     seen: dict[str, str] = {}
     for model in vmf_static_prop_models(text) + detail_models(detail_text, text):
         seen.setdefault(model.lower().replace("\\", "/"), model)
@@ -334,8 +331,7 @@ def write_prop_table(path: str, vmf_path: str, content, game_dir: str | None, de
 
 
 def write_material_table(path: str, vmf_path: str, content, game_dir: str | None) -> int:
-    with open(vmf_path, encoding="latin-1") as f:      # (bytes as they are: hlvbsp reads them raw)
-        names = vmf_materials(f.read())
+    names = vmf_materials(read_vmf_with_instances(vmf_path))
     surfaceprops: dict[str, int] = {}
     rows = [material_row(content, n, game_dir, surfaceprops) for n in names]
     # water materials' $bottommaterial: the underside of the water uses it
@@ -354,8 +350,178 @@ def write_material_table(path: str, vmf_path: str, content, game_dir: str | None
 # what hlvbsp doesn't do yet: maps with these are compiled by Valve's vbsp
 UNSUPPORTED_CLASSES = {
     "info_overlay_transition": "water overlays",
-    "func_instance": "instances",
 }
+
+
+# ---------------------------------------------------------------- instances (func_instance)
+
+def _instance_path(main_vmf: str, file: str) -> str | None:
+    """Where vbsp finds an instance's file (CMapFile::DeterminePath): next to the main map (nested instances
+    too: vbsp passes the main map's name), else from the "maps" folder the main map is in."""
+    rel = file.replace("/", "\\")
+    stem, ext = os.path.splitext(rel)
+    rel = (stem if ext else rel) + ".vmf"
+    folder = os.path.dirname(os.path.abspath(main_vmf))
+    path = os.path.join(folder, rel)
+    if os.path.isfile(path):
+        return path
+    low = folder.lower().replace("/", "\\") + "\\"
+    at = low.find("\\maps\\")
+    if at >= 0:
+        path = os.path.join(folder[:at + 6], rel)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def vmf_instances(main_vmf: str) -> list[tuple[str, str]]:
+    """The instance files a map pulls in, as vbsp reads them (the map's own func_instances in order, then those
+    the instances bring): (the "file" key, its path). Files that can't be found are left out."""
+    from .vmf import parse
+    out: list[tuple[str, str]] = []
+    queue = [main_vmf]
+    while queue:
+        with open(queue.pop(0), encoding="latin-1") as f:
+            text = f.read()
+        if "func_instance" not in text:
+            continue
+        for b in parse(text):
+            if b.name.lower() != "entity" or (b.get("classname") or "") != "func_instance":
+                continue
+            file = b.get("file") or ""
+            path = _instance_path(main_vmf, file) if file else None
+            if path:
+                out.append((file, path))
+                queue.append(path)
+    return out
+
+
+def read_vmf_with_instances(vmf_path: str) -> str:
+    """The map's text, then its instance files' (what the compiler reads: materials, props, detail kinds)."""
+    with open(vmf_path, encoding="latin-1") as f:      # (bytes as they are: hlvbsp reads them raw)
+        text = f.read()
+    for _file, path in vmf_instances(vmf_path):
+        with open(path, encoding="latin-1") as f:
+            text += "\n" + f.read()
+    return text
+
+
+# ---------------------------------------------------------------- the game's .fgd (instances rename keys by type)
+
+_FGD_TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|//[^\n]*|[A-Za-z_0-9.\-+]+|[@()\[\]=:,]')
+
+
+def _fgd_tokens(text: str) -> list[str]:
+    return [t for t in _FGD_TOKEN.findall(text) if not t.startswith("//")]
+
+
+def _fgd_classes(path: str, classes: dict, order: list) -> None:
+    """vbsp's GameData::Load: classes in file order (@include where it stands); a class defined again replaces
+    the old one. Each class's keys: its bases' keys first (in base() order), then its own; a key it repeats keeps
+    its place (one of another type is dropped)."""
+    with open(path, encoding="latin-1") as f:
+        toks = _fgd_tokens(f.read())
+    i, n = 0, len(toks)
+    while i < n:
+        if toks[i] != "@" or i + 1 >= n:
+            i += 1
+            continue
+        kind = toks[i + 1].lower()
+        i += 2
+        if kind == "include":
+            inc = os.path.join(os.path.dirname(path), toks[i].strip('"'))
+            i += 1
+            if os.path.isfile(inc):
+                _fgd_classes(inc, classes, order)
+            continue
+        if not kind.endswith("class"):
+            continue
+        bases: list[str] = []
+        while i < n and toks[i] != "=":             # header: base(...), studio(...), size(...) ...
+            if toks[i].lower() == "base" and i + 1 < n and toks[i + 1] == "(":
+                i += 2
+                while i < n and toks[i] != ")":
+                    if toks[i] != ",":
+                        bases.append(toks[i])
+                    i += 1
+            elif toks[i] == "(":
+                depth = 1
+                i += 1
+                while i < n and depth:
+                    depth += {"(": 1, ")": -1}.get(toks[i], 0)
+                    i += 1
+                continue
+            i += 1
+        i += 1
+        name = toks[i] if i < n else ""
+        i += 1
+        while i < n and toks[i] != "[":
+            i += 1
+        i += 1
+        keys: list[tuple[str, str]] = []
+
+        def add(k: str, t: str) -> None:
+            for j, (kk, tt) in enumerate(keys):
+                if kk.lower() == k.lower():
+                    return                           # (same type: kept where it was; another type: refused)
+            keys.append((k, t))
+        for b in bases:
+            base = classes.get(b.lower())
+            if base:
+                for k, t in base[1]:
+                    add(k, t)
+        while i < n and toks[i] != "]":
+            t = toks[i]
+            if t.lower() in ("input", "output") and i + 2 < n and toks[i + 2] == "(":
+                i += 3
+                while i < n and toks[i] != ")":
+                    i += 1
+                i += 1
+                continue
+            if i + 3 < n and toks[i + 1] == "(" and toks[i + 3] == ")":
+                add(t, toks[i + 2].lower())
+                i += 4
+                continue
+            if t == "[":                             # choices / flags
+                depth = 1
+                i += 1
+                while i < n and depth:
+                    depth += {"[": 1, "]": -1}.get(toks[i], 0)
+                    i += 1
+                continue
+            i += 1
+        i += 1
+        if name.lower() in classes:
+            order[order.index(name.lower())] = name.lower()
+        else:
+            order.append(name.lower())
+        classes[name.lower()] = (name, keys)
+
+
+def write_fgd_table(path: str, game_root: str) -> int:
+    """The game's .fgd (gameinfo's GameData, in bin) as hlvbsp's instances use it: per class, its keys and their
+    types in GameData's order."""
+    gameinfo = os.path.join(game_root, "left4dead2", "gameinfo.txt")
+    name = "left4dead2.fgd"
+    try:
+        with open(gameinfo, encoding="latin-1") as f:
+            m = re.search(r'"?GameData"?\s+"([^"]+)"', f.read(), re.I)
+            if m:
+                name = m.group(1)
+    except OSError:
+        pass
+    classes: dict = {}
+    order: list = []
+    fgd = os.path.join(game_root, "bin", name)
+    if os.path.isfile(fgd):
+        _fgd_classes(fgd, classes, order)
+    with open(path, "w", encoding="latin-1", errors="replace", newline="\n") as f:
+        for key in order:
+            cname, keys = classes[key]
+            f.write(f"class {cname}\n")
+            for k, t in keys:
+                f.write(f"{k} {t}\n")
+    return len(order)
 
 
 def unsupported(vmf_text: str) -> list[str]:

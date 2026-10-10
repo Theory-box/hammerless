@@ -4,7 +4,7 @@
 #include "hlvbsp.h"
 #include "disp.h"
 
-plane_t mapplanes[MAX_MAP_PLANES];
+plane_t *mapplanes;
 int nummapplanes;
 static plane_t *planehash[PLANE_HASHES];
 
@@ -879,6 +879,46 @@ static void load_solid(parser_t *p, loadent_t *le) {
 
 static int IsAreaPortal(const char *cls) { return !strncmp(cls, "func_areaportal", 15); }
 
+/* L4D2 keeps a ladder as a brush model (func_simpleladder) facing its ladder sides' normal, with their team */
+void AddLadderKeys(entity_t *mapent) {
+    SetKeyValue(mapent, "team", "0");
+    SetKeyValue(mapent, "normal.x", "0");
+    SetKeyValue(mapent, "normal.y", "0");
+    SetKeyValue(mapent, "normal.z", "1");
+    for (int i = 0; i < mapent->numbrushes; i++) {
+        mapbrush_t *b = &mapbrushes[mapent->firstbrush + i];
+        for (int j = 0; j < b->numsides; j++) {
+            const side_t *sd = &b->original_sides[j];
+            if (!(sd->contents & CONTENTS_LADDER)) continue;
+            if (sd->contents & 0x800) SetKeyValue(mapent, "team", "1");             /* CONTENTS_TEAM1 */
+            else if (sd->contents & 0x1000) SetKeyValue(mapent, "team", "2");       /* CONTENTS_TEAM2 */
+            const float *n = mapplanes[sd->planenum].normal;
+            SetKeyValue(mapent, "normal.x", FmtF(n[0]));
+            SetKeyValue(mapent, "normal.y", FmtF(n[1]));
+            SetKeyValue(mapent, "normal.z", FmtF(n[2]));
+        }
+    }
+}
+
+/* vbsp's MoveBrushesToWorldGeneral (an instance's world brushes): only entities before this one move along,
+ * and its displacements become the world's */
+void MoveBrushesToWorldGeneral(entity_t *mapent) {
+    int ent = (int)(mapent - entities);
+    for (int i = 0; i < nummapdisps; i++)
+        if (mapdisps[i].entitynum == ent) mapdisps[i].entitynum = 0;
+    int newbrushes = mapent->numbrushes, worldbrushes = entities[0].numbrushes;
+    mapbrush_t *temp = xalloc(sizeof(mapbrush_t) * (newbrushes ? newbrushes : 1));
+    memcpy(temp, mapbrushes + mapent->firstbrush, newbrushes * sizeof(mapbrush_t));
+    memmove(mapbrushes + worldbrushes + newbrushes, mapbrushes + worldbrushes,
+            sizeof(mapbrush_t) * (mapent->firstbrush - worldbrushes));
+    memcpy(mapbrushes + worldbrushes, temp, sizeof(mapbrush_t) * newbrushes);
+    entities[0].numbrushes += newbrushes;
+    for (int i = 1; i < num_entities; i++)
+        if (entities[i].firstbrush < mapent->firstbrush) entities[i].firstbrush += newbrushes;
+    free(temp);
+    mapent->numbrushes = 0;
+}
+
 /* A new entity at the end of the list (the array grows). */
 entity_t *AllocEntity(void) {
     if (num_entities == max_entities) {
@@ -912,6 +952,7 @@ static void load_entity(parser_t *p) {
                     epair_t *ep = xalloc(sizeof(*ep));
                     ep->key = copystring(k2);
                     ep->value = copystring(p->token);
+                    ep->connection = 1;
                     if (!mapent->epairs) mapent->epairs = ep;
                     else {
                         epair_t *t = mapent->epairs;
@@ -962,24 +1003,7 @@ static void load_entity(parser_t *p) {
         return;
     }
     if (!strcmp(cls, "func_ladder")) {
-        /* L4D2 keeps the ladder as a brush model (func_simpleladder) facing its ladder sides' normal */
-        SetKeyValue(mapent, "team", "0");
-        SetKeyValue(mapent, "normal.x", "0");
-        SetKeyValue(mapent, "normal.y", "0");
-        SetKeyValue(mapent, "normal.z", "1");
-        for (int i = 0; i < mapent->numbrushes; i++) {
-            mapbrush_t *b = &mapbrushes[mapent->firstbrush + i];
-            for (int j = 0; j < b->numsides; j++) {
-                const side_t *sd = &b->original_sides[j];
-                if (!(sd->contents & CONTENTS_LADDER)) continue;
-                if (sd->contents & 0x800) SetKeyValue(mapent, "team", "1");             /* CONTENTS_TEAM1 */
-                else if (sd->contents & 0x1000) SetKeyValue(mapent, "team", "2");       /* CONTENTS_TEAM2 */
-                const float *n = mapplanes[sd->planenum].normal;
-                SetKeyValue(mapent, "normal.x", FmtF(n[0]));
-                SetKeyValue(mapent, "normal.y", FmtF(n[1]));
-                SetKeyValue(mapent, "normal.z", FmtF(n[2]));
-            }
-        }
+        AddLadderKeys(mapent);
         SetKeyValue(mapent, "classname", "func_simpleladder");
         return;
     }
@@ -1057,38 +1081,34 @@ void MarkNoDynamicShadowSides(void) {
             if (brushsides[i].id == noshadow_ids[k]) brushsides[i].no_dynamic_shadows = 1;
 }
 
-void LoadMapFile(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) Error("Error opening %s", path);
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    parser_t p;
-    p.text = xalloc(n + 1);
-    fread(p.text, 1, n, f);
-    fclose(f);
-    p.at = p.text;
-    brushsides = xalloc(sizeof(side_t) * MAX_MAP_BRUSHSIDES);
-    side_textures = xalloc(sizeof(brush_texture_t) * MAX_MAP_BRUSHSIDES);
-    Msg("Loading %s\n", path);
-    char key[4096];
-    while (next_token(&p)) {
-        strcpy(key, p.token);
-        if (!next_token(&p)) break;
-        if (!p.quoted && !strcmp(p.token, "{")) {
-            if (!_stricmp(key, "world") || !_stricmp(key, "entity")) load_entity(&p);
-            else skip_block(&p);
-        }
-    }
-    free(p.text);
-    Overlay_UpdateSideLists();
-    ClearBounds(map_mins, map_maxs);
-    for (int i = 0; i < entities[0].numbrushes; i++) {
-        if (mapbrushes[i].mins[0] > MAX_COORD_INTEGER) continue;
-        AddPointToBounds(mapbrushes[i].mins, map_mins, map_maxs);
-        AddPointToBounds(mapbrushes[i].maxs, map_mins, map_maxs);
-    }
-    /* areaportal windows make the brush entities they point at see-through */
+/* ------------------------------------------------------------------ a map's own data */
+void MapState_Save(mapstate_t *s) {
+    s->planes = mapplanes, s->nplanes = nummapplanes;
+    memcpy(s->planehash, planehash, sizeof(planehash));
+    s->brushes = mapbrushes, s->nbrushes = nummapbrushes, s->maxbrushes = max_mapbrushes;
+    s->sides = brushsides, s->side_textures = side_textures, s->nsides = nummapbrushsides;
+    s->ents = entities, s->nents = num_entities, s->maxents = max_entities;
+    VectorCopy(map_mins, s->mins), VectorCopy(map_maxs, s->maxs);
+    s->areaportals = c_areaportals;
+}
+
+void MapState_Use(const mapstate_t *s) {
+    mapplanes = s->planes, nummapplanes = s->nplanes;
+    memcpy(planehash, s->planehash, sizeof(planehash));
+    mapbrushes = s->brushes, nummapbrushes = s->nbrushes, max_mapbrushes = s->maxbrushes;
+    brushsides = s->sides, side_textures = s->side_textures, nummapbrushsides = s->nsides;
+    entities = s->ents, num_entities = s->nents, max_entities = s->maxents;
+    VectorCopy(s->mins, map_mins), VectorCopy(s->maxs, map_maxs);
+    c_areaportals = s->areaportals;
+}
+
+void MapState_Free(mapstate_t *s) {
+    free(s->planes), free(s->brushes), free(s->sides), free(s->side_textures), free(s->ents);
+    memset(s, 0, sizeof(*s));
+}
+
+/* areaportal windows make the brush entities they point at see-through */
+static void ForceFuncAreaPortalWindowContents(void) {
     const char *targets[] = {"target", "BackgroundBModel"};
     for (int i = 0; i < num_entities; i++) {
         entity_t *e = &entities[i];
@@ -1106,3 +1126,48 @@ void LoadMapFile(const char *path) {
         }
     }
 }
+
+/* vbsp's LoadMapFile: reads a .vmf into the current (fresh) map data. The main map then takes in its
+ * instances; an instance's own func_instances are merged in by the main map's loop (they're appended) */
+void ReadMapFile(const char *path, int main_map) {
+    FILE *f = fopen(path, "rb");
+    if (!f) Error("Error opening %s", path);
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    parser_t p;
+    p.text = xalloc(n + 1);
+    fread(p.text, 1, n, f);
+    fclose(f);
+    p.at = p.text;
+    mapplanes = xalloc(sizeof(plane_t) * MAX_MAP_PLANES), nummapplanes = 0;
+    memset(planehash, 0, sizeof(planehash));
+    brushsides = xalloc(sizeof(side_t) * MAX_MAP_BRUSHSIDES), nummapbrushsides = 0;
+    side_textures = xalloc(sizeof(brush_texture_t) * MAX_MAP_BRUSHSIDES);
+    mapbrushes = NULL, nummapbrushes = max_mapbrushes = 0;
+    entities = NULL, num_entities = max_entities = 0;
+    c_areaportals = 0;
+    int first_overlay = Overlay_Count();
+    if (main_map || verbose) Msg("Loading %s\n", path);
+    char key[4096];
+    while (next_token(&p)) {
+        strcpy(key, p.token);
+        if (!next_token(&p)) break;
+        if (!p.quoted && !strcmp(p.token, "{")) {
+            if (!_stricmp(key, "world") || !_stricmp(key, "entity")) load_entity(&p);
+            else skip_block(&p);
+        }
+    }
+    free(p.text);
+    Overlay_UpdateSideLists(first_overlay);
+    if (main_map) CheckForInstances(path);
+    ClearBounds(map_mins, map_maxs);
+    for (int i = 0; i < entities[0].numbrushes; i++) {
+        if (mapbrushes[i].mins[0] > MAX_COORD_INTEGER) continue;
+        AddPointToBounds(mapbrushes[i].mins, map_mins, map_maxs);
+        AddPointToBounds(mapbrushes[i].maxs, map_mins, map_maxs);
+    }
+    ForceFuncAreaPortalWindowContents();
+}
+
+void LoadMapFile(const char *path) { ReadMapFile(path, 1); }

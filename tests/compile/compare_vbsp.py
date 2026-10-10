@@ -39,7 +39,8 @@ def main(argv: list[str]) -> int:
             print(f"FALLBACK {name}: {', '.join(why)}", flush=True)
             continue
         t = time.time()
-        base, vbase = suite.compile_map(name, text, root)
+        from hammerless.core.mapcompiler import vmf_instances
+        base, vbase = suite.compile_map(name, text, root, vmf_instances(path))
         problems = suite.compare(base, vbase)
         results["differ" if problems else "same"] += 1
         print(f"{'SAME' if not problems else 'DIFF'} {name} ({time.time() - t:.0f} s)"

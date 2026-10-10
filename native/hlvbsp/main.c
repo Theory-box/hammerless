@@ -174,6 +174,7 @@ int main(int argc, char **argv) {
             g_surfaceprops_file = argv[++i];
         }
         else if (!_stricmp(argv[i], "-materials") && i + 1 < argc) matfile = argv[++i];
+        else if (!_stricmp(argv[i], "-fgd") && i + 1 < argc) g_fgd_file = argv[++i];     /* (for instances) */
         else if (!_stricmp(argv[i], "-v") || !_stricmp(argv[i], "-verbose")) verbose = 1;
         else if (!_stricmp(argv[i], "-threads") && i + 1 < argc) i++;
         else if (argv[i][0] == '-') {

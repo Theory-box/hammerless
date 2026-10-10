@@ -2429,6 +2429,65 @@ class TestCubemapPatch(unittest.TestCase):
         self.assertFalse(cm.patchable("plain/wall"))
 
 
+class TestInstances(unittest.TestCase):
+    """func_instance for the map compiler: the files found as vbsp finds them, and the .fgd's key types."""
+
+    @staticmethod
+    def _inst(file, origin="0 0 0"):
+        return 'entity\n{\n"classname" "func_instance"\n"file" "%s"\n"origin" "%s"\n}\n' % (file, origin)
+
+    def test_files_and_text(self):
+        import tempfile
+        from hammerless.core.mapcompiler import read_vmf_with_instances, vmf_instances
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "maps", "instance"))
+            main = os.path.join(d, "maps", "main.vmf")
+            with open(main, "w") as f:
+                f.write(self._inst("instance/a.vmf") + self._inst("instance/b") + self._inst("instance/missing.vmf"))
+            with open(os.path.join(d, "maps", "instance", "a.vmf"), "w") as f:
+                f.write('"material" "A/MAT"\n' + self._inst("instance/b.vmf"))     # (nested: from the main map's folder)
+            with open(os.path.join(d, "maps", "instance", "b.vmf"), "w") as f:
+                f.write('"material" "B/MAT"\n')
+            found = vmf_instances(main)
+            self.assertEqual([k for k, _p in found], ["instance/a.vmf", "instance/b", "instance/b.vmf"])
+            text = read_vmf_with_instances(main)
+            self.assertLess(text.index("A/MAT"), text.index("B/MAT"))
+
+    def test_fgd_table(self):
+        import tempfile
+        from hammerless.core.mapcompiler import write_fgd_table
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "bin"))
+            os.makedirs(os.path.join(root, "left4dead2"))
+            with open(os.path.join(root, "left4dead2", "gameinfo.txt"), "w") as f:
+                f.write('"GameInfo" { "GameData" "game.fgd" }')
+            with open(os.path.join(root, "bin", "base.fgd"), "w") as f:
+                f.write('@BaseClass = Targetname [ targetname(target_source) : "Name" ]\n'
+                        '@BaseClass = Origin [ origin(origin) : "Origin" ]\n'
+                        '@PointClass base(Targetname) size(-8 -8 -8, 8 8 8) = old_point : "x" [ a(string) ]\n')
+            with open(os.path.join(root, "bin", "game.fgd"), "w") as f:
+                f.write('@include "base.fgd"\n'
+                        '@BaseClass = Angles [ angles(angle) : "Pitch Yaw Roll" : "0 0 0" ]\n'
+                        '@PointClass base(Targetname, Angles) studio("m.mdl") = thing : "A thing" [\n'
+                        '  target(target_destination) : "Target" : : "what"\n'
+                        '  targetname(target_source) : "Name again"\n'
+                        '  spawnflags(flags) = [ 1 : "One" : 0 ]\n'
+                        '  input Kill(void) : "Removes"\n'
+                        '  output OnTrigger(void) : "Fires"\n'
+                        ']\n'
+                        '@PointClass = old_point : "redefined" [ b(integer) ]\n')
+            out = os.path.join(root, "fgd.txt")
+            write_fgd_table(out, root)
+            with open(out) as f:
+                lines = f.read().split("\n")
+            i = lines.index("class thing")
+            self.assertEqual(lines[i + 1:i + 5], ["targetname target_source", "angles angle",
+                                                  "target target_destination", "spawnflags flags"])
+            j = lines.index("class old_point")
+            self.assertEqual(lines[j + 1], "b integer")                     # (the later definition replaced it)
+            self.assertLess(j, i)                                          # (in the first one's place)
+
+
 class TestStringtableDictionary(unittest.TestCase):
     """The game's stringtable dictionary is carried from one build to the next (it saves ~10 s of map load)."""
 

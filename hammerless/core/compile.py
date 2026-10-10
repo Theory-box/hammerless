@@ -194,7 +194,7 @@ LIGHT_THREADS_DURING_VIS = 0
 
 HLVBSP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvbsp.exe")
 HLVBSP_TABLES = (".hlvbsp_materials.txt", ".hlvbsp_surfaceprops.txt", ".hlvbsp_props.txt", ".hlvbsp_detail.txt",
-                 ".hlvbsp_cubemaps.txt")
+                 ".hlvbsp_cubemaps.txt", ".hlvbsp_fgd.txt")
 
 
 def use_hlvbsp(opts: "CompileOptions") -> bool:
@@ -203,9 +203,9 @@ def use_hlvbsp(opts: "CompileOptions") -> bool:
 
 
 def hlvbsp_command(tools: "Tools", base: str) -> list[str]:
-    mat, surf, props, detail, cubemaps = (base + ext for ext in HLVBSP_TABLES)
+    mat, surf, props, detail, cubemaps, fgd = (base + ext for ext in HLVBSP_TABLES)
     return [HLVBSP, "-game", tools.gamedir, "-materials", mat, "-surfaceprops", surf, "-props", props,
-            "-detail", detail, "-cubemaps", cubemaps, base]
+            "-detail", detail, "-cubemaps", cubemaps, "-fgd", fgd, base]
 
 
 _CONTENT: dict = {}
@@ -214,13 +214,17 @@ _CONTENT: dict = {}
 def prepare_hlvbsp(tools: "Tools", vmf_path: str, base: str) -> list[str]:
     """Write what hlvbsp reads from the game's files (materials, surface properties, prop models).
     Returns the reasons it can't compile this map yet (then Valve's vbsp does)."""
-    from .mapcompiler import (unsupported, write_cubemap_materials, write_detail_file, write_material_table,
-                              write_prop_table, write_surfaceprops)
+    from .mapcompiler import (unsupported, write_cubemap_materials, write_detail_file, write_fgd_table,
+                              write_material_table, write_prop_table, write_surfaceprops)
     from .vpk import GameContent
     if tools.root not in _CONTENT:
         _CONTENT[tools.root] = GameContent(tools.root)
     content = _CONTENT[tools.root]
-    mat, surf, props, detail, cubemaps = (base + ext for ext in HLVBSP_TABLES)
+    mat, surf, props, detail, cubemaps, fgd = (base + ext for ext in HLVBSP_TABLES)
+    if "func_instance" in open(vmf_path, encoding="latin-1").read():
+        write_fgd_table(fgd, tools.root)          # (instances rename their entities' keys by the .fgd's types)
+    else:
+        open(fgd, "w").close()
     write_material_table(mat, vmf_path, content, tools.gamedir)
     write_cubemap_materials(cubemaps, vmf_path, content, tools.gamedir)
     write_surfaceprops(surf, content)

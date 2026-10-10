@@ -72,6 +72,24 @@ const char *FmtF(double v) {
     return out;
 }
 
+/* printf's "%g" as vbsp's old MSVC runtime writes it: the exponent with at least 3 digits ("3.05176e-005") and an
+   exact tie at the 6th significant digit rounded away from zero. Rotating buffers, as FmtF. */
+const char *FmtG(double v) {
+    static char bufs[8][64];
+    static int next;
+    char *out = bufs[next++ & 7], exact[128];
+    snprintf(exact, sizeof(exact), "%.40e", v);      /* the 7th significant digit and what follows */
+    if (exact[0] == '-') memmove(exact, exact + 1, strlen(exact));
+    if (exact[7] == '5' && strspn(exact + 8, "0") == strcspn(exact + 8, "e")) v = nextafter(v, v < 0 ? -HUGE_VAL : HUGE_VAL);
+    snprintf(out, 64, "%g", v);
+    char *e = strchr(out, 'e');
+    if (e) {
+        int x = atoi(e + 1);
+        sprintf(e, "e%c%03d", x < 0 ? '-' : '+', x < 0 ? -x : x);
+    }
+    return out;
+}
+
 void CrossProduct(const vec3_t a, const vec3_t b, vec3_t c) {
     c[0] = a[1] * b[2] - a[2] * b[1];
     c[1] = a[2] * b[0] - a[0] * b[2];

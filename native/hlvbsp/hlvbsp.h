@@ -189,6 +189,7 @@ typedef struct {
 typedef struct epair_s {
     struct epair_s *next;
     char *key, *value;
+    int connection;          /* an output (from the "connections" block) */
 } epair_t;
 
 typedef struct {
@@ -294,7 +295,7 @@ typedef struct {
 } tree_t;
 
 /* ------------------------------------------------------------------ globals */
-extern plane_t mapplanes[MAX_MAP_PLANES];
+extern plane_t *mapplanes;          /* (MAX_MAP_PLANES of them; a map's own: see mapstate_t) */
 extern int nummapplanes;
 extern mapbrush_t *mapbrushes;
 extern int nummapbrushes;
@@ -323,9 +324,34 @@ void Msg(const char *fmt, ...);
 void *xalloc(size_t n);
 char *copystring(const char *s);
 const char *FmtF(double v);
+const char *FmtG(double v);
 
 /* map.c */
 int FindFloatPlane(vec3_t normal, vec_t dist);
+/* a map's own data (vbsp's CMapFile): an instance is read into a fresh one, then merged into the main map */
+typedef struct {
+    plane_t *planes, *planehash[PLANE_HASHES];
+    int nplanes;
+    mapbrush_t *brushes;
+    int nbrushes, maxbrushes;
+    side_t *sides;
+    brush_texture_t *side_textures;
+    int nsides;
+    entity_t *ents;
+    int nents, maxents;
+    vec3_t mins, maxs;
+    int areaportals;
+    int first_overlay;       /* (the overlays this map's file added start here) */
+} mapstate_t;
+void MapState_Save(mapstate_t *s);
+void MapState_Use(const mapstate_t *s);
+void MapState_Free(mapstate_t *s);
+void ReadMapFile(const char *path, int main_map);
+void MoveBrushesToWorldGeneral(entity_t *mapent);
+void AddLadderKeys(entity_t *mapent);
+/* instance.c */
+extern const char *g_fgd_file;
+void CheckForInstances(const char *path);
 int PlaneTypeForNormal(const vec3_t normal);
 int PlaneEqual(const plane_t *p, const vec3_t normal, vec_t dist, float nep, float dep);
 void LoadMapFile(const char *path);
@@ -349,7 +375,9 @@ extern const char *g_mapbase;
 extern int g_has_water;
 /* overlay.c */
 int Overlay_FromEntity(entity_t *e);
-void Overlay_UpdateSideLists(void);
+void Overlay_UpdateSideLists(int first);
+int Overlay_Count(void);
+void Overlay_Translate(int first, const float origin[3], const float matrix[3][4]);
 int OverlaysAreEqual(const side_t *a, const side_t *b);
 void Overlay_AddFaceToLists(int face, const side_t *side);
 void Overlay_EmitOverlayFaces(void);

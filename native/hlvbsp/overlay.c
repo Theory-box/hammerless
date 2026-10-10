@@ -79,9 +79,12 @@ static int has(const int *list, int n, int v) {
     return 0;
 }
 
-/* After the map is read: each side learns which overlays sit on it (the first side with the id). */
-void Overlay_UpdateSideLists(void) {
-    for (int i = 0; i < numoverlays; i++) {
+int Overlay_Count(void) { return numoverlays; }
+
+/* After a map file is read: each side learns which of the overlays that file added sit on it (the first side
+ * with the id: side ids are the file's own) */
+void Overlay_UpdateSideLists(int first) {
+    for (int i = first; i < numoverlays; i++) {
         mapoverlay_t *o = &overlays[i];
         for (int k = 0; k < o->nsides; k++) {
             side_t *side = NULL;
@@ -90,6 +93,52 @@ void Overlay_UpdateSideLists(void) {
             if (!side || has(side->overlays, side->noverlays, o->id)) continue;
             side->overlays = realloc(side->overlays, sizeof(int) * (side->noverlays + 1));
             side->overlays[side->noverlays++] = o->id;
+        }
+    }
+}
+
+static int fequal(float value, float target, float delta) { return value < target + delta && value > target - delta; }
+
+/* VMatrix::V3Mul with the move left out (vbsp's TransformPoint): the row sums, plus the zero move, times 1 */
+static void RotatePoint(const float m[3][4], vec3_t p) {
+    vec3_t in;
+    VectorCopy(p, in);
+    float rw = 1.0f / (0.0f * in[0] + 0.0f * in[1] + 0.0f * in[2] + 1.0f);
+    for (int k = 0; k < 3; k++) p[k] = (m[k][0] * in[0] + m[k][1] * in[1] + m[k][2] * in[2] + 0.0f) * rw;
+}
+
+static float Length3(const vec3_t v) { return sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
+
+/* An instance's overlays (those from first on) moved and turned with it: vbsp's Overlay_Translate */
+void Overlay_Translate(int first, const float origin[3], const float m[3][4]) {
+    (void)origin;
+    for (int i = first; i < numoverlays; i++) {
+        mapoverlay_t *o = &overlays[i];
+        vec3_t t;
+        VectorCopy(o->origin, t);
+        for (int k = 0; k < 3; k++) o->origin[k] = DotProduct(t, m[k]) + m[k][3];
+        int identity = m[0][0] == 1.0f && m[0][1] == 0.0f && m[0][2] == 0.0f && m[1][0] == 0.0f &&
+                       m[1][1] == 1.0f && m[1][2] == 0.0f && m[2][0] == 0.0f && m[2][1] == 0.0f && m[2][2] == 1.0f;
+        if (identity) continue;
+        VectorNormalizeX87(o->basis[0]);
+        VectorNormalizeX87(o->basis[1]);
+        vec3_t u, v, n;
+        VectorCopy(o->basis[0], u), VectorCopy(o->basis[1], v), VectorCopy(o->basis[2], n);
+        RotatePoint(m, u), RotatePoint(m, v), RotatePoint(m, n);
+        float su = Length3(u), sv = Length3(v), sn = Length3(n);
+        int unit = fequal(su, 1.0f, 0.0001f) && fequal(sv, 1.0f, 0.0001f) && fequal(sn, 1.0f, 0.0001f);
+        int perp = fequal(DotProduct(u, v), 0.0f, 0.0025f) && fequal(DotProduct(u, n), 0.0f, 0.0025f) &&
+                   fequal(DotProduct(v, n), 0.0f, 0.0025f);
+        if (unit && perp) {
+            VectorCopy(u, o->basis[0]), VectorCopy(v, o->basis[1]), VectorCopy(n, o->basis[2]);
+        } else {
+            for (int h = 0; h < 4; h++) {
+                vec3_t pos;
+                for (int k = 0; k < 3; k++) pos[k] = o->uvpoints[h][0] * o->basis[0][k] + o->uvpoints[h][1] * o->basis[1][k];
+                RotatePoint(m, pos);
+                o->uvpoints[h][0] = DotProduct(o->basis[0], pos);
+                o->uvpoints[h][1] = DotProduct(o->basis[1], pos);
+            }
         }
     }
 }

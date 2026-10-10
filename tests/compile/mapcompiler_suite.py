@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -391,9 +392,10 @@ MAPS = {
 
 
 # ---------------------------------------------------------------- running
-def compile_map(name: str, vmf_text: str, root: str) -> tuple[str, str]:
-    from hammerless.core.mapcompiler import (write_cubemap_materials, write_detail_file, write_material_table,
-                                             write_prop_table, write_surfaceprops)
+def compile_map(name: str, vmf_text: str, root: str, instances=()) -> tuple[str, str]:
+    """instances: (the func_instance's "file" key, its path), copied next to both maps as the key names them."""
+    from hammerless.core.mapcompiler import (write_cubemap_materials, write_detail_file, write_fgd_table,
+                                             write_material_table, write_prop_table, write_surfaceprops)
     from hammerless.core.vpk import GameContent
     game = os.path.join(root, "left4dead2")
     mapname = "hl_test_" + name
@@ -405,6 +407,15 @@ def compile_map(name: str, vmf_text: str, root: str) -> tuple[str, str]:
     for b in (base, vbase):
         with open(b + ".vmf", "w", encoding="utf-8") as f:
             f.write(vmf_text)
+        for key, src in instances:
+            rel = os.path.splitext(key.replace("\\", "/"))[0] + ".vmf"
+            dst = os.path.join(os.path.dirname(b), rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst)
+    if instances:
+        stamp = hashlib.sha1((vmf_text + "".join(open(p, encoding="latin-1").read() for _k, p in instances))
+                             .encode("utf-8", "replace")).hexdigest()
+        reuse = os.path.exists(vbase + ".bsp") and os.path.exists(vbase + ".stamp") and open(vbase + ".stamp").read() == stamp
     if not reuse:
         for ext in (".bsp", ".prt", ".lin"):
             if os.path.exists(vbase + ext):
@@ -420,12 +431,14 @@ def compile_map(name: str, vmf_text: str, root: str) -> tuple[str, str]:
     detail = write_detail_file(base + ".hlvbsp_detail.txt", base + ".vmf", content, game)
     write_prop_table(base + ".hlvbsp_props.txt", base + ".vmf", content, game, detail)
     write_cubemap_materials(base + ".hlvbsp_cubemaps.txt", base + ".vmf", content, game)
+    write_fgd_table(base + ".hlvbsp_fgd.txt", root)
     for ext in (".bsp", ".prt", ".lin"):
         if os.path.exists(base + ext):
             os.remove(base + ext)
     r = subprocess.run([HLVBSP, "-game", game, "-materials", base + ".hlvbsp_materials.txt",
                         "-surfaceprops", base + ".hlvbsp_surfaceprops.txt", "-props", base + ".hlvbsp_props.txt",
-                        "-detail", base + ".hlvbsp_detail.txt", "-cubemaps", base + ".hlvbsp_cubemaps.txt", base],
+                        "-detail", base + ".hlvbsp_detail.txt", "-cubemaps", base + ".hlvbsp_cubemaps.txt",
+                        "-fgd", base + ".hlvbsp_fgd.txt", base],
                        capture_output=True, text=True)
     with open(base + ".log", "w") as f:
         f.write(r.stdout + r.stderr)
