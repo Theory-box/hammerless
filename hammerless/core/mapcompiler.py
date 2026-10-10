@@ -61,7 +61,8 @@ def _texture_info(content, texture: str | None, game_dir: str | None) -> tuple[i
     """Width, height and the reflectivity stored in a texture's VTF header."""
     if not texture:
         return None
-    data = read_texture_bytes(content, texture.lower().replace("\\", "/"), game_dir)
+    from .gamematerials import texture_path
+    data = read_texture_bytes(content, texture_path(texture), game_dir)
     if not data or len(data) < 44 or data[:4] != b"VTF\0":
         return None
     w, h = struct.unpack_from("<HH", data, 16)
@@ -326,7 +327,11 @@ def write_prop_table(path: str, vmf_path: str, content, game_dir: str | None, de
     models = list(seen.values())
     with open(path, "w", encoding="latin-1", errors="replace", newline="\n") as f:
         for model in models:
-            f.write("\n".join(prop_model_record(content, model, game_dir)) + "\n")
+            try:
+                rec = prop_model_record(content, model, game_dir)
+            except (struct.error, ValueError, IndexError):     # (a damaged model file: as a missing one)
+                rec = [f"model {model} missing"]
+            f.write("\n".join(rec) + "\n")
     return len(models)
 
 

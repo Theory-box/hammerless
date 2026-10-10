@@ -198,14 +198,25 @@ def _built_ago(context) -> str:
     return f"Built {hours} h ago" if hours < 48 else "Built " + time.strftime("%b %d", time.localtime(t))
 
 
+_leak_cache = {"key": None, "value": False}
+
+
 def _leaked(context) -> bool:
-    """The last build leaked: its leak file is newer than the map file it compiled."""
-    from .ops import work_dir
-    base = os.path.join(work_dir(context), context.scene.hammerless.map_name)
+    """The last build leaked: its leak file is newer than the map file it compiled. (Looked at every few
+    seconds, not on every redraw: finding the work folder creates it.)"""
+    import time
+    key = (context.scene.hammerless.map_name, int(time.monotonic() // 3))
+    if _leak_cache["key"] == key:
+        return _leak_cache["value"]
+    value = False
     try:
-        return os.path.getmtime(base + ".lin") >= os.path.getmtime(base + ".vmf") - 1.0
+        from .ops import work_dir
+        base = os.path.join(work_dir(context), context.scene.hammerless.map_name)
+        value = os.path.getmtime(base + ".lin") >= os.path.getmtime(base + ".vmf") - 1.0
     except OSError:
-        return False
+        pass
+    _leak_cache.update(key=key, value=value)
+    return value
 
 
 _status_cache = {"key": None, "time": 0.0, "value": ("", "")}

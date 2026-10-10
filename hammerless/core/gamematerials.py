@@ -53,7 +53,17 @@ def base_texture(content, material: str, game_dir: str | None = None) -> str | N
     """Texture path (no extension, under materials/) for a material, or None."""
     p = read_vmt(content, material, game_dir)
     tex = p.get("$basetexture")
-    return tex.lower().replace("\\", "/") if tex else None
+    if not tex:
+        return None
+    return texture_path(tex)
+
+
+def texture_path(tex: str) -> str:
+    """A $basetexture as the engine finds it: it takes "x.vtf" and "materials/x" too (268 of the game's own
+    materials say .vtf)."""
+    tex = tex.strip().lower().replace("\\", "/")
+    tex = tex[:-4] if tex.endswith(".vtf") else tex
+    return tex[10:] if tex.startswith("materials/") else tex
 
 
 def read_texture_bytes(content, texture: str, game_dir: str | None = None) -> bytes | None:

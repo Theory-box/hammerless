@@ -382,6 +382,6 @@ def write_cubemap_table(path: str, material_names: list[str], read_text) -> int:
             lines = cm.wvt_patch(name)
             out.append("\t".join(["wvt", name, str(len(lines))]))
             out.extend(lines)
-    with open(path, "w", encoding="latin-1", errors="replace", newline="\n") as f:
+    with open(path, "w", encoding="utf-8", errors="replace", newline="\n") as f:   # (as the VMF: names match)
         f.write("\n".join(out) + "\n")
     return len(order)

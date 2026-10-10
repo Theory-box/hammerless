@@ -45,6 +45,8 @@ class Terrain:
     alphas: list[list[float]] | None = None  # 0..255 blend per sample (optional)
     source: str = ""
     spacing_y: float = 0.0         # rows apart along y (0: the same as spacing)
+    texture_scale: float = 0.25    # its material's (as brushes take it)
+    lightmap_scale: int = 16
 
     @property
     def sy(self) -> float:

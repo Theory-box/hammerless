@@ -8,10 +8,12 @@ the scene, saved or exported.
   whose brushes those portals were split along
 """
 import os
+import struct
 import time
 
 import bpy
 import gpu
+
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
@@ -58,7 +60,9 @@ def _polys_to_tris(polys, colors):
             col += [c, c, c]
         for i in range(len(poly)):
             lines += [poly[i], poly[(i + 1) % len(poly)]]
-    return np.array(pos), np.array(col), np.array(lines)
+    # (shaped even when empty: a map with no portals draws nothing, not an error every redraw)
+    return (np.array(pos, dtype=np.float32).reshape(-1, 3), np.array(col, dtype=np.float32).reshape(-1, 4),
+            np.array(lines, dtype=np.float32).reshape(-1, 3))
 
 
 def load(context) -> str | None:
@@ -106,7 +110,7 @@ def load(context) -> str | None:
         _state["objects"] = [(name, sh, sh * cost.flow_seconds) for name, sh in visdata.cost_by_object(cost, owners)[:8]]
         _state["info"] = {"seconds": cost.flow_seconds, "portals": len(portals.polys)}
         return None
-    except (OSError, ValueError) as ex:
+    except (OSError, ValueError, IndexError, struct.error) as ex:   # (also a map file still being written)
         _state["error"] = str(ex)
         return _state["error"]
     finally:
@@ -201,6 +205,9 @@ class HL_OT_vis_select(bpy.types.Operator):
         for o in context.selected_objects:
             o.select_set(False)
         obj.hide_set(False)
+        if not obj.visible_get():
+            self.report({"WARNING"}, f"'{self.name}' is hidden (its monitor icon, or its collection is hidden): "
+                                     "selected, but not shown")
         obj.select_set(True)
         context.view_layer.objects.active = obj
         return {"FINISHED"}

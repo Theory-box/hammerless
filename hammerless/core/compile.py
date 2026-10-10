@@ -269,6 +269,8 @@ def _opts_rad(text: str) -> str | None:
     values = {n: _field(text, n) or _FIELD_DEFAULTS.get(n) for n in names}
     if values.get("gi") == "False":
         values.pop("gi_rays", None)                     # (only counts with GI on)
+    elif "light_tool='HAMMERLESS'" in text and "bounces" not in values:
+        values["bounces"] = _field(text, "bounces")     # (GI's passes come from it at every level)
     return "|".join([m.group(1), "cycles" if cycles else "vrad"] + [f"{n}={v}" for n, v in values.items()])
 
 
@@ -694,12 +696,28 @@ class CompileJob:
         return self
 
     def _stamp(self, vmf_bytes: bytes | None = None) -> str:
-        """Fingerprint of what gets compiled: the VMF text and the compile options."""
+        """Fingerprint of what gets compiled: the VMF text, its instance files' and the compile options."""
         import hashlib
         if vmf_bytes is None:
             with open(self.vmf, "rb") as f:
                 vmf_bytes = f.read()
-        return hashlib.sha1(vmf_bytes + _opts_rest(repr(self._opts)).encode()).hexdigest()
+        return hashlib.sha1(vmf_bytes + self._instances_hash(vmf_bytes).encode()
+                            + _opts_rest(repr(self._opts)).encode()).hexdigest()
+
+    def _instances_hash(self, vmf_bytes: bytes) -> str:
+        """What the map's instance files hold (func_instance: they're compiled into it)."""
+        import hashlib
+        if b"func_instance" not in vmf_bytes:
+            return ""
+        try:
+            from .mapcompiler import vmf_instances
+            h = hashlib.sha1()
+            for _key, path in vmf_instances(self.vmf):
+                with open(path, "rb") as f:
+                    h.update(f.read())
+            return h.hexdigest()
+        except OSError:
+            return "unreadable"
 
     def _built_opts(self) -> str:
         with open(self.base + ".built.opts", encoding="utf-8") as f:
@@ -986,6 +1004,8 @@ class CompileJob:
                 self._q.put(f"Copied {self.name}.bsp to {self.tools.maps_dir}")
             with open(self.base + ".built.vmf", "wb") as f:       # what this BSP was made from (the VMF
                 f.write(self._vmf_bytes)                         # as it was when the job started)
+            with open(self.base + ".built.inst", "w", encoding="utf-8") as f:   # (and its instance files)
+                f.write(self._instances_hash(self._vmf_bytes))
             with open(self.base + ".built.opts", "w", encoding="utf-8") as f:
                 built = repr(replace(self._opts, vis=self._built_vis, rad=self._built_rad))
                 f.write(_with_light(built, self._built_light) if self._built_light else built)
@@ -1040,6 +1060,13 @@ class CompileJob:
         except OSError:
             pass
         kind, why = plan(old, self._vmf_bytes.decode("utf-8", "replace"))
+        try:
+            with open(self.base + ".built.inst", encoding="utf-8") as f:
+                built_inst = f.read()
+        except OSError:
+            built_inst = ""
+        if kind != "full" and built_inst != self._instances_hash(self._vmf_bytes):
+            kind, why = "full", "an instance file changed"
         if kind == "full":
             self.plan = "full"
             return self.steps
@@ -1048,6 +1075,10 @@ class CompileJob:
             self.plan = "full"                   # no portal file kept (an older build): compile it all
             return self.steps
         lights_changed = kind == "lighting"      # lights or static props moved: the bake is out of date
+        if add_vis and not lights_changed:
+            vis_cmd = next((c for n, c in self.steps if n == "vvis"), [])
+            if "-radius_override" in vis_cmd or bsp_fog_farz(self.base + ".bsp") > 0:
+                lights_changed = True            # (radial vis changes which leaves see the sky: relight after it)
         want = self._opts.rad != "SKIP"
         add_rad = want and (lights_changed or built_rad != _opts_rad(repr(self._opts)))
         self._built_vis = self._opts.vis if add_vis else built_vis
@@ -1060,7 +1091,8 @@ class CompileJob:
             self._built_light = built
         self.plan = "lighting" if add_rad else "entities"
         game = ["-game", self.tools.gamedir]
-        steps = [("vbsp (entities only)", [self.tools.exe("vbsp"), "-onlyents"] + game + [self.base])]
+        steps = [("vbsp (entities only)", [self.tools.exe("vbsp"), "-onlyents"] + self._opts.vbsp_args() + game
+                  + [self.base])]
         keep = "keeping geometry" + ("" if add_rad or lights_changed else " and the baked lighting")
         self._q.put(f"Smart build: {why}: {keep}")
         if add_vis:          # e.g. after a lighting bake (fast vis): the full vis leaves the lighting alone

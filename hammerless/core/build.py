@@ -521,9 +521,13 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
         for brush, disp in patches:
             world.add(w.solid(brush, {0: disp}))
             n_patches += 1
-    if n_patches > MAX_DISPLACEMENTS:
-        report.errors.append(f"{n_patches} terrain patches: the game allows {MAX_DISPLACEMENTS}. Use a bigger Patch "
-                             f"Size on the terrain objects")
+    # (an imported map's own displacements count too)
+    n_disp = sum(1 for so in world.blocks("solid") for sd in so.blocks("side") if sd.blocks("dispinfo"))
+    if max(n_patches, n_disp) > MAX_DISPLACEMENTS:
+        what = (f"{n_patches} terrain patches" if n_disp <= n_patches else
+                f"{n_disp} displacements ({n_disp - n_patches} the imported map's, {n_patches} terrain patches)")
+        report.errors.append(f"{what}: the game allows {MAX_DISPLACEMENTS}. Use a bigger Patch Size on the terrain "
+                             f"objects")
         return None, report
     if s.auto_seal:
         extra = []

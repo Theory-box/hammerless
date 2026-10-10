@@ -51,9 +51,11 @@ def _plane(poly: np.ndarray) -> tuple[np.ndarray, float]:
 
 
 def _canonical(n: np.ndarray, d: float) -> tuple[np.ndarray, float]:
-    """The same plane facing the other way gets the same key: largest component positive."""
-    if n[int(np.argmax(np.abs(n)))] < 0:
-        return -n, -d
+    """The same plane facing the other way gets the same key: the first clearly non-zero component positive
+    (not the largest: on a 45 degree wall x and y tie, and noise would pick either)."""
+    for c in n:
+        if abs(c) > 1e-3:
+            return (-n, -d) if c < 0 else (n, d)
     return n, d
 
 
@@ -114,6 +116,7 @@ def read_costs(path: str, portals: int | None = None) -> VisCost | None:
         vals = np.array([[float(x) for x in line.split()] for line in lines[2:2 + n]], dtype=np.float64)
     except (OSError, ValueError, IndexError):
         return None
+    vals = vals.reshape(-1, 2) if vals.size == 0 else vals      # (no portals: an empty table, not an error)
     if vals.shape != (n, 2) or (portals is not None and n != portals):
         return None
     return VisCost(vals.sum(axis=1), wall, threads)
@@ -219,7 +222,40 @@ def render_load(data: bytes) -> RenderLoad:
             cluster_faces[c].add(int(f))
             if face_cluster[f] < 0:
                 face_cluster[f] = c
-    count = np.array([len(s) for s in cluster_faces], dtype=np.int64)
+    # displacements aren't in the leaf faces: each goes in the cluster of the leaf at its middle
+    nodes, planes = lump(5), lump(1)
+    dispinfo_l, dispverts_l = lump(26), lump(33)
+    verts_l = np.frombuffer(lump(3), dtype="<f4").reshape(-1, 3)
+    edges_l = np.frombuffer(lump(12), dtype="<u2").reshape(-1, 2)
+    surfedges_l = np.frombuffer(lump(13), dtype="<i4")
+
+    def leaf_at(p) -> int:
+        node = 0
+        for _ in range(4096):
+            plane, c0, c1 = struct.unpack_from("<3i", nodes, 32 * node)
+            nx, ny, nz, dist = struct.unpack_from("<4f", planes, 20 * plane)
+            child = c0 if nx * p[0] + ny * p[1] + nz * p[2] - dist >= 0 else c1
+            if child < 0:
+                return -1 - child
+            node = child
+        return -1
+    if len(nodes) >= 32:
+        for f in range(nfaces):
+            b = FACE_SIZE * f
+            first_edge, num_edges, _ti, di = struct.unpack_from("<ihhh", faces, b + 4)
+            if di < 0 or num_edges != 4 or face_cluster[f] >= 0:
+                continue
+            se = surfedges_l[first_edge:first_edge + num_edges]
+            corners = verts_l[np.where(se >= 0, edges_l[np.abs(se), 0], edges_l[np.abs(se), 1])].astype(np.float64)
+            pos, _flat, _tris = _displacement(corners, dispinfo_l, dispverts_l, di)
+            lf = leaf_at(pos.mean(axis=0) + np.array([0.0, 0.0, 1.0]))
+            c = leaf_cluster[lf] if 0 <= lf < nleafs else -1
+            if 0 <= c < nclusters:
+                cluster_faces[c].add(f)
+                face_cluster[f] = c
+    # what the game draws from a cluster: every face of the clusters it sees, each once (a face in leaves of
+    # several clusters is drawn once a frame, not once per cluster)
+    members = [np.fromiter(s, dtype=np.int64, count=len(s)) for s in cluster_faces]
     load = np.zeros(nclusters, dtype=np.int64)
     for c in range(nclusters):
         off = struct.unpack_from("<i", vis, 4 + 8 * c)[0]
@@ -231,7 +267,8 @@ def render_load(data: bytes) -> RenderLoad:
             else:
                 j += vis[i + 1]; i += 2
         bits = np.unpackbits(np.frombuffer(bytes(row), np.uint8), bitorder="little")[:nclusters].astype(bool)
-        load[c] = count[bits].sum()
+        seen = [members[k] for k in np.nonzero(bits)[0] if len(members[k])]
+        load[c] = len(np.unique(np.concatenate(seen))) if seen else 0
     verts = np.frombuffer(lump(3), dtype="<f4").reshape(-1, 3)
     edges = np.frombuffer(lump(12), dtype="<u2").reshape(-1, 2)
     surfedges = np.frombuffer(lump(13), dtype="<i4")

@@ -522,6 +522,8 @@ void CheckForInstances(const char *path) {
     for (int i = 0; i < num_entities; i++) {
         if (strcmp(ValueForKey(&entities[i], "classname"), "func_instance")) continue;
         const char *file = ValueForKey(&entities[i], "file");
+        static int merged;
+        if (file[0] && ++merged > 65536) Error("Instances include each other in a loop (%s)", file);
         if (file[0]) {
             char found[1100];
             int loaded = 0;

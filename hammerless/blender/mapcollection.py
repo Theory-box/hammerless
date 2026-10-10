@@ -183,11 +183,13 @@ def organize(context) -> dict:
         for part in cat.split("/"):
             target = _child(target, part)
         for o in [obj] + list(obj.children_recursive):
+            if o.library is not None or o.override_library is not None:
+                continue                  # (linked: left where its file puts it)
             _freeze_settings(o)
             if target not in o.users_collection:
                 target.objects.link(o)
             for c in list(o.users_collection):
-                if c is not target:
+                if c is not target and c.library is None:
                     c.objects.unlink(o)
             moved += 1
     for top in imported_tops:
@@ -245,8 +247,19 @@ def _layer_collection(lc, coll):
 # ---------------------------------------------------------------- keeping it sorted
 
 _known: dict = {}             # scene name -> its objects already seen (session ids: renaming isn't new)
+_known_colls: dict = {}       # scene name -> its collections already seen (an appended collection is new)
 _pending: dict = {}           # object session id -> True when new (else: its kind may have changed)
 _timer = [False]
+_new_colls: dict = {}         # scene name -> collections that appeared since the last sort
+
+
+@bpy.app.handlers.persistent
+def _on_undo(*_args):
+    """Undo and redo bring objects back as they were: not new ones to sort (and no new undo step)."""
+    _known.clear()
+    _known_colls.clear()
+    _pending.clear()
+    _new_colls.clear()
 
 
 def _sorted_place(coll, c) -> bool:
@@ -254,34 +267,86 @@ def _sorted_place(coll, c) -> bool:
     return c is coll or (c.get("hl_category") is not None and c in _all_children(coll))
 
 
-def place(scene, obj, new: bool) -> bool:
+def _layer_hidden(view_layer, coll) -> bool:
+    """The collection is excluded from the view layer or hidden in it (what's moved there would vanish)."""
+    def find(lc):
+        if lc.collection == coll:
+            return lc
+        for ch in lc.children:
+            got = find(ch)
+            if got is not None:
+                return got
+        return None
+    lc = find(view_layer.layer_collection) if view_layer is not None else None
+    return lc is not None and (lc.exclude or lc.hide_viewport or lc.collection.hide_viewport)
+
+
+class _Batch:
+    """What one sorting pass looks up for every object, worked out once."""
+
+    def __init__(self, scene, new_colls=None):
+        self.coll = map_collection(scene)
+        self.sources = _instance_sources(scene)
+        self.new_colls = new_colls or set()
+        kids = set(_all_children(self.coll)) if self.coll is not None else set()
+        self.places = {self.coll} | {c for c in kids if c.get("hl_category") is not None}
+        self.hidden: dict = {}
+        # (obj.users_collection walks every collection each time: one pass for the whole batch)
+        self._users: dict = {}
+        for c in [scene.collection] + list(bpy.data.collections):
+            for o in c.objects:
+                self._users.setdefault(o.session_uid, []).append(c)
+
+    def users(self, obj) -> list:
+        return self._users.get(obj.session_uid, [])
+
+    def is_hidden(self, target) -> bool:
+        if target.name not in self.hidden:
+            self.hidden[target.name] = _layer_hidden(bpy.context.view_layer, target)
+        return self.hidden[target.name]
+
+
+def place(scene, obj, new: bool, sources: set | None = None, new_colls: set | None = None, batch=None) -> bool:
     """Put one object (and the objects parented under it) where its kind goes. A new object is moved from
-    anywhere; an existing one only from the map collection or its kind collections (not from collections you
+    anywhere but a collection that came with it (an appended or imported collection: a reference, an asset
+    kit); an existing one only from the map collection or its kind collections (not from collections you
     made inside the map). Returns whether it moved."""
     from .vmfimport import KIND
-    coll = map_collection(scene)
+    batch = batch or _Batch(scene, new_colls)
+    coll = batch.coll
     if coll is None or obj is None or obj.name not in scene.objects or obj.parent is not None:
         return False
-    if obj.get(KIND) is not None or not obj.visible_get() or obj.name in _instance_sources(scene):
+    if obj.library is not None or obj.override_library is not None:
+        return False                  # (linked: not this file's to move)
+    sources = batch.sources if sources is None else sources
+    new_colls = batch.new_colls if new_colls is None else new_colls
+    if obj.get(KIND) is not None or not obj.visible_get() or obj.name in sources:
         return False
+    users = batch.users(obj)
+    if new and new_colls and users and all(c.name in new_colls for c in users):
+        return False                  # (it came in its own collection: that collection decides)
     cat = _category(obj)
     if cat is None:
         return False
-    if not new and not all(_sorted_place(coll, c) for c in obj.users_collection):
+    if not new and not all(c in batch.places for c in users):
         return False
     target = coll
     for part in cat.split("/"):
         target = _child(target, part)
-    if list(obj.users_collection) == [target]:
+    if list(users) == [target]:
         return False
+    if batch.is_hidden(target):
+        return False                  # (you hid that kind's collection: a new object stays where you see it)
     for o in [obj] + list(obj.children_recursive):
-        if o is not obj and not new and not all(_sorted_place(coll, c) for c in o.users_collection):
+        if o is not obj and not new and not all(c in batch.places for c in batch.users(o)):
+            continue
+        if o.library is not None or o.override_library is not None:
             continue
         _freeze_settings(o)
         if target not in o.users_collection:
             target.objects.link(o)
         for c in list(o.users_collection):
-            if c is not target:
+            if c is not target and c.library is None:
                 c.objects.unlink(o)
     return True
 
@@ -291,12 +356,14 @@ def _apply_pending():
     scene = bpy.context.scene
     by_uid = {o.session_uid: o for o in scene.objects}
     moved = 0
-    for uid, new in list(_pending.items()):
+    pending = dict(_pending)
+    _pending.clear()                  # (first: an error below mustn't make it try again on every update)
+    batch = _Batch(scene, _new_colls.pop(scene.name, set()))   # (once a batch: thousands of objects stay quick)
+    for uid, new in pending.items():
         try:
-            moved += place(scene, by_uid.get(uid), new)
-        except (ReferenceError, RuntimeError):
+            moved += place(scene, by_uid.get(uid), new, batch=batch)
+        except (ReferenceError, RuntimeError, AttributeError):
             pass
-    _pending.clear()
     if moved:
         try:
             bpy.ops.ed.undo_push(message="Hammerless: sort into the map collection")
@@ -314,8 +381,13 @@ def _on_depsgraph(scene, depsgraph):
     ids = {o.session_uid: o for o in scene.objects}
     known = _known.get(scene.name)
     _known[scene.name] = set(ids)
+    colls = {c.name for c in bpy.data.collections}
+    known_colls = _known_colls.get(scene.name)
+    _known_colls[scene.name] = colls
     if known is None:
         return                        # (first look at this scene: what's there stays where it is)
+    if known_colls is not None and colls - known_colls:
+        _new_colls.setdefault(scene.name, set()).update(colls - known_colls)
     for uid in ids.keys() - known:
         _pending[uid] = True
     for u in depsgraph.updates:
@@ -387,6 +459,8 @@ def register():
         bpy.utils.register_class(c)
     bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
     bpy.app.handlers.load_post.append(_on_load)
+    bpy.app.handlers.undo_post.append(_on_undo)
+    bpy.app.handlers.redo_post.append(_on_undo)
 
 
 def unregister():
@@ -394,5 +468,8 @@ def unregister():
         bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph)
     if _on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_on_load)
+    for h in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post):
+        if _on_undo in h:
+            h.remove(_on_undo)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

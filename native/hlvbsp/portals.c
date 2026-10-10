@@ -654,6 +654,7 @@ static void EmitClipPortalGeometry(node_t *headnode, portal_t *portal, int src, 
     }
     int indices[512];
     int n = Convex2D(pts2, npts, indices, 512);
+    if (numclipportalverts + n > 65536) Error("MAX_MAP_PORTALVERTS: area portals have too many corners");
     dp->firstclip = (unsigned short)numclipportalverts;
     dp->numclip = (unsigned short)n;
     if (n >= 32) Warning("Warning: area portal has %d verts. Could be a vbsp bug.\n", n);
@@ -667,7 +668,8 @@ static void EmitClipPortalGeometry(node_t *headnode, portal_t *portal, int src, 
 }
 
 void EmitAreaPortals(node_t *headnode) {
-    if (c_areas > 256) Error("Map is split into too many unique areas (max = 256)\nProbably too many areaportals");
+    /* (256 areas with area 0 is 257: one past the array) */
+    if (c_areas >= 256) Error("Map is split into too many unique areas (max = 256)\nProbably too many areaportals");
     numareas = c_areas + 1;
     numareaportals = 1;       /* 0 means an error */
     numclipportalverts = 0;
@@ -681,6 +683,7 @@ void EmitAreaPortals(node_t *headnode) {
             portal_t *lead = e->portals_into_areas[0];
             if (lead && lead->nodes[0]->area == lead->nodes[1]->area) lead = e->portals_into_areas[1];
             if (!lead) continue;
+            if (numareaportals >= 1024) Error("MAX_MAP_AREAPORTALS: too many area portals (the game allows 1024)");
             dareaportal_t *dp = &dareaportals[numareaportals++];
             memset(dp, 0, sizeof(*dp));
             dp->key = (unsigned short)e->areaportalnum;

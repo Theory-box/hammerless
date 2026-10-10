@@ -543,6 +543,16 @@ class TestSmartBuild(unittest.TestCase):
         ir.entities.append(Entity("logic_relay", (0, 0, 16), (0, 0, 0), {"targetname": "r", "delay": speed}))
         return build_vmf(ir)[0]
 
+    def test_compiled_from_entities(self):
+        """Entities the compilers read: a light's aim target relights; fog far Z (radial vis) is a full build."""
+        from hammerless.core.buildplan import plan
+        base = ('world { "id" "1" } entity { "classname" "light_spot" "target" "aim" "origin" "0 0 0" } '
+                'entity { "classname" "info_target" "targetname" "aim" "origin" "%s" } '
+                'entity { "classname" "env_fog_controller" "farz" "%s" "fogcolor" "%s" }')
+        self.assertEqual(plan(base % ("0 0 0", "2000", "1"), base % ("64 0 0", "2000", "1"))[0], "lighting")
+        self.assertEqual(plan(base % ("0 0 0", "2000", "1"), base % ("0 0 0", "6000", "1"))[0], "full")
+        self.assertEqual(plan(base % ("0 0 0", "2000", "1"), base % ("0 0 0", "2000", "2"))[0], "entities")
+
     def test_plans(self):
         from hammerless.core.buildplan import plan
         a = self.vmf()

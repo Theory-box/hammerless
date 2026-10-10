@@ -18,9 +18,11 @@ from .vmf import Block, parse
 GEOMETRY_CLASSES = {"func_detail", "info_overlay", "info_overlay_transition", "env_cubemap", "func_areaportal",
                     "func_areaportalwindow", "func_viscluster", "func_occluder", "water_lod_control",
                     "func_instance", "info_lighting_relative", "prop_detail", "func_ladder", "func_vehicleclip",
-                    "func_dustmotes", "func_dustcloud", "func_smokevolume"}
+                    "func_dustmotes", "func_dustcloud", "func_smokevolume", "prop_detail_sprite",
+                    "info_no_dynamic_shadow"}
 # baked by vrad (lights, and static props: their lighting and shadows)
-LIGHT_CLASSES = {"light", "light_spot", "light_environment", "light_directional", "info_lighting", "prop_static"}
+LIGHT_CLASSES = {"light", "light_spot", "light_environment", "light_directional", "info_lighting", "prop_static",
+                 "static_prop"}
 # brush entity keyvalues vrad reads
 LIGHT_KEYS = {"_minlight", "vrad_brush_cast_shadows", "disableshadows", "_lightmode", "disablevertexlighting",
               "disableselfshadowing"}
@@ -43,7 +45,19 @@ def _canon(block: Block):
 def _split(text: str):
     """(geometry, lighting, entities) signatures of a VMF."""
     geometry, lighting, entities = [], [], []
-    for b in parse(text):
+    blocks = parse(text)
+    # entities other classes compile from: a light's aim (its target's origin, read by the light compilers) is
+    # lighting; an areaportal window's target brush (made see-through) is geometry
+    aim, window = set(), set()
+    for b in blocks:
+        if b.name.lower() != "entity":
+            continue
+        cls = (b.get("classname") or "").lower()
+        if cls in LIGHT_CLASSES and b.get("target"):
+            aim.add(b.get("target").lower())
+        if cls == "func_areaportalwindow" and b.get("target"):
+            window.add(b.get("target").lower())
+    for b in blocks:
         name = b.name.lower()
         if name in SKIP_BLOCKS:
             continue
@@ -55,9 +69,14 @@ def _split(text: str):
             continue
         cls = (b.get("classname") or "").lower()
         canon = _canon(b)
-        if cls in GEOMETRY_CLASSES:
+        tname = (b.get("targetname") or "").lower()
+        if cls == "env_fog_controller":
+            # (its far Z makes vis radial, which changes the visibility and which leaves see the sky)
+            geometry.append(("fog farz", b.get("farz")))
+            entities.append(canon)
+        elif cls in GEOMETRY_CLASSES or (tname and tname in window):
             geometry.append(("entity", canon))
-        elif cls in LIGHT_CLASSES:
+        elif cls in LIGHT_CLASSES or (tname and tname in aim):
             lighting.append(canon)
         elif b.blocks("solid"):
             # brush entity: its brushes (and origin, class) are compiled into a model; the rest is entity data

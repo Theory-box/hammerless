@@ -74,21 +74,15 @@ static int LoadPhysics(void) {
     SetDllDirectoryA(bin);
     snprintf(dll, sizeof(dll), "%s\\vphysics.dll", bin);
     HMODULE h = LoadLibraryA(dll);
-    if (!h) {
-        Warning("!!! WARNING: Can't load %s: no collision data!\n", dll);
-        return 0;
-    }
+    if (!h) Error("Can't load %s: no collision data", dll);
     CreateInterfaceFn ci = (CreateInterfaceFn)GetProcAddress(h, "CreateInterface");
-    if (!ci) return 0;
+    if (!ci) Error("%s has no CreateInterface: no collision data", dll);
     physcollision = ci("VPhysicsCollision007", NULL);
     /* vphysics' maths runs on the x87 FPU: use the precision an MSVC program starts with (53-bit), as
      * vbsp does, not our runtime's 64-bit default */
     _controlfp(_PC_53, _MCW_PC);
     physprops = ci("VPhysicsSurfaceProps001", NULL);
-    if (!physcollision) {
-        Warning("!!! WARNING: Can't build collision data!\n");
-        return 0;
-    }
+    if (!physcollision) Error("Can't build collision data (VPhysicsCollision007 not found)");
     if (physprops && g_surfaceprops_file) {
         /* blocks of: <file name> \n <byte count> \n <text> */
         FILE *f = fopen(g_surfaceprops_file, "rb");

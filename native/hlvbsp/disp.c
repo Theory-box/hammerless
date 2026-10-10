@@ -1016,9 +1016,10 @@ void ParseDispRow(const char *key, const char *value, float *out, int cols, int 
     char buf[16384];
     strncpy(buf, value, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = 0;
+    if (row < 0) return;
     int index = row * cols * per;
     for (char *tok = strtok(buf, " "); tok; tok = strtok(NULL, " ")) {
-        if (index >= MAX_DISPVERTS * 3) break;
+        if (index >= MAX_DISPVERTS * per) break;      /* (the row's own array: per numbers an element) */
         out[index++] = (float)atof(tok);
     }
 }

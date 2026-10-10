@@ -1580,18 +1580,24 @@ class HL_OT_load_leak(bpy.types.Operator):
 _SKY_ITEMS: list[tuple[str, str, str]] = []
 
 
+_SKY_TRIED = [0.0]
+
+
 def _sky_items(self, context):
+    import time
     if _SKY_ITEMS and _SKY_ITEMS[0][0] != "sky_day01_09_hdr":
         return _SKY_ITEMS          # filled from the game: keep it (Blender holds on to its strings)
+    if _SKY_ITEMS and time.monotonic() - _SKY_TRIED[0] < 10.0:
+        return _SKY_ITEMS          # (no game yet: looked for it a moment ago, not on every redraw)
+    _SKY_TRIED[0] = time.monotonic()
     root = game_root(context)
     content = game_content(root)
-    _SKY_ITEMS.clear()
-    if content:
-        names = sorted({m[len("skybox/"):-2] for m in content.materials("skybox/") if m.endswith("bk")})
-        for n in names:
-            _SKY_ITEMS.append((n, n, "Skybox " + n))
-    if not _SKY_ITEMS:
-        _SKY_ITEMS.append(("sky_day01_09_hdr", "sky_day01_09_hdr", ""))
+    names = sorted({m[len("skybox/"):-2] for m in content.materials("skybox/") if m.endswith("bk")}) if content else []
+    if names or not _SKY_ITEMS:
+        _SKY_ITEMS.clear()
+        _SKY_ITEMS.extend((n, n, "Skybox " + n) for n in names)
+        if not _SKY_ITEMS:
+            _SKY_ITEMS.append(("sky_day01_09_hdr", "sky_day01_09_hdr", ""))
     return _SKY_ITEMS
 
 

@@ -445,8 +445,9 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         # what's missing of those, without baking lighting or touching the game's copy of the map
         import dataclasses
         opts = compile_options(context.scene.hammerless)
-        opts = dataclasses.replace(cc.PRESETS[opts] if isinstance(opts, str) else opts, rad="SKIP")
-        job = cc.CompileJob(tools, path, opts, copy_to_game=False, skip_if_unchanged=True)
+        opts = dataclasses.replace(cc.PRESETS[opts] if isinstance(opts, str) else opts, rad="SKIP",
+                                   assets=cc.asset_fingerprint(tools.gamedir, context.scene.hammerless.map_name))
+        job = cc.CompileJob(tools, path, opts, copy_to_game=False, skip_if_unchanged=True)   # (as Build: same options)
         self._job = None
         if not job.up_to_date():
             try:

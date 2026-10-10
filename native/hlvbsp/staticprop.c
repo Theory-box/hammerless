@@ -262,7 +262,12 @@ unsigned char *g_sprp;
 int g_sprp_len;
 
 void EmitStaticProps(void) {
-    if (!PhysCollision()) return;
+    if (!PhysCollision()) {
+        for (int i = 0; i < num_entities; ++i)        /* (props without collision: never silently none) */
+            if (!strcmp(ValueForKey(&entities[i], "classname"), "prop_static") || !strcmp(ValueForKey(&entities[i], "classname"), "static_prop"))
+                Error("Can't load the game's vphysics.dll: static props can't be made");
+        return;
+    }
     LoadPropTable();
     int *lighting = xalloc(sizeof(int) * (num_entities + 1)), nlighting = 0;
     for (int i = 0; i < num_entities; ++i)
@@ -324,6 +329,8 @@ void EmitStaticProps(void) {
         p.proptype = (unsigned short)AddDict(model);
         VectorCopy(origin, p.origin);
         VectorCopy(angles, p.angles);
+        if (numpropleaves + leaves.n > 65535)
+            Error("MAX_MAP_LEAFS: static props touch more than 65535 leaves in all (too many props)");
         p.firstleaf = (unsigned short)numpropleaves;
         p.leafcount = (unsigned short)leaves.n;
         if (lo[0]) {

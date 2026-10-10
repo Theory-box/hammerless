@@ -10,7 +10,6 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
-from mathutils.kdtree import KDTree
 
 from ..core import textures
 from ..core.displacement import verts_per_side
@@ -400,23 +399,35 @@ def mesh_to_terrain(obj, depsgraph, scale: float, materials: MaterialResolver) -
     bm.faces.ensure_lookup_table()
     verts = [v.co.copy() for v in bm.verts]
     polys = [[v.index for v in f.verts] for f in bm.faces]
-    vcol = {}           # red channel = blend; from a face-corner or a vertex colour attribute
-    color_layer = bm.loops.layers.color.active or bm.loops.layers.float_color.active
-    vert_layer = bm.verts.layers.float_color.active or bm.verts.layers.color.active
+    # red channel = blend; from the mesh's active colour attribute (the one painted), else any
+    color_layer = vert_layer = None
+    active = getattr(obj.data.color_attributes, "active_color", None)
+    if active is not None:
+        for layers in (bm.loops.layers.color, bm.loops.layers.float_color):
+            color_layer = color_layer or layers.get(active.name)
+        for layers in (bm.verts.layers.float_color, bm.verts.layers.color):
+            vert_layer = vert_layer or (layers.get(active.name) if color_layer is None else None)
+    if color_layer is None and vert_layer is None:
+        color_layer = bm.loops.layers.color.active or bm.loops.layers.float_color.active
+        vert_layer = bm.verts.layers.float_color.active or bm.verts.layers.color.active
     if color_layer is None and vert_layer is None:
         color_layer = next(iter(bm.loops.layers.color.values()), None) or next(
             iter(bm.loops.layers.float_color.values()), None)
         vert_layer = next(iter(bm.verts.layers.float_color.values()), None) or next(
             iter(bm.verts.layers.color.values()), None)
+    # (byte colours come as sRGB, float ones linear: the same paint gives the same blend either way)
+    is_byte = (color_layer.name in bm.loops.layers.color.keys() if color_layer is not None else
+               vert_layer is not None and vert_layer.name in bm.verts.layers.color.keys())
+    as_srgb = (lambda x: x) if is_byte else _linear_to_srgb
+    corner_cols = {}    # face -> [(corner, blend)]: a sample takes the blend of the face it lands on
     if color_layer is not None:
         for f in bm.faces:
-            for loop in f.loops:
-                vcol[loop.vert.index] = loop[color_layer][0]
+            corner_cols[f.index] = [(loop.vert.co.copy(), as_srgb(loop[color_layer][0])) for loop in f.loops]
     elif vert_layer is not None:
-        for v in bm.verts:
-            vcol[v.index] = v[vert_layer][0]
+        for f in bm.faces:
+            corner_cols[f.index] = [(v.co.copy(), as_srgb(v[vert_layer][0])) for v in f.verts]
     slots = [s.material for s in obj.material_slots]
-    material, _, _ = materials.resolve(slots[0] if slots else None)
+    material, tex_scale, lm_scale = materials.resolve(slots[0] if slots else None)
     if material == materials.settings.default_material:
         material = "nature/blend_grass_grass_01"
     bm.free()
@@ -436,12 +447,7 @@ def mesh_to_terrain(obj, depsgraph, scale: float, materials: MaterialResolver) -
     cols, rows = px * step + 1, py * step + 1
 
     bvh = BVHTree.FromPolygons(verts, polys)
-    kd = None
-    if vcol:
-        kd = KDTree(len(verts))
-        for i, v in enumerate(verts):
-            kd.insert(v, i)
-        kd.balance()
+    painted = bool(corner_cols)
     top = max(zs) + 64
     lo_x, hi_x, lo_y, hi_y = min(xs), max(xs), min(ys), max(ys)
     snap = 1.0 + 1e-6               # a sample this close outside the mesh's bounds is on its edge (float error)
@@ -458,14 +464,22 @@ def mesh_to_terrain(obj, depsgraph, scale: float, materials: MaterialResolver) -
                 if (cx, cy) != (x, y) and abs(cx - x) <= snap and abs(cy - y) <= snap:
                     hit, _normal, _idx, _dist = bvh.ray_cast(Vector((cx, cy, top)), Vector((0, 0, -1)))
             hrow.append(None if hit is None else hit.z)
-            if kd is not None:
-                _co, vi, _d = kd.find(Vector((x, y, hit.z if hit else 0)))
-                arow.append(vcol.get(vi, 0.0) * 255.0)
+            if painted and hit is not None and _idx in corner_cols:
+                # (blended across the face hit, by nearness to its corners: smooth, and never paint from
+                # the other side of a cliff)
+                ws = [(1.0 / max((co - hit).length, 1e-4), val) for co, val in corner_cols[_idx]]
+                arow.append(sum(w * v for w, v in ws) / sum(w for w, _v in ws) * 255.0)
             else:
                 arow.append(0.0)
         heights.append(hrow)
         alphas.append(arow)
-    return Terrain((x0, y0), spacing, heights, power, material, alphas if kd else None, obj.name, spacing_y)
+    return Terrain((x0, y0), spacing, heights, power, material, alphas if painted else None, obj.name, spacing_y,
+                   tex_scale, lm_scale)
+
+
+def _linear_to_srgb(x: float) -> float:
+    x = min(max(x, 0.0), 1.0)
+    return x * 12.92 if x <= 0.0031308 else 1.055 * x ** (1 / 2.4) - 0.055
 
 
 # ---------------------------------------------------------------- entities

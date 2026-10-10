@@ -258,6 +258,8 @@ void WriteBSP(node_t *headnode, face_t *leaffaces) {
     if (nummodels == 0) EmitAreaPortals(headnode);
     for (int i = 0; i < nummapdisps; i++) {
         if (mapdisps[i].entitynum != entity_num) continue;
+        if (!mapdisps[i].face.originalface)          /* (its side was dropped: a duplicate or flat plane) */
+            Error("A displacement's side has no face (its brush has a duplicate or flat side)");
         EmitDispFaceVertexes(&mapdisps[i].face);
         EmitFace(&mapdisps[i].face, 0);
     }
@@ -904,6 +906,11 @@ void EndBSPFile(const char *path) {
         memcpy(game + 12, &o1, 4);
         memcpy(game + 28, &o2, 4);
     }
+    /* (the engine's limits: vbsp stops at them, and the game won't load a map past them) */
+    if (numbrushes > 8192) Error("MAX_MAP_BRUSHES: %d brushes (the game allows 8192)", numbrushes);
+    if (numbrushsides > 65536) Error("MAX_MAP_BRUSHSIDES: %d brush sides (the game allows 65536)", numbrushsides);
+    if (numtexinfo > 12288) Error("MAX_MAP_TEXINFO: %d (the game allows 12288)", numtexinfo);
+    if (numtexdata > 2048) Error("MAX_MAP_TEXDATA: %d materials (the game allows 2048)", numtexdata);
     Msg("Writing %s\n", path);
     WriteBSPFile(path);
 }

@@ -64,6 +64,8 @@ def build_patches(t: Terrain) -> list[tuple[Brush, Block]]:
             brush = g.box_brush((x0, y0, zb - TERRAIN_BASE_THICKNESS), (x1, y1, zb),
                                 "tools/toolsnodraw", t.source)
             brush.faces[0].material = t.material  # top face
+            brush.faces[0].texture_scale = t.texture_scale
+            brush.faces[0].lightmap_scale = t.lightmap_scale
             # vbsp allows at most 125 luxels per side of a displacement: 2048-unit patches need scale 17+
             brush.faces[0].lightmap_scale = max(brush.faces[0].lightmap_scale,
                                                 math.ceil(step * max(t.spacing, t.sy) / MAX_DISP_LUXELS))

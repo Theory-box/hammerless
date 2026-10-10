@@ -603,7 +603,7 @@ static void AddBrushBevels(mapbrush_t *b) {
 /* ------------------------------------------------------------------ the VMF reader */
 typedef struct {
     char *text, *at;
-    char token[4096];
+    char token[32768];
     int quoted;
 } parser_t;
 
@@ -627,7 +627,8 @@ static int next_token(parser_t *p) {
         p->quoted = 1;
         s++;
         while (*s && *s != '"') {
-            if (n < (int)sizeof(p->token) - 1) p->token[n++] = *s;
+            if (n >= (int)sizeof(p->token) - 1) Error("A value in the map is longer than 32767 characters");
+            p->token[n++] = *s;
             s++;
         }
         if (*s == '"') s++;
@@ -664,7 +665,7 @@ static void load_dispinfo(parser_t *p, side_t *side) {
     char key[4096], block[64];
     while (next_token(p)) {
         if (!p->quoted && !strcmp(p->token, "}")) break;
-        strcpy(key, p->token);
+        snprintf(key, sizeof(key), "%s", p->token);
         if (!next_token(p)) break;
         if (!p->quoted && !strcmp(p->token, "{")) {
             strncpy(block, key, sizeof(block) - 1);
@@ -673,7 +674,7 @@ static void load_dispinfo(parser_t *p, side_t *side) {
             char k2[4096];
             while (next_token(p)) {
                 if (!p->quoted && !strcmp(p->token, "}")) break;
-                strcpy(k2, p->token);
+                snprintf(k2, sizeof(k2), "%s", p->token);
                 if (!next_token(p)) break;
                 if (!p->quoted && !strcmp(p->token, "{")) { skip_block(p); continue; }
                 if (_strnicmp(k2, "row", 3)) continue;
@@ -711,7 +712,7 @@ static void load_side(parser_t *p, mapbrush_t *b, loadent_t *le, int *side_index
     char key[4096];
     while (next_token(p)) {
         if (!p->quoted && !strcmp(p->token, "}")) break;
-        strcpy(key, p->token);
+        snprintf(key, sizeof(key), "%s", p->token);
         if (!next_token(p)) break;
         if (!p->quoted && !strcmp(p->token, "{")) {
             if (!_stricmp(key, "dispinfo")) load_dispinfo(p, side);
@@ -814,7 +815,7 @@ static void load_solid(parser_t *p, loadent_t *le) {
     char key[4096];
     while (next_token(p)) {
         if (!p->quoted && !strcmp(p->token, "}")) break;
-        strcpy(key, p->token);
+        snprintf(key, sizeof(key), "%s", p->token);
         if (!next_token(p)) break;
         if (!p->quoted && !strcmp(p->token, "{")) {
             if (!_stricmp(key, "side")) load_side(p, b, le, &side_index);
@@ -855,6 +856,9 @@ static void load_solid(parser_t *p, loadent_t *le) {
         for (int i = 0; i < b->numsides; i++) {
             side_t *s = &b->original_sides[i];
             if (!s->disp) continue;
+            if (!s->winding)
+                Error("A displacement's face was clipped away (entity %d, brush %d): is its brush flat?", b->entitynum,
+                      b->brushnum);
             if (s->winding->numpoints != 4)
                 Error("Trying to create a non-quad displacement! (entity %d, brush %d)", b->entitynum, b->brushnum);
             mapdisp_t *md = &mapdisps[s->disp - 1];
@@ -938,7 +942,7 @@ static void load_entity(parser_t *p) {
     char key[4096];
     while (next_token(p)) {
         if (!p->quoted && !strcmp(p->token, "}")) break;
-        strcpy(key, p->token);
+        snprintf(key, sizeof(key), "%s", p->token);
         if (!next_token(p)) break;
         if (!p->quoted && !strcmp(p->token, "{")) {
             if (!_stricmp(key, "solid")) load_solid(p, &le);
@@ -948,7 +952,7 @@ static void load_entity(parser_t *p) {
                 char k2[4096];
                 while (next_token(p)) {
                     if (!p->quoted && !strcmp(p->token, "}")) break;
-                    strcpy(k2, p->token);
+                    snprintf(k2, sizeof(k2), "%s", p->token);
                     if (!next_token(p)) break;
                     if (p->quoted || strcmp(p->token, "{")) continue;
                     if (_stricmp(k2, "overlaydata")) { skip_block(p); continue; }
@@ -956,7 +960,7 @@ static void load_entity(parser_t *p) {
                     char k3[4096];
                     while (next_token(p)) {
                         if (!p->quoted && !strcmp(p->token, "}")) break;
-                        strcpy(k3, p->token);
+                        snprintf(k3, sizeof(k3), "%s", p->token);
                         if (!next_token(p)) break;
                         if (!p->quoted && !strcmp(p->token, "{")) { skip_block(p); continue; }
                         WaterOverlay_Key(w, k3, p->token);
@@ -968,7 +972,7 @@ static void load_entity(parser_t *p) {
                 char k2[4096];
                 while (next_token(p)) {
                     if (!p->quoted && !strcmp(p->token, "}")) break;
-                    strcpy(k2, p->token);
+                    snprintf(k2, sizeof(k2), "%s", p->token);
                     if (!next_token(p)) break;
                     epair_t *ep = xalloc(sizeof(*ep));
                     ep->key = copystring(k2);
@@ -1172,7 +1176,7 @@ void ReadMapFile(const char *path, int main_map) {
     if (main_map || verbose) Msg("Loading %s\n", path);
     char key[4096];
     while (next_token(&p)) {
-        strcpy(key, p.token);
+        snprintf(key, sizeof(key), "%s", p.token);
         if (!next_token(&p)) break;
         if (!p.quoted && !strcmp(p.token, "{")) {
             if (!_stricmp(key, "world") || !_stricmp(key, "entity")) load_entity(&p);
