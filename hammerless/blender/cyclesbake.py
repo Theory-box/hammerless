@@ -34,7 +34,7 @@ NORMAL_ATTR = "hl_normal"
 
 def _gpu_devices(prefs):
     """Turn on a GPU for this bake if the user has none chosen; returns how to put the preferences back."""
-    saved = (prefs.compute_device_type, [(d, d.use) for d in prefs.devices])
+    saved = (prefs.compute_device_type, [(d.id, d.use) for d in prefs.devices])
     if prefs.compute_device_type != "NONE":
         prefs.refresh_devices()
         if any(d.use and d.type == prefs.compute_device_type for d in prefs.devices):
@@ -58,8 +58,11 @@ def _restore_devices(prefs, saved):
     kind, uses = saved
     try:
         prefs.compute_device_type = kind
-        for d, use in uses:
-            d.use = use
+        prefs.refresh_devices()
+        by_id = {d.id: d for d in prefs.devices}
+        for did, use in uses:
+            if did in by_id:
+                by_id[did].use = use
     except (TypeError, ReferenceError):
         pass
 
@@ -265,7 +268,9 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
                 target.select_set(True, view_layer=layer)
                 bpy.ops.object.bake(type="COMBINED", pass_filter={"DIRECT", "INDIRECT", "DIFFUSE"}, margin=lb.CHART_PAD,
                                     use_clear=True)
-            return np.array(image.pixels[:], np.float32).reshape(height, width, 4)[:, :, :3] * TO_VRAD
+            px = np.empty(width * height * 4, np.float32)     # (not pixels[:]: a list of every float, GBs)
+            image.pixels.foreach_get(px)
+            return px.reshape(height, width, 4)[:, :, :3] * TO_VRAD
 
         prep = time.time() - t0
         tb = time.time()

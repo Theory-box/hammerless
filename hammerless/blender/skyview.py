@@ -103,6 +103,7 @@ def _draw():
     gpu.state.blend_set("NONE")
     _state["batch"].draw(sh)
     gpu.state.depth_test_set("NONE")
+    gpu.state.depth_mask_set(True)          # (as it was: the views drawn after this write depth)
 
 
 def redraw(*_args):

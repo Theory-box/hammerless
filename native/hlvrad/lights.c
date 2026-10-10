@@ -166,6 +166,10 @@ static void SetupLightNormalFromProps(const vec3_t angles, float angle, float pi
 
 static void ParseLightGeneric(const entity_t *e, directlight_t *dl) {
     dl->light.style = (int)FloatForKey(e, "style");
+    if (dl->light.style < 0 || dl->light.style > 63) {      /* (the engine has 64 styles; 255 ends a face's list) */
+        Msg("Warning: a light's style %d isn't 0 to 63: style 0 instead\n", dl->light.style);
+        dl->light.style = 0;
+    }
     if (FloatForKeyWithDefault(e, "_castentityshadow", 1.0f) != 0) dl->light.flags |= DWL_FLAGS_CASTENTITYSHADOWS;
     else dl->light.flags &= ~DWL_FLAGS_CASTENTITYSHADOWS;
     VectorClear(dl->light.shadow_cast_offset);

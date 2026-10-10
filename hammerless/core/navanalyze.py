@@ -451,6 +451,9 @@ def compress_visibility(mesh, lists: list[dict[int, int]]) -> None:
 def analyze(mesh, vmf_text: str, bsp_path: str, content, game_dir: str | None = None, progress=None):
     """nav_analyze on our nav mesh: hiding spots, visibility, occupy times. Marks it analyzed so
     the game loads it as is. (Light intensity: pending; left at the game's default 1.0.)"""
+    from . import fastnav
+    if not fastnav.available():
+        raise RuntimeError("the nav analysis needs the native DLL")
     materials = MaterialContents(content, game_dir)
     top = _parsed(vmf_text)                    # parsed once for both steps
     SKIPPED.clear()

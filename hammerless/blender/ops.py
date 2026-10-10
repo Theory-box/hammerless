@@ -253,6 +253,10 @@ def build_map_text(context, root: str | None):
         return None, None, rep
     gamedir = os.path.join(root, "left4dead2") if root else None
     content = game_content(root)        # loads the game's surface list before materials are read
+    if content is not None and f"maps/{s.map_name}.bsp" in getattr(content, "files", ()):
+        rep.errors.append(f"Map Name '{s.map_name}' is one of the game's own maps: give yours another name (building "
+                          "it would put files over the official map's in the game folder)")
+        return None, None, rep
     ir, _mats = extract_scene(context, rep, gamedir, content)
     if rep.errors:
         return ir, None, rep
@@ -326,13 +330,19 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
         return
     m.write_model_materials(gamedir, f"models/hammerless/{ir.settings.name}", ir.model_materials)
     built = 0
+    writer = _writer_version() if own else "studiomdl"     # (a fixed model writer makes the models again)
     for name, spec in ir.models.items():
         sig = hashlib.sha1((m.reference_smd(spec.triangles) + m.collision_smd(spec.collision)
-                            + m.qc_text(spec) + ("own" if own else "studiomdl")).encode()).hexdigest()
+                            + m.qc_text(spec) + writer).encode()).hexdigest()
         folder = os.path.join(work, "models", name.split("/")[-1])
         stamp = os.path.join(folder, "built.sha1")
-        have = all(os.path.exists(os.path.join(gamedir, *f.split("/"))) for f in m.model_files(name)[:3])
-        if have and os.path.exists(stamp) and open(stamp).read() == sig:
+        files = m.model_files(name)[:3] + (m.model_files(name)[3:] if spec.collision else [])   # (.phy too)
+        have = all(os.path.exists(os.path.join(gamedir, *f.split("/"))) for f in files)
+        old = None
+        if have and os.path.exists(stamp):
+            with open(stamp) as f:
+                old = f.read()
+        if old == sig:
             continue
         if own:
             try:
@@ -356,6 +366,17 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
         built += 1
     _remove_old_models(gamedir, ir)
     rep.info.append(f"Custom Models: {len(ir.models)} ({built} compiled now)")
+
+
+def _writer_version() -> str:
+    """Hammerless's own model writer, as a fingerprint of its code."""
+    import hashlib
+    from ..core import mdlwrite, phywrite
+    h = hashlib.sha1()
+    for mod in (mdlwrite, phywrite):
+        with open(mod.__file__, "rb") as f:
+            h.update(f.read())
+    return "own-" + h.hexdigest()[:12]
 
 
 def _remove_old_models(gamedir: str, ir) -> None:
@@ -432,6 +453,8 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
                 _compile_models(root, gamedir, ir, rep2, os.path.dirname(path))
                 if rep2.errors:
                     return None, root, rep2
+            else:
+                _remove_old_models(gamedir, ir)        # (every Custom Model deleted: their files too)
         except OSError as ex:
             rep2.errors.append(f"Can't write the map's scripts into the game folder ({ex}). Is Left 4 Dead 2 "
                                "installed somewhere that needs administrator rights?")

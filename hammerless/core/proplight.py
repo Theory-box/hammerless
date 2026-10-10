@@ -132,6 +132,11 @@ def _prop_triangles(mdl: bytes, vvd: bytes, vtx: bytes, colors: list[np.ndarray]
                     tex = textures[mat] if 0 <= mat < len(textures) else ""
                     xmesh = xlod + _i32(vtx, xlod + 4) + 9 * mm
                     ngroups = _i32(vtx, xmesh)
+                    # (strip group headers: 25 bytes, or 33 in newer compiles: whichever reads cleanly, as mdl.py)
+                    from .mdl import _read_strip_groups
+                    order = (33, 25) if _i32(mdl, 4) >= 49 else (25, 33)
+                    gsize = next((sz for sz in order if _read_strip_groups(vtx, xmesh + _i32(vtx, xmesh + 4),
+                                                                          ngroups, sz) is not None), 25)
                     for g in range(ngroups):
                         if k >= len(colors):
                             return tris, cols, uvs, names
@@ -139,7 +144,7 @@ def _prop_triangles(mdl: bytes, vvd: bytes, vtx: bytes, colors: list[np.ndarray]
                         k += 1
                         if m or lod:
                             continue
-                        verts, idx = _strip_group(vtx, xmesh + _i32(vtx, xmesh + 4) + 25 * g)
+                        verts, idx = _strip_group(vtx, xmesh + _i32(vtx, xmesh + 4) + gsize * g)
                         if len(c) < len(verts):
                             continue
                         for i in range(0, len(idx) - 2, 3):

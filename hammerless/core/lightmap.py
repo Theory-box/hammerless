@@ -160,7 +160,10 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
         else:
             pos, flat = corners, corners
             tris = np.array([(0, i, i + 1) for i in range(1, num_edges - 1)], dtype=np.int64)
-        lux = flat @ lvecs[:, :3].T + lvecs[:, 3] - np.array(mins, dtype=np.float64)
+        if di >= 0 and num_edges == 4:
+            lux = disp_luxels(len(flat), w, h)
+        else:
+            lux = flat @ lvecs[:, :3].T + lvecs[:, 3] - np.array(mins, dtype=np.float64)
         tex = (flat @ tvecs[:, :3].T + tvecs[:, 3]) / np.array([max(tw, 1), max(th, 1)], dtype=np.float64)
         if offset is not None:
             pos = pos + np.array(offset)
@@ -186,6 +189,14 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
         atlas=atlas, faces=len(blocks), luxels=luxels, hdr=hdr,
         tex_uvs=np.concatenate(tex_uvs).astype(np.float32) if tex_uvs else np.zeros((0, 2), np.float32),
         tri_material=np.concatenate(tri_mats) if tri_mats else np.zeros(0, np.int32), materials=materials)
+
+
+def disp_luxels(npoints: int, w: int, h: int) -> np.ndarray:
+    """A displacement's grid points in its lightmap: the compilers lay it out over the grid (columns along u,
+    rows along v, edge to edge), not through the face's lightmap vectors (vrad's DispUVToSurfPoint)."""
+    n = int(round(npoints ** 0.5))
+    r, c = np.divmod(np.arange(n * n), n)
+    return np.stack([c / max(n - 1, 1) * (w - 1), r / max(n - 1, 1) * (h - 1)], axis=1).astype(np.float64)
 
 
 def _displacement(corners: np.ndarray, dispinfo: bytes, dispverts: bytes, di: int):

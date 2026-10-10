@@ -998,6 +998,8 @@ class Generator(Sampler):
     def get_nearest_nav_area(self, pos, max_dist: float = 10000.0):
         """GetNearestNavArea(pos, anyZ, maxDist, checkLOS=false, checkGround=true): the area whose
         closest point is nearest in 3D, searched in rings over the 300-unit area grid."""
+        if not self.areas:
+            return None                       # (no nav mesh at all: nothing is nearest)
         ok, z, _n = self.ground_height(pos)
         if not ok:
             return None

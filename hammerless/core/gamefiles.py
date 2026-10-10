@@ -22,7 +22,10 @@ def script_path(name: str) -> str:
 # scripts/vscripts folder - a sub-folder path silently does nothing (verified in-game).
 # These scripts get map-specific names there instead.
 def director_input_script(map_name: str, name: str) -> str:
-    return f"hammerless_{map_name}_{name}"
+    # (with a short hash of both: map "a" + "b_director" and map "a_b" + "director" would share a file)
+    import hashlib
+    tag = hashlib.sha1(f"{map_name}\0{name}".encode("utf-8")).hexdigest()[:6]
+    return f"hammerless_{map_name}_{name}_{tag}"
 
 
 # ---------------------------------------------------------------- debug log

@@ -2208,10 +2208,10 @@ class TestSettingsAndScripts(unittest.TestCase):
         self.assertEqual(ents["env_fog_controller"].get("fogenable"), "1")
         self.assertEqual(ents["logic_script"].get("vscripts"), "hammerless/debug_m")
         self.assertEqual(ents["logic_auto"].blocks("connections")[0].get("OnMapSpawn"),
-                         "director,BeginScript,hammerless_m_director,1,1")
+                         "director,BeginScript,hammerless_m_director_0a3c80,1,1")
         from hammerless.core.gamefiles import game_files
         files = game_files(ir)
-        self.assertIn("CommonLimit = 7", files["scripts/vscripts/hammerless_m_director.nut"])
+        self.assertIn("CommonLimit = 7", files["scripts/vscripts/hammerless_m_director_0a3c80.nut"])
         self.assertIn("RegisterScriptGameEventListener", files["scripts/vscripts/hammerless/debug_m.nut"])
 
     def test_crescendo_preset(self):
@@ -2225,8 +2225,8 @@ class TestSettingsAndScripts(unittest.TestCase):
         self.assertTrue(rep.ok, rep.errors)
         self.assertEqual([w for w in rep.warnings if not w.startswith("No End Safe Room")], [])
         self.assertNotIn("hammerless_crescendo", text)
-        self.assertIn("director,ScriptedPanicEvent,hammerless_m_c7,0,1", text)
-        nut = game_files(ir)["scripts/vscripts/hammerless_m_c7.nut"]
+        self.assertIn("director,ScriptedPanicEvent,hammerless_m_c7_1ab010,0,1", text)
+        nut = game_files(ir)["scripts/vscripts/hammerless_m_c7_1ab010.nut"]
         # building again (outputs already rewritten) stays clean
         text2, rep2 = build_vmf(ir)
         self.assertEqual([w for w in rep2.warnings if not w.startswith("No End Safe Room")], [])
@@ -2243,7 +2243,7 @@ class TestSettingsAndScripts(unittest.TestCase):
         for part in crescendo_button("c1").parts:
             ir.entities.append(part.entity)
         build_vmf(ir)
-        self.assertIn("CommonLimit = 20", game_files(ir)["scripts/vscripts/hammerless_m_c1.nut"])
+        self.assertIn("CommonLimit = 20", game_files(ir)["scripts/vscripts/hammerless_m_c1_ea25b7.nut"])
 
     def test_crescendo_unknown_name_warns(self):
         from hammerless.core.ir import Output

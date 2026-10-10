@@ -253,8 +253,11 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
 def resolve_crescendo(ir: MapIR, parameter: str) -> str | None:
     """Crescendo name an output refers to. Accepts 'crescendo_1' and the v0.1 form
     'hammerless/crescendo_crescendo_1'."""
-    from .gamefiles import crescendo_key
-    name = parameter.split("/")[-1].removeprefix(f"hammerless_{ir.settings.name}_")  # already resolved
+    from .gamefiles import crescendo_key, director_input_script
+    for c in ir.crescendos:                      # already resolved (its script's name)
+        if parameter == director_input_script(ir.settings.name, c):
+            return c
+    name = parameter.split("/")[-1].removeprefix(f"hammerless_{ir.settings.name}_")  # (older builds' form)
     for candidate in (name, name.removeprefix("crescendo_"), crescendo_key(name),
                       crescendo_key(name).removeprefix("crescendo_")):
         if candidate in ir.crescendos:

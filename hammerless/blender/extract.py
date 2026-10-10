@@ -135,10 +135,7 @@ class MaterialResolver:
     def _resolve_path(self, mat) -> str:
         hs = mat.hammerless
         surface = hs.surface if hs.surface != "DEFAULT" else ""
-        path = hs.source_material.strip().lower().replace("\\", "/")
-        if not path and "/" in mat.name and not mat.name.startswith("hammerless/"):
-            path = re.sub(r"\.\d{3}$", "", mat.name.lower())   # material named like a game path (not its .001)
-        path = re.sub(r"\.vmt$", "", re.sub(r"^/*(materials/)?", "", path))    # (as the game names it)
+        path = game_path(mat)
         if path:
             if surface and self.game_dir:
                 return self._patch(path, surface)
@@ -147,7 +144,10 @@ class MaterialResolver:
 
     def _patch(self, base: str, surface: str) -> str:
         """Game material with a different surface: a patch VMT that includes the original."""
+        import hashlib
         safe = re.sub(r"[^a-z0-9_]", "_", base)
+        if safe != base.replace("/", "_") or "_" in base:     # (a/b_c and a_b/c would share a name)
+            safe += "_" + hashlib.sha1(base.encode("utf-8")).hexdigest()[:6]
         path = f"hammerless/{self.settings.map_name}/patch_{safe}_{surface}"
         write_patch_material(self.game_dir, path, base, surface)
         self.exported.append(path)
@@ -188,12 +188,23 @@ class MaterialResolver:
 _TEXTURE_CACHE: dict[str, tuple] = {}     # output file -> what it was made from (skips re-converting)
 
 
+def game_path(mat) -> str:
+    """The game material a Blender material uses ("" for a custom one): its Game Material, else its name when that
+    looks like a game path (not its .001), as the game names it (no materials/, no .vmt)."""
+    if mat is None:
+        return ""
+    path = mat.hammerless.source_material.strip().lower().replace("\\", "/")
+    if not path and "/" in mat.name and not mat.name.startswith("hammerless/"):
+        path = re.sub(r"\.\d{3}$", "", mat.name.lower())
+    return re.sub(r"\.vmt$", "", re.sub(r"^/*(materials/)?", "", path))
+
+
 def texture_file_name(name: str) -> str:
     """A material name as a file name: a-z, 0-9 and _, plus a short hash when that changed the name
     (so 'Wall.001' and 'Wall_001' don't overwrite each other's texture)."""
     import hashlib
     safe = re.sub(r"[^a-z0-9_]", "_", name.lower())
-    if safe != name.lower():
+    if safe != name:                    # (also 'Wall' and 'wall': the game's files don't care about case)
         safe += "_" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:6]
     return safe
 
@@ -266,14 +277,20 @@ def image_to_rgba8(img) -> np.ndarray:
         raise ValueError("image has no pixels (missing file?)")
     tw, th = _pow2_floor(w), _pow2_floor(h)
     src = img
-    if (tw, th) != (w, h):
-        src = img.copy()
-        src.scale(tw, th)
     px = np.empty(tw * th * 4, dtype=np.float32)
-    src.pixels.foreach_get(px)
-    if src is not img:
-        bpy.data.images.remove(src)
+    try:
+        if (tw, th) != (w, h):
+            src = img.copy()
+            src.scale(tw, th)
+        src.pixels.foreach_get(px)
+    finally:
+        if src is not img:
+            bpy.data.images.remove(src)        # (never left behind in the .blend, even on an error)
     arr = px.reshape(th, tw, 4)[::-1]           # Blender rows are bottom-up
+    if img.is_float and img.alpha_mode != "NONE":
+        # (float buffers are premultiplied in Blender: the game's alpha is straight, else edges go dark)
+        a = arr[..., 3:4]
+        arr[..., :3] = np.where(a > 1e-6, arr[..., :3] / np.maximum(a, 1e-6), 0.0)
     if img.colorspace_settings.name != "Non-Color" and img.is_float:
         arr[..., :3] = np.where(arr[..., :3] <= 0.0031308, arr[..., :3] * 12.92,
                                 1.055 * np.power(np.clip(arr[..., :3], 0, None), 1 / 2.4) - 0.055)
@@ -467,21 +484,16 @@ PROP_CLASSES = {"STATIC": "prop_static", "DYNAMIC": "prop_dynamic", "PHYSICS": "
 def _model_texture(mat, path: str, content) -> str:
     """The texture a model material shows: a Hammerless-made material's own texture, or the
     $basetexture of the game material it uses."""
-    from ..core.models import base_texture_of
     if path.startswith("hammerless/"):
-        hs = mat.hammerless if mat is not None else None
-        base = (hs.source_material.strip().lower().replace("\\", "/") if hs else "") or ""
-        if not base and mat is not None and "/" in mat.name and not mat.name.startswith("hammerless/"):
-            base = mat.name.lower()            # material named like a game path (as MaterialResolver does)
+        base = game_path(mat)
         if not base:
             return path                       # a converted image texture: the VTF is at the same path
         path = base                           # a game material with a surface patch: show the original
     if content is not None:
-        data = content.read(f"materials/{path}.vmt")
-        if data:
-            tex = base_texture_of(data.decode("latin-1", "replace"))
-            if tex:
-                return tex
+        from ..core.gamematerials import base_texture
+        tex = base_texture(content, path)     # (patch materials followed to the one they include)
+        if tex:
+            return tex
     return path
 
 
@@ -552,7 +564,7 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
             if mi not in mat_names:
                 mat = slots[mi].material if mi < len(slots) else None
                 path, _ts, _lm = materials.resolve(mat)
-                mname = texture_file_name(mat.name) if mat is not None else "default"
+                mname = texture_file_name(mat.name) if mat is not None else "_empty_slot"
                 mode = _alpha_mode(mat) if mat is not None else "OPAQUE"
                 ir.model_materials[mname] = (_model_texture(mat, path, content), mode == "BLENDED", mode == "CUTOUT")
                 mat_names[mi] = mname
@@ -597,6 +609,11 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
             bm.free()
     finally:
         eval_obj.to_mesh_clear()
+    if kind == "PHYSICS" and not pieces:
+        materials.report.warnings.append(
+            f"Custom Model '{obj.name}' is a Physics Prop but has no solid part (every part is flat or thinner than "
+            "half a unit): the game removes a physics prop it can't simulate. Give it some thickness, or make it "
+            "Static or Dynamic")
     surface = "default"
     for slot in obj.material_slots:
         if slot.material is not None and slot.material.hammerless.surface not in ("", "DEFAULT"):

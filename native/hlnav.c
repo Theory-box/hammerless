@@ -57,6 +57,7 @@ static void world_impl(int nbrushes, const double *bounds, const int *side_first
                      double cell, int cx0, int cy0, int w, int h, const int *cell_start, const int *cell_count,
                      int nids, const int *cell_ids) {
     free(g_sides); free(g_brushes); free(g_cell_start); free(g_cell_count); free(g_cell_ids);
+    g_sides = NULL, g_brushes = NULL, g_cell_start = NULL, g_cell_count = NULL, g_cell_ids = NULL;
     g_sides = xmalloc(sizeof(Side) * (nsides ? nsides : 1));
     for (int i = 0; i < nsides; i++) {
         const double *s = sides7 + 7 * i;
@@ -600,9 +601,15 @@ EXPORT void hl_cuts(int n, const double *bounds, const int *counts, const double
     if (n <= 0) return;
     int total = 0;
     for (int i = 0; i < n; i++) total += counts[i] & ~CUT_ONLY;
-    CUTB = xrealloc(NULL, sizeof(double) * 6 * n);
-    CUTN = xrealloc(NULL, sizeof(int) * n);
-    CUTP = xrealloc(NULL, sizeof(double) * 4 * (total + 1));
+    /* (called outside OOM_WRAP: plain allocations, and no volumes rather than a crash when one fails) */
+    CUTB = malloc(sizeof(double) * 6 * n);
+    CUTN = malloc(sizeof(int) * n);
+    CUTP = malloc(sizeof(double) * 4 * (total + 1));
+    if (!CUTB || !CUTN || !CUTP) {
+        free(CUTB), free(CUTP), free(CUTN);
+        CUTB = NULL, CUTP = NULL, CUTN = NULL;
+        return;
+    }
     memcpy(CUTB, bounds, sizeof(double) * 6 * n);
     memcpy(CUTN, counts, sizeof(int) * n);
     memcpy(CUTP, planes, sizeof(double) * 4 * total);
@@ -843,6 +850,7 @@ static void runs(int d, int *run) {
 /* CreateNavAreasFromNodes: writes (node index, width, height) per area in build order; returns the count */
 static int create_areas_impl(int *out, int cap) {
     free(COVERED); free(CLOSED);
+    COVERED = NULL, CLOSED = NULL;          /* (oom_cleanup frees them: not twice) */
     COVERED = xcalloc(NN + 1, 1); CLOSED = xcalloc(NN + 1, 1);
     for (int i = 0; i < NN; i++) CLOSED[i] = (unsigned char)closed_cell(i);
     int *east = xmalloc(sizeof(int) * (NN + 1)), *south = xmalloc(sizeof(int) * (NN + 1));

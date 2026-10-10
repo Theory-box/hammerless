@@ -88,7 +88,7 @@ def autotest_script(waypoints: list[Waypoint], map_name: str, start_door_name: t
         f'    {{ kind = "{w.kind}", pos = Vector({w.pos[0]:.0f}, {w.pos[1]:.0f}, {w.pos[2]:.0f}), '
         f'label = "{sq_text(w.label)}", target = "{sq_text(w.target)}" }}' for w in waypoints)
     return (AUTOTEST_TEMPLATE.replace("%MAP%", map_name).replace("%WAYPOINTS%", rows)
-            .replace("%START_DOOR%", start_door_name[0]).replace("%DOOR_AWAY_FROM%", start_door_name[1]))
+            .replace("%START_DOOR%", sq_text(start_door_name[0])).replace("%DOOR_AWAY_FROM%", sq_text(start_door_name[1])))
 
 
 AUTOTEST_TEMPLATE = r'''// Hammerless bot walkthrough test for %MAP%. No cheats: map scripting only.

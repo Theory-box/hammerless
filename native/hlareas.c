@@ -51,7 +51,7 @@ static int new_area_rec(const double *nw, const double *se, int attributes) {   
 static void areas_reset(void) {
     for (int i = 0; i < NA_; i++) for (int d = 0; d < 4; d++) { il_free(&A[i].connect[d]); il_free(&A[i].incoming[d]); }
     NA_ = 0; il_free(&AL); g_seq = 0;
-    free(NODE_AREA); NODE_AREA = xmalloc(sizeof(int) * (NN + 1));
+    free(NODE_AREA); NODE_AREA = NULL; NODE_AREA = xmalloc(sizeof(int) * (NN + 1));
     for (int i = 0; i < NN; i++) NODE_AREA[i] = -1;
 }
 

@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .lightmap import (DISPINFO_SIZE, FACE_SIZE, MODEL_SIZE, SURF_BUMPLIGHT, SURF_NOLIGHT, SURF_SKY, SURF_SKY2D,
-                       TEXINFO_SIZE, _displacement, _entity_origins, _lumps)
+                       TEXINFO_SIZE, _displacement, _entity_origins, _lumps, disp_luxels)
 
 OO_SQRT_2 = 0.70710676908493042
 OO_SQRT_3 = 0.57735025882720947
@@ -130,10 +130,11 @@ def read_faces(data: bytes) -> tuple[list[BakeFace], int]:
         corners = verts[vidx].astype(np.float64)
         if di >= 0 and num_edges == 4:
             pos, flat, tris = _displacement(corners, dispinfo, dispverts, di)
+            lux = disp_luxels(len(flat), size[0] + 1, size[1] + 1)     # (over the grid, as vrad lays it out)
         else:
             pos, flat = corners, corners
             tris = np.array([(0, i, i + 1) for i in range(1, num_edges - 1)], dtype=np.int64)
-        lux = flat @ lvecs[:, :3].T + lvecs[:, 3] - np.array(mins, dtype=np.float64)
+            lux = flat @ lvecs[:, :3].T + lvecs[:, 3] - np.array(mins, dtype=np.float64)
         offset = model_of.get(k)
         if offset is not None:
             pos = pos + np.array(offset)

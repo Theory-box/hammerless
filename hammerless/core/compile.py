@@ -1544,7 +1544,11 @@ def _game_command(tools: Tools, window: LaunchOptions, extra: list[str] | None =
            "-w", str(window.width), "-h", str(window.height)]
     if window.borderless:
         cmd.append("-noborder")
-    cmd += window.extra.split() + (extra or [])
+    import shlex
+    try:
+        cmd += shlex.split(window.extra, posix=False) + (extra or [])    # (a quoted value keeps its spaces)
+    except ValueError:
+        cmd += window.extra.split() + (extra or [])
     if window.difficulty:
         cmd += ["+z_difficulty", window.difficulty]
     if window.lan:
@@ -1643,7 +1647,7 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
     log_start = os.path.getsize(log) if os.path.exists(log) else 0
     window = window or LaunchOptions()
     mode = map_mode(tools, map_name)
-    map_cmd = f"{map_name} {mode}" if mode != "coop" else map_name
+    map_cmd = f"{map_name} {mode}"           # (always the mode: a bare "map" keeps the game's current one)
     booting = _prestarted_booting(tools)
     fresh = not game_running() and not booting
     if not fresh:
@@ -1657,7 +1661,7 @@ def launch_game(tools: Tools, map_name: str, generate_nav: bool = False, extra: 
             pre = ["sv_cheats 1", "mat_fullbright 0"] + pre
         commands = ["con_logfile console.log"] + pre + ["sv_cheats 0", f"map {map_cmd}"]
     cmd = _game_command(tools, window, extra)
-    cmd += ["+map", map_name] + ([mode] if mode != "coop" else [])
+    cmd += ["+map", map_name, mode]
     # (a new launch before anything is sent: an older one's scripts see it and stop)
     LOAD_STATUS["launch_id"] += 1
     LOAD_STATUS["seconds"] = None

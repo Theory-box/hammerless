@@ -300,7 +300,12 @@ class HL_OT_nav_load(bpy.types.Operator):
                       "where survivors can go, where the path to the end room breaks, drops and jump-ups")
 
     def execute(self, context):
-        msg = load(context)
+        import struct
+        try:
+            msg = load(context)
+        except (ValueError, struct.error, OSError) as ex:     # (an unknown version, or one being written)
+            self.report({"ERROR"}, f"Couldn't read the game's nav mesh: {ex}")
+            return {"CANCELLED"}
         context.scene.hammerless.show_nav = _state["mesh"] is not None
         self.report({"INFO"}, msg)
         if _state["report"] is not None:

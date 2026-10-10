@@ -1146,9 +1146,14 @@ void GpuGISurfaces(void) {
 }
 
 /* what the rays need (also for detail props): the tree's parents, displacements' triangles, the sky light */
+static void AmbientWorldLights(void);
 void AmbientSetup(void) {
     static int done;
-    if (done) return;
+    /* (the world lights each time: -gi sets up first, before ExportDirectLightsToWorldLights writes them) */
+    if (done) {
+        AmbientWorldLights();
+        return;
+    }
     done = 1;
     dtexdata = (const dtexdata_t *)lumps[LUMP_TEXDATA].data;
     BuildParents();
@@ -1168,6 +1173,10 @@ void AmbientSetup(void) {
         walkdbg = 0;
         Msg("walk: face %d frac %.5f\n", f, g_lastHitFrac);
     }
+    AmbientWorldLights();
+}
+
+static void AmbientWorldLights(void) {
     int wlump = g_bHDR ? LUMP_WORLDLIGHTS_HDR : LUMP_WORLDLIGHTS;
     worldlights = lumps[wlump].data;
     numworldlights = lumps[wlump].len / 100;

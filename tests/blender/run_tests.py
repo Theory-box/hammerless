@@ -457,7 +457,9 @@ def test_scene_settings_reach_map():
     assert entities(blocks, "logic_script")
     lm = {sd.get("lightmapscale") for sol in world_solids(blocks)[:1] for sd in sol.blocks("side")}
     assert lm == {"32"}, lm
-    nut = os.path.join(FAKE_GAME, "left4dead2", "scripts", "vscripts", "hammerless_test_map_director.nut")
+    from hammerless.core.gamefiles import director_input_script
+    nut = os.path.join(FAKE_GAME, "left4dead2", "scripts", "vscripts",
+                       director_input_script("test_map", "director") + ".nut")
     assert "CommonLimit = 12" in open(nut).read()
 
 
@@ -470,8 +472,9 @@ def test_crescendo_names_unique():
     blocks, log = export()
     assert blocks, log
     params = sorted(b.blocks("connections")[0].get("OnPressed") for b in entities(blocks, "func_button"))
-    assert params == ["director,ScriptedPanicEvent,hammerless_test_map_crescendo_1,0,1",
-                      "director,ScriptedPanicEvent,hammerless_test_map_crescendo_2,0,1"], params
+    from hammerless.core.gamefiles import director_input_script
+    assert params == sorted(f"director,ScriptedPanicEvent,{director_input_script('test_map', c)},0,1"
+                            for c in ("crescendo_1", "crescendo_2")), params
     assert "crescendo" not in log.lower() or "WARNING" not in log, log
 
 
@@ -483,9 +486,11 @@ def test_surface_override_patch_material():
     blocks, log = export()
     assert blocks, log
     mats = {sd.get("material") for sol in world_solids(blocks) for sd in sol.blocks("side")}
-    assert "HAMMERLESS/TEST_MAP/PATCH_CONCRETE_CONCRETE_FLOOR_01_ICE" in mats, mats
+    import hashlib
+    tag = hashlib.sha1(b"concrete/concrete_floor_01").hexdigest()[:6]     # (patch names carry a hash of the base)
+    assert f"HAMMERLESS/TEST_MAP/PATCH_CONCRETE_CONCRETE_FLOOR_01_{tag}_ICE".upper() in mats, mats
     vmt = os.path.join(FAKE_GAME, "left4dead2", "materials", "hammerless", "test_map",
-                       "patch_concrete_concrete_floor_01_ice.vmt")
+                       f"patch_concrete_concrete_floor_01_{tag}_ice.vmt")
     assert '"$surfaceprop" "ice"' in open(vmt).read()
 
 
