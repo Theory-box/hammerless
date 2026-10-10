@@ -246,10 +246,25 @@ def displacement_vertices(plane: str, disp) -> list[list[tuple[float, float, flo
     return grid
 
 
-def displacement_brushes(plane: str, disp, thickness: float = 1.0) -> list[CollisionBrush]:
+def solid_displacements(solid) -> list[tuple]:
+    """A solid's displacements: (side, dispinfo, the side's four corners)."""
+    from .vmfimport import solid_faces
+    faces = {id(s): v for s, v in solid_faces(solid)}
+    return [(sd, di, faces.get(id(sd))) for sd in solid.blocks("side") for di in sd.blocks("dispinfo")]
+
+
+def displacement_brushes(plane: str, disp, thickness: float = 1.0, verts=None) -> list[CollisionBrush]:
     """Each displacement triangle as a thin convex solid (face, back face, edge planes) with
-    bevels, which is how swept boxes collide with displacement triangles."""
-    grid = displacement_vertices(plane, disp)
+    bevels, which is how swept boxes collide with displacement triangles. With the side's corners (verts) any
+    displacement (walls, slopes, any start corner); without, only a flat one on the ground."""
+    grid = None
+    if verts is not None and len(verts) == 4:
+        from .vmfimport import disp_surface
+        side = type(disp)("side", [("plane", plane), disp])
+        surf = disp_surface(side, verts)
+        grid = surf[0] if surf else None
+    if grid is None:
+        grid = displacement_vertices(plane, disp)
     n = len(grid)
     flat = [p for row in grid for p in row]
     tris = []
@@ -333,10 +348,10 @@ class CollisionWorld:
         def add_solids(block, owner):
             for solid in block.blocks("solid"):
                 vmf_sides = solid.blocks("side")
-                disps = [(s, s.blocks("dispinfo")[0]) for s in vmf_sides if s.blocks("dispinfo")]
+                disps = solid_displacements(solid)
                 if disps:
-                    for side, disp in disps:
-                        brushes.extend(displacement_brushes(side.get("plane"), disp))
+                    for side, disp, verts in disps:
+                        brushes.extend(displacement_brushes(side.get("plane"), disp, verts=verts))
                     continue
                 sides = [(s.get("plane"), s.get("material", "")) for s in vmf_sides]
                 if all(m.lower() in NONSOLID for _p, m in sides):

@@ -136,7 +136,11 @@ def write_model_materials(game_dir: str, materials_dir: str, materials: dict[str
     for name, (tex, translucent, alphatest) in materials.items():
         path = os.path.join(folder, name + ".vmt")
         text = model_material_vmt(tex, translucent, alphatest)
-        if not (os.path.exists(path) and open(path, encoding="utf-8", errors="replace").read() == text):
+        old = None
+        if os.path.exists(path):
+            with open(path, encoding="utf-8", errors="replace") as f:
+                old = f.read()
+        if old != text:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
         written.append(f"materials/{materials_dir.strip('/')}/{name}.vmt")
@@ -177,7 +181,7 @@ def write_model_files(game_dir: str, spec: ModelSpec, density: float = 2000.0) -
     .phy. Mass: spec.mass, else the collision's volume times the surface's density (as studiomdl does)."""
     import zlib
     from . import mdlwrite, phywrite
-    pieces = [_outward(pts, tris) for pts, tris in spec.collision]
+    pieces = [p for p in (_outward(pts, tris) for pts, tris in spec.collision) if p[1]]   # (empty pieces: none)
     volume_m3 = sum(phywrite._solid([phywrite._ivp(p) for p in pts], tris)[0] for pts, tris in pieces)
     mass = spec.mass if spec.mass > 0 else max(volume_m3 * density, 0.01)
     physics = spec.kind == PHYSICS
@@ -203,6 +207,8 @@ def write_model_files(game_dir: str, spec: ModelSpec, density: float = 2000.0) -
 def _outward(points, tris):
     """A convex piece with every triangle wound counter-clockwise seen from outside, unused points dropped."""
     used = sorted({i for t in tris for i in t})
+    if not used:
+        return [], []
     where = {i: k for k, i in enumerate(used)}
     pts = [tuple(points[i]) for i in used]
     c = [sum(p[k] for p in pts) / len(pts) for k in range(3)]

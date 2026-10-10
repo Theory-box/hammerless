@@ -21,7 +21,7 @@ import ctypes
 from . import fastnav
 from .bsppvs import f32 as _f32
 from .bsppvs import BspPVS, bsp_brushes
-from .collision import CollisionWorld, displacement_brushes
+from .collision import CollisionWorld, displacement_brushes, solid_displacements
 from .vision import (MASK_BLOCKLOS, PHYSICS_BRUSH_CLASSES, SOLID_BRUSH_CLASSES, MaterialContents,
                      blocks_sight)
 
@@ -74,9 +74,8 @@ def _slots(vmf, bsp_path: str, materials: MaterialContents, content=None):
         if b.name != "world":
             continue
         for solid in b.blocks("solid"):
-            for side in solid.blocks("side"):
-                for disp in side.blocks("dispinfo"):
-                    world.extend(displacement_brushes(side.get("plane"), disp))
+            for side, disp, verts in solid_displacements(solid):
+                world.extend(displacement_brushes(side.get("plane"), disp, verts=verts))
     ents = [(brushes, physics, True) for brushes, physics in _entity_solids(top, materials, MASK_BLOCKLOS)]
     if content is not None:
         hulls = _HULL_CACHE                  # model -> its collision pieces' planes (kept between runs)
@@ -314,8 +313,8 @@ def hiding_spots(mesh, vmf, bsp_path: str, materials: MaterialContents) -> list[
     order and flags, measured on a 2330-area map)."""
     top = _parsed(vmf)
     ents = [b for brushes, _phys in _entity_solids(top, materials, MASK_NPCSOLID_BRUSHONLY) for b in brushes]
-    disp = [b for w in top if w.name == "world" for so in w.blocks("solid") for sd in so.blocks("side")
-            for di in sd.blocks("dispinfo") for b in displacement_brushes(sd.get("plane"), di)]
+    disp = [b for w in top if w.name == "world" for so in w.blocks("solid")
+            for sd, di, verts in solid_displacements(so) for b in displacement_brushes(sd.get("plane"), di, verts=verts)]
     world = CollisionWorld(bsp_brushes(bsp_path, model=0, mask=MASK_NPCSOLID_BRUSHONLY) + ents + disp)
     with fastnav.LOCK:
         if fastnav.available():

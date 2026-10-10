@@ -338,6 +338,7 @@ def _faces(obj, upm: float, materials) -> list[tuple]:
     if pa is not None and pa.domain == "FACE":
         pa.data.foreach_get("value", painted)
     uv = mesh.uv_layers.active
+    mirrored = m.determinant() < 0
     out = []
     for poly, sid, pnt in zip(mesh.polygons, ids, painted):
         pts = [tuple(c * upm for c in (m @ mesh.vertices[v].co)) for v in poly.vertices]
@@ -348,17 +349,30 @@ def _faces(obj, upm: float, materials) -> list[tuple]:
             from ..core.texalign import axes_from_uv
             w, h = texture_size(mat)
             tex = axes_from_uv(pts, [tuple(uv.data[li].uv) for li in poly.loop_indices], w, h)
+        if mirrored:                  # (a mirrored object's faces wind the other way in the world: its planes
+            pts = pts[::-1]           # would face inward)
         out.append((sid or None, pts, path, tex))
     return out
 
 
-def _originals(objs, kind: str) -> dict:
-    """id -> the object that is the original (a copy keeps the id but not the name: it's new)."""
+def _originals(objs, kind: str, key: str = ID) -> dict:
+    """id -> the object that is the original: the one still named as imported, else (renamed) the only one. A copy
+    keeps the tags but not the name: it's a new object, built like any other (written_back)."""
     out = {}
     for o in objs:
-        if o.get(KIND) == kind and o.get(ID) is not None:
-            if o.get(NAME) == o.name or o[ID] not in out:
-                out[o[ID]] = o
+        if o.get(KIND) == kind and o.get(key) is not None:
+            if o.get(NAME) == o.name or o[key] not in out:
+                out[o[key]] = o
+    return out
+
+
+def written_back(objs) -> set:
+    """The names of the imported map's objects that rebuild writes back (the rest, copies of them included, are
+    built as new objects)."""
+    out = {o.name for o in objs if o.get(KIND) == "world"}
+    for kind in ("solid", "disp"):
+        out |= {o.name for o in _originals(objs, kind).values()}
+    out |= {o.name for o in _originals(objs, "entity", INDEX).values()}
     return out
 
 
@@ -373,7 +387,8 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
     inside = map_objects(context.scene)
     objs = [o for o in context.scene.objects if o.name in inside]
     solids = {**_originals(objs, "solid"), **_originals(objs, "disp")}
-    entities = {o[INDEX]: o for o in objs if o.get(KIND) == "entity" and o.get(NAME) == o.name}
+    entities = _originals(objs, "entity", INDEX)
+    back = written_back(objs)
     depsgraph = context.evaluated_depsgraph_get()
 
     def default_side(verts, material, tex=None):
@@ -408,7 +423,8 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
     def new_solids(parent):
         out = []
         for o in objs:
-            if o.parent is parent and o.type == "MESH" and o.get(KIND) is None and o.visible_get():
+            if (o.parent is parent and o.type == "MESH" and o.name not in back and o.get(KIND) != "disp"
+                    and o.visible_get()):          # (new meshes, and copies of its imported brushes)
                 for b in mesh_to_brushes(o, depsgraph, upm, materials):
                     out.append(writer.solid(b))
         return out
@@ -436,7 +452,8 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
         if orig_origin is not None:
             origin = tuple(c * upm for c in obj.matrix_world.translation)
             if max(abs(a - b) for a, b in zip(origin, _num3(orig_origin))) > 0.01:
-                values["origin"] = " ".join(f"{c:g}" for c in (round(x, 3) for x in origin))
+                from ..core.vmf import fmt_vec
+                values["origin"] = fmt_vec(origin)
             else:
                 values["origin"] = orig_origin
             if e.get("angles") is not None and e.blocks("solid"):
@@ -473,6 +490,10 @@ def _outputs(obj, e: Block):
         except ValueError:
             delay = 0.0
         return (out, f[0], f[1], f[2], round(delay, 4), f[4].strip() == "1")
+
+    def times(value):
+        f = (value.split("\x1b") if "\x1b" in value else value.split(",")) + ["", "", "", "", ""]
+        return f[4].strip() or "-1"
     now = [(o.output, o.target, o.input, o.parameter, round(o.delay, 4), o.only_once) for o in obj.hammerless.outputs]
     if now == [norm(*r) for r in raw]:
         return None
@@ -481,7 +502,12 @@ def _outputs(obj, e: Block):
         if i < len(raw) and norm(*raw[i]) == now[i]:
             out.append(raw[i])
             continue
-        out.append((o.output, f"{o.target},{o.input},{o.parameter},{o.delay:g},{1 if o.only_once else -1}"))
+        # (an output that fired a set number of times keeps it; a delay with its digits, not 6 of them)
+        n = "1" if o.only_once else (times(raw[i][1]) if i < len(raw) and times(raw[i][1]) != "1" else "-1")
+        delay = f"{o.delay:.4f}".rstrip("0").rstrip(".") or "0"
+        fields = (o.target, o.input, o.parameter, delay, n)
+        sep = "\x1b" if any("," in x for x in fields) else ","   # (a parameter with commas: Hammer's own separator)
+        out.append((o.output, sep.join(fields)))
     return out
 
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 import re
 
-from .vmf import Block, _plane_points, fmt, fmt_vec, parse
+from .vmf import Block, _fine, _fine_vec, _plane_points, fmt, fmt_vec, parse
 
 Vec3 = tuple[float, float, float]
 
@@ -297,8 +297,8 @@ def side_for_face(face_verts: list[Vec3], material: str, original: Block | None,
 
 def _set_tex(side: Block, tex) -> None:
     (u, ushift, uscale), (v, vshift, vscale) = tex
-    _set(side, "uaxis", f"[{fmt_vec(u)} {fmt(ushift)}] {fmt(uscale)}")
-    _set(side, "vaxis", f"[{fmt_vec(v)} {fmt(vshift)}] {fmt(vscale)}")
+    _set(side, "uaxis", f"[{_fine_vec(u)} {_fine(ushift)}] {_fine(uscale)}")
+    _set(side, "vaxis", f"[{_fine_vec(v)} {_fine(vshift)}] {_fine(vscale)}")
 
 
 def _same_tex(side: Block, tex, eps: float = 1e-3) -> bool:

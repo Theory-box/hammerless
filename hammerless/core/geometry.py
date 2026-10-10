@@ -115,7 +115,11 @@ def coplanar_groups(faces: list[Polygon]) -> list[tuple[Plane, Polygon, float, l
                             if best is not None and i >= best:
                                 continue
                             gp = groups[i][0]
-                            if dot(gp.normal, pl.normal) > 0.9999 and abs(gp.dist - pl.dist) < EPS * 10:
+                            # (and every corner on the other's plane: a long face a fraction of a degree off, like
+                            # a shallow roof's two halves, is a different plane)
+                            if (dot(gp.normal, pl.normal) > 0.9999 and abs(gp.dist - pl.dist) < EPS * 10
+                                    and all(abs(gp.distance(v)) < EPS * 10 for v in f.verts)
+                                    and all(abs(pl.distance(v)) < EPS * 10 for v in groups[i][3][0].verts)):
                                 best = i
         if best is None:
             grid.setdefault(key, []).append(len(groups))

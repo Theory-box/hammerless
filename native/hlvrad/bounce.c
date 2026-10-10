@@ -668,24 +668,44 @@ static scaletests_t *gpu_tests;            /* (per item of the batch) */
 static int gpu_batch0, gpu_answered;
 static const uint32_t *gpu_bits;
 
-static void ScalesWork(int item, int thread) {
-    (void)thread;
-    static __thread transfer_t *all;
-    static __thread unsigned char *pvs;
-    static __thread int *face_tested, *disp_tested, stamp;       /* (tested: == this patch's stamp) */
-    static __thread int pvs_cluster;
-    if (!all) {
-        size_t n = (size_t)numpatches + 1;         /* (a patch's transfers: at most one to each patch) */
-        all = xalloc(sizeof(transfer_t) * n);
-        test_shooter = xalloc(sizeof(int) * n);
-        test_receiver = xalloc(sizeof(int) * n);
-        test_hit = xalloc(sizeof(int) * n);
-        test_dist = xalloc(sizeof(float) * n);
-        test_len = xalloc(sizeof(float) * n);
-        pvs = xalloc(VisRowBytes() + 1);
-        face_tested = xalloc(sizeof(int) * (numfaces + 1)), disp_tested = xalloc(sizeof(int) * (numfaces + 1));
-        pvs_cluster = -1;
+/* each worker's buffers, by its thread number: the -gpu path runs new threads twice a batch, so buffers kept per OS
+ * thread were made again (and never freed) every time; these last the whole step (FreeScalesScratch) */
+typedef struct {
+    transfer_t *all;
+    unsigned char *pvs;
+    int *face_tested, *disp_tested, stamp, pvs_cluster;      /* (tested: == this patch's stamp) */
+    int *shooter, *receiver, *hit;
+    float *dist, *len;
+} scales_scratch_t;
+static scales_scratch_t ms_scratch[MAX_THREADS];
+
+static void FreeScalesScratch(void) {
+    for (int t = 0; t < MAX_THREADS; t++) {
+        scales_scratch_t *x = &ms_scratch[t];
+        free(x->all), free(x->pvs), free(x->face_tested), free(x->disp_tested);
+        free(x->shooter), free(x->receiver), free(x->hit), free(x->dist), free(x->len);
+        memset(x, 0, sizeof(*x));
     }
+}
+
+static void ScalesWork(int item, int thread) {
+    scales_scratch_t *x = &ms_scratch[thread];
+    if (!x->all) {
+        size_t n = (size_t)numpatches + 1;         /* (a patch's transfers: at most one to each patch) */
+        x->all = xalloc(sizeof(transfer_t) * n);
+        x->shooter = xalloc(sizeof(int) * n);
+        x->receiver = xalloc(sizeof(int) * n);
+        x->hit = xalloc(sizeof(int) * n);
+        x->dist = xalloc(sizeof(float) * n);
+        x->len = xalloc(sizeof(float) * n);
+        x->pvs = xalloc(VisRowBytes() + 1);
+        x->face_tested = xalloc(sizeof(int) * (numfaces + 1)), x->disp_tested = xalloc(sizeof(int) * (numfaces + 1));
+        x->pvs_cluster = -1;
+    }
+    transfer_t *all = x->all;
+    unsigned char *pvs = x->pvs;
+    int *face_tested = x->face_tested, *disp_tested = x->disp_tested;
+    test_shooter = x->shooter, test_receiver = x->receiver, test_hit = x->hit, test_dist = x->dist, test_len = x->len;
     if (gpu_tests && gpu_answered) {       /* (-gpu, second pass: the answers are in) */
         scaletests_t *g = &gpu_tests[item - gpu_batch0];
         int i = ms_order[item];
@@ -701,9 +721,9 @@ static void ScalesWork(int item, int thread) {
     }
     test_gpu = gpu_tests != NULL;
     int i = ms_order[item], c = ms_cluster[item];
-    if (c != pvs_cluster) GetClusterPVS(c, pvs), pvs_cluster = c;
+    if (c != x->pvs_cluster) GetClusterPVS(c, pvs), x->pvs_cluster = c;
     patch_t *p = &patches[i];
-    stamp++;
+    int stamp = ++x->stamp;
     ntests = 0;
     for (int j = 0; j < numclusters; j++) {
         if (!(pvs[j >> 3] & (1 << (j & 7)))) continue;
@@ -801,6 +821,7 @@ void MakeAllScales(void) {
         if (getenv("HLGPUDBG")) Msg("transfers: %.0f tests; collecting %.3f s, GPU %.3f s, making %.3f s\n", nt, tc, tg, tf);
     } else
         RunThreadsOn(n, ScalesWork);
+    FreeScalesScratch();
     g_numthreads = threads;
     if (ms_dump) fclose(ms_dump), ms_dump = NULL;
     for (int k = 0; k < n; k++) {

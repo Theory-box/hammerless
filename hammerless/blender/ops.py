@@ -1042,6 +1042,13 @@ def _view_volume(context) -> str | None:
     return view_volume(r3d.perspective_matrix, eye, forward, s.light_view_distance, s.units_per_meter)
 
 
+_BUILDING: set = set()       # maps whose Build operator is still running (its nav, analysis or bake after the compile)
+
+
+def _build_key(vmf: str) -> str:
+    return os.path.normcase(os.path.splitext(os.path.abspath(vmf))[0])
+
+
 class HL_OT_build(bpy.types.Operator):
     bl_idname = "hammerless.build"
     bl_label = "Build"
@@ -1094,7 +1101,9 @@ class HL_OT_build(bpy.types.Operator):
     def execute(self, context):
         import time
         self._t0 = time.time()
-        if cc.compile_running(os.path.join(work_dir(context), f"{context.scene.hammerless.map_name}.vmf")):
+        vmf = os.path.join(work_dir(context), f"{context.scene.hammerless.map_name}.vmf")
+        if cc.compile_running(vmf) or _build_key(vmf) in _BUILDING:     # (the compile, or the nav / analysis /
+            #                                                             bake after it, still uses the files)
             self.report({"ERROR"}, "This map is still compiling: wait for it to finish (see the hammerless_log "
                                    "text), then build again")
             return {"CANCELLED"}
@@ -1184,6 +1193,13 @@ class HL_OT_build(bpy.types.Operator):
         if self.bake and (self.view or self.volume or self.selected):
             import dataclasses
             opts = dataclasses.replace(opts, keep_light=True)    # (the rest keeps the last bake)
+        try:
+            import dataclasses
+            opts = cc.PRESETS[opts] if isinstance(opts, str) else opts
+            opts = dataclasses.replace(opts, assets=cc.asset_fingerprint(cc.Tools(root).gamedir,
+                                                                         context.scene.hammerless.map_name))
+        except OSError:
+            pass
         if no_bake and opts.rad != "SKIP":
             import dataclasses
             if cc.use_hlvrad(opts):
@@ -1208,6 +1224,8 @@ class HL_OT_build(bpy.types.Operator):
             return {"CANCELLED"}
         self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
+        self._key = _build_key(self._job.base + ".vmf")
+        _BUILDING.add(self._key)
         self.report({"INFO"}, "Compiling... (see the hammerless_log text block)")
         return {"RUNNING_MODAL"}
 
@@ -1289,6 +1307,11 @@ class HL_OT_build(bpy.types.Operator):
                 "lighting failed" in m for m, _l, _o in self._job.lighting)
             add_rows(context, [("ERROR" if failed else "WARNING", m, o, loc) for m, loc, o in self._job.lighting])
             self.report({"WARNING"}, self._job.lighting[0][0][:200])
+        if self._job.fallbacks and not getattr(self, "_fallbacks_listed", False):
+            from .problems import add_rows
+            self._fallbacks_listed = True       # (Valve's tool ran instead of ours: worth knowing, and reporting)
+            add_rows(context, [("WARNING", m, "", None) for m in self._job.fallbacks])
+            self.report({"WARNING"}, self._job.fallbacks[0][:200])
         if self._nav is not None:
             if self._nav["thread"].is_alive():
                 context.workspace.status_text_set(f"Hammerless: building the nav mesh: {self._nav['stage']}...")
@@ -1398,7 +1421,19 @@ class HL_OT_build(bpy.types.Operator):
             ok = False
         self._job.bake_finished(lines, ok)
 
+    def cancel(self, context):
+        """Blender ended the operator itself (File > Open / New, the window closed): let the job end too."""
+        if self._job is not None:
+            self._job.bake_abandoned = True
+        _BUILDING.discard(getattr(self, "_key", None))
+        try:
+            context.window_manager.event_timer_remove(self._timer)
+        except Exception:
+            pass
+        BUILD_PROGRESS["vis"] = ""
+
     def _finish(self, context, result):
+        _BUILDING.discard(getattr(self, "_key", None))
         if self._job is not None:
             self._job.bake_abandoned = True      # stopped watching: nobody is left to bake
         snap = self._job.base + ".analysis.bsp" if self._job is not None else None

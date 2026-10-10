@@ -214,7 +214,7 @@ class _Compiler:
         self.log_names: list[str] = []
         self.ir = ir
         self.problems = problems
-        self.graph = _slug(graph) if graph else ""
+        self.graph = self._graph_slug(graph) if graph else ""
         self.graph_tag = f"_{self.graph}" if self.graph else ""
         self.graph_title = graph            # (the debug log says which graph a wire is in, when there are several)
         self.fires: dict[tuple[str, str], _Fire] = {}
@@ -229,7 +229,9 @@ class _Compiler:
         self.defined: set[str] = set()
         self.random_fns: dict[str, str] = {}               # Random Value node -> its function
         self.whens: list[tuple[str, str, str, bool]] = []
-        self.converted: dict[str, tuple[str, str]] = {}   # object -> (class it became, node that did it)
+        # object -> (class it became, node that did it): shared by every graph (two graphs can't make one
+        # object two different things either)
+        self.converted: dict[str, tuple[str, str]] = ir.__dict__.setdefault("_logic_converted", {})
         # script nodes (game functions and events): their event outputs run Squirrel directly
         self.script_fns: dict[str, tuple[str, str]] = {}     # node -> (function, body before Then)
         self.script_takes: dict[tuple[str, str], str] = {}  # (node, input) -> function to call
@@ -248,10 +250,34 @@ class _Compiler:
         taken.add(name)
         return name
 
-    def unique(self, base: str) -> str:
-        taken = {e.keyvalues.get("targetname") for e in self.ir.entities}
+    def _graph_slug(self, graph: str) -> str:
+        taken = self.ir.__dict__.setdefault("_logic_graph_slugs", set())
+        base = _slug(graph)
         name, i = base, 2
         while name in taken:
+            name, i = f"{base}_{i}", i + 1
+        taken.add(name)
+        return name
+
+    def key_of(self, nid: str) -> str:
+        """The node's key in the shared tables (::HL_R, ::HL_L, ::HL_I): its own, even when two node names slug
+        the same ("Code-1", "Code_1")."""
+        keys = self.ir.__dict__.setdefault("_logic_keys", {})
+        mine = (self.graph, nid)
+        if mine not in keys:
+            base = _slug(f"{self.graph}_{nid}" if self.graph else nid)
+            used = set(keys.values())
+            name, i = base, 2
+            while name in used:
+                name, i = f"{base}_{i}", i + 1
+            keys[mine] = name
+        return keys[mine]
+
+    def unique(self, base: str) -> str:
+        # (Source names don't care about case: "HL_Delay" is "hl_delay")
+        taken = {(e.keyvalues.get("targetname") or "").lower() for e in self.ir.entities}
+        name, i = base, 2
+        while name.lower() in taken:
             name, i = f"{base}_{i}", i + 1
         return name
 
@@ -362,7 +388,7 @@ class _Compiler:
 
     def value_expr(self, n: LNode, sock: str) -> str:
         s, k = n.settings, n.kind
-        slug = _slug(f"{self.graph}_{n.id}" if self.graph else n.id)
+        slug = self.key_of(n.id)
         if k == "SCRIPT_CALL":
             f = vs.function(s.get("fn", ""))
             if f is None or sock != "result":
@@ -449,7 +475,7 @@ class _Compiler:
     # -- nodes
     def node(self, n: LNode):
         s, nid = n.settings, n.id
-        slug = _slug(f"{self.graph}_{nid}" if self.graph else nid)
+        slug = self.key_of(nid)
 
         def fire(sock, ent, output, delay=0.0, times=-1):
             self.fires[(nid, sock)] = _Fire(ent, output, delay, times)
@@ -989,7 +1015,8 @@ class _Compiler:
                 flags |= (HUD_FLAG_NOBG if s.get("no_background") else 0) | (HUD_FLAG_BLINK if s.get("blink") else 0)
                 text = self.typed_in(n, "text", vs.TEXT)
                 self.helper("HL_Str", HELPERS["HL_Str"])
-                line = f"    ::HL_HudShow({slot}, function() {{ return HL_Str({text}); }}, {flags});\n"
+                line = (f"    ::HL_HudShow({slot}, (function() {{ return HL_Str({text}); }}).bindenv(::HL_Scope), "
+                        f"{flags});\n")
                 if s.get("place"):
                     x, y, w, h = (float(s.get(c, d)) for c, d in (("x", 0.25), ("y", 0.1), ("w", 0.5), ("h", 0.08)))
                     line += f"    HUDPlace({slot}, {x:g}, {y:g}, {w:g}, {h:g});\n"
@@ -1085,8 +1112,30 @@ class _Compiler:
     def render_script_nodes(self):
         """Script nodes' functions, now that their wires (what each event output runs) are known."""
         import re as _re
+        # a wire that closes a loop of script nodes (If A -> If B -> If A) is queued, not called: called directly
+        # the loop would recurse until Squirrel's stack runs out; queued it runs like a relay's loop, a step a frame
+        node_of = {fn: nid for nid, (fn, _b) in self.script_fns.items()}
+        calls = {nid: {node_of[c] for (n, _o), lines in self.script_conts.items() if n == nid for line in lines
+                       for c in _re.findall(r"^\s*(\w+)\(\);$", line) if c in node_of} for nid in self.script_fns}
+
+        def reaches(a, b):
+            seen, todo = set(), [a]
+            while todo:
+                for x in calls.get(todo.pop(), ()):
+                    if x == b:
+                        return True
+                    if x not in seen:
+                        seen.add(x)
+                        todo.append(x)
+            return False
+
+        def queued(nid, line):
+            m = _re.match(r"^(\s*)(\w+)\(\);$", line)
+            if m and m.group(2) in node_of and reaches(node_of[m.group(2)], nid):
+                return f'{m.group(1)}EntFire("{LOGIC_SCRIPT}", "RunScriptCode", "{m.group(2)}()");'
+            return line
         for nid, (fn, body) in self.script_fns.items():
-            body = _re.sub(r"@@(\w+)@@", lambda m: "\n".join(self.script_conts.get((nid, m.group(1)), [])), body)
+            body = _re.sub(r"@@(\w+)@@", lambda m: "\n".join(queued(nid, x) for x in self.script_conts.get((nid, m.group(1)), [])), body)
             self.functions.append(f"::{fn} <- function() {{\n{body}\n}}")   # root: callable from anywhere
         for hook, nids in self.hook_nodes.items():
             from .director_options import HOOKS_BY_NAME
@@ -1275,8 +1324,16 @@ class _Compiler:
             parts.append("if (\"self\" in this) __CollectEventCallbacks(this, \"OnGameEvent_\", \"GameEventCallbacks\", "
                          "RegisterScriptGameEventListener);\n")
         self.ir.extra_scripts[f"scripts/vscripts/hammerless/logic_{self.ir.settings.name}.nut"] = "".join(parts)
-        script = next((e for e in self.ir.entities if e.keyvalues.get("targetname") == LOGIC_SCRIPT), None)
+        ours = f"hammerless/logic_{self.ir.settings.name}"
+        script = next((e for e in self.ir.entities if e.classname == "logic_script"
+                       and (e.keyvalues.get("targetname") or "").lower() == LOGIC_SCRIPT
+                       and e.keyvalues.get("vscripts") == ours), None)
         if script is None:
+            for e in self.ir.entities:
+                if (e.keyvalues.get("targetname") or "").lower() == LOGIC_SCRIPT:
+                    self.problems.append(f"'{e.source or e.classname}' is named {LOGIC_SCRIPT}: rename it (the logic "
+                                         "graphs' script entity has that name, so it would get their outputs)")
+                    break
             script = Entity("logic_script", (0.0, 0.0, 0.0), (0, 0, 0), {
                 "targetname": LOGIC_SCRIPT, "vscripts": f"hammerless/logic_{self.ir.settings.name}"}, [], LOGIC_SCRIPT)
             # first in the map: entities run their scripts as they're created, in order, and the game asks

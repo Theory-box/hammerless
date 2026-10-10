@@ -103,7 +103,7 @@ class GameContent:
         for p in find_game_vpks(game_root):
             try:
                 self.vpks.append(VPK(p))
-            except (OSError, ValueError):
+            except (OSError, ValueError, struct.error):     # (a damaged or cut-short VPK: left out)
                 pass
         self.files: set[str] = set()
         for v in self.vpks:
@@ -115,7 +115,10 @@ class GameContent:
         path = path.lower().replace("\\", "/")
         for v in self.vpks:
             if path in v.entries:
-                return v.read(path)
+                try:
+                    return v.read(path)
+                except OSError:           # (its _NNN.vpk archive is missing: try the next, then loose files)
+                    continue
         loose = self._loose(path)
         if loose:
             with open(loose, "rb") as f:

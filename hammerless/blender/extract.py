@@ -100,8 +100,11 @@ def effective_role(obj) -> str:
     if obj.type == "EMPTY":
         return "ENTITY" if obj.hammerless.classname else "IGNORE"
     if obj.type == "MESH":
-        if obj.hammerless.classname and obj.hammerless.classname in CATALOG:
-            return "BRUSH_ENTITY" if CATALOG[obj.hammerless.classname].brush else "ENTITY"
+        cls = obj.hammerless.classname.strip()
+        if cls in CATALOG:
+            return "BRUSH_ENTITY" if CATALOG[cls].brush else "ENTITY"
+        if cls:                       # (a class of the game's not in the Add menu, e.g. func_door: a mesh with
+            return "BRUSH_ENTITY"     # a classname is a brush entity; point ones are in the catalog)
         return crole if crole in ("BRUSH", "TERRAIN") else "BRUSH"
     return "IGNORE"
 
@@ -134,7 +137,8 @@ class MaterialResolver:
         surface = hs.surface if hs.surface != "DEFAULT" else ""
         path = hs.source_material.strip().lower().replace("\\", "/")
         if not path and "/" in mat.name and not mat.name.startswith("hammerless/"):
-            path = mat.name.lower()   # material named like a game path
+            path = re.sub(r"\.\d{3}$", "", mat.name.lower())   # material named like a game path (not its .001)
+        path = re.sub(r"\.vmt$", "", re.sub(r"^/*(materials/)?", "", path))    # (as the game names it)
         if path:
             if surface and self.game_dir:
                 return self._patch(path, surface)
@@ -685,13 +689,20 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
 
     hidden = []
     from .mapcollection import map_collection, map_objects, outside_but_built
+    from .vmfimport import written_back
     inside = map_objects(context.scene)
+    back = written_back([o for o in context.scene.objects if o.name in inside])
     for obj in context.scene.objects:
         if obj.name not in inside:
             continue                  # (outside the map collection: not part of the map)
-        if obj.get("hl_vmf_kind") is not None or (obj.parent is not None and obj.parent.get("hl_vmf_kind")
-                                                   and obj.type == "MESH"):
-            continue                  # (an imported map's: Build writes those back itself, blender/vmfimport.py)
+        if obj.name in back or (obj.parent is not None and obj.parent.name in back and obj.type == "MESH"
+                                and obj.parent.get("hl_vmf_kind") == "entity"):
+            continue                  # (an imported map's: Build writes those back itself, blender/vmfimport.py;
+            #                            new meshes under its brush entities become their brushes there)
+        if obj.get("hl_vmf_kind") == "disp":
+            report.warnings.append(f"'{obj.name}': a copy of an imported displacement isn't built (copying "
+                                   "displacements isn't supported yet)")
+            continue
         if not obj.visible_get():
             # hidden (H, the eye or monitor icon) or in an excluded / hidden collection: left out of
             # the map, like everything you can't see. Ones hidden by hand are listed
@@ -701,6 +712,9 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
                 hidden.append(obj.name)
             continue
         role = effective_role(obj)
+        if (role == "IGNORE" and obj.hammerless.role == "AUTO" and obj.type in ("CURVE", "SURFACE", "META", "FONT")
+                and collection_role(obj) in ("BRUSH", "TERRAIN")):
+            role = collection_role(obj)          # (in a Brush / Terrain collection: say why it isn't built)
         if role in ("BRUSH", "BRUSH_ENTITY", "TERRAIN") and obj.type != "MESH":
             report.warnings.append(f"'{obj.name}' is a {obj.type.lower()}, not a mesh, so it can't be a brush or "
                                    f"terrain: convert it (Object > Convert > Mesh) to export it")
@@ -776,6 +790,8 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report, content
         holder = inst.parent.original
         if inside is not None and holder.name not in inside:
             continue                  # (a copy made outside the map collection)
+        if holder.hammerless.role == "IGNORE" or collection_role(holder) == "IGNORE":
+            continue                  # (the instancer itself is set to Ignore)
         role = effective_role(src)
         label = f"{holder.name} > {src.name}"
         matrix = inst.matrix_world.copy()

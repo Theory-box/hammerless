@@ -20,6 +20,16 @@ def fmt_vec(v: Vec3) -> str:
     return " ".join(fmt(c) for c in v)
 
 
+def _fine(x: float) -> str:
+    """Texture axes, shifts and scales: 6 decimals (3 puts a rotated texture texels off far from the origin)."""
+    s = f"{round(x, 6):.6f}".rstrip("0").rstrip(".")
+    return "0" if s in ("-0", "") else s
+
+
+def _fine_vec(v: Vec3) -> str:
+    return " ".join(_fine(c) for c in v)
+
+
 # ---------------------------------------------------------------- KV tree
 
 @dataclass
@@ -73,22 +83,29 @@ def _plane_points(r):
     if n <= 24:
         best = max(((i, j, k) for i in range(n) for j in range(i + 1, n) for k in range(j + 1, n)),
                    key=lambda t: area(r[t[0]], r[t[1]], r[t[2]]))
-    else:
-        best = (0, n // 3, (2 * n) // 3)
+    else:       # (many corners: the point farthest from the first, then the one making the largest triangle)
+        d2 = [sum((r[i][k] - r[0][k]) ** 2 for k in range(3)) for i in range(n)]
+        j = max(range(1, n), key=d2.__getitem__)
+        k = max((i for i in range(1, n) if i != j), key=lambda i: area(r[0], r[j], r[i]))
+        best = tuple(sorted((0, j, k)))     # (in winding order: the plane faces the same way)
     return tuple(r[i] for i in best)
 
 
 def parse(text: str) -> list[Block]:
-    """Parse VMF/KeyValues text into Blocks (enough for tests and tools)."""
-    tokens = re.findall(r'"[^"]*"|\{|\}|[^\s{}"]+', re.sub(r"//[^\n]*", "", text))
+    """Parse VMF/KeyValues text into Blocks (enough for tests and tools). Comments are // outside quotes (a value
+    like "http://..." keeps its slashes)."""
+    tokens = [t for t in re.findall(r'"[^"]*"|//[^\n]*|\{|\}|[^\s{}"]+', text) if not t.startswith("//")]
     root = Block("root")
     stack = [root]
     i = 0
     while i < len(tokens):
         t = tokens[i]
         if t == "}":
-            stack.pop()
+            if len(stack) > 1:              # (a stray closing brace: ignored)
+                stack.pop()
             i += 1
+        elif i + 1 >= len(tokens):          # (a key with no value at the end of the file)
+            break
         elif i + 1 < len(tokens) and tokens[i + 1] == "{":
             stack.append(stack[-1].add(Block(t.strip('"'))))
             i += 2
@@ -123,8 +140,8 @@ class VMFWriter:
         s.kv("material", face.material.upper())
         if face.tex_axes is not None:           # (a painted face: its own axes, shift and scale)
             (ua, ushift, uscale), (va, vshift, vscale) = face.tex_axes
-            s.kv("uaxis", f"[{fmt_vec(ua)} {fmt(ushift)}] {fmt(uscale)}")
-            s.kv("vaxis", f"[{fmt_vec(va)} {fmt(vshift)}] {fmt(vscale)}")
+            s.kv("uaxis", f"[{_fine_vec(ua)} {_fine(ushift)}] {_fine(uscale)}")
+            s.kv("vaxis", f"[{_fine_vec(va)} {_fine(vshift)}] {_fine(vscale)}")
         else:
             s.kv("uaxis", f"[{fmt_vec(u)} 0] {fmt(face.texture_scale)}")
             s.kv("vaxis", f"[{fmt_vec(v)} 0] {fmt(face.texture_scale)}")
@@ -164,7 +181,7 @@ class VMFWriter:
         if any(ent.angles) or ent.origin is not None:
             e.kv("angles", fmt_vec(ent.angles))
         for k, v in ent.keyvalues.items():
-            if k in ("classname", "origin", "angles", "id"):
+            if k.lower() in ("classname", "origin", "angles", "id"):
                 continue
             e.kv(k, v)
         if ent.outputs:

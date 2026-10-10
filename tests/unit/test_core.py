@@ -847,6 +847,26 @@ class TestScriptNodes(unittest.TestCase):
         self.assertTrue(hurt["userid"]["player"] and hurt["attacker"]["player"])
         self.assertTrue(hurt["attackerentid"]["entity"] and not hurt["attackerentid"]["player"])
 
+    def test_script_loop_is_queued(self):
+        """Script nodes wired in a loop: the wire that closes it is queued (a call would recurse forever)."""
+        from hammerless.core.logic import LLink, LNode, compile_graph
+        ir = MapIR()
+        nodes = [LNode("Start", "MAP_START", {}),
+                 LNode("A", "SCRIPT_CALL", {"fn": "Director.PlayMegaMobWarningSounds"}),
+                 LNode("B", "SCRIPT_CALL", {"fn": "Director.PlayMegaMobWarningSounds"})]
+        links = [LLink("Start", "out", "A", "run"), LLink("A", "then", "B", "run"), LLink("B", "then", "A", "run")]
+        compile_graph(nodes, links, ir)
+        script = next(v for k, v in ir.extra_scripts.items() if "logic_" in k)
+        self.assertIn('EntFire("hl_logic", "RunScriptCode", "HL_S_a()");', script)    # (wires in the loop: queued)
+        self.assertNotIn("    HL_S_a();", script)
+        self.assertNotIn("    HL_S_b();", script)
+
+    def test_event_fields_by_key(self):
+        """An event field named like a Squirrel keyword ("class") is read by key, not as .class."""
+        from hammerless.core import vscript as vs
+        self.assertNotIn(".class", vs.field_expr("class", vs.NUM))
+        self.assertIn('::HL_Ctx["class"]', vs.field_expr("class", vs.NUM))
+
     def test_event_into_action_into_entity_node(self):
         from hammerless.core.logic import LLink, LNode, compile_graph
         ir = MapIR()
@@ -864,9 +884,9 @@ class TestScriptNodes(unittest.TestCase):
         self.assertEqual(compile_graph(nodes, links, ir), [])
         script = next(v for k, v in ir.extra_scripts.items() if "logic_" in k)
         self.assertIn("function OnGameEvent_player_hurt(params)", script)
-        self.assertIn("HL_Ctx.userid <- GetPlayerFromUserID(params.userid)", script)
+        self.assertIn('HL_Ctx["userid"] <- GetPlayerFromUserID(params["userid"])', script)
         target = next(line for line in script.splitlines() if "local t = " in line)
-        self.assertIn('::HL_Ctx.userid', target)
+        self.assertIn('::HL_Ctx["userid"]', target)
         self.assertIn('t.GiveItem("weapon_pain_pills");', script)
         self.assertRegex(script, r'::HL_S_give <- function\(\) \{[^}]*\}[^}]*EntFire\("hl_wait", "Trigger"')
         self.assertIn("HL_S_give();", script)                              # the event runs it directly
@@ -1402,7 +1422,11 @@ class TestNoBake(unittest.TestCase):
             job._keep_last_light(steps)
             return dict(steps)["vrad"]
         self.assertNotIn("-keeplight", keep_cmd())
-        struct.pack_into("<ii", head, 8 + 16 * 8, 100, 4)                     # (lighting lump not empty)
+        struct.pack_into("<iii", head, 8 + 16 * 8, 1, 246692, 0)   # (an unlit build: an offset, no length)
+        with open(bsp, "wb") as f:
+            f.write(head)
+        self.assertNotIn("-keeplight", keep_cmd())
+        struct.pack_into("<iii", head, 8 + 16 * 8, 1, 100, 4)   # (lighting lump: version, offset, length 4)
         with open(bsp, "wb") as f:
             f.write(head)
         cmd = keep_cmd()

@@ -50,6 +50,8 @@ class CompileOptions:
     sky_key: str = ""              # sky light from a picture of the sky (<map>.hlsky_src.npy): its fingerprint
     no_bake: str = ""              # No Bake Volumes (lightvolumes.no_bake_text): hlvrad -nobake <map>.hlnobake
     keep_light: bool = False       # what isn't baked keeps the last build's lighting (hlvrad -keeplight <map>.keep.bsp)
+    assets: str = ""               # the map's own textures and models (asset_fingerprint): the compilers read them,
+    #                                but the VMF names them the same when they change
 
     def vbsp_args(self) -> list[str]:
         return self.extra_vbsp.split()
@@ -538,7 +540,53 @@ def _has_lighting(bsp: str) -> bool:
         head = f.read(8 + 16 * 64)
     if len(head) < 8 + 16 * 64 or head[:4] != b"VBSP":
         return False
-    return any(struct.unpack_from("<ii", head, 8 + 16 * lump)[1] > 0 for lump in (8, 53))
+    return any(struct.unpack_from("<iii", head, 8 + 16 * lump)[2] > 0 for lump in (8, 53))   # (version, offset, length)
+
+
+def asset_fingerprint(gamedir: str, map_name: str) -> str:
+    """The map's own exported files (custom textures and models, under materials/ and models/hammerless/<map>):
+    a repainted texture, a new Alpha or Surface, or an edited Custom Model changes it, so the map compiles again."""
+    import hashlib
+    h = hashlib.sha1()
+    for top in ("materials", "models"):
+        folder = os.path.join(gamedir, top, "hammerless", map_name)
+        for dirpath, dirs, files in os.walk(folder):
+            dirs.sort()
+            for name in sorted(files):
+                full = os.path.join(dirpath, name)
+                h.update(os.path.relpath(full, gamedir).lower().encode())
+                try:
+                    with open(full, "rb") as f:
+                        for chunk in iter(lambda: f.read(1 << 20), b""):
+                            h.update(chunk)
+                except OSError:
+                    pass
+    return h.hexdigest()[:16]
+
+
+def bsp_fog_farz(bsp: str) -> float:
+    """The largest env_fog_controller far Z in a compiled map's entities (vvis's radial vis when above 0), as
+    hlvvis reads it; -1 without one."""
+    import struct
+    try:
+        with open(bsp, "rb") as f:
+            head = f.read(8 + 16 * 64)
+            _v, ofs, ln, _c = struct.unpack_from("<iiii", head, 8)
+            f.seek(ofs)
+            text = f.read(ln).decode("latin-1")
+    except (OSError, struct.error):
+        return -1.0
+    best = -1.0
+    for block in re.findall(r"\{([^{}]*)\}", text):
+        kv = {k.lower(): v for k, v in re.findall(r'"([^"]*)"\s+"([^"]*)"', block)}
+        if kv.get("classname", "").lower() != "env_fog_controller":
+            continue
+        try:
+            farz = float(kv.get("farz", "0") or 0)
+        except ValueError:
+            farz = 0.0
+        best = max(best, farz if farz != 0 else -1.0)
+    return best
 
 
 class CompileJob:
@@ -563,6 +611,16 @@ class CompileJob:
         vvis, vrad = opts.vvis_args(), opts.vrad_args()
         game = ["-game", tools.gamedir]
         valve_vbsp = [tools.exe("vbsp")] + opts.vbsp_args() + game + [self.base]
+        self.fallbacks: list[str] = []       # where Valve's tool ran instead of ours (shown in Problems)
+        self._shaky = False                 # a failure made us fall back: don't count this build as up to date
+        self._notes: list[str] = []          # (said when the build starts)
+        if opts.map_tool == "HAMMERLESS" and not use_hlvbsp(opts):
+            self._notes.append("Hammerless map compiler " + ("isn't installed" if not os.path.exists(HLVBSP) else
+                               "doesn't take extra vbsp options") + ": running Valve's vbsp")
+        if opts.vis_tool == "HAMMERLESS" and opts.vvis_args() is not None and not use_hlvvis(opts):
+            self._notes.append("Hammerless vis " + ("isn't installed" if not os.path.exists(HLVVIS) else
+                               "doesn't know some extra vvis options (" + opts.extra_vvis + ")")
+                               + ": running Valve's vvis")
         self._valve_vbsp = None             # Valve's vbsp, run instead when ours can't (or fails)
         if use_hlvbsp(opts):
             self.steps: list[tuple[str, list[str]]] = [("vbsp", hlvbsp_command(tools, self.base))]
@@ -676,6 +734,9 @@ class CompileJob:
         name, cmd = step
         if name != "vrad" or cmd[0] != HLVRAD or "-gpu" not in cmd or "-gi" not in cmd:
             return                               # (vrad's own bounce needs vis: one after the other)
+        vis_cmd = next((c for n, c in self.steps if n == "vvis"), [])
+        if "-radius_override" in vis_cmd or bsp_fog_farz(self.base + ".bsp") > 0:
+            return                               # (radial vis changes which leaves see the sky: light after it)
         light_bsp = self.base + ".light.bsp"
         try:
             for ext in (".visdone", ".visfailed"):
@@ -697,7 +758,7 @@ class CompileJob:
                 if self.tools.root not in _CONTENT:
                     _CONTENT[self.tools.root] = GameContent(self.tools.root)
                 export_prop_models(light_bsp, _CONTENT[self.tools.root], self.base + ".hlvrad_models")
-                if self._stopping:
+                if self._stopping or box.get("cancel"):
                     return
                 proc = subprocess.Popen(light_cmd, cwd=os.path.dirname(self.vmf), stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, text=True, errors="replace",
@@ -706,6 +767,8 @@ class CompileJob:
                 box["reader"] = threading.Thread(target=lambda: box["lines"].extend(proc.stdout), daemon=True)
                 box["reader"].start()
                 box["proc"] = proc
+                if box.get("cancel"):             # (the build ended while it was starting: not left running)
+                    proc.kill()
             except Exception:
                 box["proc"] = None                # (the usual way: vrad after vis prepares and reports it)
 
@@ -738,6 +801,7 @@ class CompileJob:
 
     def _end_light_alongside(self) -> None:
         if self._light is not None:
+            self._light["cancel"] = True        # (a starter still preparing won't start it after this)
             self._light["starter"].join(5)
             proc = self._light.get("proc")
             if proc is not None and proc.poll() is None:
@@ -775,6 +839,13 @@ class CompileJob:
             out.append(line)
         return proc.wait(), out
 
+    def _fallback(self, msg: str, failure: bool = False) -> None:
+        """Valve's tool runs instead of ours: in the log, and listed in Problems after the build."""
+        self._q.put(msg)
+        self.fallbacks.append(msg.lstrip("! "))
+        if failure:
+            self._shaky = True
+
     def _keep_last_light(self, steps):
         """-keeplight: the last build's .bsp (before this build replaces it) copied aside; when there's none, or it
         has no lighting, nothing is kept (that part of the map is unlit until it is baked)."""
@@ -803,7 +874,9 @@ class CompileJob:
                 self._q.put(("OK",))
                 return
             steps = self._choose_steps() if self.skip_if_unchanged else self.steps
-            for stale in (self.base + ".stamp", self.base + ".built.vmf"):   # a failed compile mustn't look
+            for msg in self._notes:
+                self._fallback(msg)
+            for stale in (self.base + ".stamp", self.base + ".built.vmf", self.base + ".built.opts"):   # a failed compile mustn't look
                 if os.path.exists(stale):                                     # up to date or be built on
                     os.remove(stale)
             self._keep_last_light(steps)
@@ -822,7 +895,7 @@ class CompileJob:
                     code, out = done
                     cmd = [HLVRAD]                   # (ours ran: a failure falls back to Valve's vrad below)
                     if code != 0 and self._valve_vrad and not self._stopping:
-                        self._q.put(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead")
+                        self._fallback(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead", True)
                         code, out = self._exec(self._valve_vrad)
                     self.timings.append(("vrad (alongside vis)", time.time() - self._light_t0))
                     if code != 0:
@@ -844,7 +917,8 @@ class CompileJob:
                     except Exception as ex:          # never let the tables stop a build
                         why = [f"couldn't read the game's files ({ex})"]
                     if why:
-                        self._q.put("Hammerless map compiler doesn't do " + ", ".join(why) + " yet: running Valve's vbsp")
+                        self._fallback("Hammerless map compiler doesn't do " + ", ".join(why) + " yet: running Valve's vbsp",
+                                       any(w.startswith("couldn't read") for w in why))
                         cmd = self._valve_vbsp
                 self.prepared.set()
                 if name == "vrad" and cmd[0] == HLVRAD and self._opts.sky_key:
@@ -853,30 +927,31 @@ class CompileJob:
                     except Exception as ex:          # (the sky picture: one colour instead, ours still lights it)
                         self._q.put(f"Sky Light: couldn't prepare the sky picture ({ex}): the sky lights the map "
                                     "with one colour")
+                        self._shaky = True
                         cmd = [c for i, c in enumerate(cmd) if c != "-skymap" and (i == 0 or cmd[i - 1] != "-skymap")]
                 if name == "vrad" and cmd[0] == HLVRAD:
                     try:
                         prepare_hlvrad(self.tools, self.base)
                     except Exception as ex:          # never let the model copy stop a build
-                        self._q.put(f"Hammerless light compiler couldn't read the game's models ({ex}): running Valve's vrad")
+                        self._fallback(f"Hammerless light compiler couldn't read the game's models ({ex}): running Valve's vrad", True)
                         cmd = self._valve_vrad
                 elif name == "vrad" and self._opts.light_tool == "HAMMERLESS":
-                    self._q.put("Hammerless light compiler doesn't do " + ", ".join(hlvrad_unsupported(self._opts))
-                                + " yet: running Valve's vrad")
+                    self._fallback("Hammerless light compiler doesn't do " + ", ".join(hlvrad_unsupported(self._opts))
+                                   + " yet: running Valve's vrad")
                 if name == "vrad" and cmd[0] != HLVRAD and self._opts.sky_key:
                     self._q.put("Sky Light from the sky needs the Hammerless light compiler: Valve's vrad lights it "
                                 "with one colour")
                 code, out = self._exec(cmd)
                 if code != 0 and name == "vrad" and cmd[0] == HLVRAD and self._valve_vrad and not self._stopping:
                     # ours writes the map only when it has finished, so it's untouched
-                    self._q.put(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead")
+                    self._fallback(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead", True)
                     code, out = self._exec(self._valve_vrad)
                 if code != 0 and name == "vbsp" and cmd[0] == HLVBSP and self._valve_vbsp and not self._stopping:
-                    self._q.put(f"!! Hammerless map compiler failed (exit code {code}): running Valve's vbsp instead")
+                    self._fallback(f"!! Hammerless map compiler failed (exit code {code}): running Valve's vbsp instead", True)
                     code, out = self._exec(self._valve_vbsp)
                 if code != 0 and name == "vvis" and cmd[0] == HLVVIS and self._valve_vvis and not self._stopping:
                     # ours only replaces the map at the very end, so the map and portals are untouched
-                    self._q.put(f"!! Hammerless vis failed (exit code {code}): running Valve's vvis instead")
+                    self._fallback(f"!! Hammerless vis failed (exit code {code}): running Valve's vvis instead", True)
                     code, out = self._exec(self._valve_vvis)
                 self.timings.append((name, time.time() - t0))
                 if name == "vvis" and self._light is not None:
@@ -909,13 +984,16 @@ class CompileJob:
                 os.makedirs(self.tools.maps_dir, exist_ok=True)
                 self._copy_bsp(os.path.join(self.tools.maps_dir, self.name + ".bsp"))
                 self._q.put(f"Copied {self.name}.bsp to {self.tools.maps_dir}")
-            with open(self.base + ".stamp", "w", encoding="utf-8") as f:
-                f.write(self._stamp(self._vmf_bytes))
             with open(self.base + ".built.vmf", "wb") as f:       # what this BSP was made from (the VMF
                 f.write(self._vmf_bytes)                         # as it was when the job started)
             with open(self.base + ".built.opts", "w", encoding="utf-8") as f:
                 built = repr(replace(self._opts, vis=self._built_vis, rad=self._built_rad))
                 f.write(_with_light(built, self._built_light) if self._built_light else built)
+            if self._shaky:                  # (made by a fallback after a failure: the next build compiles again)
+                self._q.put("A compiler failed and Valve's ran instead: the next build compiles the map again")
+            else:                            # (last: a build is up to date only once its whole record is written)
+                with open(self.base + ".stamp", "w", encoding="utf-8") as f:
+                    f.write(self._stamp(self._vmf_bytes))
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
             self._q.put(("OK",))
         except Exception as ex:  # surfaced to the user in the log

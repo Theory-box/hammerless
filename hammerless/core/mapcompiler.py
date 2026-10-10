@@ -378,6 +378,8 @@ def vmf_instances(main_vmf: str) -> list[tuple[str, str]]:
     from .vmf import parse
     out: list[tuple[str, str]] = []
     queue = [main_vmf]
+    seen = {os.path.normcase(os.path.abspath(main_vmf))}    # (each file once: an instance can include itself)
+    listed: set = set()
     while queue:
         with open(queue.pop(0), encoding="latin-1") as f:
             text = f.read()
@@ -388,8 +390,12 @@ def vmf_instances(main_vmf: str) -> list[tuple[str, str]]:
                 continue
             file = b.get("file") or ""
             path = _instance_path(main_vmf, file) if file else None
-            if path:
+            key = os.path.normcase(os.path.abspath(path)) if path else None
+            if key and (file, key) not in listed:      # (each name once; each file read once)
+                listed.add((file, key))
                 out.append((file, path))
+            if key and key not in seen:
+                seen.add(key)
                 queue.append(path)
     return out
 
@@ -398,8 +404,8 @@ def read_vmf_with_instances(vmf_path: str) -> str:
     """The map's text, then its instance files' (what the compiler reads: materials, props, detail kinds)."""
     with open(vmf_path, encoding="latin-1") as f:      # (bytes as they are: hlvbsp reads them raw)
         text = f.read()
-    for _file, path in vmf_instances(vmf_path):
-        with open(path, encoding="latin-1") as f:
+    for path in dict.fromkeys(os.path.normcase(os.path.abspath(p)) for _file, p in vmf_instances(vmf_path)):
+        with open(path, encoding="latin-1") as f:      # (each file once, however many names point at it)
             text += "\n" + f.read()
     return text
 

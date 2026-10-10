@@ -146,20 +146,20 @@ def context_code(e: dict) -> str:
     for fld in e["fields"]:
         n = fld["name"]
         if fld.get("player"):
-            lines.append(f'    if ("{n}" in params) {{ ::HL_Ctx.{n}_id <- params.{n}; '
-                         f'::HL_Ctx.{n} <- GetPlayerFromUserID(params.{n}); }}')
+            lines.append(f'    if ("{n}" in params) {{ ::HL_Ctx["{n}_id"] <- params["{n}"]; '
+                         f'::HL_Ctx["{n}"] <- GetPlayerFromUserID(params["{n}"]); }}')
         elif fld.get("entity"):
-            lines.append(f'    if ("{n}" in params) {{ ::HL_Ctx.{n}_id <- params.{n}; '
-                         f'::HL_Ctx.{n} <- EntIndexToHScript(params.{n}); }}')
+            lines.append(f'    if ("{n}" in params) {{ ::HL_Ctx["{n}_id"] <- params["{n}"]; '
+                         f'::HL_Ctx["{n}"] <- EntIndexToHScript(params["{n}"]); }}')
     return "\n".join(lines)
 
 
 def field_expr(name: str, kind: str) -> str:
     default = {NUM: "0.0", BOOL: "false", TEXT: '""'}.get(kind, "null")
-    value = f"::HL_Ctx.{name}"
+    value = f'::HL_Ctx["{name}"]'      # (by key: a field may be named like a keyword, e.g. "class")
     if kind == NUM:
-        value = f"::HL_Ctx.{name}.tofloat()"
-    return f'(("{name}" in ::HL_Ctx && ::HL_Ctx.{name} != null) ? {value} : {default})'
+        value = f'::HL_Ctx["{name}"].tofloat()'
+    return f'(("{name}" in ::HL_Ctx && ::HL_Ctx["{name}"] != null) ? {value} : {default})'
 
 
 def groups() -> list[tuple[str, list[dict]]]:

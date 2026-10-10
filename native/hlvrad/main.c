@@ -76,6 +76,19 @@ static void TakeVis(void) {
         SetLump(vis_lumps[k], data, len, version);
     }
     MapVis();
+    {   /* the leaves vis changed: their contents (fog volume tests) and radial flag; the sky flags stay ours */
+        unsigned char *data;
+        int len, version;
+        if (!ReadLumpFrom(g_visFrom, LUMP_LEAFS, &data, &len, &version) || len != numleafs * (int)sizeof(dleaf_t))
+            Error("Can't read the vis's leaves from %s", g_visFrom);
+        const dleaf_t *vl = (const dleaf_t *)data;
+        for (int i = 0; i < numleafs; i++) {
+            dleafs[i].contents = vl[i].contents;
+            int radial = ((unsigned short)vl[i].area_flags >> 9) & 0x02;     /* (LEAF_FLAGS_RADIAL) */
+            SetLeafFlags(i, (LeafFlags(i) & ~0x02) | radial);
+        }
+        free(data);
+    }
     CreateDirectLights();
     if (g_bGPU) GPU_Lights();
     /* (vis is done: the rest of the build waits on this, so every core, at normal priority) */
@@ -105,6 +118,8 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-maxchop") && i + 1 < argc) maxchop = (float)atof(argv[++i]);  /* (and inside it) */
         else if (!_stricmp(a, "-dispchop")) {
             if (++i >= argc) Error("expected a value after '%s'", a);
+            dispchop = (float)atof(argv[i]);
+            if (dispchop <= 0) Error("-dispchop needs a value above 0");
         }
         /* beyond vrad (Hammerless's own): supersampling's points across a luxel (4: vrad's 4 x 4), passes and the
          * brightness step that triggers it; -fixquirks: vrad's oddities left out (see direct.c, leafambient.c) */

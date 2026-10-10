@@ -1,5 +1,6 @@
 /* Emitting the tree into the BSP's arrays, the portal file for vis, and the .bsp file itself in the
  * layout L4D2's vbsp writes (version 21, lumps in vbsp's order, 4-byte aligned). */
+#include <windows.h>
 #include "hlvbsp.h"
 #include "disp.h"
 
@@ -610,15 +611,19 @@ extern unsigned char *phys_collide; extern int phys_collide_len;
 unsigned char *phys_collide; int phys_collide_len;
 
 static void WriteBSPFile(const char *path) {
-    FILE *f = fopen(path, "wb");
-    if (!f) Error("Can't write %s", path);
+    /* written beside it, then put in its place: a failed write (full disk) fails instead of leaving half a map */
+    char tmp[1100];
+    snprintf(tmp, sizeof(tmp), "%s.writing", path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) Error("Can't write %s", tmp);
+    int bad = 0;
     unsigned char header[1036];
     memset(header, 0, sizeof(header));
     memcpy(header, "VBSP", 4);
     int version = 21;
     memcpy(header + 4, &version, 4);
     memcpy(header + 8 + 64 * 16, &map_revision, 4);
-    fwrite(header, 1, sizeof(header), f);
+    bad |= fwrite(header, 1, sizeof(header), f) != sizeof(header);
     int offset = (int)sizeof(header);
     for (unsigned k = 0; k < sizeof(lump_order) / sizeof(lump_order[0]); k++) {
         int i = lump_order[k];
@@ -626,17 +631,25 @@ static void WriteBSPFile(const char *path) {
         int fields[4] = {l->version, offset, l->len, 0};
         memcpy(header + 8 + 16 * i, fields, 16);
         if (l->len) {
-            fwrite(l->data, 1, l->len, f);
+            bad |= fwrite(l->data, 1, l->len, f) != (size_t)l->len;
             offset += l->len;
             static const unsigned char zero[4] = {0};
             int pad = (4 - (offset & 3)) & 3;
-            fwrite(zero, 1, pad, f);
+            bad |= fwrite(zero, 1, pad, f) != (size_t)pad;
             offset += pad;
         }
     }
-    fseek(f, 0, SEEK_SET);
-    fwrite(header, 1, sizeof(header), f);
-    fclose(f);
+    bad |= fseek(f, 0, SEEK_SET) != 0;
+    bad |= fwrite(header, 1, sizeof(header), f) != sizeof(header);
+    bad |= fclose(f) != 0;
+    if (bad) {
+        remove(tmp);
+        Error("Can't write %s (disk full?)", path);
+    }
+    if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        remove(tmp);
+        Error("Can't replace %s (is the game or another program holding it?)", path);
+    }
 }
 
 /* Pack the arrays into the file's record layouts. */

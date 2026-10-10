@@ -1,6 +1,7 @@
 /* Reading and writing the .bsp: every lump is read as it is and written back in the order L4D2's
  * tools write them (measured: vbsp's order with the HDR faces right after the faces). */
 #include <stdarg.h>
+#include <windows.h>
 #include "hlvrad.h"
 
 lump_t lumps[64];
@@ -58,7 +59,7 @@ void LoadBSPFile(const char *path) {
         l->version = h[0];
         l->len = h[2];
         l->fourcc = h[3];
-        if (h[1] < 0 || h[2] < 0 || (long)h[1] + h[2] > size) Error("lump %d runs past the end of the file", i);
+        if (h[1] < 0 || h[2] < 0 || (long long)h[1] + h[2] > (long long)size) Error("lump %d runs past the end of the file", i);
         l->data = xalloc(l->len + 1);
         memcpy(l->data, file + h[1], l->len);
         if (i == LUMP_GAME_LUMP) game_lump_offset = h[1];
@@ -166,15 +167,19 @@ void WriteBSPFile(const char *path) {
     for (int k = 0; k < n; k++) listed[lump_order[k]] = 1;
     for (int i = 0; i < 64; i++)
         if (!listed[i] && lumps[i].len) Error("lump %d has data but no place in the file order", i);
-    FILE *f = fopen(path, "wb");
-    if (!f) Error("Can't write %s", path);
+    /* written beside it, then put in its place: a failed write (full disk) leaves the old map whole and fails */
+    char tmp[1100];
+    snprintf(tmp, sizeof(tmp), "%s.writing", path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) Error("Can't write %s", tmp);
+    int bad = 0;
     unsigned char header[1036];
     memset(header, 0, sizeof(header));
     memcpy(header, "VBSP", 4);
     int version = 21;
     memcpy(header + 4, &version, 4);
     memcpy(header + 8 + 64 * 16, &map_revision, 4);
-    fwrite(header, 1, sizeof(header), f);
+    bad |= fwrite(header, 1, sizeof(header), f) != sizeof(header);
     int offset = (int)sizeof(header);
     for (int k = 0; k < n; k++) {
         int i = lump_order[k];
@@ -194,16 +199,24 @@ void WriteBSPFile(const char *path) {
             }
             game_lump_offset = offset;
         }
-        fwrite(l->data, 1, l->len, f);
+        bad |= fwrite(l->data, 1, l->len, f) != (size_t)l->len;
         offset += l->len;
         static const unsigned char zero[4] = {0};
         int pad = (4 - (offset & 3)) & 3;
-        fwrite(zero, 1, pad, f);
+        bad |= fwrite(zero, 1, pad, f) != (size_t)pad;
         offset += pad;
     }
-    fseek(f, 0, SEEK_SET);
-    fwrite(header, 1, sizeof(header), f);
-    fclose(f);
+    bad |= fseek(f, 0, SEEK_SET) != 0;
+    bad |= fwrite(header, 1, sizeof(header), f) != sizeof(header);
+    bad |= fclose(f) != 0;
+    if (bad) {
+        remove(tmp);
+        Error("Can't write %s (disk full?)", path);
+    }
+    if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        remove(tmp);
+        Error("Can't replace %s (is the game or another program holding it?)", path);
+    }
 }
 
 /* one game lump's data by its id (e.g. 'sprp' for static props), as read from the file */

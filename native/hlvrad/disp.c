@@ -441,8 +441,13 @@ void LoadDisplacements(void) {
     for (int f = 0; f < numfaces; f++) {
         const dface_t *face = &g_pFaces[f];
         if (face->dispinfo == -1) continue;
+        if (face->dispinfo < 0 || face->dispinfo >= numdispsurfs) Error("face %d: displacement %d isn't in the map", f, face->dispinfo);
         dispsurf_t *d = &dispsurfs[face->dispinfo];
         const ddispinfo_t *info = &di[face->dispinfo];
+        if (info->power < 2 || info->power > 4) Error("displacement %d: power %d (2 to 4)", face->dispinfo, info->power);
+        if (info->vert_start < 0 || (long long)info->vert_start + ((1 << info->power) + 1) * ((1 << info->power) + 1) >
+                                        (long long)(lumps[LUMP_DISP_VERTS].len / (int)sizeof(dispvert_t)))
+            Error("displacement %d: its vertexes run past the lump", face->dispinfo);
         d->face = f;
         d->power = info->power;
         d->contents = info->contents;

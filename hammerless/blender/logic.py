@@ -252,6 +252,45 @@ def _rebuild_entity_sockets(node, classname: str):
             tree.links.new(out, inp)
 
 
+def _keeps_links(rebuild):
+    """For a function that clears a node's sockets and makes them again: the wires and typed values on sockets
+    that are still there (same identifier and type) come back."""
+    import functools
+
+    @functools.wraps(rebuild)
+    def wrapper(self, context=None):
+        tree = self.id_data
+        keep = [(l.from_node.name, l.from_socket.identifier, l.from_socket.bl_idname, l.to_node.name,
+                 l.to_socket.identifier, l.to_socket.bl_idname)
+                for l in tree.links if l.from_node == self or l.to_node == self]
+        values = {}
+        for sock in self.inputs:
+            for attr in ("value", "default_value"):
+                if hasattr(sock, attr):
+                    try:
+                        v = getattr(sock, attr)
+                        values[(sock.identifier, sock.bl_idname, attr)] = tuple(v) if hasattr(v, "__len__") and not isinstance(v, str) else v
+                    except (AttributeError, TypeError):
+                        pass
+        out = rebuild(self, context)
+        for sock in self.inputs:
+            for attr in ("value", "default_value"):
+                key = (sock.identifier, sock.bl_idname, attr)
+                if key in values:
+                    try:
+                        setattr(sock, attr, values[key])
+                    except (AttributeError, TypeError, ValueError):
+                        pass
+        for fn, fs, ft, tn, ts, tt in keep:
+            a, b = tree.nodes.get(fn), tree.nodes.get(tn)
+            o = next((x for x in a.outputs if x.identifier == fs and x.bl_idname == ft), None) if a else None
+            i = next((x for x in b.inputs if x.identifier == ts and x.bl_idname == tt), None) if b else None
+            if o and i and not any(l.from_socket == o and l.to_socket == i for l in tree.links):
+                tree.links.new(o, i)
+        return out
+    return wrapper
+
+
 def _label_from_target(self, context):
     self.label = self.target.name if self.target else ""
 
@@ -1136,6 +1175,7 @@ def _data_socket(sockets, kind, ident, label):
     return sockets.new(SOCKET_OF_KIND.get(kind, "HL_AnySocket"), label, identifier=ident)
 
 
+@_keeps_links
 def _rebuild_script_call(self, context=None):
     from ..core import vscript as vs
     self.inputs.clear()
@@ -1186,6 +1226,7 @@ class HL_NodeScriptCall(_Node, bpy.types.Node):
         return {"fn": self.fn}
 
 
+@_keeps_links
 def _rebuild_script_event(self, context=None):
     from ..core import vscript as vs
     self.inputs.clear()
@@ -1271,6 +1312,7 @@ def _node_in_editor(context, name):
 class HL_OT_logic_pick_function(bpy.types.Operator):
     bl_idname = "hammerless.logic_pick_function"
     bl_label = "Pick Game Function"
+    bl_options = {"REGISTER", "UNDO"}
     bl_description = "Search the game's script functions"
     bl_property = "choice"
     node_name: StringProperty(options={"HIDDEN"})
@@ -1290,6 +1332,7 @@ class HL_OT_logic_pick_function(bpy.types.Operator):
 class HL_OT_logic_pick_event(bpy.types.Operator):
     bl_idname = "hammerless.logic_pick_event"
     bl_label = "Pick Game Event"
+    bl_options = {"REGISTER", "UNDO"}
     bl_description = "Search the game's events"
     bl_property = "choice"
     node_name: StringProperty(options={"HIDDEN"})
@@ -1350,6 +1393,7 @@ VALUE_KIND_ITEMS = [("num", "Number", ""), ("bool", "True/False", ""), ("text", 
                     ("thing", "Entity / Player", ""), ("any", "Anything", "")]
 
 
+@_keeps_links
 def _rebuild(self, context=None):
     self.inputs.clear()
     self.outputs.clear()
@@ -1357,8 +1401,8 @@ def _rebuild(self, context=None):
 
 
 def _ensure(self, context=None):
-    """Rebuild sockets when a setting changes which sockets the node has (links to kept sockets are lost
-    only if the socket goes away)."""
+    """Rebuild sockets when a setting changes which sockets the node has (wires to sockets that stay are kept:
+    _keeps_links)."""
     _rebuild(self)
 
 
@@ -1645,6 +1689,7 @@ def _option_items(self, context):
 _option_items.cache = []
 
 
+@_keeps_links
 def _rebuild_option(self, context=None):
     from ..core.director_options import BY_KEY
     self.inputs.clear()
@@ -1698,6 +1743,7 @@ class HL_NodeDirectorOption(_Block, bpy.types.Node):
 class HL_OT_logic_pick_option(bpy.types.Operator):
     bl_idname = "hammerless.logic_pick_option"
     bl_label = "Pick Director Setting"
+    bl_options = {"REGISTER", "UNDO"}
     bl_description = "Search the AI Director's settings"
     bl_property = "choice"
     node_name: StringProperty(options={"HIDDEN"})
@@ -1783,6 +1829,7 @@ def _hook_items(self, context):
     return [(h[0], h[0], h[4]) for h in HOOKS]
 
 
+@_keeps_links
 def _rebuild_override(self, context=None):
     from ..core.director_options import HOOKS_BY_NAME, NO_BY_DEFAULT
     self.inputs.clear()
@@ -1831,6 +1878,7 @@ class HL_NodeOverride(_Block, bpy.types.Node):
         return {"hook": self.hook}
 
 
+@_keeps_links
 def _rebuild_answer(self, context=None):
     from ..core.director_options import HOOKS_BY_NAME, NO_BY_DEFAULT
     self.inputs.clear()
