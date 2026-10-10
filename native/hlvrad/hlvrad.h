@@ -45,6 +45,7 @@ extern int map_revision;
 
 void LoadBSPFile(const char *path);
 void WriteBSPFile(const char *path);
+int ReadLumpFrom(const char *path, int i, unsigned char **data, int *len, int *version);
 void SetLump(int i, void *data, int len, int version);    /* takes ownership of data */
 const unsigned char *GameLump(int id, int *len);
 int GameLumpVersion(int id);

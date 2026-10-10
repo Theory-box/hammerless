@@ -82,7 +82,9 @@ class CompileOptions:
 
     def hlvrad_args(self) -> list[str]:
         """The Hammerless light compiler's own options (after vrad_args)."""
-        args = [] if self.light_exact else ["-gpu"]      # (no capable GPU: hlvrad warns and uses the CPU)
+        # (no capable GPU: hlvrad warns and uses the CPU. On the GPU its few CPU rays go through Embree, whose tree
+        # builds far quicker than vrad's: the same map, measured)
+        args = [] if self.light_exact else ["-gpu", "-embree"]
         if self.ss_points != 4:
             args += ["-sspoints", str(self.ss_points)]
         if self.ss_passes != 4:
@@ -185,6 +187,10 @@ def prepare_hlvrad(tools: "Tools", base: str) -> str:
     export_prop_models(base + ".bsp", _CONTENT[tools.root], folder)
     return folder
 
+
+# lighting alongside vis: threads while vis runs (0: one per core). Measured on a real map: fewer threads slow
+# the lighting more than they speed vis (all 10.0 s, 8: 10.3 s, 4: 10.8 s, 2: 12.4 s)
+LIGHT_THREADS_DURING_VIS = 0
 
 HLVBSP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvbsp.exe")
 HLVBSP_TABLES = (".hlvbsp_materials.txt", ".hlvbsp_surfaceprops.txt", ".hlvbsp_props.txt", ".hlvbsp_detail.txt",
@@ -558,6 +564,7 @@ class CompileJob:
         self.lighting: list = []     # bspcheck.lighting_problems after vrad: (message, location, object)
         self._q: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._run, daemon=True)
+        self.prepared = threading.Event()      # (the map compiler's tables written: Python work after it can start)
         self._proc = None
         self._vmf_bytes = b""
         self._built_vis = opts.vis            # the visibility the BSP ends up with
@@ -615,10 +622,102 @@ class CompileJob:
         except (OSError, ValueError, KeyError):
             return False
 
+    # ---- lighting alongside vis: our light compiler on the GPU with ray-traced bounce lights the faces without
+    # vis (vis only spares it rays: the same lightmaps to the byte), then waits for vis to finish the rest
+    # (hlvrad -visfrom). It lights a copy of the map (<base>.light.bsp) that replaces the map when both are done.
+    _light = None
+    _light_t0 = 0.0
+
+    def _start_light_alongside(self, step) -> None:
+        """Before vis starts: copy the map for the lighting, then (on a thread, while vis already runs) prepare
+        what the light compiler reads and start it. Nothing started: vrad runs after vis as usual."""
+        import threading
+        import time
+        name, cmd = step
+        if name != "vrad" or cmd[0] != HLVRAD or "-gpu" not in cmd or "-gi" not in cmd:
+            return                               # (vrad's own bounce needs vis: one after the other)
+        light_bsp = self.base + ".light.bsp"
+        try:
+            for ext in (".visdone", ".visfailed"):
+                if os.path.exists(self.base + ".bsp" + ext):
+                    os.remove(self.base + ".bsp" + ext)
+            shutil.copy2(self.base + ".bsp", light_bsp)      # (before vis rewrites the map)
+        except OSError:
+            return
+        light_cmd = cmd[:-1] + ["-visfrom", self.base + ".bsp", "-visthreads", str(LIGHT_THREADS_DURING_VIS),
+                                cmd[-1] + ".light"]
+        box = {"proc": None, "lines": [], "reader": None}
+
+        def launch():
+            try:
+                from .radprep import export_prop_models
+                from .vpk import GameContent
+                if self._opts.sky_key:
+                    prepare_skymap(self.base, self._opts.sky_key)
+                if self.tools.root not in _CONTENT:
+                    _CONTENT[self.tools.root] = GameContent(self.tools.root)
+                export_prop_models(light_bsp, _CONTENT[self.tools.root], self.base + ".hlvrad_models")
+                if self._stopping:
+                    return
+                proc = subprocess.Popen(light_cmd, cwd=os.path.dirname(self.vmf), stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, text=True, errors="replace",
+                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                        | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
+                box["reader"] = threading.Thread(target=lambda: box["lines"].extend(proc.stdout), daemon=True)
+                box["reader"].start()
+                box["proc"] = proc
+            except Exception:
+                box["proc"] = None                # (the usual way: vrad after vis prepares and reports it)
+
+        box["starter"] = threading.Thread(target=launch, daemon=True)
+        box["starter"].start()
+        self._light, self._light_t0 = box, time.time()
+
+    def _finish_light_alongside(self) -> tuple[int, list[str]] | None:
+        """The lighting started alongside vis: its exit code and output (the map moved into place). None: it
+        never started (vrad runs now instead)."""
+        box = self._light
+        box["starter"].join()
+        proc = box["proc"]
+        if proc is None:
+            self._light = None
+            return None
+        code = proc.wait()
+        box["reader"].join()
+        self._q.put("(lit alongside vis)")
+        for line in box["lines"]:
+            self._q.put(line.rstrip("\n"))
+        if code == 0:
+            os.replace(self.base + ".light.bsp", self.base + ".bsp")
+        return code, box["lines"]
+
+    def _light_proc(self):
+        if self._light is None:
+            return None
+        return self._light.get("proc")
+
+    def _end_light_alongside(self) -> None:
+        if self._light is not None:
+            self._light["starter"].join(5)
+            proc = self._light.get("proc")
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+        for p in (self.base + ".light.bsp", self.base + ".bsp.visdone", self.base + ".bsp.visfailed"):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
+
     def _run(self):
         try:
             self._run_steps()
         finally:
+            self.prepared.set()
+            self._end_light_alongside()
             self._proc = None
             if _ACTIVE_JOBS.get(self.base) is self:
                 del _ACTIVE_JOBS[self.base]
@@ -655,7 +754,29 @@ class CompileJob:
                     shutil.copy2(kept_prt, prt)      # vbsp -onlyents deletes the portal file; geometry is the same
                 if name == "vvis" and os.path.exists(self.base + ".viscost"):
                     os.remove(self.base + ".viscost")    # Hammerless vis writes a new one; Valve's vvis none
+                if name == "vvis" and k + 1 < len(steps):
+                    self._start_light_alongside(steps[k + 1])
                 t0 = time.time()
+                done = self._finish_light_alongside() if name == "vrad" and self._light is not None else None
+                if done is not None:
+                    code, out = done
+                    cmd = [HLVRAD]                   # (ours ran: a failure falls back to Valve's vrad below)
+                    if code != 0 and self._valve_vrad and not self._stopping:
+                        self._q.put(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead")
+                        code, out = self._exec(self._valve_vrad)
+                    self.timings.append(("vrad (alongside vis)", time.time() - self._light_t0))
+                    if code != 0:
+                        self._q.put(f"!! {name} failed (exit code {code})")
+                        self._q.put(("FAILED",))
+                        return
+                    try:
+                        from .bspcheck import lighting_problems
+                        self.lighting = lighting_problems(self.base + ".bsp", self.vmf, "".join(out))
+                    except Exception as ex:      # a checker bug must never fail the build
+                        self._q.put(f"(lighting check skipped: {ex})")
+                    for msg, _loc, _obj in self.lighting:
+                        self._q.put(f"!! {msg}")
+                    continue
                 if name == "vbsp" and cmd[0] == HLVBSP:
                     why = []
                     try:
@@ -665,6 +786,7 @@ class CompileJob:
                     if why:
                         self._q.put("Hammerless map compiler doesn't do " + ", ".join(why) + " yet: running Valve's vbsp")
                         cmd = self._valve_vbsp
+                self.prepared.set()
                 if name == "vrad" and cmd[0] == HLVRAD and self._opts.sky_key:
                     try:
                         prepare_skymap(self.base, self._opts.sky_key)
@@ -698,6 +820,8 @@ class CompileJob:
                                 if code == 3 else f"!! Hammerless vis failed (exit code {code}): running Valve's vvis instead")
                     code, out = self._exec(self._valve_vvis)
                 self.timings.append((name, time.time() - t0))
+                if name == "vvis" and self._light is not None:
+                    open(self.base + ".bsp" + (".visdone" if code == 0 else ".visfailed"), "w").close()
                 if code != 0 or (name == "vbsp" and os.path.exists(self.base + ".lin")):
                     self._q.put(f"!! {name} failed (exit code {code})")
                     self._q.put(("FAILED",))
@@ -874,12 +998,12 @@ def _stop_compilers() -> None:
     """Blender is closing: don't leave vbsp / vvis / vrad running hidden."""
     for job in list(_ACTIVE_JOBS.values()):
         job._stopping = True                              # (no fallback compiler after this)
-        proc = getattr(job, "_proc", None)
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.kill()
-            except OSError:
-                pass
+        for proc in (getattr(job, "_proc", None), job._light_proc()):
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
 
 
 import atexit                                             # noqa: E402

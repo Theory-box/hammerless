@@ -67,6 +67,25 @@ void LoadBSPFile(const char *path) {
     free(file);
 }
 
+/* one lump of another BSP file (a copy, as SetLump takes it); 0 if the file can't be read */
+int ReadLumpFrom(const char *path, int i, unsigned char **data, int *len, int *version) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    unsigned char header[1036];
+    int ok = fread(header, 1, sizeof(header), f) == sizeof(header) && !memcmp(header, "VBSP", 4);
+    int h[4];
+    if (ok) memcpy(h, header + 8 + 16 * i, 16);
+    ok = ok && h[1] >= 0 && h[2] >= 0 && !fseek(f, h[1], SEEK_SET);
+    if (ok) {
+        *data = xalloc(h[2] + 1);
+        ok = fread(*data, 1, h[2], f) == (size_t)h[2];
+        if (!ok) free(*data);
+        *len = h[2], *version = h[0];
+    }
+    fclose(f);
+    return ok;
+}
+
 void SetLump(int i, void *data, int len, int version) {
     if (lumps[i].data != data) free(lumps[i].data);
     lumps[i].data = data;

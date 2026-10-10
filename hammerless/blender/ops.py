@@ -944,8 +944,9 @@ def _popup(message: str) -> None:
         pass
 
 
-def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False) -> dict:
-    """Run our copy of the game's nav generator on the VMF in a background thread."""
+def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False, after=None) -> dict:
+    """Run our copy of the game's nav generator on the VMF in a background thread (once `after`, an Event, is
+    set: the build's own Python work first, as both need Python's lock; measured 3.8 s against 0.3 s)."""
     import threading
     import time
     from ..core.navpredict import cached, predict
@@ -961,6 +962,8 @@ def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False) 
         return box
 
     def work():
+        if after is not None:
+            after.wait(30)
         t0 = time.time()
         try:
             box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage.lower()), climbs,
@@ -1061,7 +1064,8 @@ class HL_OT_build(bpy.types.Operator):
         if self.bake:
             pass                     # lighting only: the nav is made by the next Build / Build & Play
         elif s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root) or unanalyzed):
-            self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs)
+            self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs,
+                                              after=self._job.prepared)
         self._job.snapshot_vis = self._nav is not None and s.nav_analysis == "BLENDER"
         try:
             self._job.start()

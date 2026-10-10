@@ -1547,8 +1547,8 @@ class TestLightCompilerGpu(unittest.TestCase):
         from hammerless.core import compile as cc
         a = cc.CompileOptions(light_tool="HAMMERLESS")
         gi = replace(a, gi=True, gi_rays=256)
-        self.assertEqual(gi.hlvrad_args(), ["-gpu", "-gi", "8", "-girays", "256"])
-        self.assertEqual(replace(gi, bounces=3).hlvrad_args()[1:3], ["-gi", "3"])
+        self.assertEqual(gi.hlvrad_args(), ["-gpu", "-embree", "-gi", "8", "-girays", "256"])
+        self.assertEqual(replace(gi, bounces=3).hlvrad_args()[2:4], ["-gi", "3"])
         self.assertNotIn("-gi", replace(gi, light_exact=True).hlvrad_args())
         self.assertNotIn("-gi", replace(gi, bounces=0).hlvrad_args())
         self.assertNotEqual(cc._opts_rad(repr(a)), cc._opts_rad(repr(gi)))

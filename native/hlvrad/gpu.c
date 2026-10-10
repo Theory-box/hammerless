@@ -470,6 +470,7 @@ int GPU_StyleSlot(int style) { return style >= 0 && style < 256 ? styleslot[styl
 /* the lights (in vrad's order; each light style gets a slot, worked through one at a time), what they see, the sky's
  * directions and picture */
 void GPU_Lights(void) {
+    FreeBuffer(&lightbuf), FreeBuffer(&pvsbuf), FreeBuffer(&skydirs);       /* (again: the lights made anew) */
     for (int i = 0; i < 256; i++) styleslot[i] = -1;
     nslots = 0, nlights = 0;
     for (directlight_t *dl = activelights; dl; dl = dl->next) nlights++;

@@ -45,6 +45,43 @@ static void Stage(const char *name) {
 }
 
 static void FacelightsWork(int face, int thread) { (void)thread; BuildFacelights(face); }
+
+/* -visfrom <map>: light the map while vis runs on a copy of it. The faces' light and bounce (GPU ray traced)
+ * don't need vis: vis only spares rays a light can't reach (measured: the same lightmaps to the byte). What
+ * comes after does (props' and detail props' lights, the sky's leaves): before it, wait for <map>.visdone
+ * (the build writes it when vis has finished; <map>.visfailed: give up), take the vis from <map> and make the
+ * lights again with it. The written map is then the one lighting after vis would give. */
+static const char *g_visFrom;
+static int g_tookVis, g_visThreadsAfter = -1;     /* (-visthreads n: threads while vis runs; then -threads' own) */
+static void TakeVis(void) {
+    if (g_tookVis) return;
+    g_tookVis = 1;
+    char done[1100], failed[1100];
+    snprintf(done, sizeof(done), "%s.visdone", g_visFrom);
+    snprintf(failed, sizeof(failed), "%s.visfailed", g_visFrom);
+    for (;;) {
+        if (GetFileAttributesA(done) != INVALID_FILE_ATTRIBUTES) break;
+        if (GetFileAttributesA(failed) != INVALID_FILE_ATTRIBUTES) {
+            Msg("Vis failed: not lighting\n");
+            exit(3);
+        }
+        Sleep(20);
+    }
+    /* what vis writes: the visibility, leaves' distance to water and its leaf ambient (lighting rewrites the HDR) */
+    static const int vis_lumps[] = {LUMP_VISIBILITY, 46, 51, 52, 55, 56};
+    for (int k = 0; k < (int)(sizeof(vis_lumps) / sizeof(vis_lumps[0])); k++) {
+        unsigned char *data;
+        int len, version;
+        if (!ReadLumpFrom(g_visFrom, vis_lumps[k], &data, &len, &version)) Error("Can't read the vis from %s", g_visFrom);
+        SetLump(vis_lumps[k], data, len, version);
+    }
+    MapVis();
+    CreateDirectLights();
+    if (g_bGPU) GPU_Lights();
+    /* (vis is done: the rest of the build waits on this, so every core, at normal priority) */
+    if (g_visThreadsAfter >= 0) g_numthreads = g_visThreadsAfter;
+    SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+}
 static void FinalLightWork(int face, int thread) { (void)thread; FinalLightFace(face); }
 
 int main(int argc, char **argv) {
@@ -91,6 +128,10 @@ int main(int argc, char **argv) {
             Error("-textureshadows isn't supported yet");
         } else if (!_stricmp(a, "-StaticPropLighting")) {
             g_bStaticPropLighting = 1;
+        } else if (!_stricmp(a, "-visfrom") && i + 1 < argc) {
+            g_visFrom = argv[++i];
+        } else if (!_stricmp(a, "-visthreads") && i + 1 < argc) {
+            g_visThreadsAfter = atoi(argv[++i]);          /* (swapped in below, once the options are read) */
         } else if (!_stricmp(a, "-timing")) {
             g_timing = 1;
         } else if (!_stricmp(a, "-noextra")) {
@@ -102,6 +143,11 @@ int main(int argc, char **argv) {
         } else map = a;
     }
     if (!map) Error("usage: hlvrad [options] -game <gamedir> <map>");
+    if (g_visFrom && g_visThreadsAfter >= 0) {      /* (few threads while vis runs: it has the rest of the CPU) */
+        int during = g_visThreadsAfter;
+        g_visThreadsAfter = g_numthreads;
+        g_numthreads = during;
+    } else g_visThreadsAfter = -1;
     if (g_bLDR) Error("LDR lighting isn't supported yet (L4D2 uses HDR)");
     if (g_ssPoints < 1 || g_ssPoints > 16) Error("-sspoints: 1 to 16");
     if (maxchop < minchop) maxchop = minchop;
@@ -135,7 +181,7 @@ int main(int argc, char **argv) {
     }
     Stage("load");
     MapVis();
-    if (!HaveVis() && g_numbounce > 0) {         /* (as vrad: without vis, every patch would see every other) */
+    if (!HaveVis() && g_numbounce > 0 && !g_visFrom) {         /* (as vrad: without vis, every patch would see every other) */
         Msg("No vis information, direct lighting only.\n");
         g_numbounce = 0;
     }
@@ -198,6 +244,14 @@ int main(int argc, char **argv) {
         Msg("Warning: -gi needs the GPU: vrad's bounced light instead\n");
         g_giPasses = 0;
     }
+    if (g_visFrom && g_numbounce > 0 && !g_giPasses) {   /* (vrad's bounce needs vis: wait for it here) */
+        TakeVis();
+        Stage("waiting for vis");
+        if (!HaveVis()) {
+            Msg("No vis information, direct lighting only.\n");
+            g_numbounce = 0;
+        }
+    }
     if (g_numbounce > 0 && !g_giPasses) {
         Stage("lightmap offsets");
         MakeAllScales();
@@ -211,6 +265,10 @@ int main(int argc, char **argv) {
     if (g_giPasses) {
         BuildIndirectGPU();
         Stage("gi (bounced light)");
+    }
+    if (g_visFrom) {
+        TakeVis();
+        Stage("waiting for vis");
     }
     ExportDirectLightsToWorldLights();
     ComputeDetailPropLighting();
