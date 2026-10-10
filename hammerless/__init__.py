@@ -25,7 +25,7 @@ except ImportError:
 
 
 def register():
-    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport
+    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview
     watchdog.register()
     props.register()
     quality.register()
@@ -34,6 +34,7 @@ def register():
     logic.register()
     logic_examples.register()
     spawn.register()
+    skyview.register()            # (before the lighting view: the sky goes behind everything)
     lightview.register()          # (first: its draw goes under the nav view and problem markers)
     visview.register()
     sound.register()
@@ -45,9 +46,10 @@ def register():
 
 
 def unregister():
-    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport
+    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview
     ui.unregister()
     vmfimport.unregister()
+    skyview.unregister()
     ops.unregister()
     lightview.unregister()
     visview.unregister()

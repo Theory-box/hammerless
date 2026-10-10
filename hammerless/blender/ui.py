@@ -485,9 +485,16 @@ class HL_PT_sky(_Sub, bpy.types.Panel):
     def draw(self, context):
         s = context.scene.hammerless
         col = _settings(self.layout)
+        col.prop(s, "sky_choice")
+        if s.sky_choice == "CUSTOM":
+            col.prop(s, "skyname", text="Name")
         row = col.row(align=True)
-        row.prop(s, "skyname")
-        row.operator("hammerless.pick_sky", text="", icon="VIEWZOOM")
+        row.prop(s, "show_sky")
+        if s.show_sky:
+            row.prop(s, "sky_view_exposure")
+            from .skyview import error
+            if error():
+                col.label(text=f"Sky: {error()}", icon="ERROR")
         col.separator()
         col.prop(s, "auto_sun")
         sub = col.column()

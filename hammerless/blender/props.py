@@ -53,6 +53,46 @@ LIGHT_QUALITY = [
 ]
 
 
+_SKY_CHOICES: list = []      # (kept: Blender holds on to the strings of a list from an items function)
+
+
+def _sky_choice_items(self, context):
+    """Every skybox in the game, then Custom (typed by name)."""
+    from .ops import _sky_items
+    names = [it[0] for it in _sky_items(self, context)]
+    if len(_SKY_CHOICES) != len(names) + 1 or [it[0] for it in _SKY_CHOICES[1:]] != names:
+        _SKY_CHOICES.clear()
+        _SKY_CHOICES.append(("CUSTOM", "Custom", "Type a sky name (a skybox from another game or your own)", "", 0))
+        _SKY_CHOICES.extend((n, n, "Skybox " + n, "", i + 1) for i, n in enumerate(names))
+    return _SKY_CHOICES
+
+
+def _sky_choice_get(self):
+    if self.sky_custom:
+        return 0
+    name = self.skyname.strip().lower()
+    for it in _sky_choice_items(self, bpy.context)[1:]:
+        if it[0].lower() == name:
+            return it[4]
+    return 0
+
+
+def _sky_choice_set(self, value):
+    if value == 0:
+        self.sky_custom = True
+        return
+    for it in _sky_choice_items(self, bpy.context)[1:]:
+        if it[4] == value:
+            self.skyname = it[0]
+            self.sky_custom = False
+            return
+
+
+def _sky_view(self, context):
+    from .skyview import redraw
+    redraw()
+
+
 def _sky_pick_get(self):
     from . import quality
     return quality.get_sky_rays_pick(self)
@@ -560,8 +600,17 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     extra_vrad: StringProperty(name="vrad", description="Extra command-line options for vrad, e.g. -bounce 50")
 
     # --- lighting & sky
-    skyname: StringProperty(name="Sky", default="sky_day01_09_hdr",
-                            description="Skybox texture name (use the list button to pick one)")
+    skyname: StringProperty(name="Sky", default="sky_day01_09_hdr", update=_sky_view,
+                            description="Skybox name (the name of its six materials in materials/skybox/, without "
+                                        "the side: sky_day01_09_hdr for sky_day01_09_hdrbk and so on)")
+    sky_choice: EnumProperty(name="Sky", items=_sky_choice_items, get=_sky_choice_get, set=_sky_choice_set,
+                             description="The map's sky: every skybox in Left 4 Dead 2, or Custom to type a name")
+    sky_custom: BoolProperty(default=False, options={"HIDDEN"})
+    show_sky: BoolProperty(name="Show in Viewport", default=True, update=_sky_view,
+                           description="Draw the sky behind the scene in the 3D viewport (any shading mode; "
+                                       "nothing is added to the scene)")
+    sky_view_exposure: FloatProperty(name="Brightness", default=0.0, soft_min=-4.0, soft_max=4.0, step=10,
+                                     update=_sky_view, description="The viewport sky's brightness, in stops")
     auto_sun: BoolProperty(name="Add Sun if Missing", default=True,
                            description="Add a sun from these settings when the scene has no Blender sun lamp")
     sun_color: FloatVectorProperty(name="Sun Color", subtype="COLOR_GAMMA", size=3, min=0, max=1,

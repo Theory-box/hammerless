@@ -1097,6 +1097,25 @@ def test_vmf_import_lightmap_scale():
     assert scales() == {"32", "4"}, scales()
 
 
+def test_sky_dropdown():
+    # the sky dropdown lists the game's skies then Custom; it sets the map's skyname, Custom keeps a typed one
+    from hammerless.blender.props import _sky_choice_items
+    reset_scene()
+    s = bpy.context.scene.hammerless
+    items = _sky_choice_items(s, bpy.context)
+    assert items[0][0] == "CUSTOM"
+    if len(items) < 3:
+        return                                                     # (no game here: nothing to pick from)
+    s.sky_choice = items[2][0]
+    assert s.skyname == items[2][0] and s.sky_choice == items[2][0]
+    s.sky_choice = "CUSTOM"
+    assert s.sky_custom and s.skyname == items[2][0]               # (typed below the dropdown)
+    s.skyname = "my_own_sky"
+    assert s.sky_choice == "CUSTOM"
+    s.sky_custom = False
+    assert s.sky_choice == "CUSTOM"                                # (a name the game doesn't have)
+
+
 # ---------------------------------------------------------------- runner
 
 def main():
