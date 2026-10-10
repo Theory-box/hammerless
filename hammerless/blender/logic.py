@@ -146,6 +146,7 @@ class _Node:
         self.use_custom_color = True
         self.color = CATEGORY_COLORS.get(self.category, (0.25, 0.25, 0.25))
         self.make_sockets()
+        _record_sockets(self)
 
     def make_sockets(self):
         pass
@@ -252,6 +253,11 @@ def _rebuild_entity_sockets(node, classname: str):
             tree.links.new(out, inp)
 
 
+def _record_sockets(node) -> None:
+    """What the node's sockets were made for (see _keeps_links)."""
+    node["hl_sockets_for"] = repr(tuple(getattr(node, a, None) for a in ("fn", "event", "key", "hook")))
+
+
 def _keeps_links(rebuild):
     """For a function that clears a node's sockets and makes them again: the wires and typed values on sockets
     that are still there (same identifier and type) come back."""
@@ -259,6 +265,12 @@ def _keeps_links(rebuild):
 
     @functools.wraps(rebuild)
     def wrapper(self, context=None):
+        # what decides the node's sockets (its function, event, Director key, hook): when that changed, the
+        # sockets are new ones even with the same names, so their values are the new defaults; only wires stay
+        what = repr(tuple(getattr(self, a, None) for a in ("fn", "event", "key", "hook")))
+        before = self.get("hl_sockets_for")
+        same_thing = before is None or before == what     # (none recorded yet, e.g. a node from an older file)
+        self["hl_sockets_for"] = what
         tree = self.id_data
         keep = [(l.from_node.name, l.from_socket.identifier, l.from_socket.bl_idname, l.to_node.name,
                  l.to_socket.identifier, l.to_socket.bl_idname)
@@ -273,7 +285,7 @@ def _keeps_links(rebuild):
                     except (AttributeError, TypeError):
                         pass
         out = rebuild(self, context)
-        for sock in self.inputs:
+        for sock in self.inputs if same_thing else ():
             for attr in ("value", "default_value"):
                 key = (sock.identifier, sock.bl_idname, attr)
                 if key in values:
@@ -1413,6 +1425,7 @@ class _Block(_Node):
         self.use_custom_color = True
         self.color = CATEGORY_COLORS["Script"]
         self.make_sockets()
+        _record_sockets(self)
 
     def data_in(self, kind, ident, label):
         return _data_socket(self.inputs, kind, ident, label)
@@ -1923,6 +1936,7 @@ class HL_NodeDirectorMood(_Block, bpy.types.Node):
         self.use_custom_color = True
         self.color = CATEGORY_COLORS["Director"]
         self.make_sockets()
+        _record_sockets(self)
 
     def make_sockets(self):
         self.data_out("num", "anger", "Anger")

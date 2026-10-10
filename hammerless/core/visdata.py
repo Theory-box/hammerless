@@ -248,11 +248,18 @@ def render_load(data: bytes) -> RenderLoad:
             se = surfedges_l[first_edge:first_edge + num_edges]
             corners = verts_l[np.where(se >= 0, edges_l[np.abs(se), 0], edges_l[np.abs(se), 1])].astype(np.float64)
             pos, _flat, _tris = _displacement(corners, dispinfo_l, dispverts_l, di)
-            lf = leaf_at(pos.mean(axis=0) + np.array([0.0, 0.0, 1.0]))
-            c = leaf_cluster[lf] if 0 <= lf < nleafs else -1
-            if 0 <= c < nclusters:
-                cluster_faces[c].add(f)
-                face_cluster[f] = c
+            # (in front of its base face: the side the displacement is seen from; its grid points spread over
+            # the clusters it crosses)
+            planenum, side = struct.unpack_from("<HB", faces, b)
+            n = np.array(struct.unpack_from("<3f", planes, 20 * planenum), dtype=np.float64) * (-1.0 if side else 1.0)
+            step = max(1, len(pos) // 9)
+            for p in list(pos[::step]) + [pos.mean(axis=0)]:
+                lf = leaf_at(p + n * 2.0)
+                c = leaf_cluster[lf] if 0 <= lf < nleafs else -1
+                if 0 <= c < nclusters:
+                    cluster_faces[c].add(f)
+                    if face_cluster[f] < 0:
+                        face_cluster[f] = c
     # what the game draws from a cluster: every face of the clusters it sees, each once (a face in leaves of
     # several clusters is drawn once a frame, not once per cluster)
     members = [np.fromiter(s, dtype=np.int64, count=len(s)) for s in cluster_faces]

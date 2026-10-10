@@ -253,9 +253,10 @@ def build_map_text(context, root: str | None):
         return None, None, rep
     gamedir = os.path.join(root, "left4dead2") if root else None
     content = game_content(root)        # loads the game's surface list before materials are read
-    if content is not None and f"maps/{s.map_name}.bsp" in getattr(content, "files", ()):
-        rep.errors.append(f"Map Name '{s.map_name}' is one of the game's own maps: give yours another name (building "
-                          "it would put files over the official map's in the game folder)")
+    if root and cc.foreign_map(cc.Tools(root), s.map_name):
+        rep.errors.append(f"Map Name '{s.map_name}' is a map already in the game that Hammerless didn't build (one of "
+                          "the game's own, or another of yours): give this one another name, or building it would "
+                          "replace that map's files")
         return None, None, rep
     ir, _mats = extract_scene(context, rep, gamedir, content)
     if rep.errors:

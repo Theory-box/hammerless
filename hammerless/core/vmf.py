@@ -94,7 +94,8 @@ def _plane_points(r):
 def parse(text: str) -> list[Block]:
     """Parse VMF/KeyValues text into Blocks (enough for tests and tools). Comments are // outside quotes (a value
     like "http://..." keeps its slashes)."""
-    tokens = [t for t in re.findall(r'"[^"]*"|//[^\n]*|\{|\}|[^\s{}"]+', text) if not t.startswith("//")]
+    # (an unquoted token ends at // too: "metal//note" is "metal" and a comment)
+    tokens = [t for t in re.findall(r'"[^"]*"|//[^\n]*|\{|\}|(?:[^\s{}"/]|/(?!/))+', text) if not t.startswith("//")]
     root = Block("root")
     stack = [root]
     i = 0

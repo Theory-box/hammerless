@@ -249,6 +249,8 @@ def displacement_vertices(plane: str, disp) -> list[list[tuple[float, float, flo
 def solid_displacements(solid) -> list[tuple]:
     """A solid's displacements: (side, dispinfo, the side's four corners)."""
     from .vmfimport import solid_faces
+    if not any(sd.blocks("dispinfo") for sd in solid.blocks("side")):
+        return []                     # (most solids: no clipping work)
     faces = {id(s): v for s, v in solid_faces(solid)}
     return [(sd, di, faces.get(id(sd))) for sd in solid.blocks("side") for di in sd.blocks("dispinfo")]
 
@@ -275,13 +277,19 @@ def displacement_brushes(plane: str, disp, thickness: float = 1.0, verts=None) -
                 tris += [(k, k + n, k + 1), (k + 1, k + n, k + n + 1)]
             else:
                 tris += [(k, k + n, k + n + 1), (k, k + n + 1, k + 1)]
+    up = (0.0, 0.0, 1.0)              # (the side the displacement faces: its base face's outward normal)
+    if verts is not None and len(verts) == 4:
+        from .vmfimport import _newell
+        nup, nl = _norm(_newell(list(verts)))
+        if nl > 1e-9:
+            up = nup
     out = []
     for a, b, c in tris:
         pa, pb, pc = flat[a], flat[b], flat[c]
         normal, length = _norm(_cross(_sub(pb, pa), _sub(pc, pa)))
         if length < 1e-6:
             continue
-        if normal[2] < 0:
+        if _dot(normal, up) < 0:       # (the slab goes behind the surface, away from the open side)
             normal = (-normal[0], -normal[1], -normal[2])
         dist = _dot(normal, pa)
         sides = [Side(normal, dist, DISPLACEMENT), Side((-normal[0], -normal[1], -normal[2]), -(dist - thickness),

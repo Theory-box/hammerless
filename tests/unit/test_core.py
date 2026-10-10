@@ -543,6 +543,42 @@ class TestSmartBuild(unittest.TestCase):
         ir.entities.append(Entity("logic_relay", (0, 0, 16), (0, 0, 0), {"targetname": "r", "delay": speed}))
         return build_vmf(ir)[0]
 
+    def test_foreign_map_name(self):
+        """A map already in the game (a loose file in any content folder's maps/) that Hammerless didn't build."""
+        import tempfile
+        from hammerless.core import compile as cc
+        root = tempfile.mkdtemp()
+        for folder in ("left4dead2", "update"):
+            os.makedirs(os.path.join(root, folder, "maps"))
+        open(os.path.join(root, "update", "maps", "c1m1_hotel.bsp"), "wb").close()
+        open(os.path.join(root, "left4dead2", "maps", "mine.bsp"), "wb").close()
+        tools = cc.Tools(root)
+        self.assertTrue(cc.foreign_map(tools, "c1m1_hotel"))
+        self.assertTrue(cc.foreign_map(tools, "mine"))
+        cc.set_map_owner(tools, "mine", os.path.join(root, "work", "mine.vmf"))     # (built by Hammerless)
+        self.assertFalse(cc.foreign_map(tools, "mine"))
+        self.assertFalse(cc.foreign_map(tools, "new_map"))
+
+    def test_light_aimed_at_brush_entity_moved(self):
+        """A brush entity a light aims at is still geometry: moving its brushes is a full build."""
+        from hammerless.core.buildplan import plan
+        door = ('entity { "classname" "func_door" "targetname" "door" solid { side { "plane" "(0 0 %d) (0 1 %d) '
+                '(1 1 %d)" } } }')
+        base = 'world { "id" "1" } entity { "classname" "light_spot" "target" "door" "origin" "0 0 0" } ' + door
+        self.assertEqual(plan(base % (0, 0, 0), base % (8, 8, 8))[0], "full")
+
+    def test_entity_in_filled_space_only(self):
+        """Only a point outside every brush counts as a room vbsp filled (a light flush in a ceiling doesn't)."""
+        from hammerless.core.buildplan import filled_points
+        text = ('world { solid { side { "plane" "(-64 64 0) (64 64 0) (64 -64 0)" } '
+                'side { "plane" "(-64 -64 -16) (64 -64 -16) (64 64 -16)" } '
+                'side { "plane" "(-64 64 0) (-64 -64 0) (-64 -64 -16)" } '
+                'side { "plane" "(64 -64 0) (64 64 0) (64 64 -16)" } '
+                'side { "plane" "(64 64 0) (-64 64 0) (-64 64 -16)" } '
+                'side { "plane" "(-64 -64 0) (64 -64 0) (64 -64 -16)" } } }')
+        self.assertEqual(filled_points(text, [(0, 0, -8)]), [])             # (inside the brush)
+        self.assertEqual(filled_points(text, [(0, 0, 32)]), [(0, 0, 32)])   # (above it)
+
     def test_compiled_from_entities(self):
         """Entities the compilers read: a light's aim target relights; fog far Z (radial vis) is a full build."""
         from hammerless.core.buildplan import plan
@@ -858,7 +894,7 @@ class TestScriptNodes(unittest.TestCase):
         self.assertTrue(hurt["attackerentid"]["entity"] and not hurt["attackerentid"]["player"])
 
     def test_script_loop_is_queued(self):
-        """Script nodes wired in a loop: the wire that closes it is queued (a call would recurse forever)."""
+        """Script nodes wired in a loop call each other directly, with a depth limit (no endless recursion)."""
         from hammerless.core.logic import LLink, LNode, compile_graph
         ir = MapIR()
         nodes = [LNode("Start", "MAP_START", {}),
@@ -867,9 +903,10 @@ class TestScriptNodes(unittest.TestCase):
         links = [LLink("Start", "out", "A", "run"), LLink("A", "then", "B", "run"), LLink("B", "then", "A", "run")]
         compile_graph(nodes, links, ir)
         script = next(v for k, v in ir.extra_scripts.items() if "logic_" in k)
-        self.assertIn('EntFire("hl_logic", "RunScriptCode", "HL_S_a()");', script)    # (wires in the loop: queued)
-        self.assertNotIn("    HL_S_a();", script)
-        self.assertNotIn("    HL_S_b();", script)
+        self.assertIn("    HL_S_b();", script)                          # (called directly, in order)
+        self.assertIn("if (::HL_Depth >= ::HL_MAX_DEPTH)", script)       # (an endless loop stops with a message)
+        self.assertIn("::HL_S_a_body <- function()", script)
+        self.assertNotIn("RunScriptCode", script)
 
     def test_event_fields_by_key(self):
         """An event field named like a Squirrel keyword ("class") is read by key, not as .class."""

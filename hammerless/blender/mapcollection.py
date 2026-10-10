@@ -335,20 +335,25 @@ def place(scene, obj, new: bool, sources: set | None = None, new_colls: set | No
     if obj.get(KIND) is not None or not obj.visible_get() or obj.name in sources:
         return False
     users = batch.users(obj)
-    if new and new_colls and users and all(c.name in new_colls for c in users):
+    if new and new_colls and users and all(c.session_uid in new_colls for c in users):
         return False                  # (it came in its own collection: that collection decides)
     cat = _category(obj)
     if cat is None:
         return False
     if not new and not all(c in batch.places for c in users):
         return False
+    probe = coll
+    for part in cat.split("/"):        # (a hidden or excluded kind collection, or one above it: left alone)
+        probe = next((c for c in probe.children if c.get("hl_category") == part or c.name == part), None)
+        if probe is None:
+            break
+        if batch.is_hidden(probe):
+            return False
     target = coll
     for part in cat.split("/"):
         target = _child(target, part)
     if list(users) == [target]:
         return False
-    if batch.is_hidden(target):
-        return False                  # (you hid that kind's collection: a new object stays where you see it)
     for o in [obj] + list(obj.children_recursive):
         if o is not obj and not new and not all(c in batch.places for c in batch.users(o)):
             continue
@@ -393,7 +398,7 @@ def _on_depsgraph(scene, depsgraph):
     ids = {o.session_uid: o for o in scene.objects}
     known = _known.get(scene.name)
     _known[scene.name] = set(ids)
-    colls = {c.name for c in bpy.data.collections}
+    colls = {c.session_uid for c in bpy.data.collections}
     known_colls = _known_colls.get(scene.name)
     _known_colls[scene.name] = colls
     if known is None:
@@ -401,7 +406,9 @@ def _on_depsgraph(scene, depsgraph):
             _sigs[o.session_uid] = _sig(o)
         return
     if known_colls is not None and colls - known_colls:
-        _new_colls.setdefault(scene.name, set()).update(colls - known_colls)
+        _new_colls[scene.name] = colls - known_colls      # (only what came with this update: e.g. Append)
+    else:
+        _new_colls.pop(scene.name, None)
     for uid in ids.keys() - known:
         _pending[uid] = True
         _sigs[uid] = _sig(ids[uid])
@@ -421,6 +428,9 @@ def _on_depsgraph(scene, depsgraph):
 def _on_load(*_args):
     _known.clear()
     _pending.clear()
+    _known_colls.clear()
+    _new_colls.clear()
+    _sigs.clear()
     convert_old_volumes()
 
 

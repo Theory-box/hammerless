@@ -76,12 +76,13 @@ def _split(text: str):
             entities.append(canon)
         elif cls in GEOMETRY_CLASSES or (tname and tname in window):
             geometry.append(("entity", canon))
-        elif cls in LIGHT_CLASSES or (tname and tname in aim):
+        elif cls in LIGHT_CLASSES or (tname and tname in aim and not b.blocks("solid")):
             lighting.append(canon)
         elif b.blocks("solid"):
             # brush entity: its brushes (and origin, class) are compiled into a model; the rest is entity data
             geometry.append(("brush entity", cls, b.get("origin"), tuple(_canon(s) for s in b.blocks("solid"))))
-            lighting.append(tuple(kv for kv in canon if kv[0] in LIGHT_KEYS))
+            lighting.append(tuple(kv for kv in canon if kv[0] in LIGHT_KEYS or (tname and tname in aim
+                                                                               and kv[0] == "origin")))
             entities.append(tuple(kv for kv in canon if kv[0] != "solid" and kv[0] not in LIGHT_KEYS))
         else:
             entities.append(canon)
@@ -104,6 +105,33 @@ def plan(old_text: str | None, new_text: str) -> tuple[str, str]:
     if oe != ne:
         return "entities", "only entities changed"
     return "same", "nothing that reaches the map changed"
+
+
+def _in_a_brush(blocks, p, eps: float = 0.1) -> bool:
+    """The point is inside one of the map's brushes (real solid, not a room vbsp filled)."""
+    from .vmfimport import parse_plane, plane_of
+    for top in blocks:
+        for so in top.blocks("solid"):
+            inside = True
+            for sd in so.blocks("side"):
+                try:
+                    n, d = plane_of(*parse_plane(sd.get("plane", "")))
+                except (ValueError, TypeError):
+                    inside = False
+                    break
+                if n[0] * p[0] + n[1] * p[1] + n[2] * p[2] > d + eps:
+                    inside = False
+                    break
+            if inside and so.blocks("side"):
+                return True
+    return False
+
+
+def filled_points(new_text: str, points) -> list:
+    """The points not inside any of the map's brushes (where solid in the compiled map means vbsp filled a
+    room, not a wall or ceiling a light or prop sits in)."""
+    blocks = parse(new_text)
+    return [p for p in points if not _in_a_brush(blocks, p)]
 
 
 def new_entity_points(old_text: str, new_text: str) -> list[tuple[float, float, float]]:
@@ -130,8 +158,13 @@ def any_in_solid(bsp_path: str, points) -> bool:
     try:
         with open(bsp_path, "rb") as f:
             data = f.read()
-    except OSError:
+        return _any_in_solid(data, points)
+    except (OSError, struct.error):          # (no map to look in, or a damaged one: compile it all)
         return True
+
+
+def _any_in_solid(data: bytes, points) -> bool:
+    import struct
 
     def lump(i):
         _v, off, ln, _c = struct.unpack_from("<iiii", data, 8 + 16 * i)

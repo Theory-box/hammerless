@@ -100,6 +100,11 @@ def apply_preview(mat, content, game_dir, units_per_meter: float) -> bool:
     vmt = read_vmt(content, path, game_dir)
     cut = str(vmt.get("$alphatest", "0")).strip() not in ("0", "")
     clear = str(vmt.get("$translucent", "0")).strip() not in ("0", "")
+    for attr, value in (("surface_render_method", "DITHERED"), ("blend_method", "OPAQUE")):
+        try:                              # (as new: an earlier see-through game material's setting goes)
+            setattr(mat, attr, value)
+        except (AttributeError, TypeError):
+            pass
     if cut or clear:
         amix = nt.nodes.new("ShaderNodeMix")
         amix[NODE_TAG] = True

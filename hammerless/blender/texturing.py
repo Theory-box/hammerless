@@ -115,11 +115,13 @@ def thumbnail(context, path: str) -> int:
     else:
         prev = coll.new(path)
     _thumb_failed[path] = time.monotonic()
+    found = False
     try:
         import numpy as np
         from ..core.gamematerials import base_texture, read_texture_bytes
         from ..core.vtf_read import read_vtf
         content, gd = _content(context)
+        found = content is not None
         tex = base_texture(content, path, gd) if content else None
         data = read_texture_bytes(content, tex, gd) if tex else None
         if data:
@@ -136,6 +138,8 @@ def thumbnail(context, path: str) -> int:
             _thumb_failed.pop(path, None)
     except Exception:
         pass
+    if found and path in _thumb_failed:      # (the game was there: no picture to be had, don't keep trying)
+        _thumb_failed.pop(path, None)
     return prev.icon_id
 
 

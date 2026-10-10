@@ -129,6 +129,8 @@ def parse_fields(text: str) -> list[tuple[str, str]]:
 
 # shared script helpers (written once into the map script when a node needs them)
 HELPERS = {
+    "HL_Depth": ("::HL_Depth <- 0;   // script nodes in a loop: how deep the calls are\n"
+                 "::HL_MAX_DEPTH <- 64;"),
     "HL_Players": (
         "::HL_Players <- function(which) {   // 0 everyone, 1 survivors, 2 infected players (alive)\n"
         "    local out = [], p = null;\n"
@@ -1112,9 +1114,11 @@ class _Compiler:
     def render_script_nodes(self):
         """Script nodes' functions, now that their wires (what each event output runs) are known."""
         import re as _re
-        # a wire that closes a loop of script nodes (If A -> If B -> If A) is queued, not called: called directly
-        # the loop would recurse until Squirrel's stack runs out; queued it runs like a relay's loop, a step a frame
+        # script nodes wired in a loop (If A -> If B -> If A) call each other directly, as every script wire does
+        # (in order, with the event and For Each item they were started with); a loop that doesn't end stops
+        # after HL_MAX_DEPTH calls with a message, instead of running Squirrel out of stack
         node_of = {fn: nid for nid, (fn, _b) in self.script_fns.items()}
+        node_of.update({fn: nid for (nid, _inp), fn in self.script_takes.items()})     # (its other inputs too)
         calls = {nid: {node_of[c] for (n, _o), lines in self.script_conts.items() if n == nid for line in lines
                        for c in _re.findall(r"^\s*(\w+)\(\);$", line) if c in node_of} for nid in self.script_fns}
 
@@ -1128,15 +1132,21 @@ class _Compiler:
                         seen.add(x)
                         todo.append(x)
             return False
-
-        def queued(nid, line):
-            m = _re.match(r"^(\s*)(\w+)\(\);$", line)
-            if m and m.group(2) in node_of and reaches(node_of[m.group(2)], nid):
-                return f'{m.group(1)}EntFire("{LOGIC_SCRIPT}", "RunScriptCode", "{m.group(2)}()");'
-            return line
         for nid, (fn, body) in self.script_fns.items():
-            body = _re.sub(r"@@(\w+)@@", lambda m: "\n".join(queued(nid, x) for x in self.script_conts.get((nid, m.group(1)), [])), body)
-            self.functions.append(f"::{fn} <- function() {{\n{body}\n}}")   # root: callable from anywhere
+            body = _re.sub(r"@@(\w+)@@", lambda m: "\n".join(self.script_conts.get((nid, m.group(1)), [])), body)
+            if reaches(nid, nid):
+                self.helper("HL_Depth", HELPERS["HL_Depth"])
+                where = sq_text(nid)
+                self.functions.append(f"::{fn}_body <- function() {{\n{body}\n}}")
+                self.functions.append(
+                    f"::{fn} <- function() {{\n"
+                    f"    if (::HL_Depth >= ::HL_MAX_DEPTH) {{ printl(\"HAMMERLESS_SCRIPT '{where}': a loop that doesn't "
+                    f"end, stopped\"); return; }}\n"
+                    f"    ::HL_Depth++;\n"
+                    f"    try {{ ::{fn}_body(); }} catch (e) {{ ::HL_Depth--; throw e; }}\n"
+                    f"    ::HL_Depth--;\n}}")
+            else:
+                self.functions.append(f"::{fn} <- function() {{\n{body}\n}}")   # root: callable from anywhere
         for hook, nids in self.hook_nodes.items():
             from .director_options import HOOKS_BY_NAME
             answer_kind = HOOKS_BY_NAME[hook][3]
@@ -1327,7 +1337,9 @@ class _Compiler:
         ours = f"hammerless/logic_{self.ir.settings.name}"
         script = next((e for e in self.ir.entities if e.classname == "logic_script"
                        and (e.keyvalues.get("targetname") or "").lower() == LOGIC_SCRIPT
-                       and e.keyvalues.get("vscripts") == ours), None)
+                       and (e.keyvalues.get("vscripts") or "").startswith("hammerless/logic_")), None)
+        if script is not None:            # (Hammerless's own, maybe from a build under another map name)
+            script.keyvalues = {**script.keyvalues, "vscripts": ours}
         if script is None:
             for e in self.ir.entities:
                 if (e.keyvalues.get("targetname") or "").lower() == LOGIC_SCRIPT:

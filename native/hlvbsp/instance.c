@@ -522,8 +522,17 @@ void CheckForInstances(const char *path) {
     for (int i = 0; i < num_entities; i++) {
         if (strcmp(ValueForKey(&entities[i], "classname"), "func_instance")) continue;
         const char *file = ValueForKey(&entities[i], "file");
-        static int merged;
-        if (file[0] && ++merged > 65536) Error("Instances include each other in a loop (%s)", file);
+        /* how deep in instances this one is (instances inside instances): a loop would never end */
+        static int *depth, depth_cap;
+        if (depth_cap < num_entities + 1) {
+            int cap = (num_entities + 1) * 2;
+            depth = realloc(depth, sizeof(int) * cap);
+            if (!depth) Error("out of memory");
+            memset(depth + depth_cap, 0, sizeof(int) * (cap - depth_cap));
+            depth_cap = cap;
+        }
+        if (file[0] && depth[i] >= 64) Error("Instances include each other in a loop (%s)", file);
+        int before = num_entities;
         if (file[0]) {
             char found[1100];
             int loaded = 0;
@@ -542,6 +551,16 @@ void CheckForInstances(const char *path) {
                 loaded = 1;
             }
             if (!loaded) Error("Could not open instance file %s", file);     /* (vbsp: an error, the compile stops) */
+        }
+        if (num_entities > before) {
+            if (depth_cap < num_entities + 1) {
+                int cap = (num_entities + 1) * 2;
+                depth = realloc(depth, sizeof(int) * cap);
+                if (!depth) Error("out of memory");
+                memset(depth + depth_cap, 0, sizeof(int) * (cap - depth_cap));
+                depth_cap = cap;
+            }
+            for (int k = before; k < num_entities; k++) depth[k] = depth[i] + 1;
         }
         entities[i].numbrushes = 0;
         entities[i].epairs = NULL;

@@ -502,8 +502,10 @@ def _outputs(obj, e: Block):
         if i < len(raw) and norm(*raw[i]) == now[i]:
             out.append(raw[i])
             continue
-        # (an output that fired a set number of times keeps it; a delay with its digits, not 6 of them)
-        n = "1" if o.only_once else (times(raw[i][1]) if i < len(raw) and times(raw[i][1]) != "1" else "-1")
+        # (an output that fired a set number of times keeps it: the imported one with the same output, target
+        # and input, wherever it is now; a delay with its digits, not 6 of them)
+        was = next((r for r in raw if norm(*r)[:3] == (o.output, o.target, o.input)), None)
+        n = "1" if o.only_once else (times(was[1]) if was is not None and times(was[1]) != "1" else "-1")
         delay = f"{o.delay:.4f}".rstrip("0").rstrip(".") or "0"
         fields = (o.target, o.input, o.parameter, delay, n)
         sep = "\x1b" if any("," in x for x in fields) else ","   # (a parameter with commas: Hammer's own separator)

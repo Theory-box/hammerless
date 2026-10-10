@@ -286,7 +286,7 @@ def image_to_rgba8(img) -> np.ndarray:
         if src is not img:
             bpy.data.images.remove(src)        # (never left behind in the .blend, even on an error)
     arr = px.reshape(th, tw, 4)[::-1]           # Blender rows are bottom-up
-    if img.is_float and img.alpha_mode != "NONE":
+    if img.is_float and img.alpha_mode not in ("NONE", "CHANNEL_PACKED"):
         # (float buffers are premultiplied in Blender: the game's alpha is straight, else edges go dark)
         a = arr[..., 3:4]
         arr[..., :3] = np.where(a > 1e-6, arr[..., :3] / np.maximum(a, 1e-6), 0.0)
@@ -524,7 +524,7 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
     # the model is the mesh with modifiers applied: with any on, objects sharing the mesh can differ
     modified = any(m.show_viewport for m in obj.modifiers)
     shape = f"{obj.data.name}@{obj.name}" if modified else obj.data.name
-    key = (shape, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class, round(hs.model_mass, 3),
+    key = (shape, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class_name or hs.physics_class, round(hs.model_mass, 3),
            tuple(slot.material.name if slot.material else "" for slot in obj.material_slots))
     name = getattr(ir, "_model_keys", {}).get(key)
     if name is None:
@@ -633,7 +633,7 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
         if slot.material is not None and slot.material.hammerless.surface not in ("", "DEFAULT"):
             surface = slot.material.hammerless.surface
             break
-    return ModelSpec(name, triangles, pieces, kind, surface, obj.hammerless.model_mass, obj.hammerless.physics_class,
+    return ModelSpec(name, triangles, pieces, kind, surface, obj.hammerless.model_mass, obj.hammerless.physics_class_name or obj.hammerless.physics_class,
                      f"models/hammerless/{ir.settings.name}/")
 
 
@@ -726,13 +726,21 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
     for obj in context.scene.objects:
         if obj.name not in inside:
             continue                  # (outside the map collection: not part of the map)
+        if obj.get("hl_vmf_kind") == "disp" and obj.name not in back:
+            report.warnings.append(f"'{obj.name}': a copy of an imported displacement isn't built (copying "
+                                   "displacements isn't supported yet)")
+            continue
         if obj.name in back or (obj.parent is not None and obj.parent.name in back and obj.type == "MESH"
                                 and obj.parent.get("hl_vmf_kind") == "entity"):
             continue                  # (an imported map's: Build writes those back itself, blender/vmfimport.py;
             #                            new meshes under its brush entities become their brushes there)
-        if obj.get("hl_vmf_kind") == "disp":
-            report.warnings.append(f"'{obj.name}': a copy of an imported displacement isn't built (copying "
-                                   "displacements isn't supported yet)")
+        if obj.get("hl_vmf_kind") == "entity" or (obj.parent is not None
+                                                  and obj.parent.get("hl_vmf_kind") == "entity"):
+            # (a copy of an imported entity: its preview shape isn't its own, and a brush entity's parts are
+            # under an Empty: built as it is, it would come out wrong)
+            if obj.get("hl_vmf_kind") == "entity":
+                report.warnings.append(f"'{obj.name}': a copy of an imported entity isn't built yet: add a new one "
+                                       "(Add panel), or duplicate it in Hammer")
             continue
         if not obj.visible_get():
             # hidden (H, the eye or monitor icon) or in an excluded / hidden collection: left out of

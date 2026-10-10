@@ -234,7 +234,8 @@ def set_cuts(cuts) -> None:
     counts = [len(h) | (ONLY_FLAG if only else 0) for _m, _x, h, only in hulls]
     planes = [x for _m, _x, h, _o in hulls for pl in h for x in pl]
     D, I = ctypes.c_double, ctypes.c_int
-    _lib.hl_cuts(I(len(hulls)), _arr(D, bounds), _arr(I, counts), _arr(D, planes), D(CUT_EPSILON))
+    if not _lib.hl_cuts(I(len(hulls)), _arr(D, bounds), _arr(I, counts), _arr(D, planes), D(CUT_EPSILON)):
+        raise MemoryError("not enough memory for the nav volumes")
 
 
 def sample_from(pos, normal, max_nodes: int = 500000) -> None:

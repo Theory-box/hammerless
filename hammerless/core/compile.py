@@ -716,7 +716,7 @@ class CompileJob:
                 with open(path, "rb") as f:
                     h.update(f.read())
             return h.hexdigest()
-        except OSError:
+        except Exception:                 # (unreadable or unparsable: "unknown", which never matches)
             return "unreadable"
 
     def _built_opts(self) -> str:
@@ -892,8 +892,10 @@ class CompileJob:
                 self._q.put(("OK",))
                 return
             steps = self._choose_steps() if self.skip_if_unchanged else self.steps
+            ran = {n.split()[0] for n, _c in steps}
             for msg in self._notes:
-                self._fallback(msg)
+                if ("vbsp" in msg and "vbsp" in ran) or ("vvis" in msg and "vvis" in ran):
+                    self._fallback(msg)
             for stale in (self.base + ".stamp", self.base + ".built.vmf", self.base + ".built.opts"):   # a failed compile mustn't look
                 if os.path.exists(stale):                                     # up to date or be built on
                     os.remove(stale)
@@ -1002,18 +1004,20 @@ class CompileJob:
                 os.makedirs(self.tools.maps_dir, exist_ok=True)
                 self._copy_bsp(os.path.join(self.tools.maps_dir, self.name + ".bsp"))
                 self._q.put(f"Copied {self.name}.bsp to {self.tools.maps_dir}")
-            with open(self.base + ".built.vmf", "wb") as f:       # what this BSP was made from (the VMF
-                f.write(self._vmf_bytes)                         # as it was when the job started)
-            with open(self.base + ".built.inst", "w", encoding="utf-8") as f:   # (and its instance files)
-                f.write(self._instances_hash(self._vmf_bytes))
-            with open(self.base + ".built.opts", "w", encoding="utf-8") as f:
-                built = repr(replace(self._opts, vis=self._built_vis, rad=self._built_rad))
-                f.write(_with_light(built, self._built_light) if self._built_light else built)
-            if self._shaky:                  # (made by a fallback after a failure: the next build compiles again)
+            if self._shaky:
+                # (made by a fallback after a failure: no record of it at all, so the next build, smart or not,
+                # has nothing to build on and compiles the map again)
                 self._q.put("A compiler failed and Valve's ran instead: the next build compiles the map again")
-            else:                            # (last: a build is up to date only once its whole record is written)
-                with open(self.base + ".stamp", "w", encoding="utf-8") as f:
-                    f.write(self._stamp(self._vmf_bytes))
+            else:
+                with open(self.base + ".built.vmf", "wb") as f:       # what this BSP was made from (the VMF
+                    f.write(self._vmf_bytes)                         # as it was when the job started)
+                with open(self.base + ".built.inst", "w", encoding="utf-8") as f:   # (and its instance files)
+                    f.write(self._instances_hash(self._vmf_bytes))
+                with open(self.base + ".built.opts", "w", encoding="utf-8") as f:
+                    built = repr(replace(self._opts, vis=self._built_vis, rad=self._built_rad))
+                    f.write(_with_light(built, self._built_light) if self._built_light else built)
+                with open(self.base + ".stamp", "w", encoding="utf-8") as f:   # (last: up to date only once the
+                    f.write(self._stamp(self._vmf_bytes))                     # whole record is written)
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
             self._q.put(("OK",))
         except Exception as ex:  # surfaced to the user in the log
@@ -1068,8 +1072,10 @@ class CompileJob:
         if kind != "full" and built_inst != self._instances_hash(self._vmf_bytes):
             kind, why = "full", "an instance file changed"
         if kind != "full" and old:
-            from .buildplan import any_in_solid, new_entity_points
-            if any_in_solid(self.base + ".bsp", new_entity_points(old, self._vmf_bytes.decode("utf-8", "replace"))):
+            from .buildplan import any_in_solid, filled_points, new_entity_points
+            new_text = self._vmf_bytes.decode("utf-8", "replace")
+            pts = new_entity_points(old, new_text)
+            if pts and any_in_solid(self.base + ".bsp", filled_points(new_text, pts)):
                 kind, why = "full", "an entity is now where the map was solid (a room no entity reached before)"
         if kind == "full":
             self.plan = "full"
@@ -1340,6 +1346,19 @@ def map_owner(tools: Tools, map_name: str) -> str | None:
         return None
 
 
+def foreign_map(tools: Tools, map_name: str) -> bool:
+    """A map of this name is in the game (any content folder's maps/, or a VPK) and Hammerless never built it."""
+    if map_owner(tools, map_name) is not None:
+        return False
+    import glob
+    name = map_name.lower() + ".bsp"
+    for folder in glob.glob(os.path.join(tools.root, "*", "maps")):
+        if os.path.isfile(os.path.join(folder, name)):
+            return True
+    content = _CONTENT.get(tools.root)
+    return content is not None and f"maps/{name}" in getattr(content, "files", ())
+
+
 def set_map_owner(tools: Tools, map_name: str, vmf_path: str) -> None:
     path = _owner_path(tools, map_name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1582,7 +1601,9 @@ def _game_command(tools: Tools, window: LaunchOptions, extra: list[str] | None =
         cmd.append("-noborder")
     import shlex
     try:
-        cmd += shlex.split(window.extra, posix=False) + (extra or [])    # (a quoted value keeps its spaces)
+        words = shlex.split(window.extra, posix=False)       # (a quoted value keeps its spaces...)
+        cmd += [w[1:-1] if len(w) >= 2 and w[0] == w[-1] == '"' else w for w in words] + (extra or [])   # (...as one
+        #                                                         argument, without the quote characters)
     except ValueError:
         cmd += window.extra.split() + (extra or [])
     if window.difficulty:

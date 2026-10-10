@@ -1026,6 +1026,7 @@ void ParseDispRow(const char *key, const char *value, float *out, int cols, int 
 
 void ParseDispTriTags(const char *key, const char *value, mapdisp_t *md) {
     int cols = 1 << md->power, row = atoi(key + 3);
+    if (row < 0) return;
     int tri = row * cols * 2;
     char buf[16384];
     strncpy(buf, value, sizeof(buf) - 1);

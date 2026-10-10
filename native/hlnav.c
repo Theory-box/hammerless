@@ -595,25 +595,26 @@ static double *SEEDS; static int NSEEDS;
  * no planes: the box alone) */
 static int NCUT; static double *CUTB, *CUTP, CUTE; static int *CUTN;
 #define CUT_ONLY (1 << 20)        /* (a brush's plane count with this: the nav is made only inside such brushes) */
-EXPORT void hl_cuts(int n, const double *bounds, const int *counts, const double *planes, double eps) {
+EXPORT int hl_cuts(int n, const double *bounds, const int *counts, const double *planes, double eps) {
     free(CUTB), free(CUTP), free(CUTN);
     CUTB = NULL, CUTP = NULL, CUTN = NULL, NCUT = 0, CUTE = eps;
-    if (n <= 0) return;
+    if (n <= 0) return 1;
     int total = 0;
     for (int i = 0; i < n; i++) total += counts[i] & ~CUT_ONLY;
-    /* (called outside OOM_WRAP: plain allocations, and no volumes rather than a crash when one fails) */
+    /* (called outside OOM_WRAP: plain allocations; a failure returns 0, which Python reports) */
     CUTB = malloc(sizeof(double) * 6 * n);
     CUTN = malloc(sizeof(int) * n);
     CUTP = malloc(sizeof(double) * 4 * (total + 1));
     if (!CUTB || !CUTN || !CUTP) {
         free(CUTB), free(CUTP), free(CUTN);
         CUTB = NULL, CUTP = NULL, CUTN = NULL;
-        return;
+        return 0;                         /* (out of memory: the caller says so; never as if no volumes) */
     }
     memcpy(CUTB, bounds, sizeof(double) * 6 * n);
     memcpy(CUTN, counts, sizeof(int) * n);
     memcpy(CUTP, planes, sizeof(double) * 4 * total);
     NCUT = n;
+    return 1;
 }
 /* no nav here: inside a Not-inside brush, or outside every Only-inside brush (when there are some) */
 static int in_cut(const double *p) {

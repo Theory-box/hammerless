@@ -335,6 +335,7 @@ int texdata_surfaceprop(int texdata) {
 }
 
 int AppendTexinfo(const texinfo_t *t) {
+    if (numtexinfo >= 32767) Error("MAX_MAP_TEXINFO: too many texture alignments (faces store them as shorts)");
     if (numtexinfo == max_texinfo) {
         max_texinfo = max_texinfo ? max_texinfo * 2 : 256;
         texinfos = realloc(texinfos, sizeof(texinfo_t) * max_texinfo);
@@ -348,6 +349,7 @@ static int FindOrCreateTexInfo(const texinfo_t *t) {
         if (texinfos[i].texdata != t->texdata) continue;
         if (!memcmp(&texinfos[i], t, sizeof(texinfo_t))) return i;
     }
+    if (numtexinfo >= 32767) Error("MAX_MAP_TEXINFO: too many texture alignments (faces store them as shorts)");
     if (numtexinfo == max_texinfo) {
         max_texinfo = max_texinfo ? max_texinfo * 2 : 256;
         texinfos = realloc(texinfos, sizeof(texinfo_t) * max_texinfo);
@@ -627,7 +629,8 @@ static int next_token(parser_t *p) {
         p->quoted = 1;
         s++;
         while (*s && *s != '"') {
-            if (n >= (int)sizeof(p->token) - 1) Error("A value in the map is longer than 32767 characters");
+            if (n >= (int)sizeof(p->token) - 1)
+                Error("A value in the map is longer than 32767 characters (or a quote isn't closed)");
             p->token[n++] = *s;
             s++;
         }
@@ -687,7 +690,10 @@ static void load_dispinfo(parser_t *p, side_t *side) {
             continue;
         }
         const char *v = p->token;
-        if (!_stricmp(key, "power")) md->power = atoi(v);
+        if (!_stricmp(key, "power")) {
+            md->power = atoi(v);
+            if (md->power < 2 || md->power > 4) Error("A displacement's power is %d (2 to 4)", md->power);
+        }
         else if (!_stricmp(key, "startposition")) {
             double a = 0, b = 0, c = 0;
             sscanf(v, "[%lf %lf %lf]", &a, &b, &c);

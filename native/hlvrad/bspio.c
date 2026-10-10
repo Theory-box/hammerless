@@ -213,7 +213,12 @@ void WriteBSPFile(const char *path) {
         remove(tmp);
         Error("Can't write %s (disk full?)", path);
     }
-    if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    int moved = 0;
+    for (int tries = 0; tries < 50 && !moved; tries++) {      /* (another program reading it: wait a moment) */
+        moved = MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+        if (!moved) Sleep(100);
+    }
+    if (!moved) {
         remove(tmp);
         Error("Can't replace %s (is the game or another program holding it?)", path);
     }
