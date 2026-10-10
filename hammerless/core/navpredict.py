@@ -10,6 +10,7 @@ from __future__ import annotations
 from .collision import CollisionWorld
 from .navareas import NAV_MESH_JUMP, Generator
 from .navfile import NavArea, NavLadder, NavMesh
+from .nav import NAV_CUT_BIT
 from .navgen import NAV_MESH_NO_MERGE
 from .vmf import parse
 
@@ -62,7 +63,7 @@ def to_navmesh(areas, regions, ladders=()) -> NavMesh:
         n.connections = [[ids[id(b)] for b in a.connect[d] if id(b) in ids] for d in range(4)]
         c = n.centre
         for r in regions:
-            if r.contains(c):
+            if not r.bits & NAV_CUT_BIT and r.contains(c):
                 n.spawn_attributes |= r.bits
         mesh.areas.append(n)
     lids = {id(lad): i + 1 for i, lad in enumerate(ladders)}
@@ -102,8 +103,10 @@ def predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False)
     return mesh
 
 
-def _generator(vmf_text: str) -> Generator:
+def _generator(vmf_text: str, regions=()) -> Generator:
+    from .nav import nav_cuts
     gen = Generator(CollisionWorld.from_vmf(vmf_text))
+    gen.cuts = nav_cuts(regions)          # (before the seeds: none start inside a No Nav Volume)
     for p in seed_positions(vmf_text):
         gen.add_seed(p)
     for mins, maxs in ladder_bounds(vmf_text):
@@ -152,7 +155,7 @@ def _predict_locked(vmf_text: str, regions, progress, climbs, wall_climbs, nativ
         problem = check_native(vmf_text, regions, climbs, wall_climbs)
         if problem:
             raise RuntimeError(f"native nav pipeline doesn't match the Python one: {problem}")
-    gen = _generator(vmf_text)
+    gen = _generator(vmf_text, regions)
     from . import fastnav
     if native_areas is not False and fastnav.available():   # the area pipeline in the DLL: same mesh, faster
         steps = (("Sampling walkable space", lambda: gen.sample(collect=False)),
@@ -209,7 +212,7 @@ def spawn_block_problems(mesh: NavMesh, regions) -> list[str]:
     out = []
     total = len(mesh.areas) or 1
     for r in regions:
-        if not r.bits & (EMPTY | NO_MOBS):
+        if not r.bits & (EMPTY | NO_MOBS) or r.bits & NAV_CUT_BIT:
             continue
         n = sum(1 for a in mesh.areas if all(r.mins[i] <= a.centre[i] <= r.maxs[i] for i in range(3)))
         if n / total > SPAWN_BLOCK_SHARE:

@@ -212,13 +212,25 @@ def sample(world, raw_seeds, max_nodes: int = 500000):
     return collect(world)
 
 
-def start(world, raw_seeds, max_nodes: int = 500000) -> None:
-    """Flood fill from the seeds (the nodes stay in the DLL until collect())."""
+def start(world, raw_seeds, max_nodes: int = 500000, cuts=()) -> None:
+    """Flood fill from the seeds (the nodes stay in the DLL until collect()). cuts: No Nav Volumes."""
     load_world(world)
     _lib.hl_reset()
+    set_cuts(cuts)
     for p in raw_seeds:
         _lib.hl_add_seed(p[0], p[1], p[2])
     _lib.hl_sample(ctypes.c_int(max_nodes))
+
+
+def set_cuts(cuts) -> None:
+    """The No Nav Volumes (nav.nav_cuts) for the DLL's sampling: no node inside one."""
+    from .nav import CUT_EPSILON
+    hulls = [(mins, maxs, h) for mins, maxs, hs in cuts for h in (hs or [()])]
+    bounds = [c for mins, maxs, _h in hulls for c in (*mins, *maxs)]
+    counts = [len(h) for _m, _x, h in hulls]
+    planes = [x for _m, _x, h in hulls for pl in h for x in pl]
+    D, I = ctypes.c_double, ctypes.c_int
+    _lib.hl_cuts(I(len(hulls)), _arr(D, bounds), _arr(I, counts), _arr(D, planes), D(CUT_EPSILON))
 
 
 def sample_from(pos, normal, max_nodes: int = 500000) -> None:

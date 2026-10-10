@@ -1153,6 +1153,41 @@ class TestLaddersAndClimbs(unittest.TestCase):
         self.assertTrue(any("both a bottom and a top" in p for p in problems))
 
 
+class TestNavCut(unittest.TestCase):
+    """No Nav Volume: the nav builder makes no nav inside it (and stops there like at a wall)."""
+
+    def _map(self, cut: bool):
+        from hammerless.core.entities import NAV_CUT
+        ir = MapIR()
+        m = "dev/dev_measuregeneric01b"
+        ir.brushes.append(g.box_brush((-512, -512, -64), (1536, 512, 0), m, "ground"))
+        ir.entities.append(Entity("info_landmark", (-300, 0, 32), (0, 0, 0), {"targetname": "lm"}))
+        if cut:
+            ir.entities.append(Entity(NAV_CUT, None, (0, 0, 0), {},
+                                      [g.box_brush((512, -600, -16), (1600, 600, 256), "tools/toolsskip", "cut")],
+                                      "roof cut"))
+        return ir
+
+    def test_no_nav_inside(self):
+        from hammerless.core import fastnav
+        from hammerless.core.nav import NAV_CUT_BIT, collect_regions
+        from hammerless.core.navpredict import _predict, check_native
+        ir = self._map(True)
+        text, rep = build_vmf(ir)
+        self.assertIsNotNone(text, rep.errors)
+        self.assertNotIn("hammerless_nav_cut", text)               # (steers the nav builder only)
+        regions, _ = collect_regions(ir)
+        self.assertEqual([r.bits for r in regions], [NAV_CUT_BIT])
+        whole = _predict(build_vmf(self._map(False))[0], [], native_areas=False)
+        cut = _predict(text, regions, native_areas=False)
+        self.assertTrue(any(a.centre[0] > 600 for a in whole.areas))
+        self.assertFalse(any(a.centre[0] > 512 + 2 for a in cut.areas))
+        self.assertGreater(len(cut.areas), 0)
+        self.assertFalse(any(a.spawn_attributes & NAV_CUT_BIT for a in cut.areas))
+        if fastnav.available():
+            self.assertIsNone(check_native(text, regions))           # the DLL makes the same mesh
+
+
 class TestNavPredict(unittest.TestCase):
     """The nav mesh our generator predicts, marked and analysed like the game's."""
 

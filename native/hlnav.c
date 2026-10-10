@@ -572,6 +572,9 @@ static void step_compute(const double *from, int d, StepRes *r) {
     r->ok = 1; memcpy(r->to, to, 24); memcpy(r->n, to_n, 24); r->obst = obstacle_height; r->disp = (result.flags & 2) != 0;
 }
 
+static int NCUT;                        /* (No Nav Volumes: see hl_cuts) */
+static int in_cut(const double *p);
+
 static int step(int cur, int d) {
     double pos[3] = {N[cur].pos[0], N[cur].pos[1], N[cur].pos[2]};
     Memo *e = memo_at(pos);
@@ -581,10 +584,41 @@ static int step(int cur, int d) {
     } else g_memo_hits++;
     StepRes r = e->s[d];
     if (!r.ok) return -1;
+    if (NCUT && in_cut(r.to)) return -1;           /* (a No Nav Volume: like a wall) */
     return add_node(r.to, r.n, d, cur, r.obst, r.disp);
 }
 
 static double *SEEDS; static int NSEEDS;
+
+/* No Nav Volumes: no node is made inside one (a convex hull each: its box, then n.p <= d + eps for its planes;
+ * no planes: the box alone) */
+static int NCUT; static double *CUTB, *CUTP, CUTE; static int *CUTN;
+EXPORT void hl_cuts(int n, const double *bounds, const int *counts, const double *planes, double eps) {
+    free(CUTB), free(CUTP), free(CUTN);
+    CUTB = NULL, CUTP = NULL, CUTN = NULL, NCUT = 0, CUTE = eps;
+    if (n <= 0) return;
+    int total = 0;
+    for (int i = 0; i < n; i++) total += counts[i];
+    CUTB = xrealloc(NULL, sizeof(double) * 6 * n);
+    CUTN = xrealloc(NULL, sizeof(int) * n);
+    CUTP = xrealloc(NULL, sizeof(double) * 4 * (total + 1));
+    memcpy(CUTB, bounds, sizeof(double) * 6 * n);
+    memcpy(CUTN, counts, sizeof(int) * n);
+    memcpy(CUTP, planes, sizeof(double) * 4 * total);
+    NCUT = n;
+}
+static int in_cut(const double *p) {
+    const double *pl = CUTP;
+    for (int i = 0; i < NCUT; pl += 4 * CUTN[i], i++) {
+        const double *b = CUTB + 6 * i;
+        int in = 1;
+        for (int k = 0; k < 3 && in; k++) in = b[k] - CUTE <= p[k] && p[k] <= b[3 + k] + CUTE;
+        for (int j = 0; j < CUTN[i] && in; j++)
+            in = pl[4 * j] * p[0] + pl[4 * j + 1] * p[1] + pl[4 * j + 2] * p[2] <= pl[4 * j + 3] + CUTE;
+        if (in) return 1;
+    }
+    return 0;
+}
 
 EXPORT void hl_reset(void) {
     free(N); N = NULL; NN = NCAP = 0; free(H); H = NULL; HCAP = 0; hcount = 0; free(SEEDS); SEEDS = NULL; NSEEDS = 0; g_traces = 0; g_memo_hits = g_memo_misses = 0;
@@ -595,6 +629,10 @@ static int add_seed_impl(double x, double y, double z) {
     double s[3] = {p[0], p[1], p[2] + DUCK_HULL_TOP - 0.1}, e[3] = {p[0], p[1], p[2] - DEATH_DROP};
     Tr tr = hull(s, e);
     if (tr.allsolid) return 0;
+    if (NCUT) {
+        double g[3] = {round_to_units(tr.ex, GENERATION_STEP), round_to_units(tr.ey, GENERATION_STEP), tr.ez};
+        if (in_cut(g)) return 0;
+    }
     SEEDS = xrealloc(SEEDS, sizeof(double) * 6 * (NSEEDS + 1));
     double *o = SEEDS + 6 * NSEEDS++;
     o[0] = round_to_units(tr.ex, GENERATION_STEP); o[1] = round_to_units(tr.ey, GENERATION_STEP); o[2] = tr.ez;

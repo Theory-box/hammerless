@@ -133,6 +133,7 @@ class Sampler:
         self.nodes: list[Node] = []
         self.hash: dict[tuple[float, float], list[Node]] = {}
         self.seeds: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
+        self.cuts: list = []          # No Nav Volumes (nav.nav_cuts): no node is made inside one
         self.raw_seeds: list[tuple[float, float, float]] = []
         self.native = None           # None: use the DLL when it loads; False: always Python
         self.ladders: list[Ladder] = []
@@ -205,6 +206,9 @@ class Sampler:
         self.raw_seeds.append(tuple(pos))
         p = (round_to_units(pos[0], GENERATION_STEP), round_to_units(pos[1], GENERATION_STEP), pos[2])
         p, normal, ok = self.find_ground(p)
+        if ok and self.cuts:
+            from .nav import in_cut
+            ok = not in_cut(self.cuts, p)
         if ok:
             self.seeds.append(((round_to_units(p[0], GENERATION_STEP), round_to_units(p[1], GENERATION_STEP), p[2]),
                                normal))
@@ -291,10 +295,11 @@ class Sampler:
 
     def next_ladder_seed(self, has_node):
         """Sampling from the seeds is exhausted: carry on from the ends of ladders."""
+        from .nav import in_cut
         for lad in self.ladders:
             for end in (lad.bottom, lad.top):
                 found = self.ladder_end_search(end, lad.dir, has_node)
-                if found:
+                if found and not (self.cuts and in_cut(self.cuts, found[0])):
                     return found
         return None
 
@@ -374,7 +379,7 @@ class Sampler:
         """collect=False (native only): the nodes stay in the DLL, for Generator.native_areas."""
         from . import fastnav
         if self.native is not False and fastnav.available():
-            fastnav.start(self.world, self.raw_seeds, max_nodes)
+            fastnav.start(self.world, self.raw_seeds, max_nodes, self.cuts)
             while self.ladders and fastnav.node_count() < max_nodes:
                 found = self.next_ladder_seed(fastnav.has_node)
                 if not found:
@@ -460,6 +465,10 @@ class Sampler:
         dz = to[2] - current.pos[2]
         if obstacle_height < MAX_TRAVERSABLE_HEIGHT or dz > obstacle_height - 2.0:
             obstacle_height = 0.0
+        if self.cuts:
+            from .nav import in_cut
+            if in_cut(self.cuts, to):
+                return None              # (a No Nav Volume: like a wall)
         return self.add_node(to, to_normal, d, current, obstacle_height, result.displacement)
 
 

@@ -49,9 +49,10 @@ class EntityDef:
 
 
 NAV_REGION = "hammerless_nav_region"  # pseudo-entity, see nav.py
+NAV_CUT = "hammerless_nav_cut"        # pseudo-entity: no nav mesh is made inside it (nav.py, navgen.py)
 CRESCENDO = "hammerless_crescendo"     # pseudo-entity, see gamefiles.py
 CLIMB = "hammerless_zombie_climb"      # pseudo-entity, see nav.py collect_climbs
-PSEUDO_ENTITIES = {NAV_REGION, CRESCENDO, CLIMB}  # never written to the map
+PSEUDO_ENTITIES = {NAV_REGION, NAV_CUT, CRESCENDO, CLIMB}  # never written to the map
 # Tallest wall common infected climbed from a hand-made nav link in our tests (160 yes, 172 no)
 ZOMBIE_CLIMB_MAX = 160.0
 ZOMBIES_ONLY = ("2", "zombies", "zombie", "infected")   # func_ladder "team" values meaning zombies only
@@ -288,6 +289,12 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               "Marks the nav mesh inside this volume after nav generation. Start safe rooms need "
               "PLAYER_START CHECKPOINT. Change-level volumes are marked CHECKPOINT automatically.",
               (KeyDef("attributes", "PLAYER_START CHECKPOINT", "Attributes"),), brush=True),
+
+    EntityDef(NAV_CUT, "No Nav Volume", "Brush Entities",
+              "No nav mesh is made inside this volume: put it around roofs, ledges, skybox floors and anything "
+              "outside the playable space. The nav builder stops at it like a wall, so big maps build faster and "
+              "stay under its limit. Only for nav made in Blender.",
+              (), brush=True),
 
     EntityDef(CLIMB, "Zombie Climb Point", "Infected",
               "One end of a Zombie Climb (use the Zombie Climb preset: a bottom and a top point). "

@@ -8,7 +8,7 @@ from ..core.spawnlist import BRUSH_BOXES, BY_ID, CATEGORIES, CATEGORY_ICONS, CAT
     DEFAULT_BRUSH_BOX, SPAWN_ITEMS, filtered
 
 BRUSH_MATERIALS = {"func_button": "dev/dev_hazzardstripe01a", "func_ladder": "tools/toolsinvisibleladder",
-                   "hammerless_nav_region": "tools/toolstrigger"}
+                   "hammerless_nav_region": "tools/toolstrigger", "hammerless_nav_cut": "tools/toolsskip"}
 
 
 def favorites(scene) -> set[str]:

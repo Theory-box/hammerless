@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import geometry as g
-from .entities import CLIMB, NAV_REGION, ZOMBIE_CLIMB_MAX
+from .entities import CLIMB, NAV_CUT, NAV_REGION, ZOMBIE_CLIMB_MAX
 from .ir import Entity, MapIR
 
 # TerrorNavArea spawn attribute bits
@@ -25,6 +25,9 @@ SPAWN_ATTRIBUTES = {
     "RESCUE_CLOSET": 65536, "ESCAPE_ROUTE": 131072, "DOOR": 262144, "NOTHREAT": 524288,
     "LYINGDOWN": 1048576,
 }
+
+NAV_CUT_BIT = 1 << 30        # a region that is a No Nav Volume (not an attribute: never written to areas)
+CUT_EPSILON = 1.0            # (a floor point on the volume's bottom face counts as inside)
 
 # Nav area centres sit slightly above the floor; pad regions so floor-level areas count.
 # Not upward: nav_generate also covers the safe room's roof, just above the volume, and a
@@ -49,14 +52,14 @@ class NavRegion:
                                      for hull in self.hulls)
 
 
-def _region_hulls(brushes) -> tuple:
+def _region_hulls(brushes, padded: bool = True) -> tuple:
     hulls = []
     for b in brushes:
         planes = []
         for f in g.merge_coplanar(b.faces):
             pl = g.Plane.from_polygon(f.verts)
             nx, ny, nz = pl.normal
-            pad = 0.0 if nz > 0.7 else PAD        # never upward (a roof marked CHECKPOINT breaks the flow)
+            pad = 0.0 if nz > 0.7 or not padded else PAD   # never upward (a roof marked CHECKPOINT breaks the flow)
             planes.append((round(nx, 6), round(ny, 6), round(nz, 6), round(pl.dist + pad, 3)))
         if planes:
             hulls.append(tuple(planes))
@@ -76,6 +79,12 @@ def parse_attributes(text: str) -> tuple[int, list[str]]:
 def collect_regions(ir: MapIR) -> tuple[list[NavRegion], list[str]]:
     regions, problems = [], []
     for e in ir.entities:
+        if e.classname == NAV_CUT:
+            pts = [v for b in e.brushes for f in b.faces for v in f.verts]
+            if pts:
+                mins, maxs = g.bounds(pts)
+                regions.append(NavRegion(mins, maxs, NAV_CUT_BIT, e.source, _region_hulls(e.brushes, padded=False)))
+            continue
         if e.classname == NAV_REGION:
             bits, unknown = parse_attributes(e.keyvalues.get("attributes", ""))
             if unknown:
@@ -91,6 +100,22 @@ def collect_regions(ir: MapIR) -> tuple[list[NavRegion], list[str]]:
         regions.append(NavRegion(tuple(c - PAD for c in mins), (maxs[0] + PAD, maxs[1] + PAD, maxs[2]),
                                  bits, e.source, _region_hulls(e.brushes)))
     return regions, problems
+
+
+def nav_cuts(regions) -> list[tuple]:
+    """The No Nav Volumes among the regions: (mins, maxs, hulls) each, for the nav generator."""
+    return [(r.mins, r.maxs, r.hulls) for r in regions if r.bits & NAV_CUT_BIT]
+
+
+def in_cut(cuts, p) -> bool:
+    """A floor point inside a No Nav Volume (its box, then any of its brushes; on a face counts)."""
+    e = CUT_EPSILON
+    for mins, maxs, hulls in cuts:
+        if not all(mins[i] - e <= p[i] <= maxs[i] + e for i in range(3)):
+            continue
+        if not hulls or any(all(nx * p[0] + ny * p[1] + nz * p[2] <= d + e for nx, ny, nz, d in h) for h in hulls):
+            return True
+    return False
 
 
 @dataclass
@@ -179,6 +204,8 @@ def navmark_script(regions: list[NavRegion], map_name: str, climbs: list[NavClim
         "}",
     ]
     for r in regions:
+        if r.bits & NAV_CUT_BIT:
+            continue
         lines.append(f'printl("HAMMERLESS_NAVMARK {sq_text(r.source)}: " + HL_Mark(areas, {_vec(r.mins)}, {_vec(r.maxs)}, {r.bits}, {_hulls_sq(r.hulls)}) + " areas");')
     if climbs:
         lines += [
