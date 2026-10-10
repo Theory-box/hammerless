@@ -361,7 +361,19 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
         from ..core.ir import Polygon
         return writer.side(Polygon(list(verts), material or "tools/toolsnodraw"))
 
+    def scale_of(material: str):
+        """The lightmap scale for an imported side (Imported Brushes Too): its material's own, else the scene's."""
+        m = bpy.data.materials.get(material.lower().replace("\\", "/"))
+        own = m.hammerless.lightmap_scale if m is not None else 0
+        return own or s.lightmap_scale
+
     def solid(block: Block):
+        out = _solid(block)
+        if out is not None and s.lightmap_scale_imported:
+            vi.set_lightmap_scale(out, scale_of)
+        return out
+
+    def _solid(block: Block):
         obj = solids.get(vi._id(block))
         if obj is None or not obj.visible_get():
             return None

@@ -592,6 +592,10 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     lightmap_scale: IntProperty(name="Lightmap Scale", default=16, min=1, max=128,
                                 description="Shadow detail on brush faces: 8 = sharp, 16 = Valve default, "
                                             "32+ = soft but faster to compile")
+    lightmap_scale_imported: BoolProperty(name="Imported Brushes Too", default=False,
+                                          description="An imported map's brushes keep the lightmap scale each face "
+                                                      "had in the map: use this Lightmap Scale (or the material's "
+                                                      "own) for them too")
 
     # --- fog
     fog_enabled: BoolProperty(name="Fog", default=False)

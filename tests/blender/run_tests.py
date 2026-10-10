@@ -1074,6 +1074,29 @@ def test_vmf_import_roundtrip():
     assert world.blocks("hidden"), "the world's hidden blocks stay"
 
 
+def test_vmf_import_lightmap_scale():
+    # an imported map's brushes keep their own lightmap scale unless Imported Brushes Too is on (then the scene's,
+    # or the material's own)
+    from hammerless.blender import vmfimport
+    reset_scene()
+    path = os.path.join(TMP, "small.vmf")
+    with open(path, "w", encoding="latin-1") as f:
+        f.write(SMALL_VMF)
+    vmfimport.import_text(bpy.context, SMALL_VMF, path)
+    s = bpy.context.scene.hammerless
+    s.map_name = "test_map"
+    s.lightmap_scale = 32
+
+    def scales():
+        world = next(b for b in _imported_export(SMALL_VMF) if b.name == "world")
+        return {sd.get("lightmapscale") for sol in world.blocks("solid") for sd in sol.blocks("side")}
+    assert scales() == {"16", "8"}, scales()                       # (as in the map)
+    s.lightmap_scale_imported = True
+    assert scales() == {"32"}, scales()
+    bpy.data.materials["brick/brickwall01"].hammerless.lightmap_scale = 4
+    assert scales() == {"32", "4"}, scales()
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

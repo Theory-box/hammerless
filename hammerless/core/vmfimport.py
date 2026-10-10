@@ -290,6 +290,14 @@ def side_for_face(face_verts: list[Vec3], material: str, original: Block | None,
     return side
 
 
+def set_lightmap_scale(solid: Block, scale_of) -> None:
+    """Every side's lightmap scale from scale_of(material) (an int, or None: keep the side's own)."""
+    for side in solid.blocks("side"):
+        v = scale_of(side.get("material", ""))
+        if v:
+            _set(side, "lightmapscale", str(int(v)))
+
+
 def _set(b: Block, key: str, value: str) -> None:
     for i, it in enumerate(b.items):
         if isinstance(it, tuple) and it[0].lower() == key.lower():
