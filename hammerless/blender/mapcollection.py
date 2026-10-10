@@ -406,7 +406,7 @@ def _on_depsgraph(scene, depsgraph):
         _pending[uid] = True
         _sigs[uid] = _sig(ids[uid])
     for u in depsgraph.updates:
-        if isinstance(u.id, bpy.types.Object) and not u.is_updated_transform:
+        if isinstance(u.id, bpy.types.Object):    # (a settings change can come tagged as a transform one)
             o = u.id.original
             sig = _sig(o)
             if _sigs.get(o.session_uid) != sig:     # (its kind settings changed: maybe it goes elsewhere now)
