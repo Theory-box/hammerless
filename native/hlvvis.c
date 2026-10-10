@@ -1,6 +1,6 @@
 /* hlvvis: Hammerless's visibility compiler, a drop-in for L4D2's vvis.exe.
  *
- *   hlvvis [-fast] [-threads N] [-game <dir>] <map>      (reads <map>.bsp and <map>.prt, writes <map>.bsp)
+ *   hlvvis [-fast] [-threads N] [-radius_override R] [-game <dir>] <map>     (reads <map>.bsp and <map>.prt, writes <map>.bsp)
  *
  * The method is the portal-flow visibility id Software published with Quake's vis tool (GPL): every
  * one-way portal floods through chains of portals, clipping what can be seen at each step with
@@ -13,8 +13,9 @@
  * portal sometimes uses a neighbour's finished result and sometimes its rough bound, which can flip a
  * borderline pair or two (vvis does the same). -threads 1 is fully repeatable.
  *
- * Not done yet: radial visibility (an env_fog_controller with a far Z). L4D2's vvis culls by fog
- * distance in its own way; such maps exit with code 3 and Hammerless runs Valve's vvis instead.
+ * Radial visibility (an env_fog_controller with a far Z): like L4D2's vvis, the rough pass also drops
+ * portals farther than the fog's far Z (its nearest point from the source's centre, then a sampled
+ * distance between the two windings), and every leaf is flagged radial. Same float operations as vvis.
  *
  * Speed (on top of the same method): 64-bit visibility words limited to their non-empty range,
  * separating planes built once per step and 4 at a time (SSE2, same float operations), chops 4 points
@@ -26,6 +27,7 @@
  *
  * Build: python native/build.py   (zig cc; -ffp-contract=off keeps the float arithmetic exact)
  */
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -341,6 +343,74 @@ static DWORD WINAPI flow_worker(LPVOID arg) {
     return 0;
 }
 
+/* ---- radial vis (L4D2): the distance between two windings, sampled. Each is cut into a fan of triangles
+   from its first point (the second one's fan wraps all the way round, as vvis's does) and points are
+   taken on every pair of triangles at barycentric steps of 0.25: the smallest squared distance found */
+static int g_radial;
+static double g_vis_radius2;      /* farz squared */
+static float tri_dist2(const V *a, const V *b) {
+    float best = FLT_MAX;
+    for (float u = 0; 1.0f - u >= 0; u += 0.25f) {
+        float c = 1.0f - u;
+        float aux = a[0].x * u, auy = a[0].y * u, auz = a[0].z * u;
+        float v = 0;
+        do {
+            float w = c - v;
+            float px = (aux + a[1].x * v) + a[2].x * w;
+            float py = (auy + a[1].y * v) + a[2].y * w;
+            float pz = (auz + a[1].z * v) + a[2].z * w;
+            for (float s = 0; 1.0f - s >= 0; s += 0.25f) {
+                float c2 = 1.0f - s;
+                float bsx = b[0].x * s, bsy = b[0].y * s, bsz = b[0].z * s;
+                float t = 0;
+                do {
+                    float w2 = c2 - t;
+                    float dx = px - ((bsx + b[1].x * t) + b[2].x * w2);
+                    float dy = py - ((bsy + b[1].y * t) + b[2].y * w2);
+                    float dz = pz - ((bsz + b[1].z * t) + b[2].z * w2);
+                    float d = (dy * dy + dx * dx) + dz * dz;
+                    if (d <= best) best = d;
+                    t += 0.25f;
+                } while (c2 >= t);
+            }
+            v += 0.25f;
+        } while (c >= v);
+    }
+    return best;
+}
+static float winding_dist2(const Win *a, const Win *b) {
+    float best = FLT_MAX;
+    for (int i = 2; i < a->n; i++) {
+        V ta[3] = {a->p[0], a->p[(i - 1) % a->n], a->p[i % a->n]};
+        for (int j = 2; j < b->n + 2; j++) {
+            V tb[3] = {b->p[0], b->p[(j - 1) % b->n], b->p[j % b->n]};
+            float d = tri_dist2(ta, tb);
+            if (d <= best) best = d;
+        }
+    }
+    return best;
+}
+/* is portal t (seen from p) within the fog's far Z? */
+static int within_radius(const Portal *p, const Portal *t) {
+    double md = 1024000000.0;
+    for (int k = 0; k < t->w->n; k++) {
+        double dx = (double)t->w->p[k].x - p->origin.x, dy = (double)t->w->p[k].y - p->origin.y,
+               dz = (double)t->w->p[k].z - p->origin.z;
+        double d = (dx * dx + dy * dy) + dz * dz;
+        if (d < md) md = d;
+    }
+    if (md <= g_vis_radius2) return 1;
+    /* the samples lie on the windings, so they're no closer than the windings' bounding spheres: when
+       those are clearly beyond the fog, sampling can't bring the portal back (a shortcut, same result) */
+    double ox = (double)t->origin.x - p->origin.x, oy = (double)t->origin.y - p->origin.y,
+           oz = (double)t->origin.z - p->origin.z;
+    double gap = sqrt(ox * ox + oy * oy + oz * oz) - p->radius - t->radius - 1.0;
+    if (gap > 0 && gap * gap > g_vis_radius2 * 1.001) return 0;
+    double d = winding_dist2(t->w, p->w);
+    if (d < md) md = d;
+    return md <= g_vis_radius2;
+}
+
 /* ---- rough pass */
 static void flood(Portal *src, int leaf) {
     for (int i = 0; i < lf_count[leaf]; i++) {
@@ -366,6 +436,7 @@ static DWORD WINAPI rough_worker(LPVOID arg) {
             if (k == t->w->n) continue;            /* no points in front */
             for (k = 0; k < p->w->n; k++) if (dotv(p->w->p[k], t->pl.n) - t->pl.d < -ON_EPS) break;
             if (k == p->w->n) continue;
+            if (g_radial && !within_radius(p, t)) continue;
             p->front[j >> 3] |= 1 << (j & 7);
         }
         flood(p, p->leaf);
@@ -556,15 +627,17 @@ static int compress_row(const uint8_t *vis, int rowbytes, uint8_t *dest) {
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     int threads = 0, fast = 0;
+    const char *radius_override = NULL;
     const char *map = NULL;
     for (int i = 1; i < argc; i++) {
         if (!_stricmp(argv[i], "-threads") && i + 1 < argc) threads = atoi(argv[++i]);
         else if (!_stricmp(argv[i], "-fast")) fast = 1;
         else if (!_stricmp(argv[i], "-game") && i + 1 < argc) i++;
+        else if (!_stricmp(argv[i], "-radius_override") && i + 1 < argc) radius_override = argv[++i];
         else if (argv[i][0] == '-') { printf("Error: unsupported option %s\n", argv[i]); return 2; }
         else map = argv[i];
     }
-    if (!map) { printf("usage: hlvvis [-fast] [-threads N] [-game dir] <map>\n"); return 2; }
+    if (!map) { printf("usage: hlvvis [-fast] [-threads N] [-radius_override R] [-game dir] <map>\n"); return 2; }
     if (threads <= 0) {
         threads = (int)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
         if (threads <= 0) threads = 1;
@@ -604,14 +677,23 @@ int main(int argc, char **argv) {
     int numleafs = nl / LEAF_SIZE;
     uint8_t *leafs = xmalloc(nl); memcpy(leafs, leafs0, nl);
 
-    float farz = fog_farz();
-    printf("max farz in all env_fog_controller entities: %f (used for radial vis)\n", farz);
-    if (farz > 0) {
-        /* L4D2's vvis culls by the fog distance in a way that isn't the published method (it even makes
-           its -fast mode slow); until that's matched, leave these maps to it. Exit code 3 = "use vvis". */
-        printf("Radial visibility (an env_fog_controller with a far Z) isn't supported yet: use Valve's vvis\n");
-        return 3;
+    /* radial vis: portals beyond a radius are culled, and every leaf is marked radial. The radius is
+       -radius_override's (as vvis: any value turns it on), else the largest env_fog_controller far Z */
+    if (radius_override) {
+        double r = atof(radius_override);
+        printf("Vis Radius = %4.2f\n", r);
+        g_radial = 1;
+        g_vis_radius2 = r * r;
+    } else {
+        float farz = fog_farz();
+        printf("max farz in all env_fog_controller entities: %f (used for radial vis)\n", farz);
+        if (farz > 0) {
+            g_radial = 1;
+            g_vis_radius2 = (double)farz * farz;
+        }
     }
+    if (g_radial)
+        for (int i = 0; i < numleafs; i++) leafs[i * LEAF_SIZE + 7] |= 0x400 >> 8;   /* LEAF_FLAGS_RADIAL */
     snprintf(path, sizeof path, "%s.prt", base);
     printf("reading %s\n", path);
     load_portals(path);

@@ -140,9 +140,22 @@ def _opts_rest(text: str) -> str:
 HLVVIS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvvis.exe")
 
 
+HLVVIS_OPTIONS = {"-fast": 0, "-threads": 1, "-radius_override": 1}   # vvis options ours knows: arguments each
+
+
+def _hlvvis_knows(args: list[str]) -> bool:
+    i = 0
+    while i < len(args):
+        n = HLVVIS_OPTIONS.get(args[i].lower())
+        if n is None or i + n >= len(args):
+            return False
+        i += 1 + n
+    return True
+
+
 def use_hlvvis(opts: "CompileOptions") -> bool:
     """Our vis compiler runs when chosen, present, and not given vvis options it doesn't know."""
-    return opts.vis_tool == "HAMMERLESS" and os.path.exists(HLVVIS) and not opts.extra_vvis.split()
+    return opts.vis_tool == "HAMMERLESS" and os.path.exists(HLVVIS) and _hlvvis_knows(opts.extra_vvis.split())
 
 
 HLVRAD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvrad.exe")
@@ -820,8 +833,7 @@ class CompileJob:
                     code, out = self._exec(self._valve_vbsp)
                 if code != 0 and name == "vvis" and cmd[0] == HLVVIS and self._valve_vvis and not self._stopping:
                     # ours only replaces the map at the very end, so the map and portals are untouched
-                    self._q.put("Hammerless vis doesn't do fog-distance (radial) visibility yet: running Valve's vvis"
-                                if code == 3 else f"!! Hammerless vis failed (exit code {code}): running Valve's vvis instead")
+                    self._q.put(f"!! Hammerless vis failed (exit code {code}): running Valve's vvis instead")
                     code, out = self._exec(self._valve_vvis)
                 self.timings.append((name, time.time() - t0))
                 if name == "vvis" and self._light is not None:

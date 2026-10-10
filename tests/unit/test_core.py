@@ -1460,8 +1460,14 @@ class TestVisCompiler(unittest.TestCase):
             self.assertIn("-fast", vvis(job))
             self.assertTrue(job._valve_vvis[0].endswith("vvis.exe"))
         # vvis options ours doesn't know: Valve's vvis
-        job = self._job(cc.CompileOptions(vis_tool="HAMMERLESS", extra_vvis="-radius_override 2000"))
+        job = self._job(cc.CompileOptions(vis_tool="HAMMERLESS", extra_vvis="-nosort"))
         self.assertTrue(vvis(job)[0].endswith("vvis.exe"))
+        if os.path.exists(cc.HLVVIS):
+            job = self._job(cc.CompileOptions(vis_tool="HAMMERLESS", extra_vvis="-radius_override 2000"))
+            self.assertEqual(vvis(job)[0], cc.HLVVIS)
+            self.assertIn("-radius_override", vvis(job))
+            job = self._job(cc.CompileOptions(vis_tool="HAMMERLESS", extra_vvis="-radius_override"))  # (no value)
+            self.assertTrue(vvis(job)[0].endswith("vvis.exe"))
 
     def test_choice_isnt_part_of_the_build_stamp(self):
         from hammerless.core import compile as cc
@@ -1493,13 +1499,39 @@ class TestVisCompiler(unittest.TestCase):
                     self.assertEqual(f.read(), z.read(f"rooms_portal.vvis_{mode}.bsp"), mode)
                 self.assertFalse(os.path.exists(base + ".hlvvis.tmp"))
 
+    def test_hlvvis_radial_matches_vvis(self):
+        """Radial vis, as L4D2's vvis does it: the same map with an env_fog_controller (far Z 500), and the
+        plain map with -radius_override 400. Both cull rooms vvis would otherwise see."""
+        import subprocess
+        import tempfile
+        import zipfile
+        from hammerless.core import compile as cc
+        if not os.path.exists(cc.HLVVIS):
+            self.skipTest("hlvvis.exe not built")
+        fx = os.path.join(os.path.dirname(__file__), "..", "fixtures", "vis")
+        fog, plain = zipfile.ZipFile(os.path.join(fx, "rooms_fog.zip")), zipfile.ZipFile(os.path.join(fx, "rooms_portal.zip"))
+        cases = [(fog, "rooms_fog", [], "rooms_fog.vvis_{}.bsp"),
+                 (plain, "rooms_portal", ["-radius_override", "400"], "rooms_portal.radius400_vvis_{}.bsp")]
+        for z, name, args, want in cases:
+            for mode in ("full", "fast"):
+                with tempfile.TemporaryDirectory() as d:
+                    base = os.path.join(d, name)
+                    for ext in (".bsp", ".prt"):
+                        with open(base + ext, "wb") as f:
+                            f.write(z.read(name + ext))
+                    r = subprocess.run([cc.HLVVIS] + (["-fast"] if mode == "fast" else []) + args + [base],
+                                       capture_output=True, text=True)
+                    self.assertEqual(r.returncode, 0, r.stdout)
+                    with open(base + ".bsp", "rb") as f:
+                        self.assertEqual(f.read(), fog.read(want.format(mode)), (name, mode))
+
     def test_falls_back_to_valve(self):
         import sys
         from hammerless.core import compile as cc
         job = self._job(cc.CompileOptions(vis_tool="HAMMERLESS"))
         old = cc.HLVVIS
         try:
-            cc.HLVVIS = sys.executable                    # a stand-in "ours" that exits with 3 (radial vis)
+            cc.HLVVIS = sys.executable                    # a stand-in "ours" that fails
             job.steps = [("vvis", [sys.executable, "-c", "import sys; sys.exit(3)"])]
             job._valve_vvis = [sys.executable, "-c", "print('VALVE VVIS RAN')"]
             job._run_steps()
@@ -1509,7 +1541,7 @@ class TestVisCompiler(unittest.TestCase):
         while not job._q.empty():
             lines.append(job._q.get())
         text = " | ".join(str(x) for x in lines)
-        self.assertIn("radial", text)
+        self.assertIn("Hammerless vis failed", text)
         self.assertIn("VALVE VVIS RAN", text)
         self.assertIn(("OK",), lines)
 
