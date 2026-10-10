@@ -63,3 +63,32 @@ void NoBakeColor(vec3_t out) {
     if (gAmbient) VectorCopy(gAmbient->light.intensity, out);
     else out[0] = out[1] = out[2] = 0;
 }
+
+/* every point of the box (mins, maxs) isn't baked: inside one brush that isn't inverted, or (with inverted ones)
+ * wholly outside each of those */
+int NoBakeBox(const float *mins, const float *maxs) {
+    if (!g_bNoBake) return 0;
+    for (int i = 0; i < numhulls; i++) {
+        const nbhull_t *h = &hulls[i];
+        if (h->invert) continue;
+        int all = 1;
+        for (int c = 0; c < 8 && all; c++) {
+            float p[3] = {c & 1 ? maxs[0] : mins[0], c & 2 ? maxs[1] : mins[1], c & 4 ? maxs[2] : mins[2]};
+            all = InHull(h, p);
+        }
+        if (all) return 1;
+    }
+    if (!anyInvert) return 0;
+    for (int i = 0; i < numhulls; i++) {
+        const nbhull_t *h = &hulls[i];
+        if (!h->invert) continue;
+        int outside = 0;            /* (some plane has the whole box in front of it) */
+        for (int k = 0; k < h->n && !outside; k++) {
+            float d = 0;
+            for (int j = 0; j < 3; j++) d += h->pl[k][j] * (h->pl[k][j] >= 0 ? mins[j] : maxs[j]);
+            outside = d > h->pl[k][3];
+        }
+        if (!outside) return 0;
+    }
+    return 1;
+}

@@ -432,6 +432,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                      description="Brighten or darken the view, in stops (+1 = twice as bright)")
     lightmap_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _light_display(self, c),
                                 description="Draw the baked lighting through walls")
+    light_view_distance: FloatProperty(name="Distance", default=3000.0, min=64.0, soft_max=20000.0, step=1000,
+                                       precision=0, description="Bake View: how far from the viewport to bake, in "
+                                       "Hammer units (beyond it and outside the view get the flat ambient colour)")
     lightmap_props: BoolProperty(name="Props", default=True, update=lambda self, c: _light_display(self, c),
                                  description="Draw static props with the light baked at their vertexes (Prop "
                                              "Lighting): the compiled map's props, from the game's model files")

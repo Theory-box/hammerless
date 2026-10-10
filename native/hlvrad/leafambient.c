@@ -954,6 +954,19 @@ static void LeafWork(int item, int thread) {
     (void)thread;
     gpuamb_leaf = leaf, gpuamb_cursor = gpuamb_poscursor = 0;
     if (!planes) planes = xalloc(sizeof(plane_t) * (numnodes + 1));
+    if (g_bNoBake && !(dleafs[leaf].contents & CONTENTS_SOLID)) {      /* (No Bake Volumes: a leaf wholly in one) */
+        float mins[3], maxs[3];
+        for (int k = 0; k < 3; k++) mins[k] = dleafs[leaf].mins[k], maxs[k] = dleafs[leaf].maxs[k];
+        if (NoBakeBox(mins, maxs)) {
+            ambsample_t *s = leafresults + (MAX_SAMPLES + 1) * leaf;
+            for (int k = 0; k < 3; k++) s->pos[k] = (mins[k] + maxs[k]) * 0.5f;
+            vec3_t amb;
+            NoBakeColor(amb);
+            for (int c = 0; c < 6; c++) VectorCopy(amb, s->cube[c]);
+            leafcounts[leaf] = 1;
+            return;
+        }
+    }
     leafcounts[leaf] = AmbientForLeaf(leaf, leafresults + (MAX_SAMPLES + 1) * leaf, planes);
     if (gpuamb_phase == 2 && !g_gpuCheck && gpuamb_cursor != gpuamb_n[leaf])     /* (every answer used, in order) */
         Error("GPU leaf ambient: leaf %d asked %d questions, answered %d", leaf, gpuamb_cursor, gpuamb_n[leaf]);

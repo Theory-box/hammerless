@@ -45,3 +45,23 @@ def in_volume(text: str, p) -> bool:
         else:
             inside = inside or hit
     return inside or (any_inv and not in_inv)
+
+
+def view_volume(clip, eye, forward, distance: float, units_per_meter: float) -> str:
+    """A "bake only inside" volume for what a viewport sees: its view pyramid (clip: the 4x4 projection x view
+    matrix, Blender units) cut off `distance` Hammer units from the eye. One line for hlvrad -nobake."""
+    rows = [list(map(float, clip[i])) for i in range(4)]
+    planes = []
+    for k, sign in ((0, 1), (0, -1), (1, 1), (1, -1), (2, 1)):        # left, right, bottom, top, near
+        a, b, c, d = (rows[3][j] + sign * rows[k][j] for j in range(4))
+        n = (a * a + b * b + c * c) ** 0.5
+        if n < 1e-12:
+            continue
+        # inside: a.x + d >= 0  ->  -a.x <= d (Blender units)  ->  -(a/n).X <= (d/n) * upm (Hammer units)
+        planes.append((-a / n, -b / n, -c / n, d / n * units_per_meter))
+    f = [float(v) for v in forward]
+    fl = sum(v * v for v in f) ** 0.5 or 1.0
+    f = [v / fl for v in f]
+    e = [float(v) * units_per_meter for v in eye]
+    planes.append((f[0], f[1], f[2], sum(f[i] * e[i] for i in range(3)) + distance))      # far
+    return f"1 {len(planes)} " + " ".join("%.6f %.6f %.6f %.3f" % p for p in planes) + "\n"

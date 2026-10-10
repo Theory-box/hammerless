@@ -114,9 +114,10 @@ VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
 # not with vrad -fast, the Hammerless light compiler's own only when it's used (the sky picture too), Cycles' with it
 _LIGHT_FIELDS = ("hdr", "static_prop_lighting", "extra_vrad", "prop_polys")
 _NORMAL_FIELDS = ("sky_rays", "supersample", "bounces", "patch_size")
-_HLVRAD_FIELDS = ("light_exact", "ss_points", "ss_passes", "ss_threshold", "fix_quirks", "sky_key", "gi", "gi_rays")
+_HLVRAD_FIELDS = ("light_exact", "ss_points", "ss_passes", "ss_threshold", "fix_quirks", "sky_key", "gi", "gi_rays",
+                  "no_bake")
 # (settings added later: a build from before them was baked as their default)
-_FIELD_DEFAULTS = {"gi": "False", "gi_rays": "1024"}
+_FIELD_DEFAULTS = {"gi": "False", "gi_rays": "1024", "no_bake": "''"}
 _CYCLES_FIELDS = ("cycles_samples", "cycles_denoise", "cycles_stitch")
 _ALL_LIGHT_FIELDS = _LIGHT_FIELDS + _NORMAL_FIELDS + _HLVRAD_FIELDS + _CYCLES_FIELDS
 

@@ -323,6 +323,10 @@ def _bake_button(layout, text="Bake Lighting"):
     row.scale_y = 1.3
     op = row.operator("hammerless.build", text=text, icon="LIGHT_SUN")
     op.play, op.bake = False, True
+    row = layout.row(align=True)
+    op = row.operator("hammerless.build", text="Bake View", icon="HIDE_OFF")
+    op.play, op.bake, op.view = False, True, True
+    row.prop(bpy.context.scene.hammerless, "light_view_distance")
 
 
 def _note(layout, lines, icon="INFO"):

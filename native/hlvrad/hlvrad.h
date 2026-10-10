@@ -371,6 +371,7 @@ extern float g_ssThreshold;
 extern int g_bNoBake;
 void LoadNoBake(const char *path);
 int NoBakePoint(const float *p);
+int NoBakeBox(const float *mins, const float *maxs);
 void NoBakeColor(vec3_t out);
 extern float maxchop, minchop;                     /* (bounce patches' sizes, in luxels) */
 void ExportDirectLightsToWorldLights(void);

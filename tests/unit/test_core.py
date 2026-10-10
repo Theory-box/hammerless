@@ -1220,6 +1220,30 @@ class TestNoBake(unittest.TestCase):
         self.assertFalse(in_volume(inv, (1000, 0, 0)))              # bake only inside: outside is skipped
         self.assertTrue(in_volume(inv, (0, 0, 0)))
 
+    def test_view_volume(self):
+        """Bake View: the viewport's view pyramid as a "bake only inside" volume."""
+        import math
+        import numpy as np
+        from hammerless.core.lightvolumes import in_volume, view_volume
+        f, n, fa = 1 / math.tan(math.radians(45)), 0.1, 1000.0       # 90 degrees, looking down -z (Blender's)
+        proj = np.array([[f, 0, 0, 0], [0, f, 0, 0], [0, 0, (fa + n) / (n - fa), 2 * fa * n / (n - fa)], [0, 0, -1, 0]])
+        vol = view_volume(proj, (0, 0, 0), (0, 0, -1), 500.0, 2.0)  # (2 Hammer units a Blender unit)
+        self.assertFalse(in_volume(vol, (0, 0, -100)))              # ahead: baked
+        self.assertTrue(in_volume(vol, (0, 0, 100)))                # behind
+        self.assertTrue(in_volume(vol, (300, 0, -100)))             # off to the side
+        self.assertTrue(in_volume(vol, (0, 0, -600)))               # beyond the distance
+
+    def test_volumes_relight_only(self):
+        """Changing the volumes relights (a view bake is never reused by a full build) without recompiling."""
+        from hammerless.core import compile as cc
+        whole = cc.CompileOptions(light_tool="HAMMERLESS", vis="FAST")
+        part = cc.CompileOptions(light_tool="HAMMERLESS", vis="FAST", no_bake="1 1 0 0 1 10\n")
+        self.assertFalse(cc._serves(repr(part), whole))
+        self.assertTrue(cc._serves(repr(whole), whole))
+        self.assertEqual(cc._opts_rest(repr(part)), cc._opts_rest(repr(whole)))
+        old = repr(whole).replace(", no_bake=''", "")              # (a build from before the volumes)
+        self.assertTrue(cc._serves(old, whole))
+
     def test_passed_to_hlvrad(self):
         import tempfile
         from hammerless.core import compile as cc

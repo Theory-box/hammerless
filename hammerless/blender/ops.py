@@ -994,6 +994,23 @@ def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False, 
     return box
 
 
+def _view_volume(context) -> str | None:
+    """The 3D viewport's view (this one, else the largest on screen) as a "bake only inside" volume."""
+    from ..core.lightvolumes import view_volume
+    space = context.space_data if context.space_data and context.space_data.type == "VIEW_3D" else None
+    if space is None:
+        areas = [a for a in context.screen.areas if a.type == "VIEW_3D"] if context.screen else []
+        if not areas:
+            return None
+        space = max(areas, key=lambda a: a.width * a.height).spaces.active
+    r3d = space.region_3d
+    inv = r3d.view_matrix.inverted()
+    eye = inv.translation
+    forward = -(inv.to_3x3() @ __import__("mathutils").Vector((0.0, 0.0, 1.0)))
+    s = context.scene.hammerless
+    return view_volume(r3d.perspective_matrix, eye, forward, s.light_view_distance, s.units_per_meter)
+
+
 class HL_OT_build(bpy.types.Operator):
     bl_idname = "hammerless.build"
     bl_label = "Build"
@@ -1001,6 +1018,9 @@ class HL_OT_build(bpy.types.Operator):
 
     @classmethod
     def description(cls, context, properties):
+        if properties.bake and properties.view:
+            return ("Bake only what this viewport sees, out to the distance set (a quick look at one spot): the "
+                    "rest gets the flat ambient colour. Build & Play bakes the whole map again")
         if properties.bake:
             return ("Bake the map's lighting quickly and show it (about a third of a full build: the visibility "
                     "step runs in its fast mode). Build & Play then reuses this lighting and only adds the full "
@@ -1014,6 +1034,8 @@ class HL_OT_build(bpy.types.Operator):
     play: BoolProperty(name="Play", default=True)
     bake: BoolProperty(name="Bake Lighting", default=False, options={"HIDDEN", "SKIP_SAVE"},
                        description="Lighting only: fast visibility, no nav mesh, then show the lighting")
+    view: BoolProperty(name="Bake View", default=False, options={"HIDDEN", "SKIP_SAVE"},
+                       description="With Bake Lighting: only what the viewport sees, out to Bake View's distance")
 
     _timer = None
     _job: cc.CompileJob | None = None
@@ -1075,10 +1097,20 @@ class HL_OT_build(bpy.types.Operator):
         elif context.scene.hammerless.sky_light != "FLAT" and opts.rad != "SKIP":
             write_log(["Sky Light from the sky needs the Hammerless light compiler: the sky lights the map with "
                        "one colour"], append=True)
-        if rep.no_bake and opts.rad != "SKIP":
+        no_bake = rep.no_bake
+        if self.bake and self.view:
+            vol = _view_volume(context)
+            if vol is None:
+                self.report({"ERROR"}, "Bake View needs a 3D viewport")
+                return {"CANCELLED"}
+            if not cc.use_hlvrad(opts):
+                self.report({"ERROR"}, "Bake View needs the Hammerless light compiler (Lighting > Light Compiler)")
+                return {"CANCELLED"}
+            no_bake += vol
+        if no_bake and opts.rad != "SKIP":
             import dataclasses
             if cc.use_hlvrad(opts):
-                opts = dataclasses.replace(opts, no_bake=rep.no_bake)
+                opts = dataclasses.replace(opts, no_bake=no_bake)
             else:
                 write_log(["No Bake Volumes need the Hammerless light compiler: Valve's vrad bakes everything"],
                           append=True)
