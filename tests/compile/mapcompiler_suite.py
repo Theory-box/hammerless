@@ -257,6 +257,35 @@ def m_water(m):
     m.player_and_light("200 300 64", "512 256 200")
 
 
+def m_water_overlays(m):
+    """Water overlays: Hammer saves an info_overlay_transition's shore strips in an "overlaytransition" block
+    (vectors in brackets there, as chunk keys are written)."""
+    m.solids = m.room((0, 0, -128), (1024, 512, 256))
+    m.solids += [m.box((0, 0, -128), (400, 512, 0), tag="shoreW."), m.box((800, 0, -128), (1024, 512, 0)),
+                 m.box((400, 0, -128), (800, 100, 0), tag="shoreS."), m.box((400, 400, -128), (800, 512, 0),
+                                                                          tag="shoreN.")]
+    m.solids += [m.box((400, 100, -128), (800, 400, -16), tag="pool.", mats=[W, N, N, N, N, N])]
+    m.player_and_light("200 300 64", "512 256 200")
+    s = m.sides
+
+    def strip(origin, sides, u, v, uv, mat="decals/asphalt/asphalt1", su="0", eu="1"):
+        return ('overlaydata { "material" "%s" "StartU" "%s" "EndU" "%s" "StartV" "0" "EndV" "1" '
+                '"BasisOrigin" "[%s]" "BasisU" "[%s]" "BasisV" "[%s]" "BasisNormal" "[0 0 1]" %s "sides" "%s" }'
+                % (mat, su, eu, origin, u, v, " ".join(f'"uv{i}" "[{p}]"' for i, p in enumerate(uv)),
+                   " ".join(map(str, sides))))
+    blocks = [strip("600 400 -16", [s["pool.top"], s["shoreN.top"]], "1 0 0", "0 1 0",
+                    ["-200 -24 0", "-200 24 0", "200 24 0", "200 -24 0"]),
+              strip("600 100 -16", [s["pool.top"], s["shoreS.top"]], "-1 0 0", "0 -1 0",
+                    ["-200 -24 0", "-200 24 0", "200 24 0", "200 -24 0"], su="0.5", eu="0.25"),
+              strip("400 250 -16", [s["pool.top"], s["shoreW.top"]], "0 1 0", "1 0 0",
+                    ["-150 -16 0", "-150 16 0", "150 16 0", "150 -16 0"])]
+    m.ents.append('entity { "id" "%d" "classname" "info_overlay_transition" "material" "decals/asphalt/asphalt1" '
+                  '"sides" "%d" "sides2" "%d" "LengthTexcoordStart" "0" "LengthTexcoordEnd" "1" '
+                  '"WidthTexcoordStart" "0" "WidthTexcoordEnd" "1" "Width1" "25" "Width2" "25" "DebugDraw" "0" '
+                  '"origin" "600 250 -16" overlaytransition { %s } }'
+                  % (m.nid(), s["pool.top"], s["shoreN.top"], " ".join(blocks)))
+
+
 def m_water_lake(m):
     """A big subdivided lake with a pillar through it, connected pools at two heights, detail and entity water."""
     m.solids = m.room((0, 0, -256), (4096, 4096, 512))
@@ -383,7 +412,7 @@ MAPS = {
     "box": m_box, "props": m_props, "leak": m_leak, "areaportal": m_areaportal,
     "areaportal_leak": m_areaportal_leak, "areaportal_window": m_areaportal_window,
     "grass": m_grass, "detail_entities": m_detail_entities, "overlays": m_overlays,
-    "overlays_on_terrain": m_overlays_on_terrain, "water": m_water, "water_lake": m_water_lake,
+    "overlays_on_terrain": m_overlays_on_terrain, "water": m_water, "water_overlays": m_water_overlays, "water_lake": m_water_lake,
     "water_cubemap": m_water_cubemap, "cubemaps": m_cubemaps, "blend_on_brushes": m_blend_on_brushes,
     "blend_cubemap": lambda m: m_blend_on_brushes(m, True), "no_dynamic_shadow": m_no_dynamic_shadow,
     "viscluster": m_viscluster, "occluders": m_occluders, "skybox": m_skybox,

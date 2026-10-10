@@ -175,6 +175,7 @@ typedef struct side_s {
     int material;            /* the side's material (for messages and dispinfo) */
     int disp;                /* index into mapdisps + 1; 0 = not a displacement */
     int *overlays, noverlays;  /* info_overlays on this side (shared by the side's copies) */
+    int *wateroverlays, nwateroverlays;   /* water overlays (info_overlay_transition's shore strips) on it */
     int no_dynamic_shadows;    /* listed by an info_no_dynamic_shadow */
 } side_t;
 
@@ -342,6 +343,7 @@ typedef struct {
     vec3_t mins, maxs;
     int areaportals;
     int first_overlay;       /* (the overlays this map's file added start here) */
+    int first_wateroverlay;
 } mapstate_t;
 void MapState_Save(mapstate_t *s);
 void MapState_Use(const mapstate_t *s);
@@ -378,6 +380,16 @@ int Overlay_FromEntity(entity_t *e);
 void Overlay_UpdateSideLists(int first);
 int Overlay_Count(void);
 void Overlay_Translate(int first, const float origin[3], const float matrix[3][4]);
+int WaterOverlay_New(void);
+void WaterOverlay_Key(int i, const char *key, const char *value);
+int WaterOverlay_Count(void);
+void WaterOverlay_UpdateSideLists(int first);
+void WaterOverlay_Translate(int first, const float matrix[3][4]);
+void WaterOverlay_AddFaceToLists(int face, const side_t *side);
+void WaterOverlay_EmitOverlayFaces(void);
+void WaterOverlay_CountTexinfos(int *refcount);
+void WaterOverlay_RemapTexinfos(const int *newindex);
+unsigned char *WaterOverlay_Lump(int *len);
 int OverlaysAreEqual(const side_t *a, const side_t *b);
 void Overlay_AddFaceToLists(int face, const side_t *side);
 void Overlay_EmitOverlayFaces(void);

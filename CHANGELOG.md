@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Water overlays** (`info_overlay_transition`, the strips along a water's edge) in the Hammerless map compiler, byte-identical to vbsp: nothing falls back to Valve's vbsp any more.
 - **The Hammerless map compiler does instances (`func_instance`)** the way Valve's vbsp does: the instance's brushes, displacements, overlays and entities moved and turned into the map, names prefixed or suffixed per the game's .fgd, `replace` parameters, outputs' targets, nested instances. Maps with instances no longer fall back to Valve's vbsp. Valve's sample maps: 132 of 134 byte-identical to vbsp (all 9 with instances), the 2 left are older, unrelated differences.
 - **Lighting runs alongside vis.** With the Hammerless light compiler on the GPU and ray-traced bounce, the lighting starts as soon as the map is compiled instead of after vis: the faces' light and bounce don't need vis (it only spares rays a light can't reach: measured the same lightmaps to the byte), and the light compiler waits for vis only for what does (props' light, the sky's leaves). The map comes out byte-identical to lighting after vis. vrad's patch bounce still waits for vis.
 - **Build steps no longer slow each other:** the nav mesh starts after the map compiler's preparation (both are Python: it took 3.8 s instead of 0.3 s), and the GPU lighting traces its few CPU rays with Embree (its tree built in 0.2 s instead of 2.6 s while sharing the CPU with vis; the same map). The light compiler takes `-visfrom <map>` and `-visthreads <n>`.

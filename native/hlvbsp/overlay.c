@@ -220,3 +220,178 @@ unsigned char *Overlay_Lumps(int *len45, unsigned char **fades, int *len60, unsi
     *len61 = 4 * numoverlays;
     return b;
 }
+
+
+/* ------------------------------------------------------------------ water overlays (info_overlay_transition)
+ * Hammer works out the strips along a water's edge and saves them in the entity's "overlaytransition" block, one
+ * "overlaydata" each; vbsp ties them to the faces of the sides listed (ids after the overlays': 513 on), gives
+ * them an overlay texinfo and writes lump 50 (dwateroverlay_t, 1120 bytes: up to 256 faces). */
+#define WATEROVERLAY_BSP_FACE_COUNT 256
+#define WATEROVERLAY_ID_BASE (MAX_MAP_OVERLAYS + 1)
+
+typedef struct {
+    int id;
+    float u[2], v[2];
+    vec3_t origin, uvpoints[4], basis[3];
+    char material[256];
+    int *sides, nsides;
+    int faces[WATEROVERLAY_BSP_FACE_COUNT + 1], nfaces;
+    int texinfo;
+} wateroverlay_t;
+
+static wateroverlay_t *wateroverlays;
+static int numwateroverlays;
+
+int WaterOverlay_Count(void) { return numwateroverlays; }
+
+int WaterOverlay_New(void) {
+    if (numwateroverlays % 64 == 0) wateroverlays = realloc(wateroverlays, sizeof(wateroverlay_t) * (numwateroverlays + 64));
+    wateroverlay_t *o = &wateroverlays[numwateroverlays];
+    memset(o, 0, sizeof(*o));
+    o->id = WATEROVERLAY_ID_BASE + numwateroverlays;
+    return numwateroverlays++;
+}
+
+/* CChunkFile::ReadKeyValueVector3: "[x y z]" (a value without the brackets is left unread, as in vbsp) */
+static void ReadVec3(const char *s, vec3_t v) {
+    float a, b, c;
+    if (sscanf(s, "[%f %f %f]", &a, &b, &c) == 3) v[0] = a, v[1] = b, v[2] = c;
+}
+
+void WaterOverlay_Key(int i, const char *key, const char *value) {
+    wateroverlay_t *o = &wateroverlays[i];
+    if (!_stricmp(key, "material")) {
+        if (strlen(value) >= sizeof(o->material))
+            Error("Overlay Material Name (%s) > OVERLAY_MAP_STRLEN (%d)", value, (int)sizeof(o->material));
+        strcpy(o->material, value);
+    } else if (!_stricmp(key, "StartU")) o->u[0] = (float)atof(value);
+    else if (!_stricmp(key, "EndU")) o->u[1] = (float)atof(value);
+    else if (!_stricmp(key, "StartV")) o->v[0] = (float)atof(value);
+    else if (!_stricmp(key, "EndV")) o->v[1] = (float)atof(value);
+    else if (!_stricmp(key, "BasisOrigin")) ReadVec3(value, o->origin);
+    else if (!_stricmp(key, "BasisU")) ReadVec3(value, o->basis[0]);
+    else if (!_stricmp(key, "BasisV")) ReadVec3(value, o->basis[1]);
+    else if (!_stricmp(key, "BasisNormal")) ReadVec3(value, o->basis[2]);
+    else if (!_strnicmp(key, "uv", 2) && key[2] >= '0' && key[2] <= '3' && !key[3]) ReadVec3(value, o->uvpoints[key[2] - '0']);
+    else if (!_stricmp(key, "sides")) {
+        char *list = copystring(value), *tok = strtok(list, " ");
+        if (!tok) Error("water overlay: an empty side list");
+        free(o->sides);
+        o->sides = NULL, o->nsides = 0;
+        while (tok) {
+            int id;
+            if (sscanf(tok, "%d", &id) == 1) {
+                o->sides = realloc(o->sides, sizeof(int) * (o->nsides + 1));
+                o->sides[o->nsides++] = id;
+            }
+            tok = strtok(NULL, " ");
+        }
+        free(list);
+    }
+}
+
+void WaterOverlay_UpdateSideLists(int first) {
+    for (int i = first; i < numwateroverlays; i++) {
+        wateroverlay_t *o = &wateroverlays[i];
+        for (int k = 0; k < o->nsides; k++) {
+            side_t *side = NULL;
+            for (int j = 0; j < nummapbrushsides && !side; j++)
+                if (brushsides[j].id == o->sides[k]) side = &brushsides[j];
+            if (!side || has(side->wateroverlays, side->nwateroverlays, o->id)) continue;
+            side->wateroverlays = realloc(side->wateroverlays, sizeof(int) * (side->nwateroverlays + 1));
+            side->wateroverlays[side->nwateroverlays++] = o->id;
+        }
+    }
+}
+
+void WaterOverlay_Translate(int first, const float m[3][4]) {
+    for (int i = first; i < numwateroverlays; i++) {
+        wateroverlay_t *o = &wateroverlays[i];
+        vec3_t t;
+        VectorCopy(o->origin, t);
+        for (int k = 0; k < 3; k++) o->origin[k] = DotProduct(t, m[k]) + m[k][3];
+        int identity = m[0][0] == 1.0f && m[0][1] == 0.0f && m[0][2] == 0.0f && m[1][0] == 0.0f &&
+                       m[1][1] == 1.0f && m[1][2] == 0.0f && m[2][0] == 0.0f && m[2][1] == 0.0f && m[2][2] == 1.0f;
+        if (identity) continue;
+        VectorNormalizeX87(o->basis[0]);
+        VectorNormalizeX87(o->basis[1]);
+        vec3_t u, v, n;
+        VectorCopy(o->basis[0], u), VectorCopy(o->basis[1], v), VectorCopy(o->basis[2], n);
+        RotatePoint(m, u), RotatePoint(m, v), RotatePoint(m, n);
+        float su = Length3(u), sv = Length3(v), sn = Length3(n);
+        int unit = fequal(su, 1.0f, 0.0001f) && fequal(sv, 1.0f, 0.0001f) && fequal(sn, 1.0f, 0.0001f);
+        int perp = fequal(DotProduct(u, v), 0.0f, 0.0025f) && fequal(DotProduct(u, n), 0.0f, 0.0025f) &&
+                   fequal(DotProduct(v, n), 0.0f, 0.0025f);
+        if (unit && perp) {
+            VectorCopy(u, o->basis[0]), VectorCopy(v, o->basis[1]), VectorCopy(n, o->basis[2]);
+        } else {
+            for (int h = 0; h < 4; h++) {
+                vec3_t pos;
+                for (int k = 0; k < 3; k++) pos[k] = o->uvpoints[h][0] * o->basis[0][k] + o->uvpoints[h][1] * o->basis[1][k];
+                RotatePoint(m, pos);
+                o->uvpoints[h][0] = DotProduct(o->basis[0], pos);
+                o->uvpoints[h][1] = DotProduct(o->basis[1], pos);
+            }
+        }
+    }
+}
+
+void WaterOverlay_AddFaceToLists(int face, const side_t *side) {
+    for (int i = 0; i < side->nwateroverlays; i++) {
+        wateroverlay_t *o = &wateroverlays[side->wateroverlays[i] - WATEROVERLAY_ID_BASE];
+        if (has(o->faces, o->nfaces < WATEROVERLAY_BSP_FACE_COUNT ? o->nfaces : WATEROVERLAY_BSP_FACE_COUNT, face)) continue;
+        if (o->nfaces < WATEROVERLAY_BSP_FACE_COUNT) o->faces[o->nfaces] = face;
+        o->nfaces++;
+    }
+}
+
+void WaterOverlay_EmitOverlayFaces(void) {
+    if (numwateroverlays > 16384) Error("Too many water overlays!\nMAX_MAP_WATEROVERLAYS = %d", 16384);
+    for (int i = 0; i < numwateroverlays; i++) {
+        wateroverlay_t *o = &wateroverlays[i];
+        o->texinfo = OverlayTexinfo(o->material);
+        if (o->nfaces >= WATEROVERLAY_BSP_FACE_COUNT)
+            Error("Water Overlay touching too many faces (touching %d, max %d)\nOverlay %s at %.1f %.1f %.1f", o->nfaces,
+                  OVERLAY_BSP_FACE_COUNT, o->material, o->origin[0], o->origin[1], o->origin[2]);
+    }
+}
+
+void WaterOverlay_CountTexinfos(int *refcount) {
+    for (int i = 0; i < numwateroverlays; i++)
+        if (wateroverlays[i].texinfo >= 0) refcount[wateroverlays[i].texinfo]++;
+}
+
+void WaterOverlay_RemapTexinfos(const int *newindex) {
+    for (int i = 0; i < numwateroverlays; i++)
+        if (wateroverlays[i].texinfo >= 0) wateroverlays[i].texinfo = newindex[wateroverlays[i].texinfo];
+}
+
+/* Lump 50: dwateroverlay_t (1120 bytes) */
+unsigned char *WaterOverlay_Lump(int *len) {
+    unsigned char *b = xalloc(1120 * numwateroverlays + 1);
+    for (int i = 0; i < numwateroverlays; i++) {
+        wateroverlay_t *o = &wateroverlays[i];
+        unsigned char *p = b + 1120 * i;
+        short ti = (short)o->texinfo;
+        unsigned short countorder = (unsigned short)(o->nfaces & ~0xC000);     /* (render order 0) */
+        memcpy(p, &o->id, 4);
+        memcpy(p + 4, &ti, 2);
+        memcpy(p + 6, &countorder, 2);
+        memcpy(p + 8, o->faces, 4 * o->nfaces);
+        memcpy(p + 1032, o->u, 8);
+        memcpy(p + 1040, o->v, 8);
+        vec3_t uv[4];
+        memcpy(uv, o->uvpoints, sizeof(uv));
+        uv[0][2] = o->basis[0][0];
+        uv[1][2] = o->basis[0][1];
+        uv[2][2] = o->basis[0][2];
+        vec3_t cross;
+        CrossProduct(o->basis[2], o->basis[0], cross);
+        if (DotProduct(cross, o->basis[1]) < 0.0f) uv[3][2] = 1.0f;
+        memcpy(p + 1048, uv, 48);
+        memcpy(p + 1096, o->origin, 12);
+        memcpy(p + 1108, o->basis[2], 12);
+    }
+    *len = 1120 * numwateroverlays;
+    return b;
+}

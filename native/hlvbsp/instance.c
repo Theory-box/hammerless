@@ -510,6 +510,7 @@ static void MergeInstance(int inst_ent, mapstate_t *in) {
     MergeBrushSides(in, origin, m);
     MergeEntities(inst_ent, in, origin, angles, m);
     Overlay_Translate(in->first_overlay, origin, m);
+    WaterOverlay_Translate(in->first_wateroverlay, m);
 }
 
 /* vbsp's CheckForInstances: for the main map, each func_instance (also those that come with instances) */
@@ -528,9 +529,11 @@ void CheckForInstances(const char *path) {
                 mapstate_t main_map, inst;
                 MapState_Save(&main_map);
                 int first_overlay = Overlay_Count();      /* (the overlays the instance file adds come after) */
+                int first_wateroverlay = WaterOverlay_Count();
                 ReadMapFile(found, 0);
                 MapState_Save(&inst);
                 inst.first_overlay = first_overlay;
+                inst.first_wateroverlay = first_wateroverlay;
                 MapState_Use(&main_map);
                 MergeInstance(i, &inst);
                 free(inst.planes), free(inst.sides), free(inst.side_textures), free(inst.brushes), free(inst.ents);

@@ -942,6 +942,27 @@ static void load_entity(parser_t *p) {
         if (!next_token(p)) break;
         if (!p->quoted && !strcmp(p->token, "{")) {
             if (!_stricmp(key, "solid")) load_solid(p, &le);
+            else if (!_stricmp(key, "overlaytransition")) {
+                /* water overlays: an "overlaydata" block each (any entity may carry them; Hammer puts them on
+                 * info_overlay_transition) */
+                char k2[4096];
+                while (next_token(p)) {
+                    if (!p->quoted && !strcmp(p->token, "}")) break;
+                    strcpy(k2, p->token);
+                    if (!next_token(p)) break;
+                    if (p->quoted || strcmp(p->token, "{")) continue;
+                    if (_stricmp(k2, "overlaydata")) { skip_block(p); continue; }
+                    int w = WaterOverlay_New();
+                    char k3[4096];
+                    while (next_token(p)) {
+                        if (!p->quoted && !strcmp(p->token, "}")) break;
+                        strcpy(k3, p->token);
+                        if (!next_token(p)) break;
+                        if (!p->quoted && !strcmp(p->token, "{")) { skip_block(p); continue; }
+                        WaterOverlay_Key(w, k3, p->token);
+                    }
+                }
+            }
             else if (!_stricmp(key, "connections")) {
                 /* outputs go after the keys read so far (at the list's tail) */
                 char k2[4096];
@@ -1147,7 +1168,7 @@ void ReadMapFile(const char *path, int main_map) {
     mapbrushes = NULL, nummapbrushes = max_mapbrushes = 0;
     entities = NULL, num_entities = max_entities = 0;
     c_areaportals = 0;
-    int first_overlay = Overlay_Count();
+    int first_overlay = Overlay_Count(), first_wateroverlay = WaterOverlay_Count();
     if (main_map || verbose) Msg("Loading %s\n", path);
     char key[4096];
     while (next_token(&p)) {
@@ -1160,6 +1181,7 @@ void ReadMapFile(const char *path, int main_map) {
     }
     free(p.text);
     Overlay_UpdateSideLists(first_overlay);
+    WaterOverlay_UpdateSideLists(first_wateroverlay);
     if (main_map) CheckForInstances(path);
     ClearBounds(map_mins, map_maxs);
     for (int i = 0; i < entities[0].numbrushes; i++) {
