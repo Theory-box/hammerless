@@ -1304,6 +1304,13 @@ def test_texture_painting():
     assert _tree([kept]) == _tree([vmf.parse(SMALL_VMF)[1].blocks("solid")[0]])
 
 
+def test_register_cycle():
+    # the add-on can be disabled and enabled again (an update does that): every module unregisters cleanly
+    hammerless.unregister()
+    hammerless.register()
+    assert hasattr(bpy.types.Scene, "hl_tex") and hasattr(bpy.types.Scene, "hammerless")
+
+
 def test_sky_dropdown():
     # the sky dropdown lists the game's skies then Custom; it sets the map's skyname, Custom keeps a typed one
     from hammerless.blender.props import _sky_choice_items

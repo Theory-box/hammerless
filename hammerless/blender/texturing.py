@@ -14,6 +14,7 @@ import os
 
 import bmesh
 import bpy
+import bpy.utils.previews
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 
 from ..core import texalign
@@ -83,7 +84,6 @@ def listing(context) -> list[str]:
 
 def thumbnail(context, path: str) -> int:
     """A small picture of a material's texture (icon id), made once."""
-    import bpy.utils.previews
     if _previews["coll"] is None:
         _previews["coll"] = bpy.utils.previews.new()
     coll = _previews["coll"]
@@ -774,6 +774,5 @@ def unregister():
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
     if _previews["coll"] is not None:
-        import bpy.utils.previews
         bpy.utils.previews.remove(_previews["coll"])
         _previews["coll"] = None
