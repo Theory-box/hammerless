@@ -529,6 +529,18 @@ def bsp_signature(path: str) -> str:
     return _SIGNATURES[path][1]
 
 
+def _has_lighting(bsp: str) -> bool:
+    """The .bsp exists and has baked lighting (LDR or HDR lightmap lump not empty)."""
+    import struct
+    if not os.path.exists(bsp):
+        return False
+    with open(bsp, "rb") as f:
+        head = f.read(8 + 16 * 64)
+    if len(head) < 8 + 16 * 64 or head[:4] != b"VBSP":
+        return False
+    return any(struct.unpack_from("<ii", head, 8 + 16 * lump)[1] > 0 for lump in (8, 53))
+
+
 class CompileJob:
     """Runs the compile steps one after another without blocking the caller.
 
@@ -575,9 +587,9 @@ class CompileJob:
                     with open(self.base + ".hlnobake", "w", encoding="utf-8") as f:
                         f.write(opts.no_bake)
                     sky += ["-nobake", self.base + ".hlnobake"]
-                    if opts.keep_light and os.path.exists(self.base + ".bsp"):
-                        # (the last build, before this one replaces it: its lighting where nothing is baked now)
-                        shutil.copy2(self.base + ".bsp", self.base + ".keep.bsp")
+                    if opts.keep_light:
+                        # (the last build's lighting where nothing is baked now: copied when the build starts, see
+                        # _keep_last_light)
                         sky += ["-keeplight", self.base + ".keep.bsp"]
                 self.steps.append(("vrad", [HLVRAD] + vrad + opts.hlvrad_args() + game + sky
                                    + ["-modeldir", self.base + ".hlvrad_models", self.base]))
@@ -763,6 +775,25 @@ class CompileJob:
             out.append(line)
         return proc.wait(), out
 
+    def _keep_last_light(self, steps):
+        """-keeplight: the last build's .bsp (before this build replaces it) copied aside; when there's none, or it
+        has no lighting, nothing is kept (that part of the map is unlit until it is baked)."""
+        keep = self.base + ".keep.bsp"
+        for _name, cmd in steps:
+            if "-keeplight" not in cmd:
+                continue
+            ok = False
+            try:
+                if _has_lighting(self.base + ".bsp"):
+                    shutil.copy2(self.base + ".bsp", keep)
+                    ok = True
+            except OSError as ex:
+                self._q.put(f"(last lighting not kept: {ex})")
+            if not ok:
+                i = cmd.index("-keeplight")
+                del cmd[i:i + 2]
+                self._q.put("No earlier lighting to keep: what isn't baked now is unlit")
+
     def _run_steps(self):
         import time
         try:
@@ -775,6 +806,7 @@ class CompileJob:
             for stale in (self.base + ".stamp", self.base + ".built.vmf"):   # a failed compile mustn't look
                 if os.path.exists(stale):                                     # up to date or be built on
                     os.remove(stale)
+            self._keep_last_light(steps)
             prt, kept_prt = self.base + ".prt", self.base + ".built.prt"
             for k, (name, cmd) in enumerate(steps):
                 self._q.put(f"==== {name} ====")

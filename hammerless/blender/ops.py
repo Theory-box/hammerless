@@ -1008,8 +1008,8 @@ def _selection_volume(context) -> str:
             continue
         objs = [o] + [c for c in o.children_recursive if c.type == "MESH"]    # (a preset: its parts)
         for x in objs:
-            if x.type == "EMPTY" and not x.children:
-                continue
+            if x.type == "EMPTY":
+                continue                    # (an empty's box is a tiny one around it: its parts are what's baked)
             m = x.matrix_world
             corners = [Vector(c) for c in x.bound_box]
             lo = Vector([min(c[i] for c in corners) for i in range(3)])
@@ -1056,11 +1056,11 @@ class HL_OT_build(bpy.types.Operator):
             return ("Bake only around the selected objects (when they've changed): the rest of the map keeps its "
                     "last bake. Build & Play bakes the whole map again")
         if properties.bake and properties.volume:
-            return (f"Bake only inside '{properties.volume}' (a quick look at that area): the rest gets the flat "
-                    "ambient colour. Build & Play bakes the whole map again")
+            return (f"Bake only inside '{properties.volume}' (a quick look at that area): the rest of the map "
+                    "keeps its last bake. Build & Play bakes the whole map again")
         if properties.bake and properties.view:
             return ("Bake only what this viewport sees, out to the distance set (a quick look at one spot): the "
-                    "rest gets the flat ambient colour. Build & Play bakes the whole map again")
+                    "rest of the map keeps its last bake. Build & Play bakes the whole map again")
         if properties.bake:
             return ("Bake the map's lighting quickly and show it (about a third of a full build: the visibility "
                     "step runs in its fast mode). Build & Play then reuses this lighting and only adds the full "
@@ -1071,17 +1071,18 @@ class HL_OT_build(bpy.types.Operator):
         return ("Build the map without starting the game: walls, visibility, baked lighting and the nav mesh. "
                 "Only what changed is redone. Then Play starts it, and Lighting > Baked Lighting shows it")
 
-    play: BoolProperty(name="Play", default=True)
+    play: BoolProperty(name="Play", default=True, options={"SKIP_SAVE"})
     bake: BoolProperty(name="Bake Lighting", default=False, options={"HIDDEN", "SKIP_SAVE"},
                        description="Lighting only: fast visibility, no nav mesh, then show the lighting")
     selected: BoolProperty(name="Bake Selected", default=False, options={"HIDDEN", "SKIP_SAVE"},
                            description="With Bake Lighting: bake only around the selected objects")
     volume: StringProperty(name="Bake Volume", default="", options={"HIDDEN", "SKIP_SAVE"},
-                           description="With Bake Lighting: bake only inside this No Bake Volume (Bake only inside)")
+                           description="With Bake Lighting: bake only inside this Control Volume (Only inside, "
+                                       "Light Baking)")
     vis_only: BoolProperty(name="Compute Visibility", default=False, options={"HIDDEN", "SKIP_SAVE"},
                            description="Compile and run visibility only (no lighting, no nav mesh)")
-    view: BoolProperty(name="Bake View", default=False, options={"HIDDEN", "SKIP_SAVE"},
-                       description="With Bake Lighting: only what the viewport sees, out to Bake View's distance")
+    view: BoolProperty(name="Bake What the View Sees", default=False, options={"HIDDEN", "SKIP_SAVE"},
+                       description="With Bake Lighting: only what the viewport sees, out to its Distance")
 
     _timer = None
     _job: cc.CompileJob | None = None
@@ -1156,7 +1157,7 @@ class HL_OT_build(bpy.types.Operator):
         if self.bake and self.view:
             vol = _view_volume(context)
             if vol is None:
-                self.report({"ERROR"}, "Bake View needs a 3D viewport")
+                self.report({"ERROR"}, "Baking what the view sees needs a 3D viewport")
                 return {"CANCELLED"}
             if not cc.use_hlvrad(opts):
                 self.report({"ERROR"}, "Baking what the view sees needs the Hammerless light compiler (Lighting > Advanced)")
@@ -1165,7 +1166,7 @@ class HL_OT_build(bpy.types.Operator):
         if self.bake and self.volume:
             vol = rep.bake_only.get(self.volume)
             if vol is None:
-                self.report({"ERROR"}, f"No Bake Volume '{self.volume}' (Bake only inside) isn't in the map")
+                self.report({"ERROR"}, f"Control Volume '{self.volume}' (Only inside, Light Baking) isn't in the map")
                 return {"CANCELLED"}
             if not cc.use_hlvrad(opts):
                 self.report({"ERROR"}, "Baking part of the map needs the Hammerless light compiler (Lighting > Advanced)")
@@ -1188,7 +1189,7 @@ class HL_OT_build(bpy.types.Operator):
             if cc.use_hlvrad(opts):
                 opts = dataclasses.replace(opts, no_bake=no_bake)
             else:
-                write_log(["No Bake Volumes need the Hammerless light compiler: Valve's vrad bakes everything"],
+                write_log(["Control Volumes (Light Baking) need the Hammerless light compiler: Valve's vrad bakes everything"],
                           append=True)
         self._job = cc.CompileJob(tools, path, opts, skip_if_unchanged=True)
         self._nav = None
@@ -1783,6 +1784,8 @@ class HL_OT_kv_set(bpy.types.Operator):
                 kv = o.hammerless.keyvalues.add()
                 kv.key = self.key
             kv.value = self.value
+        from .props import forget_bake_volumes
+        forget_bake_volumes()                # (a Control Volume's mode or ticks: the Bake dropdown's choices)
         return {"FINISHED"}
 
 

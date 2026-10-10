@@ -58,15 +58,26 @@ def detail_choice(obj) -> str:
 PAINTED = "hl_tex_uv"      # face attribute: 1 = painted with the texturing tools (its UVs hold its alignment)
 
 
-def texture_size(mat) -> tuple[int, int]:
-    """A material's texture size in texels (the game texture's full size), for UVs <-> texture axes."""
-    if mat is not None and mat.use_nodes and mat.node_tree:
-        for n in mat.node_tree.nodes:
-            if n.type == "TEX_IMAGE" and n.image is not None:
-                w, h = n.image.get("hl_full_size", n.image.size)
-                if w and h:
-                    return int(w), int(h)
-    return 512, 512
+def texture_size(mat, remember: bool = False) -> tuple[int, int]:
+    """A material's texture size in texels, for UVs <-> texture axes: the game texture's full size, or a custom
+    texture's size as exported (power of two, at most 2048). The first time a face is painted it's remembered on the
+    material (remember=True), so painting and export always agree even if the preview changes later."""
+    if mat is None:
+        return 512, 512
+    stored = mat.get("hl_tex_size")
+    if stored is not None and len(stored) == 2 and stored[0] > 0 and stored[1] > 0:
+        return int(stored[0]), int(stored[1])
+    size = (512, 512)
+    img = _base_color_image(mat)
+    if img is not None:
+        w, h = img.get("hl_full_size", img.size)
+        if w and h:
+            size = (int(w), int(h))
+            if not (mat.hammerless.source_material or "").strip():
+                size = (_pow2_floor(size[0]), _pow2_floor(size[1]))      # (exported power-of-two, see _export_custom)
+    if remember:
+        mat["hl_tex_size"] = list(size)
+    return size
 
 
 def _world_brushes(obj, *args, **kw) -> list:

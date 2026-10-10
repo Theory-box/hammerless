@@ -64,7 +64,22 @@ def _split(text: str) -> list[str]:
     return [t for t in (text or "").split(",") if t]
 
 
+_listing_cache = {"key": None, "names": []}
+
+
 def listing(context) -> list[str]:
+    import time
+    t = context.scene.hl_tex
+    key = (t.filter, t.folder, t.search, t.favorites if t.filter == "FAV" else "", t.recent if t.filter == "RECENT" else "",
+           int(time.monotonic() // 2) if t.filter == "USED" else 0)
+    if _listing_cache["key"] == key:
+        return _listing_cache["names"]
+    names = _listing(context)
+    _listing_cache.update(key=key, names=names)
+    return names
+
+
+def _listing(context) -> list[str]:
     t = context.scene.hl_tex
     if t.filter == "USED":
         names = used_materials(context)
@@ -119,6 +134,11 @@ def material_for(path: str):
     """The Blender material for a game material, its preview showing painted faces through their UVs."""
     from .ops import game_material, refresh_material_preview
     mat = game_material(path)
+    if not mat.get("hl_uvmix") and mat.use_nodes and mat.node_tree:
+        from .preview import NODE_TAG
+        nodes = mat.node_tree.nodes
+        if (any(n.type == "TEX_IMAGE" for n in nodes) and not any(n.get(NODE_TAG) for n in nodes)):
+            mat["hl_uvmix"] = 1            # (an imported map's: its faces show through their UVs already)
     if not mat.get("hl_uvmix") and not mat.get("hl_uvmix_tried") and not path.startswith("tools/"):
         mat["hl_uvmix_tried"] = 1          # (once: a texture the game doesn't have would be read every click)
         refresh_material_preview(mat)
@@ -155,10 +175,15 @@ def _upm(context) -> float:
     return context.scene.hammerless.units_per_meter
 
 
+def _outside(pts, m):
+    """The corners counter-clockwise from outside (a mirrored object's world winding is reversed)."""
+    return pts[::-1] if m.determinant() < 0 else pts
+
+
 def _align_bm_face(f, uvl, pl, m, upm, al, mat, set_flag=True):
     pts = [tuple(c * upm for c in (m @ v.co)) for v in f.verts]
-    ua, va = texalign.axes(pts, al)
-    w, h = texture_size(mat)
+    ua, va = texalign.axes(_outside(pts, m), al)
+    w, h = texture_size(mat, remember=True)
     for loop, uv in zip(f.loops, texalign.uvs(pts, ua, va, w, h)):
         loop[uvl].uv = uv
     if set_flag:
@@ -211,6 +236,7 @@ def selected_targets(context) -> list[tuple]:
             if not _paintable(obj):
                 continue
             bm = bmesh.from_edit_mesh(obj.data)
+            bm.faces.index_update()
             sel = [f.index for f in bm.faces if f.select]
             if sel:
                 out.append((obj, sel))
@@ -240,7 +266,7 @@ def read_face(context, obj, index) -> None:
         w, h = texture_size(mat)
         ax = texalign.axes_from_uv(pts, [tuple(uv.data[li].uv) for li in poly.loop_indices], w, h)
         if ax is not None:
-            al = texalign.alignment_from_axes(pts, *ax, mode=t.mode)
+            al = texalign.alignment_from_axes(_outside(pts, obj.matrix_world), *ax, mode=t.mode)
     if al is None:
         s = mat.hammerless.texture_scale if mat else 0.25
         al = texalign.Alignment(s, s, 0.0, 0.0, 0.0, "WORLD")
@@ -325,7 +351,18 @@ def _ray(context, event):
     if not hit or obj is None:
         return None, None
     obj = obj.original
-    if obj.type != "MESH" or index >= len(obj.data.polygons):
+    if obj.type != "MESH":
+        return None, None
+    if any(md.show_viewport for md in obj.modifiers):
+        # (the hit's index is the modified mesh's: find the face of the object's own mesh under the mouse)
+        from mathutils.bvhtree import BVHTree
+        me = obj.data
+        m = obj.matrix_world
+        tree = BVHTree.FromPolygons([m @ v.co for v in me.vertices], [tuple(p.vertices) for p in me.polygons])
+        _loc, _n, index, _d = tree.ray_cast(origin, direction)
+        if index is None:
+            return None, None
+    if index >= len(obj.data.polygons):
         return None, None
     return obj, index
 
@@ -539,8 +576,8 @@ class HL_OT_tex_justify(bpy.types.Operator):
                 poly = obj.data.polygons[i]
                 mat = obj.material_slots[poly.material_index].material if poly.material_index < len(obj.material_slots) else None
                 pts = [tuple(c * upm for c in (obj.matrix_world @ obj.data.vertices[v].co)) for v in poly.vertices]
-                w, h = texture_size(mat)
-                al = texalign.justify(pts, current_alignment(context), self.how, w, h)
+                w, h = texture_size(mat, remember=True)
+                al = texalign.justify(_outside(pts, obj.matrix_world), current_alignment(context), self.how, w, h)
                 paint_faces(context, obj, [i], None, al)
                 last_al = al
         if last_al is not None:                 # (the settings show the result)
@@ -596,14 +633,28 @@ class HL_OT_tex_replace(bpy.types.Operator):
         new = material_for(t.active)
         inside = map_objects(context.scene)
         n = 0
+        done = set()
         for o in context.scene.objects:
-            if o.name not in inside or o.type != "MESH" or not _paintable(o):
+            if o.name not in inside or o.type != "MESH" or not _paintable(o) or o.data in done:
                 continue
-            for slot in o.material_slots:
+            done.add(o.data)
+            for si, slot in enumerate(o.material_slots):
                 m = slot.material
-                if m is not None and (m.hammerless.source_material or "").strip().lower() == t.replace_from:
-                    slot.material = new
-                    n += 1
+                if m is None or (m.hammerless.source_material or "").strip().lower() != t.replace_from:
+                    continue
+                (ow, oh), (nw, nh) = texture_size(m), texture_size(new, remember=True)
+                if (ow, oh) != (nw, nh):     # (painted faces' UVs are in texture repeats: keep their texels)
+                    me = o.data
+                    pa = me.attributes.get(PAINTED)
+                    uvl = me.uv_layers.active
+                    if pa is not None and uvl is not None:
+                        for p in me.polygons:
+                            if p.material_index == si and pa.data[p.index].value:
+                                for li in p.loop_indices:
+                                    u, v = uvl.data[li].uv
+                                    uvl.data[li].uv = (u * ow / nw, v * oh / nh)
+                slot.material = new
+                n += 1
         self.report({"INFO"}, f"Replaced {t.replace_from} with {t.active} on {n} object(s)")
         return {"FINISHED"}
 

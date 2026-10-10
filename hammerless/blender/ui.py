@@ -3,6 +3,7 @@ import os
 
 import bpy
 
+from ..core.control import _on
 from ..core.entities import CATALOG, CATEGORIES, PRESETS
 from .extract import effective_role
 
@@ -170,13 +171,23 @@ def setup_problem(context):
     return value
 
 
+_built_cache = {"key": None, "t": None}
+
+
 def _built_ago(context) -> str:
-    """'Built 3 min ago' for the map's last build ('' if none)."""
+    """'Built 3 min ago' for the map's last build ('' if none). The file is looked at every few seconds, not on every
+    redraw (finding the work folder creates it)."""
     import time
-    from .ops import work_dir
-    try:
-        t = os.path.getmtime(os.path.join(work_dir(context), context.scene.hammerless.map_name + ".bsp"))
-    except (OSError, AttributeError):
+    key = (context.scene.hammerless.map_name, int(time.monotonic() // 3))
+    if _built_cache["key"] != key:
+        from .ops import work_dir
+        try:
+            t = os.path.getmtime(os.path.join(work_dir(context), context.scene.hammerless.map_name + ".bsp"))
+        except (OSError, AttributeError):
+            t = None
+        _built_cache.update(key=key, t=t)
+    t = _built_cache["t"]
+    if t is None:
         return ""
     mins = int((time.time() - t) // 60)
     if mins < 1:
@@ -319,7 +330,7 @@ def _draw_control(layout, hs):
         op.key, op.value = "mode", value
     grid = box.grid_flow(columns=2, align=True)
     for key, label, icon in _CONTROL_TICKS:
-        on = kv.get(key, "0").strip() in ("1", "true", "yes")
+        on = _on(kv.get(key, "0"))
         cell = grid.row(align=True)
         cell.enabled = not (key == "spawns" and only)
         op = cell.operator("hammerless.kv_set", text=label, icon=icon, depress=on)

@@ -370,7 +370,7 @@ typedef struct { vec3_t color; vec3_t pos; int valid; } colorvert_t;
 typedef struct { vec3_t pos, normal; int index; } badvert_t;
 
 /* one prop: its vertexes' colours, then the .vhv */
-typedef struct { unsigned char *data; int len, nskip, ntotal; } vhv_t;   /* (No Bake: vertexes not lit, all) */
+typedef struct { unsigned char *data; int len, nskip, ntotal, nexcl; } vhv_t;   /* (No Bake: vertexes not lit, all) */
 
 static void LightProp(int propIndex, const unsigned char *rec, const unsigned char *mdl, int mlen, const unsigned char *vvd,
                       int vlen, const unsigned char *vtx, int xlen, vhv_t *result) {
@@ -411,6 +411,7 @@ static void LightProp(int propIndex, const unsigned char *rec, const unsigned ch
                     result->ntotal++;
                     if (NoBakePoint(pos)) {               /* (No Bake Volumes: the ambient colour, not lit) */
                         result->nskip++;
+                        result->nexcl += NoBakeExcluded(pos);
                         cv[n].valid = 1;
                         VectorCopy(pos, cv[n].pos);
                         NoBakeColor(cv[n].color);
@@ -536,11 +537,11 @@ static void PropWork(int i, int thread) {
     {
         LightProp(i, rec, mdl, mlen, vvd, vlen, vtx, xlen, &sp_results[i]);
         vhv_t *r = &sp_results[i];
-        if (g_bKeep && r->ntotal && r->nskip == r->ntotal) {      /* (not baked at all: the last bake's colours) */
+        if (g_bKeep && r->ntotal && r->nskip == r->ntotal && !r->nexcl) {      /* (not baked at all: the last bake's colours) */
             char vhv[64];
             snprintf(vhv, sizeof(vhv), g_bHDR ? "sp_hdr_%d.vhv" : "sp_%d.vhv", i);
             int len = 0;
-            const unsigned char *old = KeepProp(i, rec, PROP_RECORD, name, vhv, &len);
+            const unsigned char *old = KeepProp(i, rec, PROP_RECORD, name, I32(mdl + 8), vhv, &len);
             if (old && len > 0) {
                 free(r->data);
                 r->data = xalloc(len + 1);

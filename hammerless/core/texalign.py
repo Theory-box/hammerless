@@ -78,11 +78,13 @@ def rotate_axes(u: Vec3, v: Vec3, normal: Vec3, degrees: float) -> tuple[Vec3, V
 
 
 def axes(points: list[Vec3], al: Alignment) -> tuple[tuple[Vec3, float, float], tuple[Vec3, float, float]]:
-    """The face's texture axes: ((u, ushift, uscale), (v, vshift, vscale))."""
+    """The face's texture axes: ((u, ushift, uscale), (v, vshift, vscale)). points: counter-clockwise from outside."""
     n = polygon_normal(points)
     u, v = base_axes(n, al.mode)
     u, v = rotate_axes(u, v, n, al.rotation)
-    return (u, al.shift_u, al.scale_u), (v, al.shift_v, al.scale_v)
+    su = al.scale_u if abs(al.scale_u) >= 1e-4 else math.copysign(1e-4, al.scale_u or 1.0)
+    sv = al.scale_v if abs(al.scale_v) >= 1e-4 else math.copysign(1e-4, al.scale_v or 1.0)
+    return (u, al.shift_u, su), (v, al.shift_v, sv)
 
 
 def texel(p: Vec3, axis) -> float:
@@ -91,8 +93,13 @@ def texel(p: Vec3, axis) -> float:
 
 
 def uvs(points: list[Vec3], uaxis, vaxis, width: int, height: int) -> list[tuple[float, float]]:
-    """Blender UVs for the points (v up, as the importer writes them)."""
-    return [(texel(p, uaxis) / max(width, 1), -texel(p, vaxis) / max(height, 1)) for p in points]
+    """Blender UVs for the points (v up, as the importer writes them). Whole texture repeats are taken off so a face
+    far from the origin keeps its UVs small (Blender stores them as 32-bit floats: large ones lose the alignment)."""
+    out = [(texel(p, uaxis) / max(width, 1), -texel(p, vaxis) / max(height, 1)) for p in points]
+    if not out:
+        return out
+    du, dv = math.floor(out[0][0]), math.floor(out[0][1])
+    return [(u - du, v - dv) for u, v in out]
 
 
 def axes_from_uv(points: list[Vec3], uv: list[tuple[float, float]], width: int, height: int):
@@ -132,7 +139,7 @@ def axes_from_uv(points: list[Vec3], uv: list[tuple[float, float]], width: int, 
         glen = math.sqrt(_dot(g, g))
         if glen < 1e-12:
             return None
-        out.append((_scaled(g, 1.0 / glen), c, 1.0 / glen))
+        out.append((_scaled(g, 1.0 / glen), c % max(size, 1), 1.0 / glen))     # (shift: one repeat is all)
     return out[0], out[1]
 
 
@@ -141,13 +148,28 @@ def alignment_from_axes(points: list[Vec3], uaxis, vaxis, mode: str = "WORLD") -
     the mode's base u axis to this u axis about the normal; a flipped axis reads as a negative scale."""
     n = _norm(polygon_normal(points))
     bu, bv = base_axes(n, mode)
+
+    def flat(a):                      # (in the face's plane: what a texture on the face shows of an axis)
+        d = _dot(a, n)
+        return (a[0] - d * n[0], a[1] - d * n[1], a[2] - d * n[2])
     u = uaxis[0]
-    ang = math.degrees(math.atan2(_dot(_cross(bu, u), n), _dot(bu, u)))
+    pbu = _norm(flat(bu))
+    ang = math.degrees(math.atan2(_dot(_cross(pbu, u), n), _dot(pbu, u)))
     ang = round(ang, 4) % 360.0
     ru, rv = rotate_axes(bu, bv, n, ang)
-    su = uaxis[2] * (1 if _dot(ru, u) >= 0 else -1)
-    sv = vaxis[2] * (1 if _dot(rv, vaxis[0]) >= 0 else -1)
-    return Alignment(su, sv, uaxis[1], vaxis[1], ang, mode)
+    fu, fv = flat(ru), flat(rv)
+    # the face shows axis/scale = flat(r)/s: s = scale read * |flat(r)|, its sign where flat(r) points
+    su = uaxis[2] * math.sqrt(_dot(fu, fu)) * (1 if _dot(fu, u) >= 0 else -1)
+    sv = vaxis[2] * math.sqrt(_dot(fv, fv)) * (1 if _dot(fv, vaxis[0]) >= 0 else -1)
+    # on the face p.r = p.flat(r) + (r.n) d: the shift takes the difference (none when r is in the plane)
+    d = _dot(n, points[0])
+    shu = uaxis[1] - _dot(ru, n) * d / su if abs(su) > 1e-9 else uaxis[1]
+    shv = vaxis[1] - _dot(rv, n) * d / sv if abs(sv) > 1e-9 else vaxis[1]
+    return Alignment(su, sv, shu, shv, ang, mode)
+
+
+def _nonzero(s: float) -> float:
+    return s if abs(s) >= 1e-4 else math.copysign(1e-4, s or 1.0)
 
 
 def justify(points: list[Vec3], al: Alignment, how: str, width: int, height: int) -> Alignment:
@@ -156,7 +178,7 @@ def justify(points: list[Vec3], al: Alignment, how: str, width: int, height: int
     (u, _su, scu), (v, _sv, scv) = axes(points, al)
     pu = [_dot(p, u) for p in points]
     pv = [_dot(p, v) for p in points]
-    out = Alignment(al.scale_u, al.scale_v, al.shift_u, al.shift_v, al.rotation, al.mode)
+    out = Alignment(_nonzero(al.scale_u), _nonzero(al.scale_v), al.shift_u, al.shift_v, al.rotation, al.mode)
     if how == "FIT":
         out.scale_u = math.copysign(max((max(pu) - min(pu)) / max(width, 1), 1e-4), al.scale_u or 1)
         out.scale_v = math.copysign(max((max(pv) - min(pv)) / max(height, 1), 1e-4), al.scale_v or 1)

@@ -108,15 +108,33 @@ def bake_only_objects(scene) -> list:
     return sorted(out)
 
 
+_bake_only_cache = {"key": None, "names": []}
+
+
+def forget_bake_volumes():
+    """The scene changed: the Bake dropdown's volumes are worked out again."""
+    _bake_only_cache["key"] = None
+
+
+def _bake_only_cached(scene) -> list[str]:
+    """bake_only_objects, worked out at most twice a second (the dropdown asks on every redraw), and again whenever
+    objects are added, removed or changed (forget_bake_volumes)."""
+    import time
+    key = (scene.name_full, len(bpy.data.objects), int(time.monotonic() * 2))
+    if _bake_only_cache["key"] != key:
+        _bake_only_cache.update(key=key, names=bake_only_objects(scene))
+    return _bake_only_cache["names"]
+
+
 def _bake_area_items(self, context):
-    scene = context.scene if context else bpy.context.scene
+    scene = self.id_data if isinstance(self.id_data, bpy.types.Scene) else (context or bpy.context).scene
     items = [("MAP", "Whole Map", "Bake the whole map's lighting", "WORLD", 0),
              ("VIEW", "What the View Sees", "Only what the 3D viewport sees, out to View Distance; the rest keeps "
                                             "the last bake's lighting", "HIDE_OFF", 1)]
     items.append(("SELECTED", "Selected Objects", "Bake only around the selected objects (their bounds); the rest "
                                                   "keeps the last bake's lighting", "RESTRICT_SELECT_OFF", 2))
-    for i, name in enumerate(bake_only_objects(scene)):
-        items.append(("VOL:" + name, name, f"Only inside the volume '{name}' (Bake only inside)", "MESH_CUBE", i + 3))
+    for i, name in enumerate(_bake_only_cached(scene)):
+        items.append(("VOL:" + name, name, f"Only inside the Control Volume '{name}'", "MESH_CUBE", i + 3))
     if [it[0] for it in items] != [it[0] for it in _BAKE_AREAS]:
         _BAKE_AREAS.clear()
         _BAKE_AREAS.extend(items)
@@ -124,14 +142,14 @@ def _bake_area_items(self, context):
 
 
 def _bake_area_get(self):
-    for it in _bake_area_items(self, bpy.context):
+    for it in _bake_area_items(self, None):
         if it[0] == self.bake_area_name:
             return it[4]
     return 0                          # (a volume that's gone: the whole map)
 
 
 def _bake_area_set(self, value):
-    for it in _bake_area_items(self, bpy.context):
+    for it in _bake_area_items(self, None):
         if it[4] == value:
             self.bake_area_name = it[0]
             return
@@ -527,12 +545,13 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                 description="Draw the baked lighting through walls")
     bake_area: EnumProperty(name="Bake", items=_bake_area_items, get=_bake_area_get, set=_bake_area_set,
                             description="What Bake Lighting bakes: the whole map, what the 3D viewport sees, the "
-                                        "selected objects, or a No Bake Volume set to Bake only inside. The rest "
+                                        "selected objects, or a Control Volume set to Only inside with Light Baking. The rest "
                                         "keeps the last bake's lighting. Builds always bake the whole map")
     bake_area_name: StringProperty(default="MAP", options={"HIDDEN"})
     light_view_distance: FloatProperty(name="Distance", default=3000.0, min=64.0, soft_max=20000.0, step=1000,
-                                       precision=0, description="Bake View: how far from the viewport to bake, in "
-                                       "Hammer units (beyond it and outside the view get the flat ambient colour)")
+                                       precision=0, description="Bake What the View Sees: how far from the viewport to "
+                                       "bake, in Hammer units (beyond it and outside the view keep the last bake's "
+                                       "lighting)")
     lightmap_props: BoolProperty(name="Props", default=True, update=lambda self, c: _light_display(self, c),
                                  description="Draw static props with the light baked at their vertexes (Prop "
                                              "Lighting): the compiled map's props, from the game's model files")

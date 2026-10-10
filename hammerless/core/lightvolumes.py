@@ -6,8 +6,6 @@ inverted volumes ("bake only inside") and it's inside none of them.
 """
 from __future__ import annotations
 
-from . import geometry as g
-from .entities import NO_BAKE
 from .ir import MapIR
 
 
@@ -15,23 +13,18 @@ def _inverted(e) -> bool:
     return str(e.keyvalues.get("invert", "0")).strip() in ("1", "true", "True")
 
 
-def _lines(e, invert: int) -> list[str]:
-    lines = []
-    for b in e.brushes:
-        planes = []
-        for f in g.merge_coplanar(b.faces):
-            pl = g.Plane.from_polygon(f.verts)
-            planes.append("%.6f %.6f %.6f %.3f" % (pl.normal[0], pl.normal[1], pl.normal[2], pl.dist))
-        if len(planes) >= 4:
-            lines.append(f"{invert} {len(planes)} " + " ".join(planes))
-    return lines
+def _lines(v, invert: int) -> list[str]:
+    """hlvrad lines for a Control Volume: one per brush, or its box when it has no closed brush."""
+    hulls = v.hulls or (((1, 0, 0, v.maxs[0]), (-1, 0, 0, -v.mins[0]), (0, 1, 0, v.maxs[1]),
+                         (0, -1, 0, -v.mins[1]), (0, 0, 1, v.maxs[2]), (0, 0, -1, -v.mins[2])),)
+    return [f"{invert} {len(h)} " + " ".join("%.6f %.6f %.6f %.3f" % pl for pl in h) for h in hulls]
 
 
 def no_bake_text(ir: MapIR) -> str:
     """Volumes where light isn't baked (Control Volumes ticked Light Baking, Not inside; older No Bake Volumes)
     for hlvrad, or "" if the map has none. Every bake uses them."""
     from .control import of, volumes
-    lines = [ln for v in of(volumes(ir), "light", only=False) for ln in _lines(v.entity, 0)]
+    lines = [ln for v in of(volumes(ir), "light", only=False) for ln in _lines(v, 0)]
     return "\n".join(lines) + "\n" if lines else ""
 
 
@@ -41,7 +34,7 @@ def bake_only_volumes(ir: MapIR) -> dict[str, str]:
     from .control import of, volumes
     out = {}
     for v in of(volumes(ir), "light", only=True):
-        lines = _lines(v.entity, 1)
+        lines = _lines(v, 1)
         if lines:
             out[v.name or "volume"] = "\n".join(lines) + "\n"
     return out

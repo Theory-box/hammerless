@@ -1707,6 +1707,9 @@ void FinalLightFace(int facenum) {
     }
     int allskip = fl->numluxels > 0 && nlskip == fl->numluxels;
     int oldf = nlskip ? KeepFace(facenum) : -1;         /* (the last bake's same face: its light where not baked) */
+    int nexcl = 0;                                      /* (luxels in a never-baked volume: the ambient colour) */
+    if (oldf >= 0)
+        for (int j = 0; j < fl->numluxels; j++) nexcl += luxskip[j] && NoBakeExcluded(fl->luxel[j]);
     for (int k = 0; k < nstyles; k++) {
         int isdisp = f->dispinfo != -1;
         radial_t *rad = allskip ? NULL : isdisp ? BuildDispLuxelRadial(facenum, k) : BuildLuxelRadial(facenum, k);
@@ -1731,9 +1734,9 @@ void FinalLightFace(int facenum) {
             }
             if (luxskip && luxskip[j]) {
                 for (int b = 0; b < bumpCount; b++) {
-                    if (oldf >= 0) {
+                    if (oldf >= 0 && !NoBakeExcluded(fl->luxel[j])) {
                         const unsigned char *c = KeepLuxel(oldf, k, b, bumpCount, j);
-                        float sc = ldexpf(1.0f, (signed char)c[3]) / 255.0f;
+                        float sc = ldexpf(1.0f, (signed char)c[3]);      /* (RGBE: byte x 2^exponent) */
                         lb[b][0] = c[0] * sc, lb[b][1] = c[1] * sc, lb[b][2] = c[2] * sc;
                     } else if (f->styles[k] == 0) VectorCopy(amb, lb[b]);
                     else lb[b][0] = lb[b][1] = lb[b][2] = 0;
@@ -1749,7 +1752,8 @@ void FinalLightFace(int facenum) {
                     avgCount++;
                 }
                 VectorToColorRGBExp32(lb[b], pdata[b]);
-                if (oldf >= 0 && luxskip[j]) memcpy(pdata[b], KeepLuxel(oldf, k, b, bumpCount, j), 4);   /* (exactly) */
+                if (oldf >= 0 && luxskip[j] && !NoBakeExcluded(fl->luxel[j]))
+                    memcpy(pdata[b], KeepLuxel(oldf, k, b, bumpCount, j), 4);   /* (exactly) */
                 pdata[b] += 4;
             }
         }
@@ -1767,7 +1771,7 @@ void FinalLightFace(int facenum) {
             median[2] = blues[avgCount >> 1];
         }
         VectorToColorRGBExp32(median, avg);
-        if (allskip && oldf >= 0) memcpy(avg, KeepAverage(oldf, k), 4);
+        if (allskip && oldf >= 0 && !nexcl) memcpy(avg, KeepAverage(oldf, k), 4);
     }
     free(reds);
     free(greens);

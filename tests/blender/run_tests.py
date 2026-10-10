@@ -1245,6 +1245,28 @@ def test_bake_area_choices():
     assert s.bake_area == "MAP"                                  # (gone: the whole map)
 
 
+def test_texture_read_back():
+    # a painted face reads back the alignment it was painted with: mirrored and tilted objects, World and Face
+    from hammerless.blender import texturing
+    from hammerless.core.texalign import Alignment
+    s = reset_scene()
+    ctx = bpy.context
+    texturing.set_active(ctx, "brick/brick_ext_01")
+    t = ctx.scene.hl_tex
+    for name, scale, rot in (("plain", (1, 1, 1), (0, 0, 0)), ("mirrored", (-1, 1, 1), (0, 0, 0)),
+                             ("mirrored_tilted", (1, -1, 1), (0.4, 0.3, 0))):
+        ob = add_box(name, (2, 2, 2), (0, 0, 1))
+        ob.scale, ob.rotation_euler = scale, rot
+        for mode in ("WORLD", "FACE"):
+            texturing.paint_faces(ctx, ob, al=Alignment(0.5, 0.25, 12, 40, 30, mode))
+            t.mode = mode
+            for i in range(len(ob.data.polygons)):
+                texturing.read_face(ctx, ob, i)
+                got = (round(t.scale_u, 3), round(t.scale_v, 3), round(t.shift_u % 256, 2) % 256,
+                       round(t.shift_v % 256, 2) % 256, round(t.rotation % 360, 2))
+                assert got == (0.5, 0.25, 12.0, 40.0, 30.0), (name, mode, i, got)
+
+
 def test_texture_painting():
     # painted faces export with their own axes (from their UVs); the rest stay world-aligned; Fit; Replace;
     # an imported map's painted face writes its new axes on its original side

@@ -40,6 +40,8 @@ class Volume:
     def contains(self, p, eps: float = EPS) -> bool:
         if not all(self.mins[i] - eps <= p[i] <= self.maxs[i] + eps for i in range(3)):
             return False
+        if not self.hulls:            # (no closed brush to read planes from: its box)
+            return True
         return any(all(nx * p[0] + ny * p[1] + nz * p[2] <= d + eps for nx, ny, nz, d in h) for h in self.hulls)
 
 
@@ -79,7 +81,7 @@ def volumes(ir: MapIR) -> list[Volume]:
             continue
         pts = [v for b in e.brushes for f in b.faces for v in f.verts]
         hulls = _hulls(e)
-        if not pts or not hulls:
+        if not pts:
             continue
         mins, maxs = g.bounds(pts)
         out.append(Volume(e.source or e.classname, st[0], st[1], mins, maxs, hulls, e))

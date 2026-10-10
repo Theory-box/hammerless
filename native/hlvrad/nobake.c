@@ -59,6 +59,14 @@ int NoBakePoint(const float *p) {
     return anyInvert && !inInvert;
 }
 
+/* inside a volume that's never baked (not a "bake only inside" one): such points don't keep the last bake */
+int NoBakeExcluded(const float *p) {
+    if (!g_bNoBake) return 0;
+    for (int i = 0; i < numhulls; i++)
+        if (!hulls[i].invert && InHull(&hulls[i], p)) return 1;
+    return 0;
+}
+
 void NoBakeColor(vec3_t out) {
     if (gAmbient) VectorCopy(gAmbient->light.intensity, out);
     else out[0] = out[1] = out[2] = 0;

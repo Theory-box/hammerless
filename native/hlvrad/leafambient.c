@@ -1279,7 +1279,8 @@ void ComputePerLeafAmbientLighting(void) {
             float mins[3], maxs[3];
             for (int k = 0; k < 3; k++) mins[k] = dleafs[leaf].mins[k], maxs[k] = dleafs[leaf].maxs[k];
             const unsigned char *old;
-            int kn = NoBakeBox(mins, maxs) ? KeepLeaf(leaf, &old) : -1;
+            float mid[3] = {(mins[0] + maxs[0]) * 0.5f, (mins[1] + maxs[1]) * 0.5f, (mins[2] + maxs[2]) * 0.5f};
+            int kn = NoBakeBox(mins, maxs) && !NoBakeExcluded(mid) ? KeepLeaf(leaf, &old, MAX_SAMPLES) : -1;
             if (kn > 0 && nout + kn <= 65536) {
                 index[leaf][0] = (unsigned short)kn, index[leaf][1] = (unsigned short)nout;
                 memcpy(out + 28 * nout, old, 28 * (size_t)kn);

@@ -599,6 +599,9 @@ class HL_OT_nav_clear(bpy.types.Operator):
     def poll(cls, context):
         return not _state["busy"]
 
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
     def execute(self, context):
         from ..core import compile as cc
         from ..core import navpredict

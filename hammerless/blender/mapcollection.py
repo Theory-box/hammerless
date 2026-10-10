@@ -307,6 +307,8 @@ def _apply_pending():
 
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph):
+    from .props import forget_bake_volumes
+    forget_bake_volumes()
     if map_collection(scene) is None:
         return
     ids = {o.session_uid: o for o in scene.objects}
@@ -334,14 +336,17 @@ def _on_load(*_args):
 def convert_old_volumes() -> int:
     """No Nav Volumes and No Bake Volumes become Control Volumes doing the same (nav, Not inside; light, its
     mode). Returns how many."""
+    from ..core.control import _on
     from ..core.entities import CONTROL, NAV_CUT, NO_BAKE
     n = 0
     for o in bpy.data.objects:
+        if o.library is not None or o.override_library is not None:
+            continue                     # (linked: not this file's to change; still read as the old kind)
         cls = o.hammerless.classname
         if cls not in (NAV_CUT, NO_BAKE):
             continue
         kv = {k.key: k.value for k in o.hammerless.keyvalues}
-        only = cls == NO_BAKE and kv.get("invert", "0").strip() in ("1", "true", "True")
+        only = cls == NO_BAKE and _on(kv.get("invert", "0"))
         values = {"mode": "ONLY" if only else "EXCLUDE", "nav": "1" if cls == NAV_CUT else "0",
                   "light": "1" if cls == NO_BAKE else "0", "vis": "0", "sound": "0", "spawns": "0"}
         o.hammerless.keyvalues.clear()
@@ -350,6 +355,9 @@ def convert_old_volumes() -> int:
             item.key, item.value = k, v
         o.hammerless.classname = CONTROL
         n += 1
+    if n:
+        from .props import forget_bake_volumes
+        forget_bake_volumes()
     return n
 
 

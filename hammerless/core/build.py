@@ -472,7 +472,10 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
     mode = s.auto_detail if s.auto_seal and base is None else "OFF"
     from .control import of, skipped, volumes
     vis_vols = of(volumes(ir), "vis")
-    if vis_vols:                    # Control Volumes ticked Visibility: brushes there don't cut up vis
+    if vis_vols and mode == "OFF":  # (func_detail doesn't seal: only safe inside the automatic shell)
+        report.warnings.append("Control Volumes ticked Visibility do nothing here: they need Auto Seal (the map's "
+                               "own walls must keep sealing it)")
+    elif vis_vols:                  # Control Volumes ticked Visibility: brushes there don't cut up vis
         made = 0
         for b in ir.brushes:
             if b.detail == "AUTO":

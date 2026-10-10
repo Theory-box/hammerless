@@ -25,7 +25,7 @@ No Hammer, no VMF editing, no console commands.
 - **See how the map renders**: the vis portals, a heatmap of how much the game draws from each spot, and which objects make the vis compile slow.
 - **See what the Director sees**: colour the nav by reachability, path distance, *what can be seen from here*, no-spawn marks, and **where zombies can spawn**.
 - **Sky light from the sky**: instead of one flat sky colour, each part of the sky lights the map with its own colour, from the skybox you picked (so the light matches the sky) or from an HDRI image. Props are lit per vertex by default.
-- **A panel per system** (Lighting, Visibility, Nav Mesh, Sound), each with its own Quality, settings and viewport view; Build & Play's Quality sets them all at once. AI Director and fog settings in World. Leak-proof by default (auto skybox seal).
+- **A panel per system** (Lighting, Visibility, Nav Mesh, Sound), each with its own Quality, settings and viewport view; the Map panel's Quality sets them all at once. Fog and the sky in Lighting > Environment; the AI Director has its own panel. Leak-proof by default (auto skybox seal).
 
 ## Requirements
 

@@ -13,15 +13,16 @@ Bots, zombies and the AI Director all run on the **nav mesh**, the game's map of
 
 Both "in Blender" options are measured against the game's own output: the nav analysis matches the game's visibility on 99.92% of area pairs, and its hiding spots exactly.
 
-## The viewer (Nav Mesh > View)
+## The viewer (Nav Mesh > Preview)
 
-The *Nav Mesh* panel's header says whether the nav is up to date. Under the viewer's buttons it reports the path from start to end (OK / BROKEN), how many areas are reachable or islands, and the drop, jump and ladder counts.
+The *Preview* header says whether the nav is up to date (its eye shows or hides the nav). Under its buttons it reports the path from start to end (OK / BROKEN), how many areas are reachable or islands, and the drop, jump and ladder counts.
 
 | Button | What it does |
 |---|---|
-| **Build Navmesh** | Builds the nav mesh from the scene (no compile) and shows it. Becomes **Clear Navmesh** once shown. |
-| **Show the Game's Nav Mesh** | Shows the nav the game is actually using (`maps/<map>.nav`). |
-| **Analyze Navmesh** | Builds the nav and runs the game's analysis (visibility, hiding spots). If walls changed since the last compile, it **compiles the map first** (the analysis looks through the compiled map). Becomes **Clear Analysis** once done. |
+| **From the Scene** | Builds the nav mesh from the scene (no compile) and shows it. |
+| **The Game's** | Shows the nav the game is actually using (`maps/<map>.nav`). |
+| 🗑 | Deletes this map's nav mesh (asks first): the next Build makes a new one. |
+| **Analyze** | Builds the nav and runs the game's analysis (visibility, hiding spots). If walls changed since the last compile, it **compiles the map first** (the analysis looks through the compiled map). Shows **Analyzed** once done; ✕ beside it clears the analysis. |
 
 Toggles: **Drops and Jumps** (one-way drop-down and jump-up arrows), **Hiding Spots** (blue = in cover, orange = exposed), **X-Ray** (see the nav through walls).
 

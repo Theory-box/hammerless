@@ -1199,16 +1199,36 @@ class TestTexAlign(unittest.TestCase):
         wu, wv = world_texture_axes(polygon_normal(self.WALL))
         self.assertEqual((u, v, su, sv), (wu, wv, 0.25, 0.25))
 
+    def test_sloped_world_read_back(self):
+        from hammerless.core.texalign import Alignment, axes, axes_from_uv, alignment_from_axes, uvs
+        ramp = [(0, 0, 0), (256, 0, 0), (256, 256, 128), (0, 256, 128)]       # (World axes aren't in its plane)
+        for al in (Alignment(0.25, 0.25, 0, 0, 0), Alignment(0.5, 0.25, 30, 8, 30)):
+            ua, va = axes(ramp, al)
+            back = axes_from_uv(ramp, uvs(ramp, ua, va, 256, 256), 256, 256)
+            read = alignment_from_axes(ramp, *back, mode="WORLD")
+            self.assertAlmostEqual(read.scale_u, al.scale_u, places=4)
+            self.assertAlmostEqual(read.rotation, al.rotation, places=3)
+            for got, want in zip(axes(ramp, read), (ua, va)):        # (the same texels on every corner)
+                for p in ramp:
+                    t = lambda ax: sum(p[k] * ax[0][k] for k in range(3)) / ax[2] + ax[1]
+                    self.assertAlmostEqual((t(got) - t(want)) % 256 % (256 - 1e-3), 0, places=2)
+
+    def test_uvs_far_from_origin_stay_small(self):
+        from hammerless.core.texalign import Alignment, axes, uvs
+        far = [(p[0] + 30000, p[1] + 30000, p[2] + 30000) for p in self.WALL]
+        got = uvs(far, *axes(far, Alignment()), 512, 512)
+        self.assertTrue(all(abs(u) < 4 and abs(v) < 4 for u, v in got), got)
+
     def test_uv_round_trip(self):
         from hammerless.core.texalign import Alignment, axes, axes_from_uv, alignment_from_axes, uvs
         for al in (Alignment(0.5, 0.25, 12, -40, 0), Alignment(0.25, 0.25, 3, 7, 30, "FACE"),
                    Alignment(-0.5, 0.25, 0, 0, 90), Alignment(1.0, 2.0, 100, 50, 45)):
             ua, va = axes(self.WALL, al)
             back = axes_from_uv(self.WALL, uvs(self.WALL, ua, va, 512, 256), 512, 256)
-            for got, want in zip(back, (ua, va)):              # (axis / scale: -u at +scale is u at -scale)
+            for got, want, size in zip(back, (ua, va), (512, 256)):   # (axis / scale: -u at +scale is u at -scale)
                 for k in range(3):
                     self.assertAlmostEqual(got[0][k] / got[2], want[0][k] / want[2], places=5)
-                self.assertAlmostEqual(got[1], want[1], places=3)
+                self.assertAlmostEqual((got[1] - want[1]) % size % (size - 1e-3), 0, places=3)   # (one repeat)
             read = alignment_from_axes(self.WALL, *back, mode=al.mode)    # (read back: the same texture)
             for got, want in zip(axes(self.WALL, read), (ua, va)):
                 for k in range(3):
@@ -1367,15 +1387,28 @@ class TestNoBake(unittest.TestCase):
         vmf = os.path.join(work, "m.vmf")
         with open(vmf, "w") as f:
             f.write("world {}")
-        with open(os.path.join(work, "m.bsp"), "wb") as f:
-            f.write(b"VBSP last build")
+        import struct
+        head = bytearray(b"VBSP" + struct.pack("<i", 20) + bytes(16 * 64 + 4))
+        bsp = os.path.join(work, "m.bsp")
+        with open(bsp, "wb") as f:              # (a last build with no lighting: nothing to keep)
+            f.write(head)
         vol = "1 6 1 0 0 1 -1 0 0 1 0 1 0 1 0 -1 0 1 0 0 1 1 0 0 -1 1\n"
-        job = cc.CompileJob(cc.Tools(root), vmf, cc.CompileOptions(light_tool="HAMMERLESS", no_bake=vol, keep_light=True),
-                            copy_to_game=False)
-        cmd = dict(job.steps)["vrad"]
+        opts = cc.CompileOptions(light_tool="HAMMERLESS", no_bake=vol, keep_light=True)
+
+        def keep_cmd():
+            job = cc.CompileJob(cc.Tools(root), vmf, opts, copy_to_game=False)
+            self.assertFalse(os.path.exists(bsp[:-4] + ".keep.bsp"))       # (copied when the build runs)
+            steps = [(n, list(c)) for n, c in job.steps]
+            job._keep_last_light(steps)
+            return dict(steps)["vrad"]
+        self.assertNotIn("-keeplight", keep_cmd())
+        struct.pack_into("<ii", head, 8 + 16 * 8, 100, 4)                     # (lighting lump not empty)
+        with open(bsp, "wb") as f:
+            f.write(head)
+        cmd = keep_cmd()
         keep = cmd[cmd.index("-keeplight") + 1]
         with open(keep, "rb") as f:
-            self.assertEqual(f.read(), b"VBSP last build")
+            self.assertEqual(f.read(), bytes(head))
         whole = cc.CompileOptions(light_tool="HAMMERLESS")
         self.assertFalse(cc._serves(repr(cc.CompileOptions(light_tool="HAMMERLESS", no_bake=vol, keep_light=True)), whole))
 

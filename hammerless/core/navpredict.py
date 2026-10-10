@@ -195,6 +195,9 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
         problems.insert(0, f"The map has more walkable space than the nav builder covers ({MAX_NODES:,} nav points): "
                            "part of it has no nav mesh (and building it is slow). Split the level into two maps, "
                            "or remove unreachable floors (roofs, areas outside the playable space)")
+    if not gen.areas and any(len(c) > 3 and c[3] for c in gen.cuts):
+        problems.insert(0, "No nav mesh: nothing walkable is inside the Control Volumes set to Only inside (nav). "
+                           "Each needs floor in it that survivors can reach from a spawn (or a seed)")
     mesh.problems = problems + spawn_block_problems(mesh, regions)
     return mesh
 

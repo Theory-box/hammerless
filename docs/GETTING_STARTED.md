@@ -11,7 +11,7 @@ This walks through a first playable map, then explains the panels.
 2. **Save your .blend first.** Builds go into `hammerless_build/` next to it (change it under *Settings > Game & Folders > Work Folder*).
 3. Open the sidebar (**N**) > **Hammerless**. If L4D2 isn't found, set its folder once in the add-on's Preferences.
 4. Start from an empty scene: **delete the default cube** (it would become a solid block in the middle of your map).
-5. Give the map its own **Map Name** (*Build & Play* panel). It's the file name in the game, so two .blend files with the same name replace each other's map (Hammerless warns you).
+5. Give the map its own **Map Name** (*Map* panel). It's the file name in the game, so two .blend files with the same name replace each other's map (Hammerless warns you).
 
 **Scale:** 1 Blender metre = 52.49 Hammer units by default, so real-size buildings match Valve's proportions (a survivor is about 1.37 m tall). Change it under *Settings > Map Defaults*.
 
@@ -77,9 +77,9 @@ Each of the panels below has everything for its job, including what it draws ove
 
 **Lighting**: Quality (*Off*, *Fast*, *Normal*, *Final*, *Ultra*, *Custom*), Lightmap Scale (*Imported Brushes Too* on an imported map), Prop Lighting, Bounce (vrad's patches or ray traced on the GPU), and **Bake Lighting** with what to bake: *Whole Map*, *What the View Sees* (out to a distance), *Selected Objects*, or any Control Volume ticked *Light Baking* in *Only Inside* mode. A partial bake re-bakes just that part: the rest of the map keeps its last bake (Build and Build & Play always bake the whole map). Under it: *Baked Lighting* (the last bake over the viewport: *Lighting Only*, *Lit* over your textures, or *Textured* as the game draws it; exposure, props, X-ray), *Environment* (the Sky: every L4D2 skybox or *Custom*, shown behind the scene; Sky Light: one colour, from the skybox or from an image; *Sun*: an imported map's own sun with a Select button, else Add Sun if Missing with its colour, brightness, height and direction; a Blender Sun lamp overrides these; *Fog*), *Quality Details* (Fast Lighting, Sky Rays, Supersampling, Bounces, GI Rays or Bounce Patch Size, Prop Shadows from Full Model) and *Advanced* (the Light Compiler: Valve vrad, Hammerless, or Cycles; Exact Lighting; HDR; Fix vrad's Quirks; extra vrad options).
 
-**Visibility**: Quality (*Off*, *Fast*, *Full*), the Vis Compiler, extra vvis options, and its view: *Portals* (how vis split the map up; tiny slivers in red), *Rendering Load* (the map coloured by how much the game draws from each spot, with a button to the worst spot), *Vis Cost* (where the vis compile spent its time and the objects behind it, each with a Select button).
+**Visibility**: Quality (*Off*, *Fast*, *Full*), **Compute Visibility** (compiles the map and runs vis only: Build, Build & Play and Bake Lighting then reuse it), the Vis Compiler, extra vvis options, and its view: *Portals* (how vis split the map up; tiny slivers in red), *Rendering Load* (the map coloured by how much the game draws from each spot, with a button to the worst spot), *Vis Cost* (where the vis compile spent its time and the objects behind it, each with a Select button).
 
-**Nav Mesh**: made in Blender or by the game, the analysis, Zombies Climb Walls, Rebuild Nav Next Time. *Preview*: Build Navmesh, Analyze, colour modes, the game's nav.
+**Nav Mesh**: made in Blender or by the game, the analysis, Zombies Climb Walls, Rebuild Nav Next Time. *Preview* (the eye in its header shows it): the nav From the Scene or The Game's, 🗑 to delete it, Analyze (✕ clears the analysis), colour modes, Drops and Jumps, Hiding Spots, X-Ray.
 
 **Sound**: *Automatic Reverb*, or *Reverb + City Ambience* with the outside heard through doorways and windows; **Trace Sound** shows outdoors, sheltered, indoors, and where the outside comes in.
 
