@@ -716,8 +716,9 @@ class CompileJob:
                 with open(path, "rb") as f:
                     h.update(f.read())
             return h.hexdigest()
-        except Exception:                 # (unreadable or unparsable: "unknown", which never matches)
-            return "unreadable"
+        except Exception:                 # (unreadable or unparsable: unknown, which never matches a record)
+            import time
+            return f"unreadable {time.time()}"
 
     def _built_opts(self) -> str:
         with open(self.base + ".built.opts", encoding="utf-8") as f:
@@ -1346,17 +1347,32 @@ def map_owner(tools: Tools, map_name: str) -> str | None:
         return None
 
 
-def foreign_map(tools: Tools, map_name: str) -> bool:
-    """A map of this name is in the game (any content folder's maps/, or a VPK) and Hammerless never built it."""
+def foreign_map(tools: Tools, map_name: str, content=None) -> bool:
+    """A map of this name is in the game (any content folder's maps/, or a VPK) and Hammerless never built it
+    (no owner record, and none of Hammerless's own entities in it: maps built before owner records existed)."""
     if map_owner(tools, map_name) is not None:
         return False
     import glob
     name = map_name.lower() + ".bsp"
     for folder in glob.glob(os.path.join(tools.root, "*", "maps")):
-        if os.path.isfile(os.path.join(folder, name)):
+        path = os.path.join(folder, name)
+        if os.path.isfile(path) and not _built_by_hammerless(path):
             return True
-    content = _CONTENT.get(tools.root)
+    content = content if content is not None else _CONTENT.get(tools.root)
     return content is not None and f"maps/{name}" in getattr(content, "files", ())
+
+
+def _built_by_hammerless(bsp: str) -> bool:
+    """The map's entities include Hammerless's own (hammerless_ready, added to every build)."""
+    import struct
+    try:
+        with open(bsp, "rb") as f:
+            head = f.read(8 + 16 * 64)
+            _v, ofs, ln, _c = struct.unpack_from("<iiii", head, 8)
+            f.seek(ofs)
+            return b'"hammerless_' in f.read(ln)
+    except (OSError, struct.error):
+        return False
 
 
 def set_map_owner(tools: Tools, map_name: str, vmf_path: str) -> None:

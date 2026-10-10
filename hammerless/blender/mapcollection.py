@@ -344,7 +344,7 @@ def place(scene, obj, new: bool, sources: set | None = None, new_colls: set | No
         return False
     probe = coll
     for part in cat.split("/"):        # (a hidden or excluded kind collection, or one above it: left alone)
-        probe = next((c for c in probe.children if c.get("hl_category") == part or c.name == part), None)
+        probe = next((c for c in probe.children if c.get("hl_category") == part), None)
         if probe is None:
             break
         if batch.is_hidden(probe):
@@ -405,10 +405,9 @@ def _on_depsgraph(scene, depsgraph):
         for o in ids.values():        # (first look at this scene: what's there stays where it is)
             _sigs[o.session_uid] = _sig(o)
         return
-    if known_colls is not None and colls - known_colls:
-        _new_colls[scene.name] = colls - known_colls      # (only what came with this update: e.g. Append)
-    else:
-        _new_colls.pop(scene.name, None)
+    if known_colls is not None and colls - known_colls and ids.keys() - known:
+        # (collections that came with new objects, e.g. Append: kept until those are sorted)
+        _new_colls.setdefault(scene.name, set()).update(colls - known_colls)
     for uid in ids.keys() - known:
         _pending[uid] = True
         _sigs[uid] = _sig(ids[uid])

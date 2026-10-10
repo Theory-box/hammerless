@@ -130,7 +130,7 @@ def parse_fields(text: str) -> list[tuple[str, str]]:
 # shared script helpers (written once into the map script when a node needs them)
 HELPERS = {
     "HL_Depth": ("::HL_Depth <- 0;   // script nodes in a loop: how deep the calls are\n"
-                 "::HL_MAX_DEPTH <- 64;"),
+                 "::HL_MAX_DEPTH <- 32;"),
     "HL_Players": (
         "::HL_Players <- function(which) {   // 0 everyone, 1 survivors, 2 infected players (alive)\n"
         "    local out = [], p = null;\n"
@@ -857,12 +857,8 @@ class _Compiler:
                 + "\n".join(base.values()) + f"\n}}\nprintl(\"HAMMERLESS_DIRECTOR settings '{sq_text(nid)}' active\");\n")
             d = self.director()
             dname = self.name_of(d, DIRECTOR)
-            main = director_input_script(self.ir.settings.name, "director")
             take("apply", dname, "BeginScript", name)
-            if self.ir.settings.director_enabled:
-                take("reset", dname, "BeginScript", main)
-            else:
-                take("reset", dname, "EndScript")
+            take("reset", dname, "EndScript")      # (back to the map-wide settings: they're the map's own)
         else:
             self.problems.append(f"Logic node '{nid}': unknown kind {k}")
 
@@ -1137,7 +1133,9 @@ class _Compiler:
             if reaches(nid, nid):
                 self.helper("HL_Depth", HELPERS["HL_Depth"])
                 where = sq_text(nid)
-                self.functions.append(f"::{fn}_body <- function() {{\n{body}\n}}")
+                # (bound to the logic script's scope, where its helpers are: calling it through .call() would be
+                # a native call a level, and the game allows only a few of those nested)
+                self.functions.append(f"::{fn}_body <- (function() {{\n{body}\n}}).bindenv(::HL_Scope)")
                 self.functions.append(
                     f"::{fn} <- function() {{\n"
                     f"    if (::HL_Depth >= ::HL_MAX_DEPTH) {{ printl(\"HAMMERLESS_SCRIPT '{where}': a loop that doesn't "

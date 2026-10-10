@@ -111,7 +111,14 @@ def _in_a_brush(blocks, p, eps: float = 0.1) -> bool:
     """The point is inside one of the map's brushes (real solid, not a room vbsp filled)."""
     from .vmfimport import parse_plane, plane_of
     for top in blocks:
+        if top.name.lower() != "world" and (top.get("classname") or "").lower() != "func_detail":
+            continue                  # (brush entities: triggers, doors... don't make solid leaves)
         for so in top.blocks("solid"):
+            sides = so.blocks("side")
+            if any(sd.blocks("dispinfo") for sd in sides):
+                continue              # (a displacement's base brush isn't in the map's solid)
+            if sides and all((sd.get("material") or "").lower().startswith("tools/") for sd in sides):
+                continue              # (clips, hints, triggers, skips)
             inside = True
             for sd in so.blocks("side"):
                 try:

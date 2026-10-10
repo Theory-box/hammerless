@@ -253,7 +253,7 @@ def build_map_text(context, root: str | None):
         return None, None, rep
     gamedir = os.path.join(root, "left4dead2") if root else None
     content = game_content(root)        # loads the game's surface list before materials are read
-    if root and cc.foreign_map(cc.Tools(root), s.map_name):
+    if root and cc.foreign_map(cc.Tools(root), s.map_name, content):
         rep.errors.append(f"Map Name '{s.map_name}' is a map already in the game that Hammerless didn't build (one of "
                           "the game's own, or another of yours): give this one another name, or building it would "
                           "replace that map's files")

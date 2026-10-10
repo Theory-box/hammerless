@@ -531,7 +531,8 @@ void CheckForInstances(const char *path) {
             memset(depth + depth_cap, 0, sizeof(int) * (cap - depth_cap));
             depth_cap = cap;
         }
-        if (file[0] && depth[i] >= 64) Error("Instances include each other in a loop (%s)", file);
+        static int merged;            /* (a loop that branches grows wide before it grows deep) */
+        if (file[0] && (depth[i] >= 64 || ++merged > 65536)) Error("Instances include each other in a loop (%s)", file);
         int before = num_entities;
         if (file[0]) {
             char found[1100];

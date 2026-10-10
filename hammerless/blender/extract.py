@@ -734,7 +734,7 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
                                 and obj.parent.get("hl_vmf_kind") == "entity"):
             continue                  # (an imported map's: Build writes those back itself, blender/vmfimport.py;
             #                            new meshes under its brush entities become their brushes there)
-        if obj.get("hl_vmf_kind") == "entity" or (obj.parent is not None
+        if obj.get("hl_vmf_kind") == "entity" or (obj.parent is not None and obj.parent.name not in back
                                                   and obj.parent.get("hl_vmf_kind") == "entity"):
             # (a copy of an imported entity: its preview shape isn't its own, and a brush entity's parts are
             # under an Empty: built as it is, it would come out wrong)

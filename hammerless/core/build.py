@@ -594,9 +594,11 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
         report.info.append(f"Bot Walkthrough Test on: {len(route)} waypoint(s). Watch for HAMMERLESS_AUTOTEST "
                            "in the console.")
     if s.director_enabled:
+        from .gamefiles import DIRECTOR_ENTITY
+        entities.append(Entity("logic_script", HELPER_SPOT, (0, 0, 0), {
+            "targetname": DIRECTOR_ENTITY, "vscripts": director_input_script(s.name, "director")}))
         entities.append(Entity("logic_auto", HELPER_SPOT, (0, 0, 0), {"spawnflags": "1"}, outputs=[
-            Output("OnMapSpawn", "director", "BeginScript", director_input_script(s.name, "director"), 1.0, 1)]))
-        # (a crescendo's options stay in force after it ends, measured; they repeat the map-wide ones)
+            Output("OnMapSpawn", DIRECTOR_ENTITY, "RunScriptCode", "::HL_ApplyDirector()", 1.0, 1)]))
     if "info_player_start" not in classes and base is None:
         first = next((e for e in entities if e.classname == "info_survivor_position"), None)
         origin = clear_spawn_spot(ir, entities, first.origin) if first else (0.0, 0.0, 0.0)

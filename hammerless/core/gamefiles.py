@@ -155,13 +155,20 @@ DIRECTOR_OPTION_KEYS = [
 ]
 
 
+DIRECTOR_ENTITY = "hammerless_director"
+
+
 def director_script(ir: MapIR) -> str:
-    s = ir.settings
-    lines = ["// Hammerless map-wide Director settings. Started by a logic_auto at map spawn",
-             "// (director > BeginScript). Values come from the Director panel in Blender.",
-             "DirectorOptions <-", "{"]
-    lines += director_option_lines(ir)
-    lines += ["}", 'printl("HAMMERLESS_DIRECTOR map options active");']
+    """The map-wide Director settings, set as the map's own (DirectorScript.MapScript): a crescendo or a Director
+    Settings node puts its own over them while it runs (LocalScript) and they're back when it ends. (Started with
+    BeginScript they were the LocalScript, which a crescendo replaces and leaves empty: measured in game, the
+    map ran on the Director's defaults after any crescendo.)"""
+    lines = ["// Hammerless map-wide Director settings, from the Director panel in Blender. A logic_auto calls",
+             "// HL_ApplyDirector() at map spawn (hammerless_director > RunScriptCode).",
+             "::HL_ApplyDirector <- function() {",
+             "    ::DirectorScript.MapScript.DirectorOptions <- {"]
+    lines += ["    " + ln for ln in director_option_lines(ir)]
+    lines += ["    };", '    printl("HAMMERLESS_DIRECTOR map options active");', "}"]
     return "\n".join(lines) + "\n"
 
 
@@ -197,21 +204,21 @@ def director_option_lines(ir: MapIR) -> list[str]:
 
 
 def crescendo_options(ir: MapIR, stages) -> list[str]:
-    """The map-wide Director settings a crescendo repeats while it runs, minus those that would stop
-    its own stages: No Random Hordes (its PANIC waves are hordes) and a Tank limit below its TANK stage."""
+    """What a crescendo changes of the map-wide Director settings while it runs: the rest come through from the
+    map's (DirectorScript.MapScript, director_script). No Random Hordes off (its PANIC waves are hordes), and the
+    Tank limit raised to its TANK stage."""
     tanks = max((int(v) for kind, v in stages if kind == "TANK"), default=0)
     out = []
     for line in director_option_lines(ir):
         key, _, value = (p.strip() for p in line.partition("="))
         if key == "NoMobSpawns":
-            continue
-        if key == "TankLimit" and tanks:
+            out.append("    NoMobSpawns = false")
+        elif key == "TankLimit" and tanks:
             try:
                 if int(value) < tanks:
-                    line = f"    TankLimit = {tanks}"
+                    out.append(f"    TankLimit = {tanks}")
             except ValueError:
                 pass
-        out.append(line)
     return out
 
 
@@ -225,9 +232,8 @@ def crescendo_script(name: str, stages: list[tuple[str, float]], extra_options: 
         lines.append(f"    A_CustomFinale{i} = {kind}")
         lines.append(f"    A_CustomFinaleValue{i} = {int(value) if float(value).is_integer() else value}")
     if extra_options:
-        # a scripted event's options replace the map's while it runs, so repeat the
-        # map-wide Director settings here (e.g. the common infected limit)
-        lines.append("    // map-wide Director settings")
+        # (over the map-wide settings, which come through for everything not set here)
+        lines.append("    // changed from the map-wide Director settings while it runs")
         lines += extra_options
     lines += ["}", f'printl("HAMMERLESS_CRESCENDO {name} started");']
     return "\n".join(lines) + "\n"

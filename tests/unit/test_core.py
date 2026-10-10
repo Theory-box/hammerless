@@ -905,7 +905,8 @@ class TestScriptNodes(unittest.TestCase):
         script = next(v for k, v in ir.extra_scripts.items() if "logic_" in k)
         self.assertIn("    HL_S_b();", script)                          # (called directly, in order)
         self.assertIn("if (::HL_Depth >= ::HL_MAX_DEPTH)", script)       # (an endless loop stops with a message)
-        self.assertIn("::HL_S_a_body <- function()", script)
+        self.assertIn("::HL_S_a_body <- (function() {", script)
+        self.assertIn(").bindenv(::HL_Scope)", script)                 # (its helpers are in the script scope)
         self.assertNotIn("RunScriptCode", script)
 
     def test_event_fields_by_key(self):
@@ -2253,9 +2254,12 @@ class TestSettingsAndScripts(unittest.TestCase):
         ents = {b.get("classname"): b for b in parse(text) if b.name == "entity"}
         self.assertEqual(ents["light_environment"].get("_light"), "10 20 30 123")
         self.assertEqual(ents["env_fog_controller"].get("fogenable"), "1")
-        self.assertEqual(ents["logic_script"].get("vscripts"), "hammerless/debug_m")
+        scripts = {b.get("targetname"): b.get("vscripts") for b in parse(text)
+                   if b.name == "entity" and b.get("classname") == "logic_script"}
+        self.assertIn("hammerless/debug_m", scripts.values())
+        self.assertEqual(scripts["hammerless_director"], "hammerless_m_director_0a3c80")
         self.assertEqual(ents["logic_auto"].blocks("connections")[0].get("OnMapSpawn"),
-                         "director,BeginScript,hammerless_m_director_0a3c80,1,1")
+                         "hammerless_director,RunScriptCode,::HL_ApplyDirector(),1,1")
         from hammerless.core.gamefiles import game_files
         files = game_files(ir)
         self.assertIn("CommonLimit = 7", files["scripts/vscripts/hammerless_m_director_0a3c80.nut"])
@@ -2281,16 +2285,26 @@ class TestSettingsAndScripts(unittest.TestCase):
         self.assertIn("A_CustomFinaleValue2 = 10", nut)
 
     def test_crescendo_keeps_map_director_limits(self):
+        """The map's settings are the map's own (MapScript): a crescendo only sets what it changes, so the rest
+        come through while it runs and all of them are back when it ends (measured in game)."""
         from hammerless.core.entities import crescendo_button
         from hammerless.core.gamefiles import game_files
         ir = box_room_ir()
         ir.settings.name = "m"
         ir.settings.director_enabled = True
         ir.settings.dir_common_limit = 20
+        ir.settings.dir_no_mobs = True
         for part in crescendo_button("c1").parts:
             ir.entities.append(part.entity)
         build_vmf(ir)
-        self.assertIn("CommonLimit = 20", game_files(ir)["scripts/vscripts/hammerless_m_c1_ea25b7.nut"])
+        files = game_files(ir)
+        cresc = files["scripts/vscripts/hammerless_m_c1_ea25b7.nut"]
+        self.assertNotIn("CommonLimit", cresc)                    # (comes through from the map's)
+        self.assertIn("NoMobSpawns = false", cresc)               # (its waves are hordes)
+        main = files["scripts/vscripts/hammerless_m_director_0a3c80.nut"]
+        self.assertIn("::DirectorScript.MapScript.DirectorOptions <- {", main)
+        self.assertIn("CommonLimit = 20", main)
+        self.assertIn("NoMobSpawns = true", main)
 
     def test_crescendo_unknown_name_warns(self):
         from hammerless.core.ir import Output
