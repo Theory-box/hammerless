@@ -503,14 +503,15 @@ class HL_PT_sky(_Sub, bpy.types.Panel):
         sub.prop(s, "sun_brightness")
         sub.prop(s, "sun_pitch")
         sub.prop(s, "sun_yaw")
-        sub.separator()
-        sub.prop(s, "sky_light")
-        if s.sky_light == "IMAGE":
-            sub.template_ID(s, "sky_image", open="image.open")
-            sub.prop(s, "sky_rotation")
         if s.sky_light == "FLAT":
             sub.prop(s, "ambient_color")
         sub.prop(s, "ambient_brightness")
+        col.separator()
+        # (the sky's colours go on whatever sun the map has, the added one or its own: not tied to Add Sun)
+        col.prop(s, "sky_light")
+        if s.sky_light == "IMAGE":
+            col.template_ID(s, "sky_image", open="image.open")
+            col.prop(s, "sky_rotation")
         _hint(self.layout, "A Blender Sun lamp in the scene", "overrides these")
         if s.sky_light != "FLAT" and s.light_tool != "HAMMERLESS":
             _hint(self.layout, "Sky Light from the sky needs", "Light Compiler: Hammerless")
