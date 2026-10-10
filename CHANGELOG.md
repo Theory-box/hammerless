@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.12.2 (test release, 2026-10-10)
+
+- **Crescendos no longer wipe the map's Director settings** (measured in game). After any crescendo the map used to run on the Director's defaults: No Random Hordes, the Tank, Witch and common limits and spawn timing were all gone. The map's settings are now its own, and a crescendo only changes what it needs (hordes on, the Tank limit raised) while it runs.
+- **GI lighting:** with GI on, the ambient light on characters and props had no sky (56% of the right brightness). It is now within 0.4% of the result without GI.
+- **Terrain lighting:** the lighting view and the Cycles bake laid displacement lightmaps out the wrong way. Terrain looked transposed or stretched, and the bake wrote it into other faces' lightmaps.
+- **Smart builds no longer keep an outdated map when:**
+  - you move a light's aim target, or a brush entity a light aims at;
+  - you change the fog's far Z;
+  - you edit an instance file in Hammer;
+  - you place an entity in a room the compiler had filled;
+  - you change detail sprites, no-shadow areas or area portal windows;
+  - a compiler fell back to Valve's after a crash (the next build now compiles everything again).
+- **The map compiler stops at the game's limits** (brushes, materials, areas, area portals and more) instead of writing a map the game rejects, and it fails cleanly on a disk or vphysics error. It still matches Valve's vbsp byte for byte on all 23 test maps.
+- **Logic nodes:**
+  - Script nodes wired in a loop call each other in order; an endless loop stops after 32 calls with a console message (tested in game).
+  - Changing a node's function or setting gives its new defaults.
+  - Event fields like `class` work.
+  - Two graphs can't silently turn one object into two different entities.
+  - HUD text from Random Value or Progress keeps updating.
+- **A co-op map always loads in co-op**, even right after a scripted map. A Map Name that is one of the game's own maps is refused.
+- **Auto-sort:**
+  - Appended or imported reference collections stay outside the map.
+  - Selecting everything no longer re-sorts every object.
+  - Undo doesn't move restored objects.
+  - Linked objects and hidden kind collections are left alone.
+- **Terrain:**
+  - Blend paint comes from the face it lands on, with the same result for byte and float colours.
+  - Terrain uses its material's texture and lightmap scale.
+  - An imported map's displacements count toward the 2048 limit.
+- **Custom assets:**
+  - Model materials follow the game's patch materials (no more purple checkerboard).
+  - Texture names that differ only in case no longer collide.
+  - Physics props with no solid part are warned about.
+  - Models are remade when the model writer changes, and deleting every Custom Model removes its files.
+- **Imported maps:**
+  - Comments only count outside quotes.
+  - Mirrored brushes come out right side out.
+  - Instances that include themselves no longer hang the build.
+  - Wall and slope displacements collide in the nav analysis.
+  - Outputs keep their fire counts and delays.
+  - Copies of imported entities are warned about instead of built wrongly.
+- **Views:**
+  - The Rendering Load view includes displacements and counts each face once.
+  - 268 game materials that name their texture with `.vtf` show their texture.
+  - Material Preview shows fences, glass and foliage as see-through.
+- **Also:**
+  - Physics Class is saved by name.
+  - Old cubemaps read correctly.
+  - The nav library's out-of-memory path and empty nav meshes no longer crash.
+  - Smaller fixes from four audit rounds and a review of the fixes.
+- Checked in game: 38 logic examples, the map compiler and custom model tests, crescendo settings before, during and after, the endless-loop guard, and a fog-distance map with GI lighting.
+
 ## 0.12.1 (test release, 2026-10-10)
 
 - **Light compiler:** no more memory leak when bouncing light on the GPU. A mid-size map could use several GB and fall back to Valve's vrad. Lighting that runs alongside vis now takes vis's changes to the map's leaves (fog and water). It also no longer starts early on maps with fog distance (radial vis), where it can't be right: those light after vis. hlvrad and hlvbsp now fail on a write error instead of leaving a cut-short map.
