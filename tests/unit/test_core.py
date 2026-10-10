@@ -1234,6 +1234,65 @@ class TestTexAlign(unittest.TestCase):
         self.assertAlmostEqual(max(t) - min(t), 512, places=3)
 
 
+class TestControlVolume(unittest.TestCase):
+    """Control Volumes: Not inside / Only inside, for nav, light, vis, sound, spawns (and the older volumes)."""
+
+    def _map(self, mode, **ticks):
+        from hammerless.core.entities import CONTROL
+        ir = MapIR()
+        m = "dev/dev_measuregeneric01b"
+        ir.brushes.append(g.box_brush((-512, -512, -64), (1400, 512, 0), m, "ground"))   # (its centre: outside)
+        ir.brushes.append(g.box_brush((900, -20, 0), (940, 20, 40), m, "crate"))
+        ir.entities.append(Entity("info_landmark", (-300, 0, 32), (0, 0, 0), {"targetname": "lm"}))
+        kv = {"mode": mode, **{k: "1" if v else "0" for k, v in ticks.items()}}
+        ir.entities.append(Entity(CONTROL, None, (0, 0, 0), kv,
+                                  [g.box_brush((512, -600, -16), (1600, 600, 256), "tools/toolsskip", "c")], "area"))
+        return ir
+
+    def test_rule(self):
+        from hammerless.core.control import skipped, volumes
+        ex = volumes(self._map("EXCLUDE", nav=True, light=False))
+        self.assertTrue(skipped(ex, "nav", (1000, 0, 0)))
+        self.assertFalse(skipped(ex, "nav", (0, 0, 0)))
+        self.assertFalse(skipped(ex, "light", (1000, 0, 0)))            # (not ticked)
+        only = volumes(self._map("ONLY", nav=True))
+        self.assertFalse(skipped(only, "nav", (1000, 0, 0)))
+        self.assertTrue(skipped(only, "nav", (0, 0, 0)))
+
+    def test_nav_only_inside(self):
+        from hammerless.core import fastnav
+        from hammerless.core.nav import collect_regions
+        from hammerless.core.navpredict import _predict, check_native
+        ir = self._map("ONLY", nav=True)
+        ir.entities[0].origin = (1000, 0, 32)                           # (the seed inside the volume)
+        text, rep = build_vmf(ir)
+        self.assertIsNotNone(text, rep.errors)
+        self.assertNotIn("hammerless_control", text)
+        regions, _ = collect_regions(ir)
+        mesh = _predict(text, regions, native_areas=False)
+        self.assertGreater(len(mesh.areas), 0)
+        self.assertFalse(any(a.centre[0] < 512 - 2 for a in mesh.areas))
+        if fastnav.available():
+            self.assertIsNone(check_native(text, regions))
+
+    def test_vis_makes_detail(self):
+        ir = self._map("EXCLUDE", vis=True)
+        text, rep = build_vmf(ir)
+        self.assertIsNotNone(text, rep.errors)
+        self.assertIn("Control Volumes: 1 brush(es) made func_detail (Visibility)", rep.info)   # (the crate)
+        self.assertEqual([b.source for b in ir.brushes if b.detail == "DETAIL"], ["crate"])
+
+    def test_light_and_old_volumes(self):
+        from hammerless.core.entities import NO_BAKE
+        from hammerless.core.lightvolumes import bake_only_volumes, no_bake_text
+        self.assertTrue(no_bake_text(self._map("EXCLUDE", light=True)).startswith("0 6 "))
+        self.assertEqual(no_bake_text(self._map("EXCLUDE", nav=True)), "")
+        self.assertEqual(list(bake_only_volumes(self._map("ONLY", light=True))), ["area"])
+        old = self._map("EXCLUDE")
+        old.entities[-1].classname, old.entities[-1].keyvalues = NO_BAKE, {"invert": "1"}
+        self.assertEqual(list(bake_only_volumes(old)), ["area"])
+
+
 class TestNoBake(unittest.TestCase):
     """No Bake Volume: hlvrad doesn't bake inside it (or, inverted, only inside it)."""
 

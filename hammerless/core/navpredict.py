@@ -10,7 +10,7 @@ from __future__ import annotations
 from .collision import CollisionWorld
 from .navareas import NAV_MESH_JUMP, Generator
 from .navfile import NavArea, NavLadder, NavMesh
-from .nav import NAV_CUT_BIT
+from .nav import NAV_VOLUME_BITS
 from .navgen import NAV_MESH_NO_MERGE
 from .vmf import parse
 
@@ -63,7 +63,7 @@ def to_navmesh(areas, regions, ladders=()) -> NavMesh:
         n.connections = [[ids[id(b)] for b in a.connect[d] if id(b) in ids] for d in range(4)]
         c = n.centre
         for r in regions:
-            if not r.bits & NAV_CUT_BIT and r.contains(c):
+            if not r.bits & NAV_VOLUME_BITS and r.contains(c):
                 n.spawn_attributes |= r.bits
         mesh.areas.append(n)
     lids = {id(lad): i + 1 for i, lad in enumerate(ladders)}
@@ -212,7 +212,7 @@ def spawn_block_problems(mesh: NavMesh, regions) -> list[str]:
     out = []
     total = len(mesh.areas) or 1
     for r in regions:
-        if not r.bits & (EMPTY | NO_MOBS) or r.bits & NAV_CUT_BIT:
+        if not r.bits & (EMPTY | NO_MOBS) or r.bits & NAV_VOLUME_BITS:
             continue
         n = sum(1 for a in mesh.areas if all(r.mins[i] <= a.centre[i] <= r.maxs[i] for i in range(3)))
         if n / total > SPAWN_BLOCK_SHARE:

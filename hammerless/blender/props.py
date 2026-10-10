@@ -92,15 +92,18 @@ _BAKE_AREAS: list = []        # (kept: Blender holds on to the strings of a list
 
 
 def bake_only_objects(scene) -> list:
-    """The map's No Bake Volumes set to Bake only inside (by name)."""
-    from ..core.entities import NO_BAKE
+    """The map's volumes to bake only inside (Control Volumes ticked Light Baking, Only inside), by name."""
+    from ..core.control import settings_of
+    from ..core.entities import CONTROL, NO_BAKE
+    from ..core.ir import Entity
     from .mapcollection import map_objects
     inside = map_objects(scene)
     out = []
     for o in scene.objects:
-        if o.name in inside and o.hammerless.classname == NO_BAKE and o.visible_get():
+        if o.name in inside and o.hammerless.classname in (CONTROL, NO_BAKE) and o.visible_get():
             kv = {k.key: k.value for k in o.hammerless.keyvalues}
-            if kv.get("invert", "0").strip() in ("1", "true", "True"):
+            st = settings_of(Entity(o.hammerless.classname, None, (0, 0, 0), kv))
+            if st and st[0] and "light" in st[1]:
                 out.append(o.name)
     return sorted(out)
 

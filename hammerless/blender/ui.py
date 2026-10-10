@@ -268,6 +268,8 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                 box.scale_y = 0.85
                 for line in _wrap(d.description, 44):
                     box.label(text=line)
+        if hs.classname == "hammerless_control":
+            _draw_control(layout, hs)
         if eff == "BRUSH":
             _enum_menu(col, hs, "brush_detail", "Detail",
                        f"Auto ({_detail_note(context, obj)})" if hs.brush_detail == "AUTO" else None)
@@ -299,6 +301,29 @@ def _enum_menu(col, data, prop, label, text=None):
     left.alignment = "RIGHT"
     left.label(text=label)
     split.prop_menu_enum(data, prop, text=text)
+
+
+_CONTROL_TICKS = (("nav", "Nav Mesh", "MOD_MESHDEFORM"), ("light", "Light Baking", "LIGHT_SUN"),
+                  ("vis", "Visibility", "HIDE_OFF"), ("sound", "Sound", "OUTLINER_OB_SPEAKER"),
+                  ("spawns", "Zombie Spawns", "GHOST_ENABLED"))
+
+
+def _draw_control(layout, hs):
+    """A Control Volume: Not inside / Only inside, and what it controls (its keyvalues, as buttons)."""
+    kv = {k.key: k.value for k in hs.keyvalues}
+    only = kv.get("mode", "EXCLUDE").upper() == "ONLY"
+    box = layout.box()
+    row = box.row(align=True)
+    for value, label in (("EXCLUDE", "Not Inside"), ("ONLY", "Only Inside")):
+        op = row.operator("hammerless.kv_set", text=label, depress=(value == "ONLY") == only)
+        op.key, op.value = "mode", value
+    grid = box.grid_flow(columns=2, align=True)
+    for key, label, icon in _CONTROL_TICKS:
+        on = kv.get(key, "0").strip() in ("1", "true", "yes")
+        cell = grid.row(align=True)
+        cell.enabled = not (key == "spawns" and only)
+        op = cell.operator("hammerless.kv_set", text=label, icon=icon, depress=on)
+        op.key, op.value = key, "0" if on else "1"
 
 
 def _detail_note(context, obj) -> str:

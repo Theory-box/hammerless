@@ -1764,6 +1764,28 @@ class HL_OT_output_remove(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class HL_OT_kv_set(bpy.types.Operator):
+    bl_idname = "hammerless.kv_set"
+    bl_label = "Set"
+    bl_description = "Set this on the selected volumes"
+    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
+    key: StringProperty()
+    value: StringProperty()
+
+    def execute(self, context):
+        obj = context.object
+        if obj is None:
+            return {"CANCELLED"}
+        cls = obj.hammerless.classname
+        for o in {obj, *[o for o in context.selected_objects if o.hammerless.classname == cls]}:
+            kv = next((k for k in o.hammerless.keyvalues if k.key == self.key), None)
+            if kv is None:
+                kv = o.hammerless.keyvalues.add()
+                kv.key = self.key
+            kv.value = self.value
+        return {"FINISHED"}
+
+
 class HL_OT_reset_keyvalues(bpy.types.Operator):
     bl_idname = "hammerless.reset_keyvalues"
     bl_label = "Reset to Defaults"
@@ -1784,7 +1806,7 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
 
 CLASSES = (HL_OT_pick_sky, HL_OT_pick_model, HL_OT_pick_material, HL_OT_refresh_previews, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_entity_class, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
            HL_OT_export_vmf, HL_OT_build, HL_OT_start_fresh, HL_OT_launch, HL_OT_load_leak,
-           HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues)
+           HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues, HL_OT_kv_set)
 
 
 def register():

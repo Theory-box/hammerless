@@ -222,13 +222,17 @@ def start(world, raw_seeds, max_nodes: int = 500000, cuts=()) -> None:
     _lib.hl_sample(ctypes.c_int(max_nodes))
 
 
+ONLY_FLAG = 1 << 20       # (hlnav.c's CUT_ONLY)
+
+
 def set_cuts(cuts) -> None:
-    """The No Nav Volumes (nav.nav_cuts) for the DLL's sampling: no node inside one."""
+    """The nav's volumes (nav.nav_cuts) for the DLL's sampling: no node inside a Not-inside one, nor outside every
+    Only-inside one. Each brush's plane count carries ONLY_FLAG for Only inside."""
     from .nav import CUT_EPSILON
-    hulls = [(mins, maxs, h) for mins, maxs, hs in cuts for h in (hs or [()])]
-    bounds = [c for mins, maxs, _h in hulls for c in (*mins, *maxs)]
-    counts = [len(h) for _m, _x, h in hulls]
-    planes = [x for _m, _x, h in hulls for pl in h for x in pl]
+    hulls = [(c[0], c[1], h, len(c) > 3 and c[3]) for c in cuts for h in (c[2] or [()])]
+    bounds = [x for mins, maxs, _h, _o in hulls for x in (*mins, *maxs)]
+    counts = [len(h) | (ONLY_FLAG if only else 0) for _m, _x, h, only in hulls]
+    planes = [x for _m, _x, h, _o in hulls for pl in h for x in pl]
     D, I = ctypes.c_double, ctypes.c_int
     _lib.hl_cuts(I(len(hulls)), _arr(D, bounds), _arr(I, counts), _arr(D, planes), D(CUT_EPSILON))
 

@@ -64,6 +64,29 @@ def scene_starts(context):
             if o.name in inside and effective_role(o) == "ENTITY" and o.hammerless.classname in START_CLASSES]
 
 
+def scene_volumes(context, aspect: str) -> list:
+    """The map's Control Volumes (and older volumes) ticked for an aspect, from the scene (Hammer units)."""
+    from ..core.control import of, volumes
+    from ..core.entities import CONTROL, NAV_CUT, NO_BAKE
+    from ..core.ir import Entity, MapIR
+    from .extract import mesh_to_brushes, object_keyvalues
+    from .mapcollection import map_objects
+    inside = map_objects(context.scene)
+    objs = [o for o in context.scene.objects if o.name in inside and o.type == "MESH" and o.visible_get()
+            and o.hammerless.classname in (CONTROL, NAV_CUT, NO_BAKE)]
+    if not objs:
+        return []
+    depsgraph = context.evaluated_depsgraph_get()
+    upm = context.scene.hammerless.units_per_meter
+
+    class _NoMaterials:
+        def resolve(self, mat):
+            return "tools/toolsskip", 0.25, 16
+    ents = [Entity(o.hammerless.classname, None, (0, 0, 0), object_keyvalues(o),
+                   mesh_to_brushes(o, depsgraph, upm, _NoMaterials()), o.name) for o in objs]
+    return of(volumes(MapIR(entities=ents)), aspect)
+
+
 def trace(context, starts=None):
     """Run the analysis. Returns (spots, zones, spacing, summary) or raises ValueError."""
     t0 = time.time()
@@ -75,6 +98,10 @@ def trace(context, starts=None):
         hit = bvh.ray_cast(Vector(origin), Vector(direction), distance)
         return None if hit[0] is None else (hit[3], hit[1].z)
     spots, spacing = acoustics.sample_spots(bounds, cast)
+    vols = scene_volumes(context, "sound")
+    if vols:                        # (Control Volumes ticked Sound: not listened from there)
+        from ..core.control import skipped
+        spots = [sp for sp in spots if not skipped(vols, "sound", sp.pos)]
     if not spots:
         raise ValueError("No floors found to listen from")
     spots = acoustics.reachable(spots, scene_starts(context) if starts is None else starts)

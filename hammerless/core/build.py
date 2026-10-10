@@ -470,6 +470,18 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
 
     # detail only when the map is sealed by the automatic shell (func_detail doesn't seal)
     mode = s.auto_detail if s.auto_seal and base is None else "OFF"
+    from .control import of, skipped, volumes
+    vis_vols = of(volumes(ir), "vis")
+    if vis_vols:                    # Control Volumes ticked Visibility: brushes there don't cut up vis
+        made = 0
+        for b in ir.brushes:
+            if b.detail == "AUTO":
+                lo, hi = g.bounds([v for f in b.faces for v in f.verts])
+                if skipped(vis_vols, "vis", tuple((lo[i] + hi[i]) / 2 for i in range(3))):
+                    b.detail = "DETAIL"
+                    made += 1
+        if made:
+            report.info.append(f"Control Volumes: {made} brush(es) made func_detail (Visibility)")
     portals = [g.bounds([v for f in b.faces for v in f.verts]) for e in ir.entities
                if e.classname in ("func_areaportal", "func_areaportalwindow") for b in e.brushes]
     detail = [b for b in ir.brushes if is_detail(b, mode) and not _touches_any(b, portals)]

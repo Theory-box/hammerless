@@ -28,20 +28,22 @@ def _lines(e, invert: int) -> list[str]:
 
 
 def no_bake_text(ir: MapIR) -> str:
-    """The No Bake Volumes ("Don't bake inside") for hlvrad, or "" if the map has none. Every bake uses them."""
-    lines = [ln for e in ir.entities if e.classname == NO_BAKE and not _inverted(e) for ln in _lines(e, 0)]
+    """Volumes where light isn't baked (Control Volumes ticked Light Baking, Not inside; older No Bake Volumes)
+    for hlvrad, or "" if the map has none. Every bake uses them."""
+    from .control import of, volumes
+    lines = [ln for v in of(volumes(ir), "light", only=False) for ln in _lines(v.entity, 0)]
     return "\n".join(lines) + "\n" if lines else ""
 
 
 def bake_only_volumes(ir: MapIR) -> dict[str, str]:
-    """The "Bake only inside" volumes, by name: hlvrad text for each. Only a bake that picks one uses it (Lighting's
-    Bake choice); builds bake the whole map."""
+    """Volumes to bake only inside (Light Baking, Only inside), by name: hlvrad text for each. Only a bake that picks
+    one uses it (Lighting's Bake choice); builds bake the whole map."""
+    from .control import of, volumes
     out = {}
-    for e in ir.entities:
-        if e.classname == NO_BAKE and _inverted(e):
-            lines = _lines(e, 1)
-            if lines:
-                out[e.source or "volume"] = "\n".join(lines) + "\n"
+    for v in of(volumes(ir), "light", only=True):
+        lines = _lines(v.entity, 1)
+        if lines:
+            out[v.name or "volume"] = "\n".join(lines) + "\n"
     return out
 
 

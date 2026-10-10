@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import geometry as g
-from .entities import CLIMB, NAV_CUT, NAV_REGION, ZOMBIE_CLIMB_MAX
+from .entities import CLIMB, NAV_REGION, ZOMBIE_CLIMB_MAX
 from .ir import Entity, MapIR
 
 # TerrorNavArea spawn attribute bits
@@ -27,6 +27,8 @@ SPAWN_ATTRIBUTES = {
 }
 
 NAV_CUT_BIT = 1 << 30        # a region that is a No Nav Volume (not an attribute: never written to areas)
+NAV_ONLY_BIT = 1 << 29       # a region the nav is made only inside (Control Volume, Only inside)
+NAV_VOLUME_BITS = NAV_CUT_BIT | NAV_ONLY_BIT
 CUT_EPSILON = 1.0            # (a floor point on the volume's bottom face counts as inside)
 
 # Nav area centres sit slightly above the floor; pad regions so floor-level areas count.
@@ -78,13 +80,15 @@ def parse_attributes(text: str) -> tuple[int, list[str]]:
 
 def collect_regions(ir: MapIR) -> tuple[list[NavRegion], list[str]]:
     regions, problems = [], []
+    from .control import volumes
+    for v in volumes(ir):           # (Control Volumes, and the older No Nav Volumes)
+        if "nav" in v.aspects:
+            regions.append(NavRegion(v.mins, v.maxs, NAV_ONLY_BIT if v.only else NAV_CUT_BIT, v.name,
+                                     _region_hulls(v.entity.brushes, padded=False)))
+        if "spawns" in v.aspects and not v.only:
+            regions.append(NavRegion(v.mins, v.maxs, SPAWN_ATTRIBUTES["EMPTY"] | SPAWN_ATTRIBUTES["NO_MOBS"], v.name,
+                                     _region_hulls(v.entity.brushes, padded=False)))
     for e in ir.entities:
-        if e.classname == NAV_CUT:
-            pts = [v for b in e.brushes for f in b.faces for v in f.verts]
-            if pts:
-                mins, maxs = g.bounds(pts)
-                regions.append(NavRegion(mins, maxs, NAV_CUT_BIT, e.source, _region_hulls(e.brushes, padded=False)))
-            continue
         if e.classname == NAV_REGION:
             bits, unknown = parse_attributes(e.keyvalues.get("attributes", ""))
             if unknown:
@@ -103,19 +107,32 @@ def collect_regions(ir: MapIR) -> tuple[list[NavRegion], list[str]]:
 
 
 def nav_cuts(regions) -> list[tuple]:
-    """The No Nav Volumes among the regions: (mins, maxs, hulls) each, for the nav generator."""
-    return [(r.mins, r.maxs, r.hulls) for r in regions if r.bits & NAV_CUT_BIT]
+    """The volumes the nav generator keeps out of: (mins, maxs, hulls, only) each; only: the nav is made only inside
+    those (Only inside), else not inside it."""
+    return [(r.mins, r.maxs, r.hulls, bool(r.bits & NAV_ONLY_BIT)) for r in regions if r.bits & NAV_VOLUME_BITS]
+
+
+def _in_volume(mins, maxs, hulls, p, e) -> bool:
+    if not all(mins[i] - e <= p[i] <= maxs[i] + e for i in range(3)):
+        return False
+    return not hulls or any(all(nx * p[0] + ny * p[1] + nz * p[2] <= d + e for nx, ny, nz, d in h) for h in hulls)
 
 
 def in_cut(cuts, p) -> bool:
-    """A floor point inside a No Nav Volume (its box, then any of its brushes; on a face counts)."""
+    """A floor point the nav isn't made at: inside a Not-inside volume, or outside every Only-inside one (when there
+    are some). Its box, then any of its brushes; on a face counts as inside."""
     e = CUT_EPSILON
-    for mins, maxs, hulls in cuts:
-        if not all(mins[i] - e <= p[i] <= maxs[i] + e for i in range(3)):
-            continue
-        if not hulls or any(all(nx * p[0] + ny * p[1] + nz * p[2] <= d + e for nx, ny, nz, d in h) for h in hulls):
+    only = in_only = False
+    for c in cuts:
+        mins, maxs, hulls = c[0], c[1], c[2]
+        is_only = len(c) > 3 and c[3]
+        inside = _in_volume(mins, maxs, hulls, p, e)
+        if is_only:
+            only = True
+            in_only = in_only or inside
+        elif inside:
             return True
-    return False
+    return only and not in_only
 
 
 @dataclass
@@ -204,7 +221,7 @@ def navmark_script(regions: list[NavRegion], map_name: str, climbs: list[NavClim
         "}",
     ]
     for r in regions:
-        if r.bits & NAV_CUT_BIT:
+        if r.bits & NAV_VOLUME_BITS:
             continue
         lines.append(f'printl("HAMMERLESS_NAVMARK {sq_text(r.source)}: " + HL_Mark(areas, {_vec(r.mins)}, {_vec(r.maxs)}, {r.bits}, {_hulls_sq(r.hulls)}) + " areas");')
     if climbs:

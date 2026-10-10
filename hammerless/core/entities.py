@@ -51,9 +51,11 @@ class EntityDef:
 NAV_REGION = "hammerless_nav_region"  # pseudo-entity, see nav.py
 NAV_CUT = "hammerless_nav_cut"        # pseudo-entity: no nav mesh is made inside it (nav.py, navgen.py)
 NO_BAKE = "hammerless_no_bake"        # pseudo-entity: no light is baked inside it (lightvolumes.py, hlvrad -nobake)
+CONTROL = "hammerless_control"        # pseudo-entity: where nav / light / vis / sound / spawns are worked out (control.py)
+LEGACY_VOLUMES = {NAV_CUT, NO_BAKE}   # (older volumes a Control Volume replaces: still read, not in the Add menu)
 CRESCENDO = "hammerless_crescendo"     # pseudo-entity, see gamefiles.py
 CLIMB = "hammerless_zombie_climb"      # pseudo-entity, see nav.py collect_climbs
-PSEUDO_ENTITIES = {NAV_REGION, NAV_CUT, NO_BAKE, CRESCENDO, CLIMB}  # never written to the map
+PSEUDO_ENTITIES = {NAV_REGION, NAV_CUT, NO_BAKE, CONTROL, CRESCENDO, CLIMB}  # never written to the map
 # Tallest wall common infected climbed from a hand-made nav link in our tests (160 yes, 172 no)
 ZOMBIE_CLIMB_MAX = 160.0
 ZOMBIES_ONLY = ("2", "zombies", "zombie", "infected")   # func_ladder "team" values meaning zombies only
@@ -304,6 +306,17 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               "builds still bake the whole map). Surfaces inside still cast shadows. Only for the Hammerless "
               "light compiler.",
               (KeyDef("invert", "0", "Mode", (("0", "Don't bake inside"), ("1", "Bake only inside"))),),
+              brush=True),
+
+    EntityDef(CONTROL, "Control Volume", "Brush Entities",
+              "Where things are worked out: Not Inside or Only Inside, for what's ticked (nav mesh, light "
+              "baking, visibility, sound, zombie spawns). Not written into the map.",
+              (KeyDef("mode", "EXCLUDE", "Mode", (("EXCLUDE", "Not inside"), ("ONLY", "Only inside"))),
+               KeyDef("nav", "1", "Nav Mesh", (("0", "No"), ("1", "Yes"))),
+               KeyDef("light", "1", "Light Baking", (("0", "No"), ("1", "Yes"))),
+               KeyDef("vis", "0", "Visibility", (("0", "No"), ("1", "Yes"))),
+               KeyDef("sound", "0", "Sound", (("0", "No"), ("1", "Yes"))),
+               KeyDef("spawns", "0", "Zombie Spawns", (("0", "No"), ("1", "Yes")))),
               brush=True),
 
     EntityDef(CLIMB, "Zombie Climb Point", "Infected",

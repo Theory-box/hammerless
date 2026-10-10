@@ -57,6 +57,7 @@ _ALIASES = {
     "HORDE_BUTTON": "panic mob alarm", "CRESCENDO_BUTTON": "panic waves event",
     "ZOMBIE_SPAWN_AREA": "commons nav obscured", "trigger_once": "touch", "func_detail": "world brush",
     "env_player_blocker": "invisible wall clip", "prop_static": "model", "prop_physics": "model barrel",
+    "hammerless_control": "no nav cut bake lightmap skip vis detail sound spawn only exclude volume",
 }
 _TIPS = {
     "START_SAFE_ROOM": "Comes with 4 survivor spawns, weapons and a door. One per map.",
@@ -83,6 +84,7 @@ BRUSH_BOXES = {
     "hammerless_nav_region": ((-512, -512, -64), (512, 512, 256)),
     "hammerless_nav_cut": ((-512, -512, -64), (512, 512, 256)),
     "hammerless_no_bake": ((-512, -512, -64), (512, 512, 256)),
+    "hammerless_control": ((-512, -512, -64), (512, 512, 256)),
     "info_changelevel": ((0, 0, 0), (320, 256, 128)),
 }
 DEFAULT_BRUSH_BOX = ((-64, -64, 0), (64, 64, 128))
@@ -109,7 +111,10 @@ def _build() -> list[SpawnItem]:
     for key, p in PRESETS.items():
         items.append(SpawnItem(f"preset:{key}", p.label, _PRESET_CATEGORY.get(key, "EVENTS"),
                                p.description, "preset", key, _TIPS.get(key, "")))
+    from .entities import LEGACY_VOLUMES
     for cls, d in CATALOG.items():
+        if cls in LEGACY_VOLUMES:
+            continue                  # (a Control Volume does what they did)
         cat = _CLASS_CATEGORY.get(cls) or _ENTITY_CATEGORY.get(d.category, "LOGIC")
         items.append(SpawnItem(f"entity:{cls}", _LABELS.get(cls, d.label), cat, d.description,
                                "volume" if d.brush else "entity", cls, _TIPS.get(cls, "")))

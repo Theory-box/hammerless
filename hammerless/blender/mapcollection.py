@@ -13,7 +13,7 @@ KEY = "hl_map_collection"          # the scene's map collection (a pointer: rena
 # where each kind goes, under the map collection
 WORLD, DETAIL, TERRAIN, LIGHTS, PROPS, MODELS = "World", "Detail", "Terrain", "Lights", "Props", "Custom Models"
 ENTITIES, BRUSH_ENTITIES, VOLUMES, PREFABS, INSTANCES = "Entities", "Brush Entities", "Volumes", "Prefabs", "Instances"
-VOLUME_CLASSES = {"hammerless_nav_region", "hammerless_nav_cut", "hammerless_no_bake"}
+VOLUME_CLASSES = {"hammerless_nav_region", "hammerless_nav_cut", "hammerless_no_bake", "hammerless_control"}
 
 
 def map_collection(scene):
@@ -328,6 +328,29 @@ def _on_depsgraph(scene, depsgraph):
 def _on_load(*_args):
     _known.clear()
     _pending.clear()
+    convert_old_volumes()
+
+
+def convert_old_volumes() -> int:
+    """No Nav Volumes and No Bake Volumes become Control Volumes doing the same (nav, Not inside; light, its
+    mode). Returns how many."""
+    from ..core.entities import CONTROL, NAV_CUT, NO_BAKE
+    n = 0
+    for o in bpy.data.objects:
+        cls = o.hammerless.classname
+        if cls not in (NAV_CUT, NO_BAKE):
+            continue
+        kv = {k.key: k.value for k in o.hammerless.keyvalues}
+        only = cls == NO_BAKE and kv.get("invert", "0").strip() in ("1", "true", "True")
+        values = {"mode": "ONLY" if only else "EXCLUDE", "nav": "1" if cls == NAV_CUT else "0",
+                  "light": "1" if cls == NO_BAKE else "0", "vis": "0", "sound": "0", "spawns": "0"}
+        o.hammerless.keyvalues.clear()
+        for k, v in values.items():
+            item = o.hammerless.keyvalues.add()
+            item.key, item.value = k, v
+        o.hammerless.classname = CONTROL
+        n += 1
+    return n
 
 
 class HL_OT_organize_scene(bpy.types.Operator):

@@ -1304,6 +1304,36 @@ def test_texture_painting():
     assert _tree([kept]) == _tree([vmf.parse(SMALL_VMF)[1].blocks("solid")[0]])
 
 
+def test_control_volumes():
+    # older No Nav / No Bake volumes become Control Volumes doing the same; the toggles set its keyvalues; one set to
+    # Light Baking, Only inside, is a Bake choice
+    from hammerless.blender.mapcollection import convert_old_volumes
+    from hammerless.blender.props import _bake_area_items
+    s = reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    cut = add_box("old cut", (2, 2, 2), (3, 0, 1))
+    cut.hammerless.role, cut.hammerless.classname = "BRUSH_ENTITY", "hammerless_nav_cut"
+    nb = add_box("old bake", (2, 2, 2), (-3, 0, 1))
+    nb.hammerless.role, nb.hammerless.classname = "BRUSH_ENTITY", "hammerless_no_bake"
+    kv = nb.hammerless.keyvalues.add()
+    kv.key, kv.value = "invert", "1"
+    assert convert_old_volumes() == 2
+
+    def values(o):
+        return {k.key: k.value for k in o.hammerless.keyvalues}
+    assert cut.hammerless.classname == "hammerless_control"
+    assert values(cut) == {"mode": "EXCLUDE", "nav": "1", "light": "0", "vis": "0", "sound": "0", "spawns": "0"}
+    assert values(nb)["mode"] == "ONLY" and values(nb)["light"] == "1" and values(nb)["nav"] == "0"
+    assert [it[0] for it in _bake_area_items(s, bpy.context)][-1] == "VOL:old bake"
+    # the toggles
+    bpy.context.view_layer.objects.active = cut
+    bpy.ops.hammerless.kv_set(key="vis", value="1")
+    assert values(cut)["vis"] == "1"
+    blocks, log = export()
+    assert blocks is not None, log
+    assert not entities(blocks, "hammerless_control")               # (never written to the map)
+
+
 def test_register_cycle():
     # the add-on can be disabled and enabled again (an update does that): every module unregisters cleanly
     hammerless.unregister()

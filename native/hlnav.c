@@ -593,12 +593,13 @@ static double *SEEDS; static int NSEEDS;
 /* No Nav Volumes: no node is made inside one (a convex hull each: its box, then n.p <= d + eps for its planes;
  * no planes: the box alone) */
 static int NCUT; static double *CUTB, *CUTP, CUTE; static int *CUTN;
+#define CUT_ONLY (1 << 20)        /* (a brush's plane count with this: the nav is made only inside such brushes) */
 EXPORT void hl_cuts(int n, const double *bounds, const int *counts, const double *planes, double eps) {
     free(CUTB), free(CUTP), free(CUTN);
     CUTB = NULL, CUTP = NULL, CUTN = NULL, NCUT = 0, CUTE = eps;
     if (n <= 0) return;
     int total = 0;
-    for (int i = 0; i < n; i++) total += counts[i];
+    for (int i = 0; i < n; i++) total += counts[i] & ~CUT_ONLY;
     CUTB = xrealloc(NULL, sizeof(double) * 6 * n);
     CUTN = xrealloc(NULL, sizeof(int) * n);
     CUTP = xrealloc(NULL, sizeof(double) * 4 * (total + 1));
@@ -607,17 +608,24 @@ EXPORT void hl_cuts(int n, const double *bounds, const int *counts, const double
     memcpy(CUTP, planes, sizeof(double) * 4 * total);
     NCUT = n;
 }
+/* no nav here: inside a Not-inside brush, or outside every Only-inside brush (when there are some) */
 static int in_cut(const double *p) {
     const double *pl = CUTP;
-    for (int i = 0; i < NCUT; pl += 4 * CUTN[i], i++) {
+    int only = 0, in_only = 0;
+    for (int i = 0; i < NCUT; i++) {
+        int n = CUTN[i] & ~CUT_ONLY, is_only = (CUTN[i] & CUT_ONLY) != 0;
         const double *b = CUTB + 6 * i;
         int in = 1;
         for (int k = 0; k < 3 && in; k++) in = b[k] - CUTE <= p[k] && p[k] <= b[3 + k] + CUTE;
-        for (int j = 0; j < CUTN[i] && in; j++)
+        for (int j = 0; j < n && in; j++)
             in = pl[4 * j] * p[0] + pl[4 * j + 1] * p[1] + pl[4 * j + 2] * p[2] <= pl[4 * j + 3] + CUTE;
-        if (in) return 1;
+        pl += 4 * n;
+        if (is_only) {
+            only = 1;
+            in_only |= in;
+        } else if (in) return 1;
     }
-    return 0;
+    return only && !in_only;
 }
 
 EXPORT void hl_reset(void) {
