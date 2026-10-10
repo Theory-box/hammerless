@@ -88,6 +88,50 @@ def _sky_choice_set(self, value):
             return
 
 
+_BAKE_AREAS: list = []        # (kept: Blender holds on to the strings of a list from an items function)
+
+
+def bake_only_objects(scene) -> list:
+    """The map's No Bake Volumes set to Bake only inside (by name)."""
+    from ..core.entities import NO_BAKE
+    from .mapcollection import map_objects
+    inside = map_objects(scene)
+    out = []
+    for o in scene.objects:
+        if o.name in inside and o.hammerless.classname == NO_BAKE and o.visible_get():
+            kv = {k.key: k.value for k in o.hammerless.keyvalues}
+            if kv.get("invert", "0").strip() in ("1", "true", "True"):
+                out.append(o.name)
+    return sorted(out)
+
+
+def _bake_area_items(self, context):
+    scene = context.scene if context else bpy.context.scene
+    items = [("MAP", "Whole Map", "Bake the whole map's lighting", "WORLD", 0),
+             ("VIEW", "What the View Sees", "Only what the 3D viewport sees, out to View Distance (needs the "
+                                            "Hammerless light compiler)", "HIDE_OFF", 1)]
+    for i, name in enumerate(bake_only_objects(scene)):
+        items.append(("VOL:" + name, name, f"Only inside the volume '{name}' (Bake only inside)", "MESH_CUBE", i + 2))
+    if [it[0] for it in items] != [it[0] for it in _BAKE_AREAS]:
+        _BAKE_AREAS.clear()
+        _BAKE_AREAS.extend(items)
+    return _BAKE_AREAS
+
+
+def _bake_area_get(self):
+    for it in _bake_area_items(self, bpy.context):
+        if it[0] == self.bake_area_name:
+            return it[4]
+    return 0                          # (a volume that's gone: the whole map)
+
+
+def _bake_area_set(self, value):
+    for it in _bake_area_items(self, bpy.context):
+        if it[4] == value:
+            self.bake_area_name = it[0]
+            return
+
+
 def _sky_view(self, context):
     from .skyview import redraw
     redraw()
@@ -476,11 +520,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                      description="Brighten or darken the view, in stops (+1 = twice as bright)")
     lightmap_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _light_display(self, c),
                                 description="Draw the baked lighting through walls")
-    bake_area: EnumProperty(name="Bake", default="MAP", items=[
-        ("MAP", "Whole Map", "Bake the whole map's lighting"),
-        ("VIEW", "What the View Sees", "Bake only what the 3D viewport sees, out to a distance (a quick look at one "
-                                       "spot; the rest gets the flat ambient colour). Needs the Hammerless light "
-                                       "compiler. Build & Play always bakes the whole map")])
+    bake_area: EnumProperty(name="Bake", items=_bake_area_items, get=_bake_area_get, set=_bake_area_set,
+                            description="What Bake Lighting bakes: the whole map, what the 3D viewport sees, or a "
+                                        "No Bake Volume set to Bake only inside (the rest gets the flat ambient "
+                                        "colour). Builds always bake the whole map")
+    bake_area_name: StringProperty(default="MAP", options={"HIDDEN"})
     light_view_distance: FloatProperty(name="Distance", default=3000.0, min=64.0, soft_max=20000.0, step=1000,
                                        precision=0, description="Bake View: how far from the viewport to bake, in "
                                        "Hammer units (beyond it and outside the view get the flat ambient colour)")

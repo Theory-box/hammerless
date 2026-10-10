@@ -299,9 +299,10 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
 
     EntityDef(NO_BAKE, "No Bake Volume", "Brush Entities",
               "No light is baked for surfaces inside this volume: they get the map's ambient colour instead, and "
-              "the bake skips them. Put it under the map or around anything never seen. Bake Only Inside turns it "
-              "around: only surfaces inside it are baked (for testing one area quickly). Surfaces inside still "
-              "cast shadows. Only for the Hammerless light compiler.",
+              "the bake skips them. Put it under the map or around anything never seen. Mode Bake only inside: "
+              "it becomes a choice in Lighting's Bake dropdown, to bake just that area (for testing it quickly; "
+              "builds still bake the whole map). Surfaces inside still cast shadows. Only for the Hammerless "
+              "light compiler.",
               (KeyDef("invert", "0", "Mode", (("0", "Don't bake inside"), ("1", "Bake only inside"))),),
               brush=True),
 

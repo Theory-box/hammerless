@@ -103,10 +103,6 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         org.alert = not organized          # (not organized yet: the whole scene is the map)
         org.operator("hammerless.organize_scene", text="", icon="OUTLINER_COLLECTION")
         col.prop(s, "compile_preset", text="Quality")
-        if s.compile_preset == "CUSTOM":
-            sub = col.column(align=True)
-            sub.prop(s, "light_quality", text="Lighting")
-            sub.prop(s, "vis_mode", text="Visibility")
         layout.separator()
         big = layout.row()
         big.scale_y = 1.6
@@ -461,12 +457,15 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
         bm.enabled = ours and not s.light_exact and not s.light_fast
         bm.prop(s, "light_bounce_method", text="Bounce")
         layout.separator()
-        view = s.bake_area == "VIEW"
+        area = s.bake_area
+        view = area == "VIEW"
+        partial = area != "MAP"
         row = layout.row(align=True)
         row.scale_y = 1.3
-        row.enabled = s.light_quality != "OFF" and (ours or not view)
+        row.enabled = s.light_quality != "OFF" and (ours or not partial)
         op = row.operator("hammerless.build", text="Bake Lighting", icon="LIGHT_SUN")
         op.play, op.bake, op.view = False, True, view
+        op.volume = area[4:] if area.startswith("VOL:") else ""
         row.prop(s, "bake_area", text="")
         if view:
             dist = layout.row(align=True)
@@ -474,8 +473,8 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
             dist.prop(s, "light_view_distance", text="View Distance")
         # (only what needs acting on: explanations are the settings' tooltips)
         if s.light_quality != "OFF":
-            if view and not ours:
-                _hint(layout, "Baking what the view sees needs the", "Hammerless light compiler (Advanced)",
+            if partial and not ours:
+                _hint(layout, "Baking part of the map needs the", "Hammerless light compiler (Advanced)",
                       icon="ERROR")
             if s.light_fast and ours:
                 _hint(layout, "Fast Lighting always uses Valve's vrad", icon="ERROR")
@@ -665,6 +664,10 @@ class HL_PT_visibility(_Panel, bpy.types.Panel):
         col.prop(s, "vis_mode", text="Quality")
         col.prop(s, "vis_tool", text="Vis Compiler")
         col.prop(s, "extra_vvis", text="Extra vvis Options")
+        row = self.layout.row()
+        row.scale_y = 1.3
+        row.enabled = s.vis_mode != "SKIP"
+        row.operator("hammerless.build", text="Compute Visibility", icon="HIDE_OFF").vis_only = True
         self.layout.separator()
         draw_panel(self.layout, context)
 
@@ -689,6 +692,7 @@ class HL_PT_navmesh(_Panel, bpy.types.Panel):
         sub.prop(s, "nav_analysis")
         sub.prop(s, "wall_climbs")
         col.prop(s, "generate_nav", text="Rebuild Nav Next Time")
+        _hint(self.layout, _nav_status(context)[1])
 
 
 class HL_PT_view_nav(_Panel, bpy.types.Panel):
@@ -698,10 +702,14 @@ class HL_PT_view_nav(_Panel, bpy.types.Panel):
     def draw_header(self, context):
         _eye(self.layout, context.scene.hammerless, "show_nav")
 
+    def draw_header_preset(self, context):
+        from .navview import header_status
+        text = header_status()
+        if text:
+            _status(self.layout, text)
+
     def draw(self, context):
         from .navview import draw_panel
-        _hint(self.layout, _nav_status(context)[1])
-        self.layout.separator()
         draw_panel(self.layout, context)
 
 

@@ -1213,6 +1213,26 @@ def test_new_objects_sorted():
     assert where(kit) == {"my stuff"}, where(kit)
 
 
+def test_bake_area_choices():
+    # Lighting's Bake choice: the whole map, the view, and each No Bake Volume set to Bake only inside
+    s = reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    vol = add_box("test area", (2, 2, 2), (0, 0, 1))
+    vol.hammerless.role, vol.hammerless.classname = "BRUSH_ENTITY", "hammerless_no_bake"
+    kv = vol.hammerless.keyvalues.add()
+    kv.key, kv.value = "invert", "1"
+    skip = add_box("under", (2, 2, 2), (5, 5, -3))
+    skip.hammerless.role, skip.hammerless.classname = "BRUSH_ENTITY", "hammerless_no_bake"
+    from hammerless.blender.props import _bake_area_items
+    ids = [it[0] for it in _bake_area_items(s, bpy.context)]
+    assert ids == ["MAP", "VIEW", "VOL:test area"], ids        # (a Don't-bake volume isn't a choice)
+    assert s.bake_area == "MAP"
+    s.bake_area = "VOL:test area"
+    assert s.bake_area == "VOL:test area" and s.bake_area_name == "VOL:test area"
+    bpy.data.objects.remove(vol)
+    assert s.bake_area == "MAP"                                  # (gone: the whole map)
+
+
 def test_sky_dropdown():
     # the sky dropdown lists the game's skies then Custom; it sets the map's skyname, Custom keeps a typed one
     from hammerless.blender.props import _sky_choice_items

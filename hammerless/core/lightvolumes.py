@@ -11,21 +11,38 @@ from .entities import NO_BAKE
 from .ir import MapIR
 
 
-def no_bake_text(ir: MapIR) -> str:
-    """The No Bake Volumes for hlvrad, or "" if the map has none."""
+def _inverted(e) -> bool:
+    return str(e.keyvalues.get("invert", "0")).strip() in ("1", "true", "True")
+
+
+def _lines(e, invert: int) -> list[str]:
     lines = []
-    for e in ir.entities:
-        if e.classname != NO_BAKE:
-            continue
-        invert = 1 if str(e.keyvalues.get("invert", "0")).strip() in ("1", "true", "True") else 0
-        for b in e.brushes:
-            planes = []
-            for f in g.merge_coplanar(b.faces):
-                pl = g.Plane.from_polygon(f.verts)
-                planes.append("%.6f %.6f %.6f %.3f" % (pl.normal[0], pl.normal[1], pl.normal[2], pl.dist))
-            if len(planes) >= 4:
-                lines.append(f"{invert} {len(planes)} " + " ".join(planes))
+    for b in e.brushes:
+        planes = []
+        for f in g.merge_coplanar(b.faces):
+            pl = g.Plane.from_polygon(f.verts)
+            planes.append("%.6f %.6f %.6f %.3f" % (pl.normal[0], pl.normal[1], pl.normal[2], pl.dist))
+        if len(planes) >= 4:
+            lines.append(f"{invert} {len(planes)} " + " ".join(planes))
+    return lines
+
+
+def no_bake_text(ir: MapIR) -> str:
+    """The No Bake Volumes ("Don't bake inside") for hlvrad, or "" if the map has none. Every bake uses them."""
+    lines = [ln for e in ir.entities if e.classname == NO_BAKE and not _inverted(e) for ln in _lines(e, 0)]
     return "\n".join(lines) + "\n" if lines else ""
+
+
+def bake_only_volumes(ir: MapIR) -> dict[str, str]:
+    """The "Bake only inside" volumes, by name: hlvrad text for each. Only a bake that picks one uses it (Lighting's
+    Bake choice); builds bake the whole map."""
+    out = {}
+    for e in ir.entities:
+        if e.classname == NO_BAKE and _inverted(e):
+            lines = _lines(e, 1)
+            if lines:
+                out[e.source or "volume"] = "\n".join(lines) + "\n"
+    return out
 
 
 def in_volume(text: str, p) -> bool:

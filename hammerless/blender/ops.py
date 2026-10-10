@@ -1019,6 +1019,12 @@ class HL_OT_build(bpy.types.Operator):
 
     @classmethod
     def description(cls, context, properties):
+        if properties.vis_only:
+            return ("Compile the map and work out its visibility, without lighting or the nav mesh. Build and "
+                    "Build & Play then reuse it and only add what's missing")
+        if properties.bake and properties.volume:
+            return (f"Bake only inside '{properties.volume}' (a quick look at that area): the rest gets the flat "
+                    "ambient colour. Build & Play bakes the whole map again")
         if properties.bake and properties.view:
             return ("Bake only what this viewport sees, out to the distance set (a quick look at one spot): the "
                     "rest gets the flat ambient colour. Build & Play bakes the whole map again")
@@ -1035,6 +1041,10 @@ class HL_OT_build(bpy.types.Operator):
     play: BoolProperty(name="Play", default=True)
     bake: BoolProperty(name="Bake Lighting", default=False, options={"HIDDEN", "SKIP_SAVE"},
                        description="Lighting only: fast visibility, no nav mesh, then show the lighting")
+    volume: StringProperty(name="Bake Volume", default="", options={"HIDDEN", "SKIP_SAVE"},
+                           description="With Bake Lighting: bake only inside this No Bake Volume (Bake only inside)")
+    vis_only: BoolProperty(name="Compute Visibility", default=False, options={"HIDDEN", "SKIP_SAVE"},
+                           description="Compile and run visibility only (no lighting, no nav mesh)")
     view: BoolProperty(name="Bake View", default=False, options={"HIDDEN", "SKIP_SAVE"},
                        description="With Bake Lighting: only what the viewport sees, out to Bake View's distance")
 
@@ -1052,6 +1062,8 @@ class HL_OT_build(bpy.types.Operator):
             self.report({"ERROR"}, "This map is still compiling: wait for it to finish (see the hammerless_log "
                                    "text), then build again")
             return {"CANCELLED"}
+        if self.vis_only:
+            self.play = self.bake = False
         if self.play and not self.bake:      # the game boots while the map exports and compiles
             early_root = game_root(context)
             if early_root:
@@ -1088,6 +1100,13 @@ class HL_OT_build(bpy.types.Operator):
                 return {"CANCELLED"}
             opts = dataclasses.replace(opts, vis="FAST" if opts.vis != "SKIP" else "SKIP")
             self.play = False
+        if self.vis_only:
+            import dataclasses
+            opts = cc.PRESETS[opts] if isinstance(opts, str) else opts
+            if opts.vis == "SKIP":
+                self.report({"ERROR"}, "Visibility Quality is Off: choose Fast or Full in Visibility")
+                return {"CANCELLED"}
+            opts = dataclasses.replace(opts, rad="SKIP")
         if cc.use_hlvrad(opts):          # (only our light compiler uses the sky's picture)
             sky_key, sky_note = export_sky(context, root, os.path.splitext(path)[0])
             if sky_note:
@@ -1108,6 +1127,15 @@ class HL_OT_build(bpy.types.Operator):
                 self.report({"ERROR"}, "Baking what the view sees needs the Hammerless light compiler (Lighting > Advanced)")
                 return {"CANCELLED"}
             no_bake += vol
+        if self.bake and self.volume:
+            vol = rep.bake_only.get(self.volume)
+            if vol is None:
+                self.report({"ERROR"}, f"No Bake Volume '{self.volume}' (Bake only inside) isn't in the map")
+                return {"CANCELLED"}
+            if not cc.use_hlvrad(opts):
+                self.report({"ERROR"}, "Baking part of the map needs the Hammerless light compiler (Lighting > Advanced)")
+                return {"CANCELLED"}
+            no_bake += vol
         if no_bake and opts.rad != "SKIP":
             import dataclasses
             if cc.use_hlvrad(opts):
@@ -1119,8 +1147,8 @@ class HL_OT_build(bpy.types.Operator):
         self._nav = None
         s = context.scene.hammerless
         unanalyzed = s.nav_analysis == "BLENDER" and cc.nav_analyzed(tools, s.map_name) is False
-        if self.bake:
-            pass                     # lighting only: the nav is made by the next Build / Build & Play
+        if self.bake or self.vis_only:
+            pass                     # lighting / visibility only: the nav is made by the next Build / Build & Play
         elif s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root) or unanalyzed):
             self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs,
                                               after=self._job.prepared)
@@ -1270,6 +1298,8 @@ class HL_OT_build(bpy.types.Operator):
             launch(context, self._root, nav_written=written, analyzed=analyzed)
             _watch_load(time.time() - self._t0, timing, nav)
             self.report({"INFO"}, f"{compiled}. Launching L4D2 on {s.map_name}{nav_note}  [{timing}]")
+        elif self.vis_only:
+            self.report({"INFO"}, f"{compiled}: visibility worked out. Build and Build & Play reuse it  [{timing}]")
         elif self.bake:
             from . import lightview
             err = lightview.load(context)

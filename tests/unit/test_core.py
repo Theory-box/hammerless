@@ -1215,10 +1215,16 @@ class TestNoBake(unittest.TestCase):
         self.assertTrue(vol.startswith("0 6 "))
         self.assertTrue(in_volume(vol, (1000, 0, 0)))
         self.assertFalse(in_volume(vol, (0, 0, 0)))
-        inv = no_bake_text(self._map("1"))
+        from hammerless.core.lightvolumes import bake_only_volumes
+        ir = self._map("1")
+        self.assertEqual(no_bake_text(ir), "")                       # (bake only inside: only when a bake picks it)
+        only = bake_only_volumes(ir)
+        self.assertEqual(list(only), ["no bake"])
+        inv = only["no bake"]
         self.assertTrue(inv.startswith("1 6 "))
         self.assertFalse(in_volume(inv, (1000, 0, 0)))              # bake only inside: outside is skipped
         self.assertTrue(in_volume(inv, (0, 0, 0)))
+        self.assertEqual(bake_only_volumes(self._map("0")), {})
 
     def test_view_volume(self):
         """Bake View: the viewport's view pyramid as a "bake only inside" volume."""

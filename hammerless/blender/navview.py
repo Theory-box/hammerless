@@ -652,89 +652,78 @@ class HL_OT_nav_clear_analysis(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def header_status() -> str:
+    """What the preview shows, for its header."""
+    if _state["report"] is None:
+        return ""
+    return "from the scene" if _state["source"] == "predicted" else "the game's"
+
+
+_LEGEND = {
+    "REACH": ["Green: survivors can reach it. Red: they can't"],
+    "FLOW": ["Blue near the start, red far along the path"],
+    "WHY": ["Green: wanderers can spawn. Red: no-spawn mark",
+            f"Orange: under {SPAWN_SAFETY_RANGE:.0f} units' walk. Yellow: in view"],
+    "VIS": ["From the area under the 3D cursor (white):", "green fully visible, yellow partly, grey not"],
+}
+
+
 def draw_panel(layout, context):
     s = context.scene.hammerless
     rep = _state["report"]
-    big = layout.row()
-    big.scale_y = 1.3
-    if built_shown():
-        big.operator("hammerless.nav_clear", text="Clear Navmesh", icon="X")
-    else:
-        big.operator("hammerless.nav_predict", text="Build Navmesh", icon="VIEWZOOM")
+    # what to show: built from the scene, or the game's (each clears what it made: small buttons beside them)
     row = layout.row(align=True)
-    row.operator("hammerless.nav_load", text="Show the Game's Nav Mesh", icon="MOD_MESHDEFORM")
-    if analysis_shown():
-        layout.operator("hammerless.nav_clear_analysis", text="Clear Analysis", icon="X")
-    else:
-        layout.operator("hammerless.nav_analyze", text="Analyze Navmesh (visibility, hiding spots)", icon="HIDE_OFF")
+    row.scale_y = 1.2
+    row.operator("hammerless.nav_predict", text="From the Scene", icon="VIEWZOOM")
+    row.operator("hammerless.nav_load", text="The Game's", icon="MOD_MESHDEFORM")
     on_disk = _nav_on_disk(context)
-    if on_disk and not built_shown():
-        sub = layout.row(align=True)
-        sub.operator("hammerless.nav_clear", text="Clear Navmesh", icon="X")
-        if on_disk == "analyzed" and not analysis_shown():
-            sub.operator("hammerless.nav_clear_analysis", text="Clear Analysis", icon="X")
+    if rep is not None or on_disk:
+        row.operator("hammerless.nav_clear", text="", icon="TRASH")
+    row = layout.row(align=True)
+    if analysis_shown():
+        row.operator("hammerless.nav_analyze", text="Analyzed", icon="CHECKMARK")
+    else:
+        row.operator("hammerless.nav_analyze", text="Analyze (visibility, hiding spots)", icon="HIDE_OFF")
+    if analysis_shown() or on_disk == "analyzed":
+        row.operator("hammerless.nav_clear_analysis", text="", icon="X")
     if rep is None:
-        col = layout.column(align=True)
-        col.scale_y = 0.8
-        col.label(text="Build Navmesh: from this scene, no compile", icon="INFO")
-        col.label(text="Game's: what the last Build & Play made", icon="BLANK1")
         return
-    row.prop(s, "show_nav", text="", icon="HIDE_OFF" if s.show_nav else "HIDE_ON")
-    layout.label(text="Showing: built from the scene" if _state["source"] == "predicted"
-                 else "Showing: the game's nav mesh", icon="RESTRICT_VIEW_OFF")
     box = layout.box()
     col = box.column(align=True)
     if not rep.end:
-        col.label(text="No end safe room marked in the nav", icon="INFO")
+        col.label(text="No end safe room in the nav", icon="INFO")
     elif rep.end_reached:
         far = max((rep.distance[e] for e in rep.end if e in rep.distance), default=0)
-        col.label(text=f"Path start to end: OK ({far:.0f} units)", icon="CHECKMARK")
+        col.label(text=f"Start to end: OK ({far:.0f} units)", icon="CHECKMARK")
     else:
         r = col.row()
         r.alert = True
-        r.label(text="Path start to end: BROKEN", icon="ERROR")
-    col.label(text=f"{rep.total} areas, {len(rep.reachable)} reachable from the start")
+        r.label(text="Start to end: BROKEN", icon="ERROR")
+    col.label(text=f"{rep.total} areas, {len(rep.reachable)} reachable", icon="BLANK1")
     if rep.unreachable:
-        col.label(text=f"{rep.unreachable} unreachable in {len(rep.islands)} island(s)", icon="GHOST_DISABLED")
+        r = col.row()
+        r.alert = True
+        r.label(text=f"{rep.unreachable} unreachable, in {len(rep.islands)} island(s)", icon="BLANK1")
     drops = sum(l.kind == "drop" for l in rep.links)
     jumps = sum(l.kind == "jump" for l in rep.links)
-    col.label(text=f"{drops} drop-downs, {jumps} jump-ups / climbs, {len(_state['mesh'].ladders)} ladders")
+    col.label(text=f"{drops} drops, {jumps} jumps / climbs, {len(_state['mesh'].ladders)} ladders", icon="BLANK1")
     col = layout.column(align=True)
     col.prop(s, "nav_color_mode", text="")
+    if s.nav_color_mode == "WHY":
+        col.prop(s, "spawn_from")
     row = col.row(align=True)
     row.prop(s, "show_nav_links", toggle=True)
     row.prop(s, "show_hiding_spots", toggle=True)
     row.prop(s, "nav_xray", toggle=True)
+    lines = list(_LEGEND.get(s.nav_color_mode, ["Red: no zombies. Pink: no wanderers. Violet: no hordes",
+                                                "Orange: Zombie Spawn Area. Light blue: normal"]))
+    if s.nav_color_mode in ("WHY", "VIS") and not visibility_lists():
+        lines.append("(Analyze to also show what's in view)")
+    lines.append("Blue: start room. Purple: end room")
     legend = layout.column(align=True)
     legend.scale_y = 0.8
-    if s.nav_color_mode == "REACH":
-        legend.label(text="Green: survivors can reach it. Red: they can't", icon="INFO")
-    elif s.nav_color_mode == "FLOW":
-        legend.label(text="Blue near the start, red far along the path", icon="INFO")
-    elif s.nav_color_mode == "WHY":
-        legend.prop(s, "spawn_from")
-        legend.label(text="Green: wandering zombies can spawn", icon="INFO")
-        legend.label(text="Red: no-spawn mark (EMPTY)", icon="BLANK1")
-        legend.label(text=f"Orange: too close, under {SPAWN_SAFETY_RANGE:.0f} units walking", icon="BLANK1")
-        if visibility_lists():
-            legend.label(text="Yellow: a survivor can see it", icon="BLANK1")
-        else:
-            legend.label(text="(Analyze Navmesh to also show what's in view)", icon="BLANK1")
-        legend.label(text="Nothing spawns until someone leaves the start room", icon="BLANK1")
-    elif s.nav_color_mode == "VIS":
-        if not visibility_lists():
-            legend.label(text="No visibility in this nav: Analyze Navmesh, or show the game's nav", icon="INFO")
-        else:
-            legend.label(text="From the area under the 3D cursor (white):", icon="INFO")
-            legend.label(text="green completely visible, yellow partly, grey not", icon="BLANK1")
-    else:
-        legend.label(text="Red: no zombies spawn (EMPTY + NO_MOBS)", icon="INFO")
-        legend.label(text="Pink: no wanderers (EMPTY). Violet: no hordes (NO_MOBS)", icon="BLANK1")
-        legend.label(text="Orange: Zombie Spawn Area (OBSCURED). Light blue: normal", icon="BLANK1")
-        legend.label(text="An area takes a box's marks when its centre is inside it", icon="BLANK1")
-    legend.label(text="Blue: start room. Purple: end room", icon="BLANK1")
-    if s.show_nav_links:
-        legend.label(text="Arrows: orange drop-down, cyan jump-up", icon="BLANK1")
+    for i, line in enumerate(lines):
+        legend.label(text=line, icon="INFO" if i == 0 else "BLANK1")
 
 
 CLASSES = (HL_OT_nav_load, HL_OT_nav_predict, HL_OT_nav_analyze, HL_OT_nav_clear, HL_OT_nav_clear_analysis)

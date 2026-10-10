@@ -113,6 +113,7 @@ class Report:
     solid_sources: dict = field(default_factory=dict)  # VMF solid id -> Blender object name
     nav_regions: list = field(default_factory=list)  # nav.NavRegion: marks for the nav mesh
     no_bake: str = ""             # the No Bake Volumes for the light compiler (lightvolumes.no_bake_text)
+    bake_only: dict = field(default_factory=dict)  # "Bake only inside" volumes by name (lightvolumes.bake_only_volumes)
     nav_climbs: list = field(default_factory=list)   # nav.NavClimb: Zombie Climb links
 
     @property
@@ -199,8 +200,9 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
 
     regions, nav_problems = collect_regions(ir)
     r.errors += nav_problems
-    from .lightvolumes import no_bake_text
+    from .lightvolumes import bake_only_volumes, no_bake_text
     r.no_bake = no_bake_text(ir)
+    r.bake_only = bake_only_volumes(ir)
     r.warnings += collect_climbs(ir)[1]
     ir.crescendos.clear()
     r.errors += collect_crescendos(ir)
