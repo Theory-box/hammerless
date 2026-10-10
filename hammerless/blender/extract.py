@@ -652,7 +652,11 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
     materials = MaterialResolver(s, game_dir, report)
 
     hidden = []
+    from .mapcollection import map_collection, map_objects, outside_but_built
+    inside = map_objects(context.scene)
     for obj in context.scene.objects:
+        if obj.name not in inside:
+            continue                  # (outside the map collection: not part of the map)
         if obj.get("hl_vmf_kind") is not None or (obj.parent is not None and obj.parent.get("hl_vmf_kind")
                                                    and obj.type == "MESH"):
             continue                  # (an imported map's: Build writes those back itself, blender/vmfimport.py)
@@ -696,8 +700,17 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
                 ir.entities.append(model_prop(obj, depsgraph, scale, materials, ir, content))
         except Exception as ex:
             report.errors.append(f"'{obj.name}': {ex}")
-    _extract_instances(context, depsgraph, scale, ir, materials, report, content)
+    _extract_instances(context, depsgraph, scale, ir, materials, report, content, inside)
     _drop_comma_outputs(ir, report)
+    if map_collection(context.scene) is None:
+        report.info.append("Tip: Organize Scene (Map panel) puts the map in a collection named after it, sorted by "
+                           "kind; then only what's in that collection is built")
+    else:
+        out = outside_but_built(context.scene)
+        if out:
+            report.warnings.append(f"{len(out)} object(s) are outside the map collection, so they aren't in the map "
+                                   f"(move them in, or Organize Scene): {', '.join(out[:5])}"
+                                   + (", ..." if len(out) > 5 else ""))
     if hidden:
         report.warnings.append(f"{len(hidden)} hidden object(s) are left out of the map (Alt+H shows them; a "
                                f"missing wall can make the map leak): {', '.join(sorted(hidden)[:5])}"
@@ -720,7 +733,7 @@ def _drop_comma_outputs(ir, report) -> None:
         e.outputs = keep
 
 
-def _extract_instances(context, depsgraph, scale, ir, materials, report, content=None) -> None:
+def _extract_instances(context, depsgraph, scale, ir, materials, report, content=None, inside=None) -> None:
     """Copies made by collection instances (Add > Collection Instance, linked asset kits) and by
     geometry nodes: each copy exports like the object it copies, at the copy's place."""
     skipped, skipped_geo = set(), set()
@@ -729,6 +742,8 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report, content
             continue
         src = inst.object.original
         holder = inst.parent.original
+        if inside is not None and holder.name not in inside:
+            continue                  # (a copy made outside the map collection)
         role = effective_role(src)
         label = f"{holder.name} > {src.name}"
         matrix = inst.matrix_world.copy()

@@ -1114,6 +1114,53 @@ def test_vmf_import_sky():
     assert world.get("skyname") == "sky_l4d_c1_2_hdr"
 
 
+def test_organize_scene():
+    # Organize Scene: the map collection named after the map, sorted by kind; the map builds the same; then only
+    # what's inside it is built; renaming the map renames it
+    from hammerless.blender.mapcollection import map_collection
+    s = reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    add_box("wall", (0.5, 10, 3), (5, 0, 1.5))
+    group = bpy.data.collections.new("my details")                # (Detail set on a collection: kept on the move)
+    bpy.context.scene.collection.children.link(group)
+    pillar = add_box("pillar", (0.5, 0.5, 3), (2, 2, 1.5))
+    for c in list(pillar.users_collection):
+        c.objects.unlink(pillar)
+    group.objects.link(pillar)
+    group.hammerless.brush_detail = "DETAIL"
+    bpy.ops.hammerless.add_entity(classname="info_survivor_position")
+    bpy.ops.hammerless.add_entity(classname="weapon_first_aid_kit_spawn")
+    bpy.ops.object.light_add(type="POINT", location=(1, 1, 2))
+    bpy.ops.object.camera_add(location=(0, -5, 2))
+    cam = bpy.context.object
+    before, log = export()
+    assert before is not None, log
+    assert map_collection(bpy.context.scene) is None
+    assert "Organize Scene" in log
+    bpy.ops.hammerless.organize_scene()
+    coll = map_collection(bpy.context.scene)
+    assert coll is not None and coll.name == "test_map"
+    kids = {c.get("hl_category"): c for c in coll.children}
+    assert {"World", "Detail", "Lights", "Entities"} <= set(kids), set(kids)
+    assert bpy.data.objects["floor"].name in kids["World"].objects
+    assert "pillar" in kids["Detail"].objects and bpy.data.objects["pillar"].hammerless.brush_detail == "DETAIL"
+    assert cam.name not in coll.all_objects                       # (not built: stays outside)
+    assert not bpy.data.collections["my details"].objects        # (emptied; kept: it has a Detail setting)
+    after, log = export()
+    assert after is not None, log
+    assert _tree(before) == _tree(after), "organizing changed the map"
+    # outside the map collection: not built
+    wall = bpy.data.objects["wall"]
+    for c in list(wall.users_collection):
+        c.objects.unlink(wall)
+    bpy.context.scene.collection.objects.link(wall)
+    out, log = export()
+    assert len(world_solids(out)) == len(world_solids(after)) - 1
+    assert "outside the map collection" in log and "wall" in log
+    s.map_name = "renamed_map"
+    assert coll.name == "renamed_map"
+
+
 def test_sky_dropdown():
     # the sky dropdown lists the game's skies then Custom; it sets the map's skyname, Custom keeps a typed one
     from hammerless.blender.props import _sky_choice_items

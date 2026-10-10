@@ -356,7 +356,9 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
     upm = s.units_per_meter
     doc = vi.Document(bpy.data.texts[context.scene[SOURCE_KEY]].as_string())
     writer._next_id = max(writer._next_id, doc.max_id() + 1)
-    objs = [o for o in context.scene.objects]
+    from .mapcollection import map_objects
+    inside = map_objects(context.scene)
+    objs = [o for o in context.scene.objects if o.name in inside]
     solids = {**_originals(objs, "solid"), **_originals(objs, "disp")}
     entities = {o[INDEX]: o for o in objs if o.get(KIND) == "entity" and o.get(NAME) == o.name}
     depsgraph = context.evaluated_depsgraph_get()

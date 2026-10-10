@@ -92,6 +92,13 @@ class HL_PT_build(_Panel, bpy.types.Panel):
             layout.separator()
         col = _settings(layout)
         col.prop(s, "map_name")
+        from .mapcollection import map_collection
+        row = col.row(align=True)
+        coll = map_collection(context.scene)
+        row.operator("hammerless.organize_scene", icon="OUTLINER_COLLECTION",
+                     text="Organize Scene" if coll is not None else "Organize Scene (make the map collection)")
+        if coll is None:
+            _hint(layout, "The whole scene is the map. Organize Scene puts it", "in a collection: only that is built")
         col.prop(s, "compile_preset", text="Quality")
         if s.compile_preset == "CUSTOM":
             _hint(layout, f"Lighting {_label(s, 'light_quality')}, Visibility {_label(s, 'vis_mode')}")
@@ -503,8 +510,10 @@ class HL_PT_sky(_Sub, bpy.types.Panel):
             if error():
                 col.label(text=f"Sky: {error()}", icon="ERROR")
         col.separator()
-        own = [o for o in context.scene.objects
-               if o.type != "LIGHT" and o.hammerless.classname == "light_environment" and o.visible_get()]
+        from .mapcollection import map_objects
+        inside = map_objects(context.scene)
+        own = [o for o in context.scene.objects if o.name in inside
+               and o.type != "LIGHT" and o.hammerless.classname == "light_environment" and o.visible_get()]
         if own:                       # (an imported map's own sun: the settings below don't touch it)
             box = col.box()
             box.label(text="This map has its own sun:", icon="LIGHT_SUN")

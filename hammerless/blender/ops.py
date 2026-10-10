@@ -276,6 +276,7 @@ def build_map_text(context, root: str | None):
     text, rep2 = build_vmf(ir, content if s.check_game_content else None, base)
     rep2.errors[:0] = rep.errors
     rep2.warnings[:0] = rep.warnings
+    rep2.info[:0] = rep.info
     return ir, text, rep2
 
 

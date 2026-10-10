@@ -264,6 +264,10 @@ def _on_map_name(self):
     clean = clean_map_name(self.map_name)
     if clean and clean != self.map_name:
         self.map_name = clean           # (runs this again once, with nothing left to change)
+        return
+    coll = self.map_collection          # (the map collection is named after the map)
+    if coll is not None and clean and coll.name != clean:
+        coll.name = clean
 
 
 def _surface_items(self, context):
@@ -483,6 +487,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     spawn_index: IntProperty(default=-1, update=_on_spawn_index)
     spawn_favorites: StringProperty(description="Starred Add panel items (comma separated)")
     # --- build
+    map_collection: PointerProperty(name="Map Collection", type=bpy.types.Collection,
+                                    description="The collection the map is built from (Organize Scene makes it): "
+                                                "only what's in it is exported, compiled and baked")
     map_name: StringProperty(name="Map Name", default="my_map", update=lambda self, c: _on_map_name(self),
                              description="File name of the map: lowercase letters, digits and _ (spaces "
                                          "become _)")

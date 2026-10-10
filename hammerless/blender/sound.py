@@ -31,8 +31,10 @@ def scene_bvh(context):
     scale = context.scene.hammerless.units_per_meter
     depsgraph = context.evaluated_depsgraph_get()
     verts, polys = [], []
+    from .mapcollection import map_objects
+    inside = map_objects(context.scene)
     for obj in context.scene.objects:
-        if obj.type != "MESH" or not obj.visible_get() or not _solid(obj):
+        if obj.name not in inside or obj.type != "MESH" or not obj.visible_get() or not _solid(obj):
             continue
         ev = obj.evaluated_get(depsgraph)
         mesh = ev.to_mesh()
@@ -56,8 +58,10 @@ def scene_starts(context):
     """Where survivors start (Hammer units): the scene's survivor spawn objects."""
     from .extract import effective_role
     scale = context.scene.hammerless.units_per_meter
+    from .mapcollection import map_objects
+    inside = map_objects(context.scene)
     return [tuple(o.matrix_world.translation * scale) for o in context.scene.objects
-            if effective_role(o) == "ENTITY" and o.hammerless.classname in START_CLASSES]
+            if o.name in inside and effective_role(o) == "ENTITY" and o.hammerless.classname in START_CLASSES]
 
 
 def trace(context, starts=None):
