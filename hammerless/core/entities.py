@@ -50,9 +50,10 @@ class EntityDef:
 
 NAV_REGION = "hammerless_nav_region"  # pseudo-entity, see nav.py
 NAV_CUT = "hammerless_nav_cut"        # pseudo-entity: no nav mesh is made inside it (nav.py, navgen.py)
+NO_BAKE = "hammerless_no_bake"        # pseudo-entity: no light is baked inside it (lightvolumes.py, hlvrad -nobake)
 CRESCENDO = "hammerless_crescendo"     # pseudo-entity, see gamefiles.py
 CLIMB = "hammerless_zombie_climb"      # pseudo-entity, see nav.py collect_climbs
-PSEUDO_ENTITIES = {NAV_REGION, NAV_CUT, CRESCENDO, CLIMB}  # never written to the map
+PSEUDO_ENTITIES = {NAV_REGION, NAV_CUT, NO_BAKE, CRESCENDO, CLIMB}  # never written to the map
 # Tallest wall common infected climbed from a hand-made nav link in our tests (160 yes, 172 no)
 ZOMBIE_CLIMB_MAX = 160.0
 ZOMBIES_ONLY = ("2", "zombies", "zombie", "infected")   # func_ladder "team" values meaning zombies only
@@ -295,6 +296,14 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               "outside the playable space. The nav builder stops at it like a wall, so big maps build faster and "
               "stay under its limit. Only for nav made in Blender.",
               (), brush=True),
+
+    EntityDef(NO_BAKE, "No Bake Volume", "Brush Entities",
+              "No light is baked for surfaces inside this volume: they get the map's ambient colour instead, and "
+              "the bake skips them. Put it under the map or around anything never seen. Bake Only Inside turns it "
+              "around: only surfaces inside it are baked (for testing one area quickly). Surfaces inside still "
+              "cast shadows. Only for the Hammerless light compiler.",
+              (KeyDef("invert", "0", "Mode", (("0", "Don't bake inside"), ("1", "Bake only inside"))),),
+              brush=True),
 
     EntityDef(CLIMB, "Zombie Climb Point", "Infected",
               "One end of a Zombie Climb (use the Zombie Climb preset: a bottom and a top point). "

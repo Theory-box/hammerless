@@ -1072,12 +1072,25 @@ void BuildFacelights(int facenum) {
     int normalCount = tex->flags & SURF_BUMPLIGHT ? NUM_BUMP_VECTS + 1 : 1;
     f->styles[0] = 0;
     for (int n = 0; n < normalCount; n++) fl->light[0][n] = xalloc(sizeof(vec3_t) * (fl->numsamples + 1));
+    /* No Bake Volumes: the samples that aren't lit (groups of them all skipped aren't traced) */
+    unsigned char *skip = NULL;
+    int nskip = 0;
+    if (g_bNoBake) {
+        skip = xalloc(fl->numsamples + 1);
+        for (int i = 0; i < fl->numsamples; i++) nskip += skip[i] = (unsigned char)NoBakePoint(fl->sample[i].pos);
+        if (!nskip) free(skip), skip = NULL;
+    }
     vec3_t flatBump[NUM_BUMP_VECTS];
     if (l.isflat && normalCount > 1)
         GetBumpNormals(tex->textureVecsTexelsPerWorldUnits[0], tex->textureVecsTexelsPerWorldUnits[1], l.facenormal,
                        l.facenormal, flatBump);
     for (int group = 0; group < fl->numsamples; group += LANES) {
         int count = fl->numsamples - group < LANES ? fl->numsamples - group : LANES;
+        if (skip) {
+            int all = 1;
+            for (int i = 0; i < count; i++) all &= skip[group + i];
+            if (all) continue;
+        }
         points4_t p;
         int cluster[LANES];
         float pos[LANES][3], nin[LANES][3], nout[LANES][3];
@@ -1130,12 +1143,30 @@ void BuildFacelights(int facenum) {
                         fl->light[style][b][group + i][k] += fxdot[b][i] * (out.tinted ? out.tint[b][k][i] : dl->light.intensity[k]);
         }
     }
-    if (gpucur && gpucur->incomplete) return;            /* (-gpu: answers to come) */
-    if (g_bExtra && !isdisp)
+    if (gpucur && gpucur->incomplete) {                  /* (-gpu: answers to come) */
+        free(skip);
+        return;
+    }
+    if (g_bExtra && !isdisp && nskip < fl->numsamples)
         for (int k = 0; k < MAXLIGHTMAPS && f->styles[k] != 255; k++) {
             BuildSupersampleFaceLights(&l, facenum, fl, k, normalCount, (const vec3_t *)flatBump);
-            if (gpucur && gpucur->incomplete) return;
+            if (gpucur && gpucur->incomplete) {
+                free(skip);
+                return;
+            }
         }
+    if (skip) {                    /* (the skipped samples: the ambient colour, for bouncing and the luxels' edges) */
+        vec3_t amb;
+        NoBakeColor(amb);
+        for (int k = 0; k < MAXLIGHTMAPS && f->styles[k] != 255; k++)
+            for (int b = 0; b < normalCount; b++)
+                for (int i = 0; i < fl->numsamples; i++)
+                    if (skip[i]) {
+                        if (f->styles[k] == 0) VectorCopy(amb, fl->light[k][b][i]);
+                        else fl->light[k][b][i][0] = fl->light[k][b][i][1] = fl->light[k][b][i][2] = 0;
+                    }
+        free(skip);
+    }
     /* the samples' direct light (style 0) onto the face's patches, for bouncing */
     int k0;
     for (k0 = 0; k0 < MAXLIGHTMAPS; k0++)
@@ -1665,17 +1696,28 @@ void FinalLightFace(int facenum) {
     int bump = texinfo[f->texinfo].flags & SURF_BUMPLIGHT ? 1 : 0, bumpCount = bump ? NUM_BUMP_VECTS + 1 : 1;
     float *reds = xalloc(sizeof(float) * (fl->numluxels + 1)), *greens = xalloc(sizeof(float) * (fl->numluxels + 1)),
           *blues = xalloc(sizeof(float) * (fl->numluxels + 1));
+    /* No Bake Volumes: luxels inside get the ambient colour (a face wholly inside isn't gathered at all) */
+    unsigned char *luxskip = NULL;
+    int nlskip = 0;
+    vec3_t amb;
+    if (g_bNoBake) {
+        luxskip = xalloc(fl->numluxels + 1);
+        for (int j = 0; j < fl->numluxels; j++) nlskip += luxskip[j] = (unsigned char)NoBakePoint(fl->luxel[j]);
+        NoBakeColor(amb);
+    }
+    int allskip = fl->numluxels > 0 && nlskip == fl->numluxels;
     for (int k = 0; k < nstyles; k++) {
         int isdisp = f->dispinfo != -1;
-        radial_t *rad = isdisp ? BuildDispLuxelRadial(facenum, k) : BuildLuxelRadial(facenum, k);
-        radial_t *prad = g_numbounce > 0 && !g_giPasses && k == 0
+        radial_t *rad = allskip ? NULL : isdisp ? BuildDispLuxelRadial(facenum, k) : BuildLuxelRadial(facenum, k);
+        radial_t *prad = !allskip && g_numbounce > 0 && !g_giPasses && k == 0
                              ? (isdisp ? BuildDispPatchRadial(facenum, bump) : BuildPatchRadial(facenum)) : NULL;
         unsigned char *pdata[NUM_BUMP_VECTS + 1];
         for (int b = 0; b < bumpCount; b++) pdata[b] = dlightdata + f->lightofs + (k * bumpCount + b) * fl->numluxels * 4;
         int avgCount = 0;
         for (int j = 0; j < fl->numluxels; j++) {
             vec3_t lb[NUM_BUMP_VECTS + 1];
-            int ok = isdisp ? DispSampleRadial(rad, j, lb, bumpCount) : SampleRadial(rad, fl->luxel[j], lb, bumpCount);
+            int ok = 1;
+            if (rad) ok = isdisp ? DispSampleRadial(rad, j, lb, bumpCount) : SampleRadial(rad, fl->luxel[j], lb, bumpCount);
             if (prad) {
                 vec3_t v[NUM_BUMP_VECTS + 1];
                 if (isdisp) DispSampleRadial(prad, j, v, bumpCount);
@@ -1685,6 +1727,13 @@ void FinalLightFace(int facenum) {
             if (fl->numsamples == 0) {
                 for (int b = 0; b < bumpCount; b++) lb[b][0] = 255, lb[b][1] = lb[b][2] = 0;
                 ok = 0;
+            }
+            if (luxskip && luxskip[j]) {
+                for (int b = 0; b < bumpCount; b++) {
+                    if (f->styles[k] == 0) VectorCopy(amb, lb[b]);
+                    else lb[b][0] = lb[b][1] = lb[b][2] = 0;
+                }
+                ok = 1;
             }
             for (int b = 0; b < bumpCount; b++) {
                 for (int i = 0; i < 3; i++) lb[b][i] = lb[b][i] > minlight ? lb[b][i] : minlight;
@@ -1698,7 +1747,7 @@ void FinalLightFace(int facenum) {
                 pdata[b] += 4;
             }
         }
-        FreeRadial(rad);
+        if (rad) FreeRadial(rad);
         if (prad) FreeRadial(prad);
         /* the median colour, stored before lightofs in reverse style order */
         unsigned char *avg = dlightdata + f->lightofs - 4 * (k + 1);
@@ -1716,6 +1765,7 @@ void FinalLightFace(int facenum) {
     free(reds);
     free(greens);
     free(blues);
+    free(luxskip);
 }
 
 void AllocFacelights(void) { facelight = xalloc(sizeof(facelight_t) * (numfaces + 1)); }
@@ -1759,6 +1809,11 @@ void BuildIndirectGPU(void) {
         }
         for (int group = 0; group < fl->numsamples; group += LANES) {
             int count = fl->numsamples - group < LANES ? fl->numsamples - group : LANES;
+            if (g_bNoBake) {                 /* (No Bake Volumes: points all inside one gather nothing) */
+                int all = 1;
+                for (int i = 0; i < count && all; i++) all = NoBakePoint(fl->sample[group + i].pos);
+                if (all) continue;
+            }
             float pos[LANES][3], nin[LANES][3], nout[LANES][3];
             for (int i = 0; i < LANES; i++) {
                 sample_t *sp = &fl->sample[group + (i < count ? i : count - 1)];

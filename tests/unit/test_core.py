@@ -1188,6 +1188,58 @@ class TestNavCut(unittest.TestCase):
             self.assertIsNone(check_native(text, regions))           # the DLL makes the same mesh
 
 
+class TestNoBake(unittest.TestCase):
+    """No Bake Volume: hlvrad doesn't bake inside it (or, inverted, only inside it)."""
+
+    def _map(self, invert: str | None):
+        from hammerless.core.entities import NO_BAKE
+        ir = MapIR()
+        ir.brushes.append(g.box_brush((-512, -512, -64), (1536, 512, 0), "dev/dev_measuregeneric01b", "ground"))
+        ir.entities.append(Entity("info_player_start", (0, 0, 8), (0, 0, 0), {}))
+        if invert is not None:
+            ir.entities.append(Entity(NO_BAKE, None, (0, 0, 0), {"invert": invert},
+                                      [g.box_brush((512, -600, -100), (1600, 600, 256), "tools/toolsskip", "nb")],
+                                      "no bake"))
+        return ir
+
+    def test_volumes_for_hlvrad(self):
+        from hammerless.core.lightvolumes import in_volume, no_bake_text
+        self.assertEqual(no_bake_text(self._map(None)), "")
+        ir = self._map("0")
+        text, rep = build_vmf(ir)
+        self.assertIsNotNone(text, rep.errors)
+        self.assertNotIn("hammerless_no_bake", text)                # (steers the light compiler only)
+        self.assertEqual(rep.no_bake, no_bake_text(ir))
+        vol = no_bake_text(ir)
+        self.assertEqual(len(vol.splitlines()), 1)
+        self.assertTrue(vol.startswith("0 6 "))
+        self.assertTrue(in_volume(vol, (1000, 0, 0)))
+        self.assertFalse(in_volume(vol, (0, 0, 0)))
+        inv = no_bake_text(self._map("1"))
+        self.assertTrue(inv.startswith("1 6 "))
+        self.assertFalse(in_volume(inv, (1000, 0, 0)))              # bake only inside: outside is skipped
+        self.assertTrue(in_volume(inv, (0, 0, 0)))
+
+    def test_passed_to_hlvrad(self):
+        import tempfile
+        from hammerless.core import compile as cc
+        if not os.path.exists(cc.HLVRAD):
+            self.skipTest("hlvrad.exe not built")
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "left4dead2", "maps"))
+        work = tempfile.mkdtemp()
+        vmf = os.path.join(work, "m.vmf")
+        open(vmf, "w").write("world {}")
+        vol = "0 6 1 0 0 1 -1 0 0 1 0 1 0 1 0 -1 0 1 0 0 1 1 0 0 -1 1\n"
+        opts = cc.CompileOptions(light_tool="HAMMERLESS", no_bake=vol)
+        job = cc.CompileJob(cc.Tools(root), vmf, opts, copy_to_game=False)
+        cmd = dict(job.steps)["vrad"]
+        self.assertEqual(cmd[0], cc.HLVRAD)
+        self.assertEqual(cmd[cmd.index("-nobake") + 1], job.base + ".hlnobake")
+        with open(job.base + ".hlnobake") as f:
+            self.assertEqual(f.read(), vol)
+
+
 class TestNavPredict(unittest.TestCase):
     """The nav mesh our generator predicts, marked and analysed like the game's."""
 

@@ -82,6 +82,7 @@ BRUSH_BOXES = {
     "func_movelinear": ((-64, -4, 0), (64, 4, 128)),
     "hammerless_nav_region": ((-512, -512, -64), (512, 512, 256)),
     "hammerless_nav_cut": ((-512, -512, -64), (512, 512, 256)),
+    "hammerless_no_bake": ((-512, -512, -64), (512, 512, 256)),
     "info_changelevel": ((0, 0, 0), (320, 256, 128)),
 }
 DEFAULT_BRUSH_BOX = ((-64, -64, 0), (64, 64, 128))

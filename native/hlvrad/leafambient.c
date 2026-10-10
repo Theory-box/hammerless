@@ -1269,7 +1269,12 @@ void ComputePerLeafAmbientLighting(void) {
         const dleaf_t *l = &dleafs[leaf];
         for (int i = 0; i < n; i++, nout++) {
             unsigned char *o = out + 28 * nout;
-            for (int s = 0; s < 6; s++) VectorToColorRGBExp32(list[i].cube[s], o + 4 * s);
+            if (NoBakePoint(list[i].pos)) {           /* (No Bake Volumes: the ambient colour all round) */
+                vec3_t amb;
+                NoBakeColor(amb);
+                for (int s = 0; s < 6; s++) VectorToColorRGBExp32(amb, o + 4 * s);
+            } else
+                for (int s = 0; s < 6; s++) VectorToColorRGBExp32(list[i].cube[s], o + 4 * s);
             o[24] = Fixed8Fraction(list[i].pos[0], l->mins[0], l->maxs[0]);
             o[25] = Fixed8Fraction(list[i].pos[1], l->mins[1], l->maxs[1]);
             o[26] = Fixed8Fraction(list[i].pos[2], l->mins[2], l->maxs[2]);

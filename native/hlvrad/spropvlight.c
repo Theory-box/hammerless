@@ -408,6 +408,12 @@ static void LightProp(int propIndex, const unsigned char *rec, const unsigned ch
                     VectorTransform((const float *)(vert + 16), matPos, pos);
                     VectorTransform((const float *)(vert + 28), matNormal, normal);
                     if (n >= numverts) continue;
+                    if (NoBakePoint(pos)) {               /* (No Bake Volumes: the ambient colour, not lit) */
+                        cv[n].valid = 1;
+                        VectorCopy(pos, cv[n].pos);
+                        NoBakeColor(cv[n].color);
+                        continue;
+                    }
                     if (PositionInSolid(pos)) {
                         bad = realloc(bad, sizeof(badvert_t) * (nbad + 1));
                         VectorCopy(pos, bad[nbad].pos), VectorCopy(normal, bad[nbad].normal), bad[nbad].index = n;

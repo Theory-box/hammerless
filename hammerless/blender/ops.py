@@ -1075,6 +1075,13 @@ class HL_OT_build(bpy.types.Operator):
         elif context.scene.hammerless.sky_light != "FLAT" and opts.rad != "SKIP":
             write_log(["Sky Light from the sky needs the Hammerless light compiler: the sky lights the map with "
                        "one colour"], append=True)
+        if rep.no_bake and opts.rad != "SKIP":
+            import dataclasses
+            if cc.use_hlvrad(opts):
+                opts = dataclasses.replace(opts, no_bake=rep.no_bake)
+            else:
+                write_log(["No Bake Volumes need the Hammerless light compiler: Valve's vrad bakes everything"],
+                          append=True)
         self._job = cc.CompileJob(tools, path, opts, skip_if_unchanged=True)
         self._nav = None
         s = context.scene.hammerless

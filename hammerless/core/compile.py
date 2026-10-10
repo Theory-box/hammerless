@@ -48,6 +48,7 @@ class CompileOptions:
     cycles_stitch: bool = True     # make neighbouring faces' lightmaps agree along shared edges
     cycles_denoise: bool = False   # measured: OpenImageDenoise smears the packed bake (7.7% off vs 1.3% raw)
     sky_key: str = ""              # sky light from a picture of the sky (<map>.hlsky_src.npy): its fingerprint
+    no_bake: str = ""              # No Bake Volumes (lightvolumes.no_bake_text): hlvrad -nobake <map>.hlnobake
 
     def vbsp_args(self) -> list[str]:
         return self.extra_vbsp.split()
@@ -568,6 +569,10 @@ class CompileJob:
             valve = [tools.exe("vrad")] + vrad + game + [self.base]
             if use_hlvrad(opts):
                 sky = ["-skymap", self.base + ".hlsky"] if opts.sky_key else []
+                if opts.no_bake:
+                    with open(self.base + ".hlnobake", "w", encoding="utf-8") as f:
+                        f.write(opts.no_bake)
+                    sky += ["-nobake", self.base + ".hlnobake"]
                 self.steps.append(("vrad", [HLVRAD] + vrad + opts.hlvrad_args() + game + sky
                                    + ["-modeldir", self.base + ".hlvrad_models", self.base]))
                 self._valve_vrad = valve
@@ -1235,7 +1240,7 @@ def clear_build(tools: Tools | None, work_base: str, map_name: str) -> list[str]
     if tools is not None:
         paths.append(os.path.join(tools.maps_dir, map_name + ".bsp"))
     shutil.rmtree(work_base + ".hlvrad_models", ignore_errors=True)    # (models copied for hlvrad)
-    paths += [work_base + ".hlsky", work_base + ".hlsky.key", work_base + ".hlsky_src.npy"]
+    paths += [work_base + ".hlsky", work_base + ".hlsky.key", work_base + ".hlsky_src.npy", work_base + ".hlnobake"]
     return _remove(paths)
 
 

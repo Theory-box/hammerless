@@ -112,6 +112,7 @@ class Report:
     problems: list = field(default_factory=list)   # mapcheck.Problem: with object and location
     solid_sources: dict = field(default_factory=dict)  # VMF solid id -> Blender object name
     nav_regions: list = field(default_factory=list)  # nav.NavRegion: marks for the nav mesh
+    no_bake: str = ""             # the No Bake Volumes for the light compiler (lightvolumes.no_bake_text)
     nav_climbs: list = field(default_factory=list)   # nav.NavClimb: Zombie Climb links
 
     @property
@@ -198,6 +199,8 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
 
     regions, nav_problems = collect_regions(ir)
     r.errors += nav_problems
+    from .lightvolumes import no_bake_text
+    r.no_bake = no_bake_text(ir)
     r.warnings += collect_climbs(ir)[1]
     ir.crescendos.clear()
     r.errors += collect_crescendos(ir)
