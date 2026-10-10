@@ -478,6 +478,13 @@ class HL_PT_light_advanced(_Sub, bpy.types.Panel):
         col.prop(s, "extra_vrad", text="Extra vrad Options")
 
 
+def _note_lines(layout, lines):
+    col = layout.column(align=True)
+    col.scale_y = 0.8
+    for line in lines:
+        col.label(text=line)
+
+
 class HL_PT_sky(_Sub, bpy.types.Panel):
     bl_label = "Sky & Sun"
     bl_parent_id = "HL_PT_lighting"
@@ -496,9 +503,20 @@ class HL_PT_sky(_Sub, bpy.types.Panel):
             if error():
                 col.label(text=f"Sky: {error()}", icon="ERROR")
         col.separator()
+        own = [o for o in context.scene.objects
+               if o.type != "LIGHT" and o.hammerless.classname == "light_environment" and o.visible_get()]
+        if own:                       # (an imported map's own sun: the settings below don't touch it)
+            box = col.box()
+            box.label(text="This map has its own sun:", icon="LIGHT_SUN")
+            for o in own[:4]:
+                row = box.row()
+                row.label(text=o.name)
+                row.operator("hammerless.select_object", text="Select", icon="RESTRICT_SELECT_OFF").name = o.name
+            _note_lines(box, ["It lights the map: change its _light / _ambient", "keys, or delete it. The settings",
+                              "below only make a sun for maps without one"])
         col.prop(s, "auto_sun")
         sub = col.column()
-        sub.enabled = s.auto_sun
+        sub.enabled = s.auto_sun and not own
         sub.prop(s, "sun_color")
         sub.prop(s, "sun_brightness")
         sub.prop(s, "sun_pitch")
