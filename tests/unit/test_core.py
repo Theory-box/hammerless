@@ -1285,14 +1285,14 @@ class TestPropLighting(unittest.TestCase):
         self.assertEqual((r.props, r.missing, len(r.positions)), (0, 0, 0))
 
     def test_valve_sample_map(self):
-        """(needs L4D2: Valve's styleguide_urban as shipped, its props lit by vrad)"""
+        """(needs L4D2 and a compiled styleguide_urban in its maps folder, its props lit: build Valve's sample)"""
         from hammerless.core.compile import find_game_root
         from hammerless.core.proplight import read_prop_lighting
         from hammerless.core.vpk import GameContent
         root = find_game_root()
         path = root and os.path.join(root, "left4dead2", "maps", "styleguide_urban.bsp")
         if not path or not os.path.exists(path):
-            self.skipTest("L4D2's styleguide_urban.bsp not found")
+            self.skipTest("no compiled styleguide_urban.bsp in L4D2's maps folder")
         with open(path, "rb") as f:
             r = read_prop_lighting(f.read(), GameContent(root))
         self.assertGreater(r.props, 400)
@@ -2686,6 +2686,23 @@ class TestVmfImport(unittest.TestCase):
            'side { "id" "6" "plane" "(64 64 -16) (64 -64 -16) (64 -64 0)" "material" "A" "uaxis" "[0 1 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" } '
            'side { "id" "7" "plane" "(64 64 0) (-64 64 0) (-64 64 -16)" "material" "A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" } '
            'side { "id" "8" "plane" "(64 -64 -16) (-64 -64 -16) (-64 -64 0)" "material" "A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 0 -1 0] 0.25" } }')
+
+    def test_lightmap_scale_override(self):
+        """Imported Brushes Too: every side gets the scale, but a displacement too big for it (at most 125 luxels a
+        side; vbsp can't split one) gets the finest scale that fits."""
+        from hammerless.core import vmfimport as vi
+        from hammerless.core.vmf import parse
+        big = self.BOX.replace("64", "514").replace('"material" "A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" }',
+                                                    '"material" "A" "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" '
+                                                    'dispinfo { "power" "3" } }', 1)
+        solid = parse(big)[0]
+        self.assertEqual(vi.set_lightmap_scale(solid, lambda m: 8), 1)
+        scales = {s.get("id"): int(s.get("lightmapscale")) for s in solid.blocks("side")}
+        self.assertEqual(scales["3"], 9)                             # (1028 units: 129 luxels at 8, 115 at 9)
+        self.assertEqual({v for k, v in scales.items() if k != "3"}, {8})
+        solid = parse(self.BOX)[0]
+        self.assertEqual(vi.set_lightmap_scale(solid, lambda m: 32 if m == "A" else None), 0)
+        self.assertEqual([s.get("lightmapscale") for s in solid.blocks("side")], ["32", None, "32", "32", "32", "32"])
 
     def test_box(self):
         from hammerless.core import vmfimport as vi

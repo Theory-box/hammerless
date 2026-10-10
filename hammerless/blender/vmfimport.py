@@ -367,10 +367,12 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
         own = m.hammerless.lightmap_scale if m is not None else 0
         return own or s.lightmap_scale
 
+    raised = [0]
+
     def solid(block: Block):
         out = _solid(block)
         if out is not None and s.lightmap_scale_imported:
-            vi.set_lightmap_scale(out, scale_of)
+            raised[0] += vi.set_lightmap_scale(out, scale_of)
         return out
 
     def _solid(block: Block):
@@ -428,6 +430,9 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
         block = vi.set_entity_values(e, values, outputs)
         kept = [b for b in (solid(x) for x in e.blocks("solid")) if b is not None] + new_solids(obj)
         out_ents.append(vi.with_solids(block, kept) if e.blocks("solid") or kept else block)
+    if raised[0]:
+        report.info.append(f"Lightmap Scale {s.lightmap_scale}: {raised[0]} displacement(s) are too big for it (a "
+                           "displacement's lightmap is at most 125 luxels a side): they use the finest scale that fits")
     return doc, world, out_ents
 
 

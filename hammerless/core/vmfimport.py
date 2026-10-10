@@ -290,12 +290,42 @@ def side_for_face(face_verts: list[Vec3], material: str, original: Block | None,
     return side
 
 
-def set_lightmap_scale(solid: Block, scale_of) -> None:
-    """Every side's lightmap scale from scale_of(material) (an int, or None: keep the side's own)."""
+MAX_DISP_LUXELS = 125      # a displacement's lightmap, luxels a side (vbsp can't split one to fit; 126 errors)
+
+
+def _disp_min_scale(side: Block, verts: list[Vec3]) -> int:
+    """The smallest lightmap scale a displacement side's lightmap fits at (its extent along the texture axes)."""
+    need = 1
+    for key in ("uaxis", "vaxis"):
+        try:
+            axis = _norm(parse_axis(side.get(key, ""))[0])
+        except (ValueError, ZeroDivisionError):
+            continue
+        d = [_dot(p, axis) for p in verts]
+        lo, hi = min(d), max(d)
+        s = max(1, math.ceil((hi - lo) / MAX_DISP_LUXELS))
+        while math.ceil(hi / s) - math.floor(lo / s) > MAX_DISP_LUXELS:
+            s += 1
+        need = max(need, s)
+    return need
+
+
+def set_lightmap_scale(solid: Block, scale_of) -> int:
+    """Every side's lightmap scale from scale_of(material) (an int, or None: keep the side's own). A displacement
+    gets at least the scale its lightmap fits at. Returns how many displacement sides were raised for that."""
+    raised = 0
+    disp = {id(s): w for s, w in solid_faces(solid) if s.blocks("dispinfo")}
     for side in solid.blocks("side"):
         v = scale_of(side.get("material", ""))
-        if v:
-            _set(side, "lightmapscale", str(int(v)))
+        if not v:
+            continue
+        v = int(v)
+        if id(side) in disp:
+            need = _disp_min_scale(side, disp[id(side)])
+            if need > v:
+                v, raised = need, raised + 1
+        _set(side, "lightmapscale", str(v))
+    return raised
 
 
 def _set(b: Block, key: str, value: str) -> None:
