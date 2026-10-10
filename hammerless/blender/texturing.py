@@ -119,7 +119,8 @@ def material_for(path: str):
     """The Blender material for a game material, its preview showing painted faces through their UVs."""
     from .ops import game_material, refresh_material_preview
     mat = game_material(path)
-    if not mat.get("hl_uvmix") and not path.startswith("tools/"):
+    if not mat.get("hl_uvmix") and not mat.get("hl_uvmix_tried") and not path.startswith("tools/"):
+        mat["hl_uvmix_tried"] = 1          # (once: a texture the game doesn't have would be read every click)
         refresh_material_preview(mat)
     return mat
 
@@ -164,12 +165,13 @@ def _align_bm_face(f, uvl, pl, m, upm, al, mat, set_flag=True):
         f[pl] = 1
 
 
-def paint_faces(context, obj, faces=None, material=None, al=None) -> int:
+def paint_faces(context, obj, faces=None, material=None, al=None, fresh=True) -> int:
     """Give faces of an object (indices; None: all) the material (None: keep theirs) and alignment. Object or
-    Edit Mode. Returns how many faces."""
+    Edit Mode. Returns how many faces. fresh: update the scene first (a just-moved object's matrix may lag; the
+    paint tool's clicks don't need it)."""
     al = al or current_alignment(context)
-    if obj.mode != "EDIT":
-        context.view_layer.update()     # (the object's place as it is now: a just-moved object's matrix may lag)
+    if fresh and obj.mode != "EDIT":
+        context.view_layer.update()
     edit = obj.mode == "EDIT"
     bm = bmesh.from_edit_mesh(obj.data) if edit else bmesh.new()
     if not edit:
@@ -328,6 +330,48 @@ def _ray(context, event):
     return obj, index
 
 
+def _snapshot(obj, faces):
+    """What painting these faces changes (materials, UVs, the painted mark), to put back."""
+    me = obj.data
+    idx = list(range(len(me.polygons))) if faces is None else list(faces)
+    uvl = me.uv_layers.active
+    pa = me.attributes.get(PAINTED)
+    return {
+        "obj": obj.name, "slots": len(obj.material_slots), "faces": idx,
+        "mats": [me.polygons[i].material_index for i in idx],
+        "uvs": ({li: tuple(uvl.data[li].uv) for i in idx for li in me.polygons[i].loop_indices}
+                if uvl is not None else None),
+        "flags": [pa.data[i].value for i in idx] if pa is not None and pa.domain == "FACE" else None,
+    }
+
+
+def _restore(snap) -> bool:
+    obj = bpy.data.objects.get(snap["obj"])
+    if obj is None or obj.type != "MESH":
+        return False
+    me = obj.data
+    for i, m in zip(snap["faces"], snap["mats"]):
+        if i < len(me.polygons):
+            me.polygons[i].material_index = m
+    uvl = me.uv_layers.active
+    if uvl is not None and snap["uvs"] is not None:
+        for li, uv in snap["uvs"].items():
+            if li < len(uvl.data):
+                uvl.data[li].uv = uv
+    pa = me.attributes.get(PAINTED)
+    if pa is not None:
+        for k, i in enumerate(snap["faces"]):
+            if i < len(pa.data):
+                pa.data[i].value = snap["flags"][k] if snap["flags"] is not None else 0
+    while len(obj.material_slots) > snap["slots"]:          # (a slot the click added, now unused)
+        used = {p.material_index for p in me.polygons}
+        if len(obj.material_slots) - 1 in used:
+            break
+        me.materials.pop()
+    me.update()
+    return True
+
+
 class HL_OT_tex_paint(bpy.types.Operator):
     bl_idname = "hammerless.tex_paint"
     bl_label = "Paint Faces"
@@ -347,7 +391,9 @@ class HL_OT_tex_paint(bpy.types.Operator):
             bpy.ops.object.mode_set(mode="OBJECT")
         context.window.cursor_modal_set("PAINT_BRUSH")
         context.area.header_text_set("Paint Faces: click a face   Shift+click: whole object   Alt+click: pick   "
-                                     "Right-click / Esc: stop")
+                                     "Ctrl+Z: undo a click   Right-click / Esc: stop")
+        self._undo = []
+        self._mats = {}                     # (each texture's material, looked up once a session)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
@@ -359,6 +405,11 @@ class HL_OT_tex_paint(bpy.types.Operator):
     def modal(self, context, event):
         if event.type in ("RIGHTMOUSE", "ESC") and event.value == "PRESS":
             return self._stop(context)
+        if event.type == "Z" and event.value == "PRESS" and (event.ctrl or event.oskey) and not event.shift:
+            if self._undo and _restore(self._undo.pop()):
+                context.area.tag_redraw()
+                self.report({"INFO"}, f"Undid a click ({len(self._undo)} left)")
+            return {"RUNNING_MODAL"}
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
             if _view_under_mouse(context, event) is None:
                 return {"PASS_THROUGH"}         # (a click on the panel, another editor...)
@@ -369,10 +420,14 @@ class HL_OT_tex_paint(bpy.types.Operator):
                 read_face(context, obj, index)
                 self.report({"INFO"}, f"Picked {context.scene.hl_tex.active}")
                 return {"RUNNING_MODAL"}
-            mat = material_for(context.scene.hl_tex.active)
-            n = paint_faces(context, obj, None if event.shift else [index], mat)
+            path = context.scene.hl_tex.active
+            mat = self._mats.get(path) or self._mats.setdefault(path, material_for(path))
+            faces = None if event.shift else [index]
+            # (no undo step a click: on a big scene Blender's takes half a second. The tool keeps its own,
+            # Ctrl+Z; the whole session is one undo step when it ends)
+            self._undo.append(_snapshot(obj, faces))
+            paint_faces(context, obj, faces, mat, fresh=False)
             _remember_last(context, obj, index)
-            bpy.ops.ed.undo_push(message=f"Paint {n} face(s)")
             return {"RUNNING_MODAL"}
         return {"PASS_THROUGH"}         # (navigating the view, the panel)
 
