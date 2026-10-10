@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.12.1 (test release, 2026-10-10)
+
+- **Light compiler:** no more memory leak when bouncing light on the GPU. A mid-size map could use several GB and fall back to Valve's vrad. Lighting that runs alongside vis now takes vis's changes to the map's leaves (fog and water). It also no longer starts early on maps with fog distance (radial vis), where it can't be right: those light after vis. hlvrad and hlvbsp now fail on a write error instead of leaving a cut-short map.
+- **Builds:**
+  - Valve's tools running instead of ours is now listed in Problems. A build where that happened after a crash isn't counted as up to date, so the next build tries again.
+  - Repainting a custom texture or editing a custom model now rebuilds the map.
+  - A second Build can't start while the first is still making the nav, analyzing it or baking.
+- **Brushes:** faces a fraction of a degree apart (a shallow roof or ramp) are no longer merged into one plane. That could put a long brush tens of units off. Faces with many corners always get a valid plane. Painted texture alignment is written more precisely, so textures far from the origin stay exact.
+- **Imported maps:**
+  - Copies of imported objects are built (they used to vanish), and renamed ones are still written back.
+  - Mirrored imported brushes are no longer inside out.
+  - `//` inside a value (a URL) no longer breaks the file, and an instance that includes itself no longer hangs the build.
+  - Wall and slope displacements collide correctly in the nav analysis.
+  - Moved entities, outputs' fire counts and delays are written exactly.
+- **Logic nodes:**
+  - Changing a node's settings no longer deletes its wires.
+  - Script nodes wired in a loop take a step per frame instead of crashing the script.
+  - Event fields named like a script keyword (`class`) work.
+  - Two graphs turning one object into different entities is reported.
+  - HUD text from Random Value or Progress keeps updating.
+- **Other fixes:**
+  - A collection instance set to Ignore isn't built.
+  - A mesh with any game class becomes that brush entity.
+  - Game material paths with `materials/` or `.vmt` work.
+  - Damaged game VPKs are skipped.
+  - The add-on shows its right version in Blender 4.0 and 4.1.
+
 ## 0.12.0 (test release, 2026-10-10)
 
 - **Audit fixes.** *Texturing:* painting and export always use the same texture size, remembered on the material; a custom texture uses its exported power-of-two size. Faces far from the origin keep their alignment, because UVs stay near 0..1. Mirrored objects paint and read back right. World alignment on sloped faces reads back with the right scale and shift. Painting an object with modifiers hits the object's own face. Replace keeps painted faces' texel size. An imported map's materials keep their look. *Control Volumes:* Visibility needs Auto Seal, and warns when it's off, since func_detail doesn't seal. An Only Inside nav volume with no floor in it is reported. A volume without a closed brush acts as its box. *Partial bakes:* the last build's lighting is copied when the build starts, and only if it has lighting. The light compiler's keep-light matching is stricter: the full face key, the model checksum and bounds checks. Not Inside volumes win over kept lighting. *UI:* Clear Navmesh asks first; the Bake dropdown and the Map panel redraw less; tooltips and docs now use the new panel names.
