@@ -247,6 +247,23 @@ def _id(b: Block) -> int:
         return 0
 
 
+def map_points(world: Block, entities: list[Block]) -> list[Vec3]:
+    """Points spanning a map's brushes and entities (sides' plane points, entity origins): for its bounds."""
+    pts: list[Vec3] = []
+    for holder in [world] + list(entities):
+        for s in holder.blocks("solid"):
+            for side in s.blocks("side"):
+                try:
+                    pts.extend(parse_plane(side.get("plane", "")))
+                except ValueError:
+                    pass
+        if holder is not world and holder.get("origin") is not None:
+            nums = [float(x) for x in re.findall(_NUM, holder.get("origin"))[:3]]
+            if len(nums) == 3:
+                pts.append(tuple(nums))
+    return pts
+
+
 def entity_solids(e: Block) -> list[Block]:
     return e.blocks("solid")
 

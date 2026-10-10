@@ -307,7 +307,8 @@ def import_text(context, text: str, path: str) -> tuple[int, int]:
                 b.parent = obj
                 b.matrix_parent_inverse = obj.matrix_world.inverted()
                 n_brushes += 1
-    # (a Valve map brings its own sky, sun, Director and spawns: Build adds none of its own)
+    # (a Valve map brings its own sky, sun, Director and spawns: Build adds none of its own; Auto Seal stays off
+    # while it has its own seal: turn it on to delete the map's outer shell)
     s.map_name = "".join(c if c.isalnum() or c == "_" else "_" for c in base.lower())[:60] or s.map_name
     for attr, value in (("auto_seal", False), ("auto_director", False), ("auto_light_environment", False),
                         ("sound_mode", "OFF")):       # (and its own soundscapes)

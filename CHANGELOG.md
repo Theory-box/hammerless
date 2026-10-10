@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Fix: Auto Seal was ignored on imported maps.** Deleting a Valve map's outer shell (its giant sky walls, ceiling and floor) with Auto Seal on leaked the map, which broke vis and lighting. Auto Seal now wraps imported maps too (around the map's own brushes and entities as well as yours). Import leaves it off while the map has its own seal.
+- **Fix: the Sound system on imported maps** placed its soundscape spots in the void (it only sees the scene's own brushes) and leaked the map: it's off for imported maps, which keep their own soundscapes.
 - **No Nav Volume** (Add > Volumes): no nav mesh is made inside it. Put it around roofs, ledges, skybox floors and anything outside the playable space: the nav builder stops at it like a wall, so big maps build faster and stay under its limit (500,000 nav points). For nav made in Blender; it isn't written into the map.
 - **Import Hammer maps (File > Import > Hammer Map (.vmf)).** Brushes (one object each, textured with their real alignment), displacements, entities with all their keyvalues and outputs, brush entities (an Empty with their brushes), props as their models. Build writes the map back exactly: what you didn't change is written as it was read (a moved face gets a new plane and keeps its texture settings), new objects are added the usual way, and the map's own sky, sun, spawns, Director and soundscapes are kept (Build adds none of its own). Instances are copied next to the built map. All 134 of Valve's sample maps come back identical. Not yet: editing displacements (they keep their imported shape).
 - **Water overlays** (`info_overlay_transition`, the strips along a water's edge) in the Hammerless map compiler, byte-identical to vbsp: nothing falls back to Valve's vbsp any more.

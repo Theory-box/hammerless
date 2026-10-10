@@ -259,7 +259,13 @@ def build_map_text(context, root: str | None):
     from .logic import compile_logic
     compile_logic(context, ir, rep)
     from .sound import add_acoustics
-    add_acoustics(context, ir, rep)
+    from . import vmfimport as _vi
+    if _vi.imported(context.scene) and s.sound_mode != "OFF":
+        # (it works out rooms from the scene's own brushes: an imported map's aren't among them, so its
+        # soundscape spots would land in the void and leak the map. The map has its own soundscapes)
+        rep.info.append("Sound is off for an imported map (it keeps its own soundscapes)")
+    else:
+        add_acoustics(context, ir, rep)
     base = None
     from . import vmfimport
     if vmfimport.imported(context.scene):

@@ -413,9 +413,9 @@ def zombie_ladder_entity(e: Entity, report: Report) -> Entity:
     return dataclasses.replace(e, classname="func_simpleladder", keyvalues=kv)
 
 
-def seal_brushes(ir: MapIR):
-    """Six skybox brushes forming a hollow box around everything."""
-    pts = _all_points(ir)
+def seal_brushes(ir: MapIR, extra_points=()):
+    """Six skybox brushes forming a hollow box around everything (extra_points: an imported map's)."""
+    pts = _all_points(ir) + list(extra_points)
     if not pts:
         return []
     (x0, y0, z0), (x1, y1, z1) = g.bounds(pts)
@@ -502,8 +502,12 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
         report.errors.append(f"{n_patches} terrain patches: the game allows {MAX_DISPLACEMENTS}. Use a bigger Patch "
                              f"Size on the terrain objects")
         return None, report
-    if s.auto_seal and base is None:
-        for b in seal_brushes(ir):
+    if s.auto_seal:
+        extra = []
+        if base is not None:
+            from .vmfimport import map_points
+            extra = map_points(world, [e for e in base_entities if e is not None])
+        for b in seal_brushes(ir, extra):
             world.add(w.solid(b))
         report.info.append("Sealed the map in an automatic skybox shell.")
 
