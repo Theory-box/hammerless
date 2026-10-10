@@ -196,6 +196,7 @@ def organize(context) -> dict:
                 parent.children.unlink(top)
         coll.children.link(top)
     removed = _drop_empty(scene, coll)
+    _known[scene.name] = {o.session_uid for o in scene.objects}
     # new objects (Shift+A, the Add panel) land in the map
     lc = _layer_collection(context.view_layer.layer_collection, coll)
     if lc is not None:
@@ -241,6 +242,94 @@ def _layer_collection(lc, coll):
     return None
 
 
+# ---------------------------------------------------------------- keeping it sorted
+
+_known: dict = {}             # scene name -> its objects already seen (session ids: renaming isn't new)
+_pending: dict = {}           # object session id -> True when new (else: its kind may have changed)
+_timer = [False]
+
+
+def _sorted_place(coll, c) -> bool:
+    """A collection objects are sorted into: the map collection itself or one of its kind collections."""
+    return c is coll or (c.get("hl_category") is not None and c in _all_children(coll))
+
+
+def place(scene, obj, new: bool) -> bool:
+    """Put one object (and the objects parented under it) where its kind goes. A new object is moved from
+    anywhere; an existing one only from the map collection or its kind collections (not from collections you
+    made inside the map). Returns whether it moved."""
+    from .vmfimport import KIND
+    coll = map_collection(scene)
+    if coll is None or obj is None or obj.name not in scene.objects or obj.parent is not None:
+        return False
+    if obj.get(KIND) is not None or not obj.visible_get() or obj.name in _instance_sources(scene):
+        return False
+    cat = _category(obj)
+    if cat is None:
+        return False
+    if not new and not all(_sorted_place(coll, c) for c in obj.users_collection):
+        return False
+    target = coll
+    for part in cat.split("/"):
+        target = _child(target, part)
+    if list(obj.users_collection) == [target]:
+        return False
+    for o in [obj] + list(obj.children_recursive):
+        if o is not obj and not new and not all(_sorted_place(coll, c) for c in o.users_collection):
+            continue
+        _freeze_settings(o)
+        if target not in o.users_collection:
+            target.objects.link(o)
+        for c in list(o.users_collection):
+            if c is not target:
+                c.objects.unlink(o)
+    return True
+
+
+def _apply_pending():
+    _timer[0] = False
+    scene = bpy.context.scene
+    by_uid = {o.session_uid: o for o in scene.objects}
+    moved = 0
+    for uid, new in list(_pending.items()):
+        try:
+            moved += place(scene, by_uid.get(uid), new)
+        except (ReferenceError, RuntimeError):
+            pass
+    _pending.clear()
+    if moved:
+        try:
+            bpy.ops.ed.undo_push(message="Hammerless: sort into the map collection")
+        except RuntimeError:
+            pass
+    return None
+
+
+@bpy.app.handlers.persistent
+def _on_depsgraph(scene, depsgraph):
+    if map_collection(scene) is None:
+        return
+    ids = {o.session_uid: o for o in scene.objects}
+    known = _known.get(scene.name)
+    _known[scene.name] = set(ids)
+    if known is None:
+        return                        # (first look at this scene: what's there stays where it is)
+    for uid in ids.keys() - known:
+        _pending[uid] = True
+    for u in depsgraph.updates:
+        if isinstance(u.id, bpy.types.Object) and not u.is_updated_transform:
+            _pending.setdefault(u.id.original.session_uid, False)
+    if _pending and not _timer[0]:
+        _timer[0] = True
+        bpy.app.timers.register(_apply_pending, first_interval=0.0)
+
+
+@bpy.app.handlers.persistent
+def _on_load(*_args):
+    _known.clear()
+    _pending.clear()
+
+
 class HL_OT_organize_scene(bpy.types.Operator):
     bl_idname = "hammerless.organize_scene"
     bl_label = "Organize Scene"
@@ -265,8 +354,14 @@ CLASSES = (HL_OT_organize_scene,)
 def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
+    bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
+    bpy.app.handlers.load_post.append(_on_load)
 
 
 def unregister():
+    if _on_depsgraph in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph)
+    if _on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_on_load)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

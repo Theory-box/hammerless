@@ -1161,6 +1161,58 @@ def test_organize_scene():
     assert coll.name == "renamed_map"
 
 
+def test_new_objects_sorted():
+    # after Organize Scene, what's added goes where its kind goes (even when added outside the map); a change of
+    # kind moves it; objects in your own collections inside the map, cameras, and renames are left alone
+    from hammerless.blender import mapcollection as mc
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    bpy.ops.hammerless.organize_scene()
+    coll = mc.map_collection(bpy.context.scene)
+
+    def settle():
+        bpy.context.view_layer.update()
+        mc._apply_pending()                                        # (the timer doesn't run in background mode)
+
+    def where(o):
+        return {c.get("hl_category") or c.name for c in o.users_collection}
+    settle()
+    bpy.context.view_layer.active_layer_collection = bpy.context.view_layer.layer_collection   # (outside the map)
+    wall = add_box("wall", (0.5, 10, 3), (5, 0, 1.5))
+    bpy.ops.hammerless.add_entity(classname="weapon_first_aid_kit_spawn")
+    kit = bpy.context.object
+    bpy.ops.object.light_add(type="POINT", location=(1, 1, 2))
+    lamp = bpy.context.object
+    bpy.ops.object.camera_add(location=(0, -5, 2))
+    cam = bpy.context.object
+    settle()
+    assert where(wall) == {"World"}, where(wall)
+    assert where(kit) == {"Items"}, where(kit)
+    assert where(lamp) == {"Lights"}, where(lamp)
+    assert cam.name not in coll.all_objects                       # (not built)
+    bpy.ops.hammerless.add_preset(preset="START_SAFE_ROOM", landmark="landmark_0")
+    settle()
+    room = next(o for o in bpy.data.objects if o.hammerless.preset == "START_SAFE_ROOM")
+    assert where(room) == {"Prefabs"}, where(room)
+    assert all(where(c) == {"Prefabs"} for c in room.children_recursive)      # (its parts with it)
+    # a change of kind: a brush becomes a trigger
+    wall.hammerless.role, wall.hammerless.classname = "BRUSH_ENTITY", "trigger_once"
+    wall.update_tag()
+    settle()
+    assert where(wall) == {"Brush Entities"}, where(wall)
+    # your own collection inside the map: kept; renaming isn't "new"
+    mine = bpy.data.collections.new("my stuff")
+    coll.children.link(mine)
+    for c in list(kit.users_collection):
+        c.objects.unlink(kit)
+    mine.objects.link(kit)
+    settle()
+    kit.name = "renamed kit"
+    kit.update_tag()
+    settle()
+    assert where(kit) == {"my stuff"}, where(kit)
+
+
 def test_sky_dropdown():
     # the sky dropdown lists the game's skies then Custom; it sets the map's skyname, Custom keeps a typed one
     from hammerless.blender.props import _sky_choice_items
