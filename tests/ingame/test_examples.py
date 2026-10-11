@@ -31,7 +31,7 @@ from hammerless.blender.logic_examples import all_examples, build_example
 for t in [t for t in bpy.data.node_groups if t.bl_idname == TREE]:
     bpy.data.node_groups.remove(t)
 for i, ex in enumerate(all_examples()):
-    bpy.context.scene.cursor.location = Vector((3 + (i % 14) * 4.8, (-10, -3, 7)[i // 14], 0.0))
+    bpy.context.scene.cursor.location = Vector((3 + (i % 14) * 4.8, (-10, -3, 7)[min(i // 14, 2)], 0.0))
     build_example(bpy.context, i)
 nuke = next(t for t in bpy.data.node_groups if t.name.endswith("Power-Up: Nuke"))
 nuke.nodes["chance"].inputs["value"].value = 1.0
@@ -306,6 +306,24 @@ def check(run: Run, n: int, b: Bench):
         left = b.value('T.alive("infected")')
         assert b.value('HL_VarGet("cooling", false)'), "no cooldown after the nuke"
         return f"nuke went off, {left} commons left (outside the radius)"
+    if n == 43:
+        speed = 'Convars.GetFloat("host_timescale")'
+        b.run('FireGameEvent("infected_death", { headshot = false, attacker = T.host().GetPlayerUserId() });')
+        time.sleep(0.5)
+        assert b.value(speed) == 1.0, "a body shot slowed the game"
+        b.run('FireGameEvent("infected_death", { headshot = true, attacker = T.host().GetPlayerUserId() });')
+        time.sleep(0.5)
+        slow = b.value(speed)
+        assert abs(slow - 0.3) < 0.01, f"time scale {slow} after a headshot"
+        t0, w0 = b.value("Time()"), time.time()
+        time.sleep(1.0)
+        rate = (b.value("Time()") - t0) / (time.time() - w0)
+        time.sleep(2.5)
+        back, cheats = b.value(f"[{speed}, Convars.GetFloat(\"sv_cheats\")]")
+        b.console("sv_cheats 1", wait=0.3)          # (the graph turned cheats off: the run needs them)
+        assert back == 1.0 and cheats == 0, f"after it: time scale {back}, sv_cheats {cheats}"
+        assert rate < 0.5, f"the game ran at {rate:.2f}x during the slow motion"
+        return f"headshot: game at {rate:.2f}x, then back to normal with cheats off"
     raise SkipTest("not automated (needs real play: " + SKIP_WHY.get(n, "timing") + ")")
 
 

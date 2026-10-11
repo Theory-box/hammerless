@@ -108,6 +108,7 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | | Example | Shows |
 |---|---|---|
 | 42 | Power-Up: Nuke | A kill may drop a glowing pickup (spawned with Spawn Entity From Table); walking over it blows up the common infected within a Radius in a wave, five per tenth of a second; a Delay keeps new ones from dropping for 30 s |
+| 43 | Slow Motion Headshots | A headshot on a common (infected_death) or a special (player_death) slows the game to 30% for about 2 s with Console Variable calls (host_timescale only works with cheats on, so they're on during it), then back |
 
 `demo/hl_test_nuke.blend` (made by `tests/fixtures/nuke_test.py`) is the demo level with it, set so the first kill drops it, and 40 commons on the field.
 
