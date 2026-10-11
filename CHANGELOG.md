@@ -7,6 +7,7 @@
 - The Nav Mesh preview buttons say what they do: **Build Nav Mesh** and **Show Game's Nav**.
 - **Visibility is many times faster** (Hammerless's vis compiler): areas that look through the same opening are worked out together instead of one route at a time. It never hides anything that can really be seen: every area pair it hides that vvis shows is proven hidden (vvis is over-generous there), and it draws about 1% more than vvis. *Visibility > Match vvis Exactly* gives vvis's own result instead.
 - **The nav mesh is made in its own process:** Blender stays responsive while it's built and analyzed, the build doesn't wait for it to start, and Cancel stops it at once.
+- **Closing Blender stops the build:** the compilers, light baking and nav mesh end with it, even mid-build or after a crash (the game keeps running).
 - **Build timeline:** the build log ends with a chart of when each step ran (map compiler, vis, light, nav, game load) and which ones the build waited on.
 
 ## 0.12.3 (test release, 2026-10-10)
