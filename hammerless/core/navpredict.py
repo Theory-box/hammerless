@@ -79,6 +79,36 @@ def to_navmesh(areas, regions, ladders=()) -> NavMesh:
 
 _last: dict = {"key": None, "mesh": None}
 
+# entities the nav generator and analysis never read: logic (adding logic nodes doesn't make a new nav mesh)
+_NOT_NAV = ("logic_", "math_", "filter_", "point_clientcommand", "point_servercommand", "point_broadcastclientcommand",
+            "ambient_generic", "game_text", "env_fade", "env_shake", "env_hudhint", "env_instructor_hint",
+            "info_director", "trigger_")     # (triggers aren't solid to the nav)
+
+
+def inputs_key(vmf_text: str, regions, climbs=(), wall_climbs=False, extra: str = "") -> str:
+    """What the nav mesh (and its analysis) is made from: the map without its logic entities and without any
+    entity's outputs, the nav settings, and the nav code itself. The same key: the nav on disk still fits."""
+    import hashlib
+    import os
+    from .buildplan import _split
+    from .vmf import parse
+    kept = []
+    for b in parse(vmf_text):
+        if b.name.lower() == "entity":
+            cls = (b.get("classname") or "").lower()
+            if cls.startswith(_NOT_NAV):
+                continue
+            b.items = [it for it in b.items if not (hasattr(it, "name") and it.name.lower() == "connections")]
+        kept.append(b)
+    h = hashlib.sha1(repr(_split(kept)).encode())
+    h.update(_key("", regions, climbs, wall_climbs).encode() + extra.encode())
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in sorted(os.listdir(here)):            # (a new Hammerless version makes a new nav)
+        if name.startswith("nav") and name.endswith(".py"):
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(f.read())
+    return h.hexdigest()
+
 
 def _key(vmf_text: str, regions, climbs=(), wall_climbs=False) -> str:
     import hashlib

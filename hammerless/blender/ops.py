@@ -997,6 +997,19 @@ def _popup(message: str) -> None:
         pass
 
 
+def _nav_key(vmf_path: str, rep, s, opts) -> str | None:
+    """What a nav for this build is made from (navpredict.inputs_key), or None when it can't be read."""
+    from ..core.navpredict import inputs_key
+    try:
+        with open(vmf_path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        o = cc.PRESETS[opts] if isinstance(opts, str) else opts
+        extra = f"{o.vis}|{o.vis_tool}|{o.vis_exact}|{s.nav_analysis}"     # (the analysis reads the visibility)
+        return inputs_key(text, rep.nav_regions, rep.nav_climbs, s.wall_climbs, extra)
+    except Exception:
+        return None
+
+
 def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False) -> dict:
     """Run our copy of the game's nav generator on the VMF in its own process (core/navworker.py: not sharing
     Python's lock with Blender and the build), watched from a background thread."""
@@ -1163,6 +1176,8 @@ class HL_OT_build(bpy.types.Operator):
     _t0 = 0.0
     _export_s = 0.0
     _nav: dict | None = None        # our nav generator running alongside the compile
+    _nav_key: str | None = None     # what that nav is made from (navpredict.inputs_key)
+    _nav_kept = False               # the nav on disk still fits: not made again
     _bake: dict | None = None       # its Cycles bake running in a background Blender
 
     def execute(self, context):
@@ -1288,7 +1303,12 @@ class HL_OT_build(bpy.types.Operator):
         if self.bake or self.vis_only:
             pass                     # lighting / visibility only: the nav is made by the next Build / Build & Play
         elif s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root) or unanalyzed):
-            self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs)
+            self._nav_key = _nav_key(path, rep, s, opts)
+            if (self._nav_key and not needs_nav(context, root) and s.nav_analysis == "BLENDER"
+                    and cc.nav_inputs_same(tools, s.map_name, self._nav_key)):
+                self._nav_kept = True        # (only logic changed: the nav on disk still fits the map)
+            else:
+                self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs)
         self._job.snapshot_vis = self._nav is not None and s.nav_analysis == "BLENDER"
         try:
             self._job.start()
@@ -1449,6 +1469,7 @@ class HL_OT_build(bpy.types.Operator):
                 analyzed = bool(self._nav.get("analysis") and self._nav["analysis"]["done"])
                 self._nav["analyzed"] = analyzed
                 cc.write_generated_nav(cc.Tools(self._root), self._owner[1], self._nav["mesh"], analyzed=analyzed)
+                cc.set_nav_inputs(cc.Tools(self._root), self._owner[1], self._nav_key if analyzed else None)
                 if analyzed:
                     timing += f", nav analysis {self._nav['analysis']['seconds']:.1f}s" + (
                         " (alongside the lighting)" if self._nav.get("analysis_early") else "")
@@ -1462,6 +1483,15 @@ class HL_OT_build(bpy.types.Operator):
                     write_log(self._nav["mesh"].problems, append=True)
                 s.generate_nav = False
                 timing += f", nav mesh {self._nav['seconds']:.1f}s (during the compile)"
+        if self._nav_kept and not getattr(self, "_nav_followed", False):
+            self._nav_followed = True
+            try:
+                if not self._job.skipped:
+                    cc.nav_follow_bsp(cc.Tools(self._root), self._owner[1])
+                timing += ", nav mesh kept (nothing it's made from changed)"
+            except OSError as ex:
+                cc.set_nav_inputs(cc.Tools(self._root), self._owner[1], None)
+                self.report({"WARNING"}, f"Couldn't update the nav mesh for the new map ({ex}): the next build makes it")
         write_log([timing], append=True)       # (once: the waits above return before this)
         tl = self._timeline()
         if not self.play:                      # (Build & Play writes it once the game has loaded)

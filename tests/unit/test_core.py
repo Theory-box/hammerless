@@ -543,6 +543,45 @@ class TestSmartBuild(unittest.TestCase):
         ir.entities.append(Entity("logic_relay", (0, 0, 16), (0, 0, 0), {"targetname": "r", "delay": speed}))
         return build_vmf(ir)[0]
 
+    def test_nav_kept_when_only_logic_changes(self):
+        """A build that only changed logic (a logic entity, a delay, outputs) keeps the nav mesh; moving a prop or a
+        wall makes a new one."""
+        from hammerless.core.navpredict import inputs_key
+        base = inputs_key(self.vmf(), [])
+        self.assertEqual(inputs_key(self.vmf(speed="7"), []), base)
+        ir_text = self.vmf().replace('"classname" "logic_relay"', '"classname" "logic_relay"\n\t"spawnflags" "1"')
+        self.assertEqual(inputs_key(ir_text, []), base)
+        self.assertNotEqual(inputs_key(self.vmf(prop_x=40), []), base)
+        self.assertNotEqual(inputs_key(self.vmf(wall=160), []), base)
+        self.assertNotEqual(inputs_key(self.vmf(), [], wall_climbs=True), base)
+        self.assertNotEqual(inputs_key(self.vmf(), [], extra="FULL"), base)
+
+    def test_nav_follows_new_bsp(self):
+        """A kept nav gets the new map's size in its header (the game checks it) and isn't outdated."""
+        import struct
+        import tempfile
+        from hammerless.core import compile as cc
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "left4dead2", "maps"))
+        tools = cc.Tools(root)
+        nav, bsp = (os.path.join(tools.maps_dir, "m" + e) for e in (".nav", ".bsp"))
+        with open(bsp, "wb") as f:
+            f.write(b"VBSP" + bytes(2000))
+        with open(nav, "wb") as f:
+            f.write(struct.pack("<IIII", 0xFEEDFACE, 16, 1, 50) + b"\x01")
+        cc.set_nav_maker(tools, "m", "blender")
+        cc.set_nav_inputs(tools, "m", "k")
+        self.assertTrue(cc.nav_inputs_same(tools, "m", "k"))
+        self.assertFalse(cc.nav_inputs_same(tools, "m", "other"))
+        with open(bsp, "wb") as f:
+            f.write(b"VBSP" + bytes(3000))
+        cc.nav_follow_bsp(tools, "m")
+        with open(nav, "rb") as f:
+            self.assertEqual(struct.unpack("<IIII", f.read(16))[3], 3004)
+        self.assertTrue(cc.nav_inputs_same(tools, "m", "k"))
+        cc.clear_nav(tools, "m")
+        self.assertFalse(cc.nav_inputs_same(tools, "m", "k"))
+
     def test_foreign_map_name(self):
         """A map already in the game (a loose file in any content folder's maps/) that Hammerless didn't build."""
         import tempfile

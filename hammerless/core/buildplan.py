@@ -42,10 +42,10 @@ def _canon(block: Block):
     return tuple(out)
 
 
-def _split(text: str):
-    """(geometry, lighting, entities) signatures of a VMF."""
+def _split(text):
+    """(geometry, lighting, entities) signatures of a VMF (its text, or its parsed blocks)."""
     geometry, lighting, entities = [], [], []
-    blocks = parse(text)
+    blocks = parse(text) if isinstance(text, str) else text
     # entities other classes compile from: a light's aim (its target's origin, read by the light compilers) is
     # lighting; an areaportal window's target brush (made see-through) is geometry
     aim, window = set(), set()

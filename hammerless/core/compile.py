@@ -1448,6 +1448,50 @@ def set_map_owner(tools: Tools, map_name: str, vmf_path: str) -> None:
         f.write(os.path.abspath(vmf_path))
 
 
+def _nav_inputs_path(tools: Tools, map_name: str) -> str:
+    return os.path.join(tools.gamedir, "scripts", "vscripts", "hammerless", f"navinputs_{map_name}.txt")
+
+
+def nav_inputs_same(tools: Tools, map_name: str, key: str) -> bool:
+    """The nav on disk was made from these inputs (navpredict.inputs_key) and is still ours, current and analyzed."""
+    try:
+        with open(_nav_inputs_path(tools, map_name), encoding="utf-8") as f:
+            same = f.read().strip() == key
+    except OSError:
+        return False
+    return (same and nav_maker(tools, map_name) == "blender" and nav_analyzed(tools, map_name) is True
+            and not nav_marks_changed(tools, map_name) and not nav_outdated(tools, map_name))
+
+
+def set_nav_inputs(tools: Tools, map_name: str, key: str | None) -> None:
+    """Record what the nav just written was made from (None: unknown, the next build makes it again)."""
+    path = _nav_inputs_path(tools, map_name)
+    try:
+        if key is None:
+            if os.path.exists(path):
+                os.remove(path)
+            return
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(key)
+    except OSError:
+        pass
+
+
+def nav_follow_bsp(tools: Tools, map_name: str) -> None:
+    """The map was compiled again but its nav still fits (only logic changed): the nav's header gets the new map's
+    size (the game checks it) and the marker the new map's signature."""
+    import struct
+    nav = os.path.join(tools.maps_dir, map_name + ".nav")
+    bsp = os.path.join(tools.maps_dir, map_name + ".bsp")
+    with open(nav, "r+b") as f:
+        head = f.read(16)
+        if len(head) == 16 and head[:4] == bytes((0xCE, 0xFA, 0xED, 0xFE)):
+            f.seek(12)
+            f.write(struct.pack("<I", os.path.getsize(bsp)))
+    set_nav_maker(tools, map_name, "blender")
+
+
 def set_nav_maker(tools: Tools, map_name: str, maker: str) -> None:
     """Record who made maps/<map>.nav: "blender" (our generator) or "game" (nav_generate), and for
     which compiled map (its signature), so a later compile without a new nav is noticed."""
@@ -1465,7 +1509,8 @@ def clear_nav(tools: Tools, map_name: str) -> list[str]:
     """Delete the map's nav mesh (and what records how it was made): the next build makes a new
     one. Returns the files that couldn't be deleted (the game has the map loaded)."""
     script, used = _navmark_paths(tools, map_name)
-    return _remove([os.path.join(tools.maps_dir, map_name + ".nav"), _nav_maker_path(tools, map_name), used])
+    return _remove([os.path.join(tools.maps_dir, map_name + ".nav"), _nav_maker_path(tools, map_name), used,
+                    _nav_inputs_path(tools, map_name)])
 
 
 def clear_nav_analysis(tools: Tools, map_name: str) -> bool:
