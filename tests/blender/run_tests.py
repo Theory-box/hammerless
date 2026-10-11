@@ -925,6 +925,17 @@ def test_logic_loops():
     assert "circle of value wires" in log, log
 
 
+def test_new_landmarks_get_free_names():
+    # each Landmark added gets a name no other landmark has (two with one name stop the build)
+    reset_scene()
+    names = []
+    for _ in range(3):
+        bpy.ops.hammerless.add_entity(classname="info_landmark")
+        o = bpy.context.object
+        names.append(next(kv.value for kv in o.hammerless.keyvalues if kv.key == "targetname"))
+    assert names == ["landmark_1", "landmark_2", "landmark_3"], names
+
+
 def test_logic_examples_build():
     # every example graph builds, and compiles into the map with nothing to warn about. Entity event
     # nodes need the game's entity definitions: copied from the real game when it's installed

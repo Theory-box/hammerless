@@ -585,7 +585,24 @@ def make_entity_object(context, classname: str, location, collection=None, rotat
     for k, v in (keyvalues or {}).items():
         kv = next((x for x in obj.hammerless.keyvalues if x.key == k), None) or obj.hammerless.keyvalues.add()
         kv.key, kv.value = k, v
+    if classname == "info_landmark" and "targetname" not in (keyvalues or {}):
+        _free_landmark_name(obj)
     return obj
+
+
+def _free_landmark_name(obj) -> None:
+    """A new landmark whose default name another landmark already has gets the next free one (two with one name
+    stop the build)."""
+    taken = {kv.value for o in bpy.data.objects if o is not obj and o.hammerless.classname == "info_landmark"
+             for kv in o.hammerless.keyvalues if kv.key == "targetname"}
+    kv = next((x for x in obj.hammerless.keyvalues if x.key == "targetname"), None)
+    if kv is None or kv.value not in taken:
+        return
+    stem = kv.value.rstrip("0123456789").rstrip("_") or "landmark"
+    n = 2
+    while f"{stem}_{n}" in taken:
+        n += 1
+    kv.value = f"{stem}_{n}"
 
 
 def apply_entity_data(obj, ent) -> None:
