@@ -11,10 +11,11 @@ No Hammer, no VMF editing, no console commands.
 
 - **One-click Build & Play**: export, compile, copy to the game and launch. The game starts the moment you press the button, so it boots while the map compiles, and a running game is reused. **Fast Map Loading** (LAN-only test games) skips a 6-second Steam wait on every load: from button to map in about 8 seconds on a small map. **Smart builds** only redo what changed: entity edits skip geometry, unchanged maps skip the compile.
 - **Hammerless's own compilers**, each checked against the output of Valve's:
-  - **Map compiler** (the default): the same map as vbsp, byte for byte on Valve's own sample maps.
+  - All four are the defaults.
+  - **Map compiler**: the same map as vbsp, byte for byte on Valve's own sample maps.
   - **Vis compiler**: the same visibility data as vvis, about 3 times faster.
   - **Light compiler**: lights the map **on the graphics card** (Vulkan ray tracing): looks the same as vrad's lighting and is several times faster (Final quality on a real map: 1.5 s against vrad's 16 s). **Exact Lighting** reproduces vrad byte for byte on the CPU instead. Fast, Normal, Final and **Ultra** quality (beyond vrad: finer supersampling, vrad's oddities fixed), each setting visible and adjustable; prop and grass lighting.
-  - **Model compiler** (the default): Custom Models without studiomdl.
+  - **Model compiler**: Custom Models without studiomdl.
   - Anything one of them doesn't do yet goes to Valve's tool, with a note in the log.
 - **Meshes become brushes.** Any convex mesh is a wall or floor; non-convex meshes can use a convex hull. **Terrain** objects become displacements (sculpt them however you like).
 - **Custom Models**: any mesh becomes a game prop (static, dynamic or physics), with collision, your own textures or the game's, and no extra tools.

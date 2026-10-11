@@ -498,7 +498,9 @@ def test_custom_compile_options():
     from hammerless.blender.ops import compile_options, launch_options
     s = reset_scene()
     from hammerless.core import compile as cc
+    s.light_tool = "VALVE"                          # (the presets are vrad's options; ours adds its own on top)
     assert compile_options(s).vrad_args() == cc.PRESETS["NORMAL"].vrad_args()
+    s.light_tool = "HAMMERLESS"
     s.compile_preset = "FINAL"                      # (sets Lighting and Visibility)
     assert s.light_quality == "FINAL" and s.vis_mode == "FULL" and s.light_sky_rays == 16
     s.light_bounces = 50                            # (a lighting setting by hand: Custom, and the build shows Mixed)

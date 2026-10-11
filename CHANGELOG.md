@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Hammerless's own compilers are now the defaults for everything:** the vis and light compilers join the map and model compilers (Valve's are still in the menus). Maps and settings you already changed keep your choice.
+- The Nav Mesh preview buttons say what they do: **Build Nav Mesh** and **Show Game's Nav**.
+
 ## 0.12.3 (test release, 2026-10-10)
 
 - **Camera node (Actions):** switches players to the game's over-the-shoulder third person view or back to first person, no cheats needed. With Player empty it acts on whoever set it off (walked into a Volume, pressed a Button), or everyone. New examples: Third Person Zone and Third Person Everywhere. Tested in game.

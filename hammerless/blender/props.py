@@ -593,7 +593,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                  description="Sets Lighting's and Visibility's quality together (each can still be "
                                              "changed in its own panel: then this shows Mixed)")
     settings_version: IntProperty(default=0)      # (quality.migrate: files saved before per-system qualities)
-    vis_tool: EnumProperty(name="Vis Compiler", default="VALVE", items=[
+    vis_tool: EnumProperty(name="Vis Compiler", default="HAMMERLESS", items=[
         ("VALVE", "Valve vvis", "L4D2's own visibility compiler (vvis.exe)"),
         ("HAMMERLESS", "Hammerless (faster)",
          "Hammerless's visibility compiler: the same results as vvis, about 3 times faster. If it ever fails, "
@@ -606,7 +606,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     model_compiler: EnumProperty(name="Model Compiler", default="HAMMERLESS", items=[
         ("HAMMERLESS", "Hammerless", "Hammerless writes Custom Models' game files itself (no extra tools needed)"),
         ("STUDIOMDL", "Valve studiomdl", "L4D2's own model compiler (studiomdl.exe, from the Authoring Tools)")])
-    light_tool: EnumProperty(name="Light Compiler", default="VALVE", update=_q("on_light_tool"), items=[
+    light_tool: EnumProperty(name="Light Compiler", default="HAMMERLESS", update=_q("on_light_tool"), items=[
         ("VALVE", "Valve vrad", "L4D2's own lighting compiler (vrad.exe)"),
         ("HAMMERLESS", "Hammerless",
          "Hammerless's lighting compiler: the same lighting as vrad (a few shadow-edge pixels differ very "
