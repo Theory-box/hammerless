@@ -13,7 +13,7 @@ No Hammer, no VMF editing, no console commands.
 - **Hammerless's own compilers**, each checked against the output of Valve's:
   - All four are the defaults.
   - **Map compiler**: the same map as vbsp, byte for byte on Valve's own sample maps.
-  - **Vis compiler**: many times faster than vvis, and it never hides anything that can be seen (every area pair it hides that vvis shows is proven hidden). **Match vvis Exactly** gives vvis's own result instead, still about 3 times faster.
+  - **Vis compiler**: many times faster than vvis, about 1% looser, and it never hides a view through an opening wider than vvis's own tolerance (0.01 units; checked on Valve's maps by proof and by searching for sight lines). **Match vvis Exactly** gives vvis's own result instead, still about 3 times faster.
   - **Light compiler**: lights the map **on the graphics card** (Vulkan ray tracing): looks the same as vrad's lighting and is several times faster (Final quality on a real map: 1.5 s against vrad's 16 s). **Exact Lighting** reproduces vrad byte for byte on the CPU instead. Fast, Normal, Final and **Ultra** quality (beyond vrad: finer supersampling, vrad's oddities fixed), each setting visible and adjustable; prop and grass lighting.
   - **Model compiler**: Custom Models without studiomdl.
   - Anything one of them doesn't do yet goes to Valve's tool, with a note in the log.

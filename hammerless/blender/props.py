@@ -603,7 +603,8 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         name="Match vvis Exactly", default=False,
         description="Hammerless's vis compiler follows vvis's own method and gives its result byte for byte (about 3 "
                     "times faster than vvis, several times slower than the default). The default merges what each "
-                    "opening shows: never hides anything visible, about 1% looser")
+                    "opening shows: about 1% looser, never hides a view through an opening wider than vvis's "
+                    "own 0.01-unit tolerance")
     map_tool: EnumProperty(name="Map Compiler", default="HAMMERLESS", items=[
         ("HAMMERLESS", "Hammerless",
          "Hammerless's map compiler: the same map as vbsp. Maps with things it doesn't do (water overlays, "
