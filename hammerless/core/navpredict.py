@@ -12,7 +12,7 @@ from .navareas import NAV_MESH_JUMP, Generator
 from .navfile import NavArea, NavLadder, NavMesh
 from .nav import NAV_VOLUME_BITS
 from .navgen import NAV_MESH_NO_MERGE
-from .vmf import parse
+from .vmf import parse_shared
 
 # L4D2's nav_generate grows from landmarks and item/weapon spawns, not player spawns
 # (verified in-game: a map with only survivor spawns fails with "No valid walkable seed
@@ -22,7 +22,7 @@ SEED_CLASSES = {"info_landmark"}
 
 def seed_positions(vmf_text: str) -> list[tuple[float, float, float]]:
     seeds = []
-    for e in (b for b in parse(vmf_text) if b.name == "entity"):
+    for e in (b for b in parse_shared(vmf_text) if b.name == "entity"):
         cls = e.get("classname", "")
         if cls in SEED_CLASSES or (cls.startswith("weapon_") and cls.endswith("_spawn")):
             origin = e.get("origin")
@@ -39,7 +39,7 @@ def ladder_bounds(vmf_text: str) -> list[tuple[tuple, tuple]]:
     brush-model bounds (what nav generation measures ladders by)."""
     from .collision import brush_from_vmf_sides
     out = []
-    for e in (b for b in parse(vmf_text) if b.name == "entity"):
+    for e in (b for b in parse_shared(vmf_text) if b.name == "entity"):
         if e.get("classname", "") not in LADDER_CLASSES:
             continue
         mins, maxs = [1e9] * 3, [-1e9] * 3
@@ -149,13 +149,13 @@ def static_prop_brushes(vmf_text: str) -> list:
     big props, ours under 74% before this), which also cuts open streets into the small areas the Director needs."""
     from .compile import find_game_root
     from .navanalyze import _prop_pieces
-    from .vmf import parse
+    from .vmf import parse_shared
     from .vpk import GameContent
     root = find_game_root()
     if not root:
         return []
     content, cache, out = GameContent(root), {}, []
-    for ent in (b for b in parse(vmf_text) if b.name == "entity"):
+    for ent in (b for b in parse_shared(vmf_text) if b.name == "entity"):
         if (ent.get("classname") or "").lower() != "prop_static":
             continue
         try:

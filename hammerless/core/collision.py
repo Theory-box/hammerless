@@ -389,8 +389,8 @@ class CollisionWorld:
         """World and solid brush-entity brushes from a VMF (what nav generation collides with).
         A brush with a displacement side isn't solid in the compiled map: its displacement
         surface is, as triangles."""
-        from .vmf import parse
-        top = parse(text)
+        from .vmf import parse_shared
+        top = parse_shared(text)
         brushes = []
 
         def add_solids(block, owner):

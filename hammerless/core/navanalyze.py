@@ -40,8 +40,8 @@ DOOR_MODE = "all"          # doors block sight lines and boxes (measured: "none"
 def _parsed(vmf):
     """The VMF's top-level blocks (text or already parsed)."""
     if isinstance(vmf, str):
-        from .vmf import parse
-        return parse(vmf)
+        from .vmf import parse_shared
+        return parse_shared(vmf)
     return vmf
 
 

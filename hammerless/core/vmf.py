@@ -115,6 +115,17 @@ def parse(text: str) -> list[Block]:
     return [b for b in root.items if isinstance(b, Block)]
 
 
+_SHARED: list = [None, None]      # (the text, its blocks) last parsed by parse_shared
+
+
+def parse_shared(text: str) -> list[Block]:
+    """parse(), remembered for the same text: the nav generation and analysis read one map several times. The blocks
+    are shared, so callers must not change them."""
+    if _SHARED[0] is not text and _SHARED[0] != text:
+        _SHARED[0], _SHARED[1] = text, parse(text)
+    return _SHARED[1]
+
+
 # ---------------------------------------------------------------- writer
 
 class VMFWriter:
