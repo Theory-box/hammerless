@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Slow Motion Headshots needs no cheats any more** (publishable, achievements stay on): it uses the game's Time Scale entity (func_timescale), which the example adds: Start blends the game to its Desired Timescale, Stop back to normal. Tested in game with cheats off: 30% speed after a headshot, normal again after the Delay.
+- Nav Mesh panel: Show Game's Nav is hidden for now.
+
 ## 0.13.3 (test release, 2026-10-11)
 
 - **The commons-only mark only goes where infected can't get out to the survivors** (sealed spots, roofs too high to drop from): commons on a roof or car with a way down jump down when they hear the survivors, so they're no longer lost picks.

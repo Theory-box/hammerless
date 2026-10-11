@@ -985,7 +985,7 @@ def test_logic_examples_build():
         # a build warning below)
         blocks, log = export()
         # (an example that needs cheats on purpose gets that warning, and only that one)
-        needs_cheats = ex["title"] == "Slow Motion Headshots"
+        needs_cheats = False                      # (none: Slow Motion Headshots uses func_timescale)
         warned = [ln for ln in log.splitlines() if tree.name in ln]
         if needs_cheats:
             ok = len(warned) == 1 and "Needs cheats" in warned[0]

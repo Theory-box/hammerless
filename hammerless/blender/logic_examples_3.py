@@ -133,36 +133,30 @@ EXAMPLES_3 = [
                  "Timer, which is fine for events)", ["taker", "wave", "empty", "if_empty"]),
                 ("No new drops for 30 seconds", ["cool_on", "cool_wait", "cool_off"])]),
     dict(title="Slow Motion Headshots", level="Scripting",
+         objects={"slowmo": ("ENTITY:func_timescale", (0.0, 0.0, 0.5),
+                             {"desiredTimescale": "0.3", "acceleration": "1.0", "minBlendRate": "1.0",
+                              "blendDeltaMultiplier": "3.0"})},
          about="Every headshot slows the whole game to 30% speed for about two seconds, then brings it "
-               "back. Kills of common infected ('infected_death') and of specials ('player_death') both "
-               "say whether it was a headshot. The game only lets a script change its speed "
-               "(host_timescale) while cheats are on, so the graph turns cheats on for the slow motion "
-               "and off again after it: the game says so in the chat, and cheats being on at any moment "
-               "turns off achievements for that game. The Delay counts game time, which runs slowly "
-               "too: 0.6 s of it is 2 s for the players. Change the Speed value for more or less.",
+               "back, no cheats needed. Kills of common infected ('infected_death') and of specials "
+               "('player_death') both say whether it was a headshot. The slow motion is a Time Scale entity "
+               "(func_timescale, in the collection 'Example 43 objects': put it anywhere in the map): Start "
+               "blends the game to its Desired Timescale, Stop blends back to normal (Acceleration and the "
+               "blend rates set how quickly). The Delay counts game time, which runs slowly too: 0.6 s of it "
+               "is about 2 s for the players. Change the entity's Desired Timescale for more or less.",
          nodes=[ev("kill", "infected_death", 0, 0),
                 N("if_kill", "HL_NodeIf", 1, 0),
                 ev("special", "player_death", 0, 2),
                 N("if_special", "HL_NodeIf", 1, 2),
-                N("on", "HL_NodeValue", 2, 2, label="On", sockets={"value": 1.0}),
-                fn("cheats_on", "Convars.SetValue", 2, 0, {"p0": "sv_cheats"}),
-                N("speed", "HL_NodeValue", 3, 2, label="Speed", sockets={"value": 0.3}),
-                fn("slow", "Convars.SetValue", 3, 0, {"p0": "host_timescale"}),
-                N("wait", "HL_NodeDelay", 4, 0, label="Slow motion (game time)", seconds=0.6),
-                N("full", "HL_NodeValue", 5, 2, label="Normal", sockets={"value": 1.0}),
-                fn("normal", "Convars.SetValue", 5, 0, {"p0": "host_timescale"}),
-                N("off", "HL_NodeValue", 6, 2, label="Off", sockets={"value": 0.0}),
-                fn("cheats_off", "Convars.SetValue", 6, 0, {"p0": "sv_cheats"})],
+                N("slow", "HL_NodeObject", 2, 0, label="Slow motion", target="@slowmo"),
+                N("wait", "HL_NodeDelay", 2, 2, label="Slow motion (game time)", seconds=0.6),
+                N("normal", "HL_NodeObject", 3, 2, label="Back to normal", target="@slowmo")],
          links=[("kill.happened", "if_kill.in"), ("kill.headshot", "if_kill.condition"),
                 ("special.happened", "if_special.in"), ("special.headshot", "if_special.condition"),
-                ("if_kill.true", "cheats_on.run"), ("if_special.true", "cheats_on.run"),
-                ("on.value", "cheats_on.p1"), ("cheats_on.then", "slow.run"), ("speed.value", "slow.p1"),
-                ("slow.then", "wait.in"), ("wait.out", "normal.run"), ("full.value", "normal.p1"),
-                ("normal.then", "cheats_off.run"), ("off.value", "cheats_off.p1")],
+                ("if_kill.true", "slow.Start"), ("if_special.true", "slow.Start"),
+                ("if_kill.true", "wait.in"), ("if_special.true", "wait.in"), ("wait.out", "normal.Stop")],
          steps=[("A headshot, on a common or a special", ["kill", "if_kill", "special", "if_special"]),
-                ("Cheats on (the game's speed only changes with them), then slow it down",
-                 ["on", "cheats_on", "speed", "slow"]),
-                ("After the slow motion: normal speed, cheats off", ["wait", "full", "normal", "off", "cheats_off"])]),
+                ("Slow the game down (the Time Scale entity's Start)", ["slow"]),
+                ("After the slow motion: back to normal (its Stop)", ["wait", "normal"])]),
     dict(title="Third Person Zone", level="Simple",
          objects={"room": ("ROOM", (0.0, 0.0, 1.5))},
          about="The Camera node switches players to the game's over-the-shoulder third person view and back "
