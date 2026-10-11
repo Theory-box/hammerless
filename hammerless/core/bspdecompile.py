@@ -267,7 +267,8 @@ def _axis(vec4) -> tuple[str, float]:
 
 
 SPREAD = 256.0         # units between a side's three plane points
-DISP_DEPTH = 8.0       # a rebuilt displacement brush's thickness behind its face
+DISP_DEPTH = 8.0
+PROP_NUDGE = 0.05      # units a prop exactly on a wall face moves out of it       # a rebuilt displacement brush's thickness behind its face
 
 
 def plane_points(n, d, w):
@@ -504,8 +505,30 @@ class Decompiler:
                 kv.append(("targetname", accessors[o["id"]]))
             out.append(self.entity_block(kv))
         if lost:
-            self.notes.append(f"{lost} overlays had no brush face to go on and were left out")
+            self.notes.append(f"{lost} overlays aren't on any face of the map (they draw nothing) and were left out")
         return out
+
+    def off_walls(self, origin, brushes) -> tuple:
+        """A prop's origin exactly on a solid world brush's face counts as inside the wall or not depending on
+        how vbsp happens to split the map, and a prop "outside the map" is dropped: such an origin moves
+        PROP_NUDGE out of the wall (Valve's maps have props placed exactly on wall faces)."""
+        if not hasattr(self, "_solid_boxes"):
+            self._solid_boxes = [(b, self.brush_bounds(b)) for b in brushes
+                                 if not self.brushes[b][2] & CONTENTS_DETAIL]
+        for b, box in self._solid_boxes:
+            if box is None or any(origin[k] < box[0][k] - 0.01 or origin[k] > box[1][k] + 0.01 for k in range(3)):
+                continue
+            first, count, contents = self.brushes[b]
+            planes = [self.planes[s[0]] for s in self.sides[first:first + count] if not s[3]]
+            ds = [sum(n[k] * origin[k] for k in range(3)) - d for n, d in planes]
+            if not ds or max(ds) > 1e-3:
+                continue                                   # (not inside or on this brush)
+            on = [i for i, x in enumerate(ds) if x > -1e-3]
+            if not on:
+                continue                                   # (really inside: leave it as the map had it)
+            n = planes[on[0]][0]
+            return tuple(origin[k] + n[k] * PROP_NUDGE for k in range(3))
+        return origin
 
     def all_trigger(self, b: int) -> bool:
         first, count, _c = self.brushes[b]
@@ -719,8 +742,10 @@ class Decompiler:
                     continue
                 solids = [s]
             entities.append(self.entity_block(e, solids))
+        solid_world = [b for b in world_brushes if self.brushes[b][2] & CONTENTS_SOLID]
         for p in self.bsp.static_props():
-            kv = [("classname", "prop_static"), ("model", p["model"]), ("origin", _vec(p["origin"])),
+            origin = self.off_walls(p["origin"], solid_world)
+            kv = [("classname", "prop_static"), ("model", p["model"]), ("origin", _vec(origin)),
                   ("angles", _vec(p["angles"])), ("solid", str(p["solid"])), ("skin", str(p["skin"])),
                   ("fademindist", _num(p["fademindist"])), ("fademaxdist", _num(p["fademaxdist"])),
                   ("fadescale", _num(p["fadescale"])),

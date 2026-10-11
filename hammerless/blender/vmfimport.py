@@ -264,6 +264,94 @@ class HL_OT_import_vmf(bpy.types.Operator, ImportHelper):
         return {"FINISHED"}
 
 
+def import_bsp(op, context, data: bytes, name: str) -> set:
+    """A compiled map, decompiled (core.bspdecompile) and imported like a Hammer map. The .vmf is kept in the
+    build folder (Build writes the map back from it)."""
+    import time
+    from ..core.bspdecompile import decompile
+    from .ops import work_dir
+    t0 = time.time()
+    try:
+        text, notes = decompile(data)
+    except Exception as ex:
+        import traceback
+        traceback.print_exc()
+        op.report({"ERROR"}, f"Couldn't read the map: {ex}")
+        return {"CANCELLED"}
+    path = os.path.join(work_dir(context), f"{name}_decompiled.vmf")
+    with open(path, "w", encoding="latin-1", errors="replace") as f:
+        f.write(text)
+    try:
+        n_brushes, n_ents = import_text(context, text, path)
+    except Exception as ex:
+        import traceback
+        traceback.print_exc()
+        op.report({"ERROR"}, f"Couldn't import the map: {ex}")
+        return {"CANCELLED"}
+    # (never the game's own map name: Build would replace Valve's map)
+    context.scene.hammerless.map_name = f"{name}_remix"
+    for n in notes:
+        op.report({"WARNING"}, n)
+    op.report({"INFO"}, f"Imported {name}: {n_brushes} brushes and {n_ents} entities in {time.time() - t0:.1f} s. "
+                        "Instances, visgroups and brush grouping aren't kept in a compiled map")
+    return {"FINISHED"}
+
+
+def game_map_names(context) -> list[str]:
+    from .ops import game_content, game_root
+    root = game_root(context)
+    content = game_content(root) if root else None
+    if content is None:
+        return []
+    return sorted(f[5:-4] for f in content.files if f.startswith("maps/") and f.endswith(".bsp") and "/" not in f[5:])
+
+
+def _search_maps(self, context, edit_text):
+    t = edit_text.lower()
+    return [n for n in game_map_names(context) if t in n.lower()]
+
+
+class HL_OT_import_game_map(bpy.types.Operator):
+    bl_idname = "hammerless.import_game_map"
+    bl_label = "Import L4D2 Map"
+    bl_description = ("Bring in one of the game's own maps (c1m1_hotel...) to look at or remix: decompiled from the "
+                      "game's files into brushes, terrain, entities and props")
+    bl_options = {"REGISTER", "UNDO"}
+    map: bpy.props.StringProperty(name="Map", default="c1m1_hotel", search=_search_maps,
+                                  description="The game's map to import (type to search: c1m1_hotel, c2m1_highway...)")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        from .ops import game_content, game_root
+        root = game_root(context)
+        content = game_content(root) if root else None
+        data = content.read(f"maps/{self.map}.bsp") if content and self.map else None
+        if not data:
+            self.report({"ERROR"}, "Left 4 Dead 2 or the map wasn't found (Settings > Game & Folders)")
+            return {"CANCELLED"}
+        return import_bsp(self, context, data, self.map)
+
+
+class HL_OT_import_bsp(bpy.types.Operator, ImportHelper):
+    bl_idname = "hammerless.import_bsp"
+    bl_label = "Import Compiled Map"
+    bl_description = "Bring in a compiled Left 4 Dead 2 map (.bsp), decompiled into brushes, terrain, entities and props"
+    bl_options = {"REGISTER", "UNDO"}
+    filename_ext = ".bsp"
+    filter_glob: bpy.props.StringProperty(default="*.bsp", options={"HIDDEN"})
+
+    def execute(self, context):
+        try:
+            with open(self.filepath, "rb") as f:
+                data = f.read()
+        except OSError as ex:
+            self.report({"ERROR"}, f"Couldn't read the map: {ex}")
+            return {"CANCELLED"}
+        return import_bsp(self, context, data, os.path.splitext(os.path.basename(self.filepath))[0])
+
+
 def import_text(context, text: str, path: str) -> tuple[int, int]:
     from .ops import game_content, game_root
     s = context.scene.hammerless
@@ -534,9 +622,11 @@ def copy_instances(scene, folder: str, report) -> None:
 
 def menu_func(self, context):
     self.layout.operator(HL_OT_import_vmf.bl_idname, text="Hammer Map (.vmf) [Hammerless]")
+    self.layout.operator(HL_OT_import_game_map.bl_idname, text="L4D2 Map (from the game) [Hammerless]")
+    self.layout.operator(HL_OT_import_bsp.bl_idname, text="Compiled Map (.bsp) [Hammerless]")
 
 
-CLASSES = (HL_OT_import_vmf,)
+CLASSES = (HL_OT_import_vmf, HL_OT_import_game_map, HL_OT_import_bsp)
 
 
 def register():
