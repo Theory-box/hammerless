@@ -304,12 +304,14 @@ def _draw():
     use_cursor = s.nav_color_mode == "VIS" or (s.nav_color_mode == "WHY" and s.spawn_from == "CURSOR")
     viewer = cursor_area(s.units_per_meter) if use_cursor else None
     key = (s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer.id if viewer else None,
-           s.spawn_from, s.show_zombie_spawns, s.zombie_seed, round(s.zombie_progress, 3))
+           s.spawn_from, s.show_zombie_spawns, s.zombie_seed, round(s.zombie_progress, 3),
+           s.dir_common_limit if s.director_enabled else 30)
     if _state["batches"] is None or _state["key"] != key:
         plan = None
         if s.show_zombie_spawns:
             from ..core.spawnsim import simulate
-            plan = simulate(_state["mesh"], s.zombie_seed, s.zombie_progress)
+            plan = simulate(_state["mesh"], s.zombie_seed, s.zombie_progress,
+                            common_limit=s.dir_common_limit if s.director_enabled else 30)
         _state["zombies"] = plan
         _state["batches"] = _build(s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer,
                                    plan)
@@ -821,7 +823,8 @@ def draw_panel(layout, context):
         if plan is None or not plan.budget:
             col.label(text="Needs a start and an end safe room joined by the nav", icon="INFO")
         else:
-            col.label(text=f"{plan.budget} wanderers (route {plan.route:.0f} units x 0.03)", icon="INFO")
+            col.label(text=f"{plan.budget} wanderers (route {plan.route:.0f} units x 0.03; Max Common Infected "
+                           f"only caps how many are alive)", icon="INFO")
             col.label(text=f"Red, appear now: {plan.count('now')}   Grey, waiting: {plan.count('later')}", icon="BLANK1")
             lost = plan.count("lost")
             if lost:

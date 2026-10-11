@@ -59,8 +59,10 @@ def _walk(mesh, sources, edges, centre):
     return d
 
 
-def simulate(mesh, seed: int = 1, progress: float = 0.0, density_scale: float = 1.0) -> SpawnPlan:
-    """The wanderers for one seed, with the survivors `progress` (0..1) of the way along the route."""
+def simulate(mesh, seed: int = 1, progress: float = 0.0, density_scale: float = 1.0,
+             common_limit: int = COMMON_LIMIT) -> SpawnPlan:
+    """The wanderers for one seed, with the survivors `progress` (0..1) of the way along the route. common_limit: the
+    most commons alive at once (z_common_limit 30, or the map's Director CommonLimit); it doesn't add wanderers."""
     plan = SpawnPlan()
     by = mesh.by_id()
     centre = {a.id: a.centre for a in mesh.areas}
@@ -116,7 +118,7 @@ def simulate(mesh, seed: int = 1, progress: float = 0.0, density_scale: float = 
             plan.why_lost[reason] = plan.why_lost.get(reason, 0) + 1
             continue
         d = math.dist(here, pos)
-        if SAFETY_RANGE <= d <= SPAWN_RANGE and a.id not in seen and now < COMMON_LIMIT:
+        if SAFETY_RANGE <= d <= SPAWN_RANGE and a.id not in seen and now < common_limit:
             plan.zombies.append(Zombie(pos, "now", a.id))
             now += 1
         else:
