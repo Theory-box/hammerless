@@ -134,6 +134,13 @@ def store_nav(context, mesh, rep, predicted: bool = False) -> None:
                      "can't get down to the rest of the map (tops of walls, closed-off spots). Zombies can spawn "
                      "there and never reach survivors. Make it unwalkable "
                      "(player clip, a sloped or skybox top) or connect it", centre))
+    # why there may be few zombies (core/zombiereport.py: the Director's measured rules)
+    from ..core.zombiereport import analyse as zombie_report
+    custom = s.director_enabled
+    zr = zombie_report(mesh, s.dir_mob_interval_min if custom else 90, s.dir_mob_interval_max if custom else 180,
+                       hordes_off=custom and s.dir_no_mobs, wanderers_off=custom and s.dir_no_wanderers)
+    for severity, msg, loc in zr.rows:
+        rows.append(("WARNING" if severity == "WARNING" else "INFO", "Zombies: " + msg, loc))
     for spot, dz in rep.dead_ledges[:12]:
         rows.append(("WARNING", f"A {dz:.0f}-unit ledge that bots and zombies can't use either way: L4D2 only links "
                      "a step of 18 or less, or a drop-down over 64 (one way down, can't climb back). Make it a "

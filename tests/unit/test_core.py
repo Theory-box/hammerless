@@ -1272,6 +1272,38 @@ class TestLaddersAndClimbs(unittest.TestCase):
         self.assertEqual([z.pos for z in p.zombies], [z.pos for z in simulate(mesh, 7, density_scale=10).zombies])
         self.assertNotEqual([z.pos for z in p.zombies], [z.pos for z in simulate(mesh, 8, density_scale=10).zombies])
 
+    def test_zombie_report(self):
+        """core/zombiereport.py: a short straight street fully in view is a dead zone; hordes slower than the run
+        are reported; a roof soaking up the budget is reported."""
+        from hammerless.core.navfile import NavArea, NavMesh
+        from hammerless.core.zombiereport import analyse
+        mesh = NavMesh(analyzed=True)
+        areas = []
+        n = 40
+        for i in range(n):                                    # a 4000-unit straight street, every area sees all
+            a = NavArea(i + 1, 0, (i * 100.0, 0.0, 0.0), (i * 100.0 + 100, 100.0, 0.0), 0.0, 0.0)
+            a.connections = [[j for j in (i, i + 2) if 1 <= j <= n], [], [], []]
+            a.ladders = [[], []]
+            a.visible = [(j, 2) for j in range(1, n + 1) if j != i + 1]
+            areas.append(a)
+        areas[0].spawn_attributes = 0x880
+        areas[-1].spawn_attributes = 0x800
+        mesh.areas = areas
+        r = analyse(mesh)
+        texts = " ".join(t for _s, t, _l in r.rows)
+        self.assertAlmostEqual(r.route, 3900.0)
+        self.assertIn("Dead zone", texts)
+        self.assertIn("No horde in a normal run-through", texts)
+        self.assertNotIn("No horde", " ".join(t for _s, t, _l in analyse(mesh, 10, 20).rows))
+        for a in areas:                                       # nothing in view: no dead zone
+            a.visible = [(a.id, 2)]
+        self.assertNotIn("Dead zone", " ".join(t for _s, t, _l in analyse(mesh).rows))
+        for i in range(60):                                   # 60 roof areas marked no-spawn: most of the nav
+            roof = NavArea(100 + i, 0, (0.0, 200.0 + i, 300.0), (10.0, 201.0 + i, 300.0), 300.0, 300.0)
+            roof.spawn_attributes, roof.connections, roof.ladders = 0x2002, [[], [], [], []], [[], []]
+            mesh.areas.append(roof)
+        self.assertIn("can't hold them", " ".join(t for _s, t, _l in analyse(mesh).rows))
+
     def test_nav_in_its_own_process(self):
         """navworker: the same mesh as in-process (remembered for the next Build), errors come back, Cancel kills it."""
         from hammerless.core import navworker

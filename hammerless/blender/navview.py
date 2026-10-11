@@ -182,6 +182,11 @@ def _area_color(a, rep, mode, viewer=None, reasons=None):
         return COLORS[reasons.get(a.id, "can_spawn")] if reasons else COLORS["plain"]
     if mode == "REACH":
         return COLORS["reach"] if a.id in rep.reachable else COLORS["unreach"]
+    if mode == "AHEAD":
+        n = (_state.get("ahead") or {}).get(a.id)
+        if n is None:
+            return COLORS["unseen"]                  # (off the route, or the nav isn't analyzed)
+        return COLORS["no_spawn"] if n < 10 else COLORS["in_view"] if n < 30 else COLORS["can_spawn"]
     if mode == "SPAWN":
         attrs = a.spawn_attributes
         if attrs & EMPTY and attrs & NO_MOBS:
@@ -231,6 +236,10 @@ def zombie_plan():
 def _build(scale: float, mode: str, links: bool, spots: bool = False, viewer=None, zombies=None):
     m, rep = _state["mesh"], _state["report"]
     reasons = spawn_reasons(m, viewer) if mode == "WHY" else None
+    akey = (id(m), bool(m.analyzed), sum(len(a.visible or []) for a in m.areas[:50]))   # (Analyze changes it in place)
+    if mode == "AHEAD" and _state.get("ahead_key") != akey:
+        from ..core.zombiereport import analyse as zombie_report
+        _state["ahead"], _state["ahead_key"] = zombie_report(m).ahead, akey
     tris, tri_cols, outline = [], [], []
     spot_lines = {"spot_cover": [], "spot_exposed": []}
     if spots:
@@ -742,6 +751,8 @@ _LEGEND = {
     "WHY": ["Green: wanderers can spawn. Red: no-spawn mark",
             f"Orange: under {SPAWN_SAFETY_RANGE:.0f} units' walk. Yellow: in view"],
     "VIS": ["From the area under the 3D cursor (white):", "green fully visible, yellow partly, grey not"],
+    "AHEAD": ["Hidden spawn spots ahead of survivors standing here:",
+              "red under 10 (dead zone: add cover), yellow under 30, green plenty"],
 }
 
 
@@ -822,7 +833,7 @@ def draw_panel(layout, context):
             col.label(text="A simulation of the Director's rule, not the game itself", icon="BLANK1")
     lines = list(_LEGEND.get(s.nav_color_mode, ["Red: no zombies. Pink: no wanderers. Violet: no hordes",
                                                 "Orange: Zombie Spawn Area. Light blue: normal"]))
-    if s.nav_color_mode in ("WHY", "VIS") and not visibility_lists():
+    if s.nav_color_mode in ("WHY", "VIS", "AHEAD") and not visibility_lists():
         lines.append("(Analyze to also show what's in view)")
     lines.append("Blue: start room. Purple: end room")
     legend = layout.column(align=True)

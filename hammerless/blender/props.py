@@ -513,6 +513,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     nav_color_mode: EnumProperty(name="Colour", default="REACH", update=lambda self, c: _nav_display(self, c), items=[
         ("REACH", "Can survivors reach it?", "Green: reachable from the start room. Red: not"),
         ("FLOW", "Distance from the start", "Heat map of walking distance along the path"),
+        ("AHEAD", "Zombies can appear ahead?", "Standing here, how many spots ahead along the route (550-1500 "
+                  "units away) are hidden from the survivors, so zombies can appear there. Red: under 10 (a dead zone: "
+                  "add cover). Yellow: under 30. Green: plenty. Needs the nav analyzed"),
         ("SPAWN", "Zombie spawn marks", "Red: no zombies spawn (EMPTY + NO_MOBS). Pink: no wanderers. "
                  "Violet: no hordes. Orange: Zombie Spawn Area (OBSCURED). Light blue: normal"),
         ("WHY", "Where zombies can spawn", "Why an area gets zombies or not, for survivors stepping out of the "
