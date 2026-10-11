@@ -1245,6 +1245,33 @@ class TestLaddersAndClimbs(unittest.TestCase):
         self.assertEqual(mark_unreachable(mesh, ids), 1)
         self.assertEqual(roof.spawn_attributes & 0x2002, 0x2002)
 
+    def test_zombie_spawn_simulation(self):
+        """core/spawnsim.py: budget from the route, wanderers on areas picked by count; a no-spawn roof loses its
+        share; the same seed gives the same roll."""
+        from hammerless.core.navfile import NavArea, NavMesh
+        from hammerless.core.spawnsim import simulate
+        mesh = NavMesh(analyzed=False)
+        areas = []
+        for i in range(12):                                   # a 12-area street, 100 units per area, start to end
+            a = NavArea(i + 1, 0, (i * 100.0, 0.0, 0.0), (i * 100.0 + 100, 100.0, 0.0), 0.0, 0.0)
+            a.connections = [[j for j in (i, i + 2) if 1 <= j <= 12], [], [], []]
+            a.ladders = [[], []]
+            areas.append(a)
+        areas[0].spawn_attributes = 0x880                       # start room
+        areas[-1].spawn_attributes = 0x800                      # end room
+        roof = NavArea(13, 0, (500.0, 0.0, 300.0), (600.0, 100.0, 300.0), 300.0, 300.0)
+        roof.spawn_attributes, roof.connections, roof.ladders = 0x2002, [[], [], [], []], [[], []]
+        mesh.areas = areas + [roof]
+        p = simulate(mesh, seed=7, density_scale=10)
+        self.assertAlmostEqual(p.route, 1100.0)
+        self.assertEqual(p.budget, round(0.03 * 10 * 1100))
+        self.assertEqual(len(p.zombies), p.budget)
+        self.assertTrue(p.why_lost.get("no-spawn mark (roofs, ledges, your boxes)", 0) > 0)
+        self.assertTrue(all(z.kind == "lost" for z in p.zombies if z.area == 13))
+        self.assertTrue(all(550 <= abs(z.pos[0] - 50) <= 1500 for z in p.zombies if z.kind == "now"))
+        self.assertEqual([z.pos for z in p.zombies], [z.pos for z in simulate(mesh, 7, density_scale=10).zombies])
+        self.assertNotEqual([z.pos for z in p.zombies], [z.pos for z in simulate(mesh, 8, density_scale=10).zombies])
+
     def test_nav_in_its_own_process(self):
         """navworker: the same mesh as in-process (remembered for the next Build), errors come back, Cancel kills it."""
         from hammerless.core import navworker

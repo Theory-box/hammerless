@@ -532,6 +532,17 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     ])
     nav_xray: BoolProperty(name="X-Ray", default=False, update=lambda self, c: _nav_display(self, c),
                            description="Draw the nav mesh through walls")
+    show_zombie_spawns: BoolProperty(
+        name="Zombie Spawns", default=False, update=lambda self, c: _nav_display(self, c),
+        description="Where the AI Director would put its wandering commons, simulated from a seed (the game picks "
+                    "nav areas at random by count). Red: they appear with the survivors there. Grey: they wait "
+                    "until survivors come near. Purple: lost on an area that can't hold them (roofs, safe rooms)")
+    zombie_seed: IntProperty(name="Seed", default=1, min=1, update=lambda self, c: _nav_display(self, c),
+                             description="A different seed is a different roll of the Director's dice")
+    zombie_progress: FloatProperty(
+        name="Survivors At", default=0.0, min=0.0, max=1.0, subtype="FACTOR",
+        update=lambda self, c: _nav_display(self, c),
+        description="How far along the route (start room to end room) the survivors are: 0 = leaving the start")
     sound_mode: EnumProperty(name="Sound", default="REVERB", items=[
         ("OFF", "Off", "No soundscapes: the map plays without the engine's room reverb"),
         ("REVERB", "Automatic Reverb", "Soundscapes everywhere with the engine's own automatic reverb (it traces the "

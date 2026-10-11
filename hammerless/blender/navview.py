@@ -31,6 +31,8 @@ COLORS = {
     "seen_complete": (0.2, 0.9, 0.3, 0.5), "seen_partly": (1.0, 0.85, 0.1, 0.45), "seen_both": (0.55, 0.95, 0.25, 0.5),
     "unseen": (0.25, 0.25, 0.28, 0.25), "viewer": (1.0, 1.0, 1.0, 0.7),
     "spot_cover": (0.2, 0.55, 1.0, 1.0), "spot_exposed": (1.0, 0.5, 0.1, 1.0),
+    "zombie_now": (1.0, 0.08, 0.05, 0.95), "zombie_later": (0.55, 0.55, 0.55, 0.55),
+    "zombie_lost": (0.7, 0.3, 1.0, 0.9), "survivors": (1.0, 1.0, 1.0, 0.9),
 }
 LIFT = 2.0      # draw this many Hammer units above the floor so areas don't flicker
 
@@ -199,7 +201,34 @@ def _area_color(a, rep, mode, viewer=None, reasons=None):
     return (0.2 + 0.8 * t, 0.85 - 0.6 * t, 1.0 - 0.9 * t, 0.35)
 
 
-def _build(scale: float, mode: str, links: bool, spots: bool = False, viewer=None):
+def _zombie_boxes(plan, scale: float):
+    """An upright box per simulated wanderer (zombie-sized: 24 x 24 x 64 units), and a white post where the
+    survivors stand."""
+    tris, cols = [], []
+
+    def box(p, half, height, col):
+        x, y, z = p
+        lo = [Vector((x + dx, y + dy, z + LIFT)) / scale for dx, dy in ((-half, -half), (half, -half), (half, half),
+                                                                       (-half, half))]
+        hi = [v + Vector((0, 0, height / scale)) for v in lo]
+        quads = [(lo[0], lo[1], hi[1], hi[0]), (lo[1], lo[2], hi[2], hi[1]), (lo[2], lo[3], hi[3], hi[2]),
+                 (lo[3], lo[0], hi[0], hi[3]), (hi[0], hi[1], hi[2], hi[3])]
+        for a, b, c, d in quads:
+            tris.extend((a, b, c, a, c, d))
+            cols.extend([col] * 6)
+    for z in plan.zombies:
+        box(z.pos, 12, 64, COLORS[f"zombie_{z.kind}"])
+    if plan.survivors is not None:
+        box(plan.survivors, 8, 140, COLORS["survivors"])
+    return tris, cols
+
+
+def zombie_plan():
+    """The last simulated wanderers on screen (core/spawnsim.py), or None."""
+    return _state.get("zombies")
+
+
+def _build(scale: float, mode: str, links: bool, spots: bool = False, viewer=None, zombies=None):
     m, rep = _state["mesh"], _state["report"]
     reasons = spawn_reasons(m, viewer) if mode == "WHY" else None
     tris, tri_cols, outline = [], [], []
@@ -249,6 +278,10 @@ def _build(scale: float, mode: str, links: bool, spots: bool = False, viewer=Non
         "fill": (flat, batch_for_shader(flat, "TRIS", {"pos": tris, "color": tri_cols})),
         "outline": (uni, batch_for_shader(uni, "LINES", {"pos": outline})),
     }
+    if zombies is not None:
+        ztris, zcols = _zombie_boxes(zombies, scale)
+        if ztris:
+            batches["zombies"] = (flat, batch_for_shader(flat, "TRIS", {"pos": ztris, "color": zcols}))
     for kind, pts in list(link_lines.items()) + list(spot_lines.items()):
         if pts:
             batches[kind] = (uni, batch_for_shader(uni, "LINES", {"pos": pts}))
@@ -262,15 +295,21 @@ def _draw():
     use_cursor = s.nav_color_mode == "VIS" or (s.nav_color_mode == "WHY" and s.spawn_from == "CURSOR")
     viewer = cursor_area(s.units_per_meter) if use_cursor else None
     key = (s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer.id if viewer else None,
-           s.spawn_from)
+           s.spawn_from, s.show_zombie_spawns, s.zombie_seed, round(s.zombie_progress, 3))
     if _state["batches"] is None or _state["key"] != key:
-        _state["batches"] = _build(s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer)
+        plan = None
+        if s.show_zombie_spawns:
+            from ..core.spawnsim import simulate
+            plan = simulate(_state["mesh"], s.zombie_seed, s.zombie_progress)
+        _state["zombies"] = plan
+        _state["batches"] = _build(s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer,
+                                   plan)
         _state["key"] = key
     gpu.state.blend_set("ALPHA")
     gpu.state.depth_test_set("LESS_EQUAL" if not s.nav_xray else "NONE")
     gpu.state.depth_mask_set(False)
     for name, (shader, batch) in _state["batches"].items():
-        if name != "fill":
+        if name not in ("fill", "zombies"):
             shader.bind()
             shader.uniform_float("color", COLORS[name])
             gpu.state.line_width_set(2.5 if name in ("drop", "jump", "ladder", "spot_cover", "spot_exposed") else 1.0)
@@ -758,6 +797,29 @@ def draw_panel(layout, context):
     row.prop(s, "show_nav_links", toggle=True)
     row.prop(s, "show_hiding_spots", toggle=True)
     row.prop(s, "nav_xray", toggle=True)
+    zbox = layout.box()
+    zbox.prop(s, "show_zombie_spawns", icon="GHOST_ENABLED")
+    if s.show_zombie_spawns:
+        row = zbox.row(align=True)
+        row.prop(s, "zombie_seed")
+        row.operator("hammerless.zombie_reroll", text="Reroll", icon="FILE_REFRESH")
+        zbox.prop(s, "zombie_progress", slider=True)
+        plan = zombie_plan()
+        col = zbox.column(align=True)
+        col.scale_y = 0.8
+        if plan is None or not plan.budget:
+            col.label(text="Needs a start and an end safe room joined by the nav", icon="INFO")
+        else:
+            col.label(text=f"{plan.budget} wanderers (route {plan.route:.0f} units x 0.03)", icon="INFO")
+            col.label(text=f"Red, appear now: {plan.count('now')}   Grey, waiting: {plan.count('later')}", icon="BLANK1")
+            lost = plan.count("lost")
+            if lost:
+                r = col.row()
+                r.alert = lost > plan.budget * 0.25
+                r.label(text=f"Purple, lost: {lost} (" + ", ".join(f"{n} {why}" for why, n in
+                                                                  sorted(plan.why_lost.items(), key=lambda x: -x[1]))
+                        + ")", icon="BLANK1")
+            col.label(text="A simulation of the Director's rule, not the game itself", icon="BLANK1")
     lines = list(_LEGEND.get(s.nav_color_mode, ["Red: no zombies. Pink: no wanderers. Violet: no hordes",
                                                 "Orange: Zombie Spawn Area. Light blue: normal"]))
     if s.nav_color_mode in ("WHY", "VIS") and not visibility_lists():
@@ -769,7 +831,18 @@ def draw_panel(layout, context):
         legend.label(text=line, icon="INFO" if i == 0 else "BLANK1")
 
 
-CLASSES = (HL_OT_nav_load, HL_OT_nav_predict, HL_OT_nav_analyze, HL_OT_nav_clear, HL_OT_nav_clear_analysis, HL_OT_nav_cancel)
+class HL_OT_zombie_reroll(bpy.types.Operator):
+    bl_idname = "hammerless.zombie_reroll"
+    bl_label = "Reroll Zombies"
+    bl_description = "Another roll of the Director's dice: where its wandering commons would go with a new seed"
+
+    def execute(self, context):
+        context.scene.hammerless.zombie_seed += 1
+        return {"FINISHED"}
+
+
+CLASSES = (HL_OT_nav_load, HL_OT_nav_predict, HL_OT_nav_analyze, HL_OT_nav_clear, HL_OT_nav_clear_analysis, HL_OT_nav_cancel,
+           HL_OT_zombie_reroll)
 
 
 @bpy.app.handlers.persistent
