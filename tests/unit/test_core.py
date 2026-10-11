@@ -255,6 +255,17 @@ class TestNavReportAudit(unittest.TestCase):
 
 
 class TestBuild(unittest.TestCase):
+    def test_sky_light_without_sun(self):
+        """Without Add Sun the sky light is still added (its entity's sun part at 0), unless its brightness is 0."""
+        import re
+        for sun, ambient, want in ((False, 80, "0"), (True, 80, "400"), (False, 0, None)):
+            ir = box_room_ir()
+            ir.settings.auto_light_environment, ir.settings.ambient_brightness = sun, ambient
+            ir.settings.sun_brightness = 400
+            text, _rep = build_vmf(ir)
+            m = re.search(r'"classname" "light_environment".*?"_light" "\d+ \d+ \d+ (\d+)"', text, re.S)
+            self.assertEqual(m.group(1) if m else None, want, (sun, ambient))
+
     def test_stale_game_files(self):
         """A build removes this map's files the last build wrote and it doesn't (every logic graph deleted), and an
         old logic script from before the list was kept; never another map's or anything outside scripts/ and maps/."""

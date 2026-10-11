@@ -629,9 +629,13 @@ class HL_PT_sun(_Sub, bpy.types.Panel):
         sub.prop(s, "sun_pitch")
         sub.prop(s, "sun_yaw")
         sub.separator()
+        sky = col.column()
+        sky.enabled = not own             # (the sky light: also without a sun, its entity's sun part at 0)
         if s.sky_light == "FLAT":
-            sub.prop(s, "ambient_color")
-        sub.prop(s, "ambient_brightness")
+            sky.prop(s, "ambient_color")
+        sky.prop(s, "ambient_brightness")
+        if not own and not s.auto_sun:
+            _hint(layout, "No sun: only the sky light is added (Sky Light Brightness 0: none)")
 
 
 class HL_PT_fog(_Sub, bpy.types.Panel):

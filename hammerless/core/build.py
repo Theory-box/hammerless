@@ -566,12 +566,15 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
     if s.auto_director and base is None and "info_director" not in classes:
         entities.append(Entity("info_director", (0, 0, 0), (0, 0, 0), default_keyvalues("info_director")))
         report.info.append("Added info_director.")
-    if s.auto_light_environment and base is None and "light_environment" not in classes:
-        kv = {"_light": "{} {} {} {}".format(*s.sun_color, s.sun_brightness),
+    if "light_environment" not in classes and (s.auto_light_environment or s.ambient_brightness > 0):
+        # (the sky light is part of the sun's entity in Source: without Add Sun, the sky light alone, sun at 0)
+        sun = s.sun_brightness if s.auto_light_environment else 0
+        kv = {"_light": "{} {} {} {}".format(*s.sun_color, sun),
               "_ambient": "{} {} {} {}".format(*s.ambient_color, s.ambient_brightness),
               "pitch": f"{s.sun_pitch:g}"}
         entities.append(Entity("light_environment", (0, 0, 0), (s.sun_pitch, s.sun_yaw, 0), kv))
-        report.info.append("No sun in the scene. Added one from the Lighting settings.")
+        report.info.append("No sun in the scene. Added one from the Lighting settings." if s.auto_light_environment
+                           else "No sun in the scene: added the sky light only (Add Sun if Missing is off).")
     if s.fog_enabled and "env_fog_controller" not in classes:
         entities.append(Entity("env_fog_controller", HELPER_SPOT, (0, 0, 0), {
             "targetname": "hammerless_fog", "fogenable": "1", "spawnflags": "1",
