@@ -46,7 +46,7 @@ ladders, zombie climbs) EMPTY | NO_MOBS, and warns when over 20% of the nav is u
   `WanderingZombieDensityModifier` change it? Run spawncheck with `director_debug_threat_placement 1` to print
   "Total wandering zombie population".
 - The full-map nav getting 0-1 commons is unexplained.
-- The user's 03:04 build had vis "Average clusters visible 891" while a fresh compile of the same VMF gives 519
-  (vvis 507): find what Build passed differently.
+- (Solved by Audit 2) "Average clusters visible 891" was a stale Valve log (`<map>.log`, an earlier `vvis -fast`
+  build): our compilers don't write that file. The map played had ~519 (vvis 507).
 - "It used to be dozens": not reproduced with any version; the user's two .blend files build into the same map name
   and folder (each build overwrites the other's), which may explain differing memories of the map.
