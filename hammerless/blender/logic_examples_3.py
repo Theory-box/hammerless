@@ -35,14 +35,14 @@ MUZZLE_FLASH = """local p = a;      // (the event's Userid wire gives the player
 local w = p != null ? p.GetActiveWeapon() : null;
 if (w != null && w.LookupAttachment("muzzle_flash") > 0) {
     // two lights per player: one for the walls and floor (Brightness), one for zombies and survivors (Model Brightness)
-    foreach (part in [["world", b, "2"], ["models", d, "1"]]) {      // (spawnflags 2: not models; 1: not the world)
+    foreach (part in [["world", b, 2], ["models", d, 1]]) {      // (flags 2: not models; 1: not the world)
         local name = "hl_muzzle_" + part[0] + "_" + p.GetEntityIndex();
         local l = Entities.FindByName(null, name);
         if (l == null) {      // made once
             l = SpawnEntityFromTable("light_dynamic", {targetname = name, origin = w.GetOrigin(),
                 _light = "255 190 110 255", brightness = part[1].tostring(), distance = c.tostring(),
                 spotlight_radius = "0", _inner_cone = "0", _cone = "0", spawnflags = part[2]});
-            DoEntFire("!self", "TurnOff", "", 0.0, null, l);
+            DoEntFire("!self", "TurnOff", "", 0.0, null, l);      // (while off its flags read 3: lights nothing)
             l.ValidateScriptScope();
         }
         local s = l.GetScriptScope();
