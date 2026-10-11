@@ -20,7 +20,21 @@ import threading
 import time
 
 PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../hammerless
-PACKAGE = os.path.basename(PACKAGE_DIR)
+# the add-on's import name: "bl_ext.user_default.hammerless" when installed as an extension. The child loads the
+# package under exactly this name, so pickled classes (NavMesh, NavRegion...) mean the same both ways.
+PACKAGE = __name__.rsplit(".core.navworker", 1)[0] if __name__.endswith(".core.navworker") else "hammerless"
+
+# (the child: parent packages of the name as empty namespaces, then the add-on folder as the last one)
+_BOOT = """import importlib.util, sys, types
+name, folder = sys.argv[1], sys.argv[2]
+parts = name.split(".")
+for i in range(1, len(parts)):
+    m = types.ModuleType(".".join(parts[:i])); m.__path__ = []
+    sys.modules.setdefault(m.__name__, m)
+spec = importlib.util.spec_from_file_location(name, folder + "/__init__.py", submodule_search_locations=[folder])
+pkg = importlib.util.module_from_spec(spec); sys.modules[name] = pkg; spec.loader.exec_module(pkg)
+importlib.import_module(name + ".core.navworker")._child(sys.argv[3], sys.argv[4])
+"""
 
 
 def python_exe() -> str:
@@ -36,10 +50,8 @@ def run(kind: str, args: dict, on_stage=None, should_stop=None):
     job, out = os.path.join(work, "job.pickle"), os.path.join(work, "result.pickle")
     with open(job, "wb") as f:
         pickle.dump({"kind": kind, "args": args}, f, protocol=pickle.HIGHEST_PROTOCOL)
-    boot = (f"import sys; sys.path.insert(0, sys.argv[1]); "
-            f"from {PACKAGE}.core.navworker import _child; _child(sys.argv[2], sys.argv[3])")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    proc = subprocess.Popen([python_exe(), "-s", "-c", boot, os.path.dirname(PACKAGE_DIR), job, out],
+    proc = subprocess.Popen([python_exe(), "-s", "-c", _BOOT, PACKAGE, PACKAGE_DIR, job, out],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=flags)
     err: list[str] = []
 
