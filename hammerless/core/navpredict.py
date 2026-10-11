@@ -185,6 +185,8 @@ def python_steps(gen):
 
 def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     problems = []
+    # where survivors can get to, before the zombie-only climb links (they lead up onto roofs and ledges)
+    unreachable_ids = unreachable_areas(to_navmesh(gen.areas, regions, gen.ladders))
     if wall_climbs:
         from .entities import ZOMBIE_CLIMB_MAX
         if progress:
@@ -203,7 +205,7 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
         problems.insert(0, "No nav mesh: nothing walkable is inside the Control Volumes set to Only inside (nav). "
                            "Each needs floor in it that survivors can reach from a spawn (or a seed)")
     blocked = spawn_block_problems(mesh, regions)        # (the user's own no-spawn boxes, before the marks below)
-    unreachable = mark_unreachable(mesh)
+    unreachable = mark_unreachable(mesh, unreachable_ids)
     if unreachable and unreachable / max(1, len(mesh.areas)) > 0.2:
         problems.append(f"{unreachable} of {len(mesh.areas)} nav areas can't be walked to from the start (roofs, "
                         "ledges, closed-off spots): no zombies spawn there (they could never reach the survivors). "
@@ -212,13 +214,28 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     return mesh
 
 
-def mark_unreachable(mesh: NavMesh) -> int:
-    """Areas survivors can't walk (or climb) to from the start room get EMPTY | NO_MOBS. Measured on the user's
-    map: the Director put 26 of its 30 start-of-map commons on roofs and a raised walkway the survivors can't get
-    to (they're hidden from view: the Director's favourite spots), leaving 4 on the street. Returns how many."""
+def mark_unreachable(mesh: NavMesh, ids: set | None = None) -> int:
+    """Areas survivors can't walk (or climb a ladder) to from the start room get EMPTY | NO_MOBS. Measured on the
+    user's map: the Director put 26 of its 30 start-of-map commons on roofs and a raised walkway the survivors can't
+    get to (hidden from view: the Director's favourite spots), leaving 4 on the street. ids: the areas to mark,
+    worked out before the zombie-only climb links were added (they lead up onto exactly these roofs). Returns how
+    many were marked."""
+    if ids is None:
+        ids = unreachable_areas(mesh)
+    n = 0
+    for a in mesh.areas:
+        if a.id in ids:
+            a.spawn_attributes |= EMPTY | NO_MOBS
+            n += 1
+    return n
+
+
+def unreachable_areas(mesh: NavMesh) -> set:
+    """Ids of the areas survivors can't get to from the start room (along links, drops and ladders); empty when
+    there's no start room (nothing to measure from: the nav report says so)."""
     start = [a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START]
     if not start:
-        return 0                      # (no start room: nothing to measure from; the nav report says so)
+        return set()
     by = mesh.by_id()
     lad = {l.id: l for l in mesh.ladders}
     seen, todo = set(start), list(start)
@@ -234,12 +251,7 @@ def mark_unreachable(mesh: NavMesh) -> int:
             if i in by and i not in seen:
                 seen.add(i)
                 todo.append(i)
-    n = 0
-    for a in mesh.areas:
-        if a.id not in seen:
-            a.spawn_attributes |= EMPTY | NO_MOBS
-            n += 1
-    return n
+    return {a.id for a in mesh.areas if a.id not in seen}
 
 
 MAX_NODES = 500000           # navgen.Generator.sample's default

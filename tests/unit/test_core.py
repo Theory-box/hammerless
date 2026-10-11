@@ -1237,6 +1237,13 @@ class TestLaddersAndClimbs(unittest.TestCase):
         self.assertEqual(roof.spawn_attributes & 0x2002, 0x2002)
         self.assertEqual(street.spawn_attributes, 0)
         self.assertEqual(mark_unreachable(NavMesh(analyzed=False)), 0)     # (no start room: nothing marked)
+        # a zombie climb up to the roof doesn't make it reachable: the ids come from before the climb links
+        from hammerless.core.navpredict import unreachable_areas
+        roof.spawn_attributes = 0
+        ids = unreachable_areas(mesh)
+        street.connections = [[1, 3], [], [], []]      # (the climb link, added after)
+        self.assertEqual(mark_unreachable(mesh, ids), 1)
+        self.assertEqual(roof.spawn_attributes & 0x2002, 0x2002)
 
     def test_nav_in_its_own_process(self):
         """navworker: the same mesh as in-process (remembered for the next Build), errors come back, Cancel kills it."""
