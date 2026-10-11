@@ -596,8 +596,14 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     vis_tool: EnumProperty(name="Vis Compiler", default="HAMMERLESS", items=[
         ("VALVE", "Valve vvis", "L4D2's own visibility compiler (vvis.exe)"),
         ("HAMMERLESS", "Hammerless (faster)",
-         "Hammerless's visibility compiler: the same results as vvis, about 3 times faster. If it ever fails, "
-         "Valve's vvis runs instead")])
+         "Hammerless's visibility compiler: many times faster than vvis (a city map: 4 s instead of 2 min 19 s), "
+         "never hiding anything visible; about 1% looser than vvis. Match vvis Exactly gives vvis's own result "
+         "instead. If it ever fails, Valve's vvis runs")])
+    vis_exact: BoolProperty(
+        name="Match vvis Exactly", default=False,
+        description="Hammerless's vis compiler follows vvis's own method and gives its result byte for byte (about 3 "
+                    "times faster than vvis, several times slower than the default). The default merges what each "
+                    "opening shows: never hides anything visible, about 1% looser")
     map_tool: EnumProperty(name="Map Compiler", default="HAMMERLESS", items=[
         ("HAMMERLESS", "Hammerless",
          "Hammerless's map compiler: the same map as vbsp. Maps with things it doesn't do (water overlays, "

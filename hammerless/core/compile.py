@@ -39,7 +39,8 @@ class CompileOptions:
     extra_vbsp: str = ""
     extra_vvis: str = ""
     extra_vrad: str = ""
-    vis_tool: str = "HAMMERLESS"  # VALVE: L4D2's vvis.exe / HAMMERLESS: hlvvis.exe (same results, faster)
+    vis_tool: str = "HAMMERLESS"  # VALVE: L4D2's vvis.exe / HAMMERLESS: hlvvis.exe (merged windows: much faster)
+    vis_exact: bool = False       # with hlvvis: vvis's own path search (-exact), its output byte for byte
     map_tool: str = "HAMMERLESS"  # HAMMERLESS: hlvbsp.exe (same map as vbsp) / VALVE: L4D2's vbsp.exe
     light_tool: str = "HAMMERLESS"  # VALVE: vrad's lightmaps / HAMMERLESS: hlvrad.exe (vrad's lighting, faster) /
                                 # CYCLES: Blender bakes them after vrad (bake_handler)
@@ -145,7 +146,7 @@ def _opts_rest(text: str) -> str:
 HLVVIS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvvis.exe")
 
 
-HLVVIS_OPTIONS = {"-fast": 0, "-threads": 1, "-radius_override": 1}   # vvis options ours knows: arguments each
+HLVVIS_OPTIONS = {"-fast": 0, "-threads": 1, "-radius_override": 1, "-exact": 0}   # vvis options ours knows: arguments each
 
 
 def _hlvvis_knows(args: list[str]) -> bool:
@@ -638,7 +639,8 @@ class CompileJob:
         if vvis is not None:
             valve = [tools.exe("vvis")] + vvis + game + [self.base]
             if use_hlvvis(opts):
-                self.steps.append(("vvis", [HLVVIS] + vvis + game + [self.base]))
+                self.steps.append(("vvis", [HLVVIS] + (["-exact"] if opts.vis_exact else []) + vvis + game
+                                   + [self.base]))
                 self._valve_vvis = valve
             else:
                 self.steps.append(("vvis", valve))

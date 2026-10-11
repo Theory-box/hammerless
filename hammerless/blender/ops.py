@@ -52,7 +52,8 @@ def compile_options(s) -> "cc.CompileOptions":
                              sky_rays=s.light_sky_rays, supersample=s.light_supersample, bounces=s.light_bounces,
                              prop_polys=s.light_prop_polys, patch_size=s.light_patch_size,
                              extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad,
-                             vis_tool=s.vis_tool, light_tool=s.light_tool, map_tool=s.map_tool,
+                             vis_tool=s.vis_tool, vis_exact=s.vis_exact, light_tool=s.light_tool,
+                             map_tool=s.map_tool,
                              **_light_options(s))
 
 
