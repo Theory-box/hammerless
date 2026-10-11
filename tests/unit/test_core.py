@@ -1329,6 +1329,43 @@ class TestLaddersAndClimbs(unittest.TestCase):
         _c, problems = collect_climbs(ir)
         self.assertTrue(any("both a bottom and a top" in p for p in problems))
 
+    def test_top_seeds(self):
+        """Every flat top inside the map gets a nav seed (a roof the flood from the spawns never climbs onto); the top
+        of the map's own roof, with nothing above it, doesn't; nor does a thin wall top."""
+        from hammerless.core.build import build_vmf
+        from hammerless.core.collision import CollisionWorld
+        from hammerless.core.navpredict import top_seeds
+        ir = box_room_ir()
+        mat = "dev/dev_measuregeneric01b"
+        ir.brushes.append(g.box_brush((-256, -256, 512), (256, 256, 528), mat, "ceiling"))
+        ir.brushes.append(g.box_brush((0, 0, 0), (128, 128, 200), mat, "block"))
+        ir.brushes.append(g.box_brush((-200, 0, 0), (-184, 128, 200), mat, "thin wall"))
+        for seal in (True, False):
+            ir.settings.auto_seal = seal
+            world = CollisionWorld.from_vmf(build_vmf(ir)[0])
+            seeds = [(round(x), round(y), round(z)) for x, y, z in top_seeds(world)]
+            self.assertIn((64, 64, 216), seeds)                  # the block's top: the ceiling is above it
+            # the roof's top: under Auto Seal's sky it's inside the map; without, nothing above (outside the map)
+            self.assertEqual((0, 0, 544) in seeds, seal)
+            self.assertFalse(any(z < 0 for _x, _y, z in seeds))  # (never the seal's own floor, under the map)
+            self.assertFalse(any(x == -192 for x, _y, _z in seeds))    # 16 units wide: nobody stands there
+
+    def test_survivor_areas(self):
+        """The areas survivors can walk to from the start room (a roof that only drops down to the street isn't one:
+        commons are kept off it with EMPTY, which only the wanderers' placement reads)."""
+        from hammerless.core.navfile import NavArea, NavMesh
+        from hammerless.core.navpredict import survivor_areas
+        mesh = NavMesh(analyzed=False)
+        start, street, roof = (NavArea(i, 0, (0, 0, 0), (50, 50, 0), 0, 0) for i in (1, 2, 3))
+        start.spawn_attributes = 0x80
+        start.connections, street.connections = [[2], [], [], []], [[1], [], [], []]
+        roof.connections = [[2], [], [], []]
+        for a in (start, street, roof):
+            a.ladders = [[], []]
+        mesh.areas = [start, street, roof]
+        self.assertEqual(survivor_areas(mesh), {1, 2})
+        self.assertIsNone(survivor_areas(NavMesh(analyzed=False)))
+
     def test_zombie_spawn_simulation(self):
         """core/spawnsim.py: budget from the route, wanderers on areas picked by count; a no-spawn roof loses its
         share; the same seed gives the same roll."""

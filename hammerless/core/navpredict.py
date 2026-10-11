@@ -165,6 +165,32 @@ def static_prop_brushes(vmf_text: str) -> list:
     return out
 
 
+TOP_SEED_MIN = 48.0          # a brush top this wide each way can hold a standing player (hull 32) with room
+
+
+def top_seeds(world) -> list[tuple[float, float, float]]:
+    """A seed above the middle of every flat top a player could stand on (world and detail brushes, not props): roofs,
+    ledges, walkways the flood from the item spawns never reaches (it doesn't climb walls), so they get nav without a
+    landmark placed on each. Only tops inside the map: a line straight up from it hits something (a ceiling or the
+    skybox), which the top of the map's outer shell doesn't. The seed drops onto the floor below it (find_ground);
+    one in solid or on something too narrow makes nothing."""
+    from .collision import DISPLACEMENT, SKY
+    out = []
+    for b in world.brushes:
+        if b.source.startswith("prop_") or b.source == "displacement":
+            continue
+        if b.maxs[0] - b.mins[0] < TOP_SEED_MIN or b.maxs[1] - b.mins[1] < TOP_SEED_MIN:
+            continue
+        if not any(not s.bevel and s.normal[2] >= 0.7 and s.material != DISPLACEMENT and s.material not in SKY
+                   for s in b.sides):
+            continue              # (a skybox brush's top is never a floor: Auto Seal's box, the map's own sky)
+        x, y, z = (b.mins[0] + b.maxs[0]) / 2.0, (b.mins[1] + b.maxs[1]) / 2.0, b.maxs[2] + 16.0
+        up = world.trace_hull((x, y, z), (x, y, z + 32768.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+        if up.fraction < 1.0 and not up.startsolid:
+            out.append((x, y, z))
+    return out
+
+
 def _generator(vmf_text: str, regions=()) -> Generator:
     from .nav import nav_cuts
     world = CollisionWorld.from_vmf(vmf_text)
@@ -175,6 +201,11 @@ def _generator(vmf_text: str, regions=()) -> Generator:
     gen = Generator(world)
     gen.cuts = nav_cuts(regions)          # (before the seeds: none start inside a No Nav Volume)
     for p in seed_positions(vmf_text):
+        gen.add_seed(p)
+    from . import fastnav
+    if fastnav.available():
+        fastnav.load_world(world)          # (the up traces below in the DLL; sampling loads it again, memo kept)
+    for p in top_seeds(world):
         gen.add_seed(p)
     for mins, maxs in ladder_bounds(vmf_text):
         gen.add_ladder(mins, maxs)
@@ -248,6 +279,10 @@ def python_steps(gen):
 
 def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     problems = []
+    # where survivors can walk from the start room: worked out before the zombie-only climb links
+    pre = to_navmesh(gen.areas, regions, gen.ladders)
+    walk = survivor_areas(pre)
+    survivors = None if walk is None else {id(a) for a, m in zip(gen.areas, pre.areas) if m.id in walk}
     if wall_climbs:
         from .entities import ZOMBIE_CLIMB_MAX
         if progress:
@@ -266,8 +301,47 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
         problems.insert(0, "No nav mesh: nothing walkable is inside the Control Volumes set to Only inside (nav). "
                            "Each needs floor in it that survivors can reach from a spawn (or a seed)")
     blocked = spawn_block_problems(mesh, regions)        # (the user's own no-spawn boxes)
+    if survivors is not None:
+        # commons off the roofs and ledges survivors can't walk to (the old nav put 26 of 30 starting commons there):
+        # EMPTY is only read by the wandering commons' placement (server.dll); specials (smokers prefer spawning
+        # above the survivors) and hordes still use these areas
+        for a, m in zip(gen.areas, mesh.areas):
+            if id(a) not in survivors:
+                m.spawn_attributes |= EMPTY
     mesh.problems = problems + blocked
     return mesh
+
+
+def _links(mesh: NavMesh) -> dict[int, list]:
+    """Each area's way out: connections (walks, drops) and the ladders it's on."""
+    by = mesh.by_id()
+    lad = {l.id: l for l in mesh.ladders}
+    out = {}
+    for a in mesh.areas:
+        nxt = [i for d in a.connections for i in d if i in by]
+        for k in (0, 1):
+            for lid in (a.ladders[k] if a.ladders else []):
+                l = lad.get(lid)
+                if l is not None:
+                    nxt += [i for i in (l.bottom_area, l.top_forward, l.top_left, l.top_right, l.top_behind) if i in by]
+        out[a.id] = nxt
+    return out
+
+
+def _spread(sources, edges) -> set:
+    seen, todo = set(sources), list(sources)
+    while todo:
+        for i in edges.get(todo.pop(), ()):
+            if i not in seen:
+                seen.add(i)
+                todo.append(i)
+    return seen
+
+
+def survivor_areas(mesh: NavMesh) -> set | None:
+    """Ids of the areas survivors can walk (drop, climb a ladder) to from the start room; None without one."""
+    start = [a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START]
+    return _spread(start, _links(mesh)) if start else None
 
 
 MAX_NODES = 500000           # navgen.Generator.sample's default

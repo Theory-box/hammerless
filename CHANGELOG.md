@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Roofs, ledges and walkways get nav automatically:** every flat top big enough to stand on inside the map seeds the nav, so places the flood from the item spawns never climbs onto (the game's own nav_generate leaves them empty too) get nav without a landmark on each. On a real map: 628 -> 1425 areas, roofs covered, built in 2.7 s. Areas survivors can't walk to are marked EMPTY, which (read from the game's code) only the wandering commons' placement reads: smokers, the other specials and hordes still use the roofs. The Director spreads its commons over all areas by count, so roof areas still cost street commons: the preview on that map goes from 30 to about 17 starting commons.
 - **No more automatic no-spawn marks on areas survivors can't walk to** (0.13.1 added them): they also kept smokers and the other specials off the roofs they use. With the nav going around props, the zombie preview on a real map puts only about 4 of 30 starting commons on such roofs (they drop down when they hear you). Every area still gets nav; to keep zombies off a spot, use a Control Volume with Zombie Spawns.
 - A new Landmark gets a free name (`landmark_2`, ...) instead of a second `landmark_1` (two with one name stop the build). A landmark on a roof also seeds the nav there (the nav grows from landmarks and item spawns).
 
