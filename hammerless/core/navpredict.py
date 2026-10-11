@@ -311,15 +311,21 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     blocked = spawn_block_problems(mesh, regions)        # (the user's own no-spawn boxes)
     start = [a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START]
     if start:
-        # commons off the roofs and ledges survivors can't walk to (the old nav put 26 of 30 starting commons there):
-        # EMPTY is only read by the wandering commons' placement (server.dll); specials (smokers prefer spawning
-        # above the survivors) and hordes still use these areas. (The zombie-only climb links don't count)
+        # commons off the areas they could never get out of to where the survivors are (sealed spots, roofs too high
+        # to drop from): a common placed there is a pick wasted. A roof with a drop down stays: they jump down when
+        # they hear the survivors. EMPTY is only read by the wandering commons' placement (server.dll); specials
+        # (smokers prefer spawning above the survivors) and hordes still use these areas
         edges: dict[int, list] = {}
-        for a, b in walkable:
+        for a, b in walkable:                  # (where survivors can go: not up the zombie-only climb links)
             edges.setdefault(a, []).append(b)
         survivors = _spread(start, edges)
+        back: dict[int, list] = {}
+        for a, nxt in _links(mesh).items():    # (where infected can go: drops, ladders and climbs too)
+            for b in nxt:
+                back.setdefault(b, []).append(a)
+        out = _spread(survivors, back)
         for m in mesh.areas:
-            if m.id not in survivors:
+            if m.id not in out:
                 m.spawn_attributes |= EMPTY
     mesh.problems = problems + blocked
     return mesh

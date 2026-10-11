@@ -9,7 +9,7 @@
 ## 0.13.2 (test release, 2026-10-11)
 
 - **Roofs, ledges and walkways get nav automatically:** every flat top big enough to stand on inside the map seeds the nav, so places the flood from the item spawns never climbs onto (the game's own nav_generate leaves them empty too) get nav without a landmark on each. On a real map: 628 -> 1425 areas, roofs covered, built in 2.7 s. Areas survivors can't walk to are marked EMPTY, which (read from the game's code) only the wandering commons' placement reads: smokers, the other specials and hordes still use the roofs. The Director spreads its commons over all areas by count, so roof areas still cost street commons: the preview on that map goes from 30 to about 17 starting commons.
-- **Smokers and the other specials can spawn on roofs again:** 0.13.1 marked areas survivors can't walk to EMPTY | NO_MOBS, which kept them off. The mark is now EMPTY alone, which keeps only the wandering commons off (they'd fill hidden roofs first).
+- **Smokers and the other specials can spawn on roofs again:** 0.13.1 marked areas survivors can't walk to EMPTY | NO_MOBS, which kept them off. The mark is now EMPTY alone, which keeps only the wandering commons off (they'd fill hidden roofs first). (Unreleased: only areas the infected can't get out of to the survivors are marked, sealed spots and roofs too high to drop from: commons on a roof with a drop down jump down to the survivors, so they're not wasted.)
 - A new Landmark gets a free name (`landmark_2`, ...) instead of a second `landmark_1` (two with one name stop the build). 
 
 ## 0.13.1 (test release, 2026-10-11)
