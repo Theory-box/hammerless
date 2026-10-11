@@ -319,11 +319,9 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
         for a, b in walkable:                  # (where survivors can go: not up the zombie-only climb links)
             edges.setdefault(a, []).append(b)
         survivors = _spread(start, edges)
-        back: dict[int, list] = {}
-        for a, nxt in _links(mesh).items():    # (where infected can go: drops, ladders and climbs too)
-            for b in nxt:
-                back.setdefault(b, []).append(a)
-        out = _spread(survivors, back)
+        out = _can_reach(mesh, survivors)
+        if link_islands(mesh, gen.world, out):      # (drops the generator missed: off cars, crates, balconies)
+            out = _can_reach(mesh, survivors)
         for m in mesh.areas:
             if m.id not in out:
                 m.spawn_attributes |= EMPTY
@@ -425,6 +423,68 @@ def add_nav_areas(mesh: NavMesh, regions) -> tuple[list[int], set]:
         mesh.areas.append(new)
         made.append(new.id)
     return made, links
+
+
+def _can_reach(mesh: NavMesh, targets: set) -> set:
+    """Ids of the areas from which there's a way (walks, drops, ladders, climbs) to one of targets."""
+    back: dict[int, list] = {}
+    for a, nxt in _links(mesh).items():
+        for b in nxt:
+            back.setdefault(b, []).append(a)
+    return _spread(targets, back)
+
+
+ISLAND_REACH = (24.0, 40.0, 56.0, 72.0)   # how far past an edge a drop is looked for (past a car's wider body)
+
+
+def link_islands(mesh: NavMesh, world, out: set) -> int:
+    """Drop links the generator never makes: from an area nothing can get out of (a car top, a crate, a balcony:
+    the game's own nav_generate leaves them as islands too) down to nav that does lead to the survivors, where a
+    crouching player-sized box can move off the edge and fall clear (DEATH_DROP at most: the infected take no fall
+    damage). One way, like a drop. Returns how many links it added."""
+    from .navgen import DEATH_DROP, HALF_HUMAN_WIDTH, HUMAN_CROUCH_HEIGHT, STEP_HEIGHT
+    mins, maxs = (-HALF_HUMAN_WIDTH, -HALF_HUMAN_WIDTH, 0.0), (HALF_HUMAN_WIDTH, HALF_HUMAN_WIDTH, HUMAN_CROUCH_HEIGHT)
+    targets = [a for a in mesh.areas if a.id in out]
+
+    def landing_area(x, y, z):
+        for b in targets:
+            if min(b.nw[0], b.se[0]) <= x <= max(b.nw[0], b.se[0]) and min(b.nw[1], b.se[1]) <= y <= max(b.nw[1], b.se[1]) \
+                    and abs(b.z_at(x, y) - z) <= STEP_HEIGHT:
+                return b
+        return None
+    added = 0
+    for a in [m for m in mesh.areas if m.id not in out]:
+        x0, x1 = min(a.nw[0], a.se[0]), max(a.nw[0], a.se[0])
+        y0, y1 = min(a.nw[1], a.se[1]), max(a.nw[1], a.se[1])
+        # (side, points along its edge, outward direction)
+        xs = [(x0 + x1) / 2] + ([x0 + (x1 - x0) / 4, x1 - (x1 - x0) / 4] if x1 - x0 > 100 else [])
+        ys = [(y0 + y1) / 2] + ([y0 + (y1 - y0) / 4, y1 - (y1 - y0) / 4] if y1 - y0 > 100 else [])
+        sides = ((0, [(x, y0) for x in xs], (0.0, -1.0)), (1, [(x1, y) for y in ys], (1.0, 0.0)),
+                 (2, [(x, y1) for x in xs], (0.0, 1.0)), (3, [(x0, y) for y in ys], (-1.0, 0.0)))
+        for d, points, (dx, dy) in sides:
+            done = False
+            for px, py in points:
+                za = a.z_at(px, py)
+                inward = min(8.0, (x1 - x0) / 2 if dx else (y1 - y0) / 2)
+                start = (px - dx * inward, py - dy * inward, za + STEP_HEIGHT)
+                for reach in ISLAND_REACH:
+                    end = (px + dx * reach, py + dy * reach, za + STEP_HEIGHT)
+                    tr = world.trace_hull(start, end, mins, maxs)
+                    if tr.startsolid or tr.fraction < 1.0:
+                        break                              # (a wall, a rail: no way off here)
+                    down = world.trace_hull(end, (end[0], end[1], za - DEATH_DROP), mins, maxs)
+                    if down.startsolid or down.fraction >= 1.0:
+                        continue
+                    b = landing_area(down.endpos[0], down.endpos[1], down.endpos[2])
+                    if b is not None:
+                        if b.id not in a.connections[d]:
+                            a.connections[d].append(b.id)
+                            added += 1
+                        done = True
+                        break
+                if done:
+                    break
+    return added
 
 
 def survivor_areas(mesh: NavMesh) -> set | None:

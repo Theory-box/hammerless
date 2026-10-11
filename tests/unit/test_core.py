@@ -1329,6 +1329,36 @@ class TestLaddersAndClimbs(unittest.TestCase):
         _c, problems = collect_climbs(ir)
         self.assertTrue(any("both a bottom and a top" in p for p in problems))
 
+    def test_island_drop_links(self):
+        """An area nothing can get out of (the top of a car-sized box) gets a one-way drop link to the floor beside it
+        when a player-sized box can move off its edge and fall clear; boxed in by tall walls, it gets none."""
+        from hammerless.core.build import build_vmf
+        from hammerless.core.collision import CollisionWorld
+        from hammerless.core.navfile import NavArea, NavMesh
+        from hammerless.core.navpredict import link_islands
+        mat = "dev/dev_measuregeneric01b"
+
+        def mesh_and_world(walls):
+            ir = box_room_ir()
+            ir.settings.auto_seal = False
+            ir.brushes.append(g.box_brush((-50, -30, 0), (50, 30, 40), mat, "car"))
+            if walls:
+                for lo, hi in (((-70, -50, 0), (70, -34, 200)), ((-70, 34, 0), (70, 50, 200)),
+                               ((-70, -50, 0), (-54, 50, 200)), ((54, -50, 0), (70, 50, 200))):
+                    ir.brushes.append(g.box_brush(lo, hi, mat, "wall"))
+            world = CollisionWorld.from_vmf(build_vmf(ir)[0])
+            mesh = NavMesh(analyzed=False)
+            floor = NavArea(1, 0, (-250.0, -250.0, 0.0), (250.0, -100.0, 0.0), 0.0, 0.0)     # south of the car
+            top = NavArea(2, 0, (-50.0, -30.0, 40.0), (50.0, 30.0, 40.0), 40.0, 40.0)
+            mesh.areas = [floor, top]
+            return mesh, world, top
+        mesh, world, top = mesh_and_world(walls=False)
+        self.assertGreaterEqual(link_islands(mesh, world, {1}), 1)
+        self.assertIn(1, top.connections[0])                     # north (-y): off the side, down to the floor
+        mesh, world, top = mesh_and_world(walls=True)
+        self.assertEqual(link_islands(mesh, world, {1}), 0)
+        self.assertEqual(top.connections, [[], [], [], []])
+
     def test_nav_area_volume(self):
         """A Nav Area is one area at its outline and bottom height: the small areas under it go, it's linked both ways
         to a level neighbour beside its edge and one way (a drop) to the street below; nav far below isn't touched."""
