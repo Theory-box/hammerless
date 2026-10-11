@@ -107,7 +107,9 @@ def _base(source: str) -> str:
     return re.sub(r" \(part \d+\)$", "", source)
 
 
-BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER")
+BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
+                 "CAMERA")
+CLIENT_COMMAND = "hl_clientcommand"     # the map's point_clientcommand: a console command run on one player
 BLOCK_VALUES = ("GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
                 "CHECK", "SCRIPT_VALUE")
 VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
@@ -382,6 +384,22 @@ class _Compiler:
             return f'Entities.FindByName(null, "{self.name_of(e, v)}")'
         return vs.literal(kind, v)
 
+    def check_cheats(self, n: LNode) -> None:
+        """A warning when the node uses what only works with cheats on (core/cheats.py)."""
+        from . import cheats
+        used: list[str] = []
+        if n.kind == "SCRIPT_CALL":
+            fn = n.settings.get("fn", "")
+            first = str(n.consts.get("p0", "") or "")
+            if fn == "Convars.SetValue" and first.lower() in cheats.names():
+                used = [first.lower()]
+            elif fn in cheats.CONSOLE_FUNCTIONS:
+                used = cheats.in_commands(first)
+        elif n.kind == "SCRIPT_CODE":
+            used = cheats.in_code(n.settings.get("code", ""))
+        if used:
+            self.cheat_uses.append((n.id, used))
+
     def script_args(self, n: LNode, f: dict) -> tuple:
         socks = vs.param_sockets(f)
         target = self.typed_in(n, "target", vs.THING) if f.get("on") else None
@@ -478,6 +496,7 @@ class _Compiler:
     def node(self, n: LNode):
         s, nid = n.settings, n.id
         slug = self.key_of(nid)
+        self.check_cheats(n)
 
         def fire(sock, ent, output, delay=0.0, times=-1):
             self.fires[(nid, sock)] = _Fire(ent, output, delay, times)
@@ -1019,6 +1038,28 @@ class _Compiler:
                     x, y, w, h = (float(s.get(c, d)) for c, d in (("x", 0.25), ("y", 0.1), ("w", 0.5), ("h", 0.08)))
                     line += f"    HUDPlace({slot}, {x:g}, {y:g}, {w:g}, {h:g});\n"
             self.script_action(nid, fn, line + "@@then@@", ["then"], take)
+        elif k == "CAMERA":
+            # (point_clientcommand runs a console command on its activator; measured: thirdpersonshoulder switches
+            # without cheats, firstperson always ends in first person, so "firstperson; thirdpersonshoulder" always
+            # ends in third. Bots have no camera: skipped)
+            if not any(e.classname == "point_clientcommand" and e.keyvalues.get("targetname") == CLIENT_COMMAND
+                       for e in self.ir.entities):
+                self.ir.entities.append(Entity("point_clientcommand", (0.0, 0.0, 0.0),
+                                               keyvalues={"targetname": CLIENT_COMMAND}))
+            self.helper("HL_Players", HELPERS["HL_Players"])
+            third = self.typed_in(n, "third", vs.BOOL)
+            who = self.typed_in(n, "player", vs.THING)
+            body = (f"    local who = {who};\n"
+                    # (empty: the player who set it off, as wires pass it on: who walked into a Volume, pressed a
+                    # Button; nobody (a Timer, Map Start): everyone)
+                    "    if (who == null) try { if (activator != null && activator.IsValid() && "
+                    'activator.GetClassname() == "player") who = activator; } catch (e) {}\n'
+                    f'    local cmd = {third} ? "firstperson; thirdpersonshoulder" : "firstperson";\n'
+                    f"    foreach (p in (who != null ? [who] : HL_Players(0))) {{\n"
+                    f'        if (p == null || !p.IsValid() || p.GetClassname() != "player" || IsPlayerABot(p)) continue;\n'
+                    f'        DoEntFire("{CLIENT_COMMAND}", "Command", cmd, 0.0, p, p);\n'
+                    f"    }}\n@@then@@")
+            self.script_action(nid, fn, body, ["then"], take)
         elif k == "SCRIPT_CODE":
             args = "".join(f"    local {x} = {self.typed_in(n, x, vs.ANY)};\n" for x in "abcd")
             code = "\n".join("    " + line for line in (s.get("code") or "").splitlines())
@@ -1398,6 +1439,7 @@ def compile_graph(nodes: list[LNode], links: list[LLink], ir: MapIR, graph: str 
     log: every wire also prints 'HAMMERLESS_EVENT from -> to' to the console when it fires."""
     problems: list[str] = []
     c = _Compiler(ir, problems, graph, log)
+    c.cheat_uses = []
     c.nodes = {n.id: n for n in nodes}
     c.data_links = {(l.to_node, l.to_socket): (l.from_node, l.from_socket) for l in links if l.data}
     makers = ("BUTTON", "MOVE", "SHOW_HIDE", "VOLUME")
@@ -1408,4 +1450,11 @@ def compile_graph(nodes: list[LNode], links: list[LLink], ir: MapIR, graph: str 
             c.link(l)
     c.render_script_nodes()
     c.finish_script()
+    if c.cheat_uses:                     # (one warning for the graph, naming its nodes)
+        from . import cheats
+        used = []
+        for _nid, u in c.cheat_uses:
+            used += [x for x in u if x not in used]
+        where = ", ".join(f"'{nid}'" for nid, _u in c.cheat_uses)
+        problems.append(cheats.warning(f"Needs cheats: logic node{'s' if len(c.cheat_uses) > 1 else ''} {where}", used))
     return problems

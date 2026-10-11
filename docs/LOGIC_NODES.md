@@ -27,7 +27,7 @@ The Add menu has one place per purpose:
 | **Flow** | When (fires when a condition becomes true), If, Sequence, Delay, Once, Gate, Branch, Counter, Random, For Each (survivors, infected, players, commons, entities by class or name, a list) |
 | **Values** | Value, Math, Compare, Boolean Math, Random Value, Path Progress (furthest / average / last survivor, 0 to 1), Infected Count; Set / Get Variable (for the map or per player, kept across maps if you like), Format Text, Compare Values; Make / Break Vector, Vector Math; Make Table, Get Field |
 | **Scene** | Object Info (picks a scene object to hand to other nodes), Entity Events (an object's own events, e.g. a door opening), Collision (solid for players and/or the nav) |
-| **Actions** | Move Over Time (Mover), Show / Hide Object, Horde, Crescendo, Spawn Zombie (a spot, or the game picks; *Only If Fewer Than*), Play Sound, Teleport Survivors. **All Game Functions**: all 419 of the game's script functions, grouped (Player, Director, Nav Mesh, Entity, Find Entities, Spawning, Sound...) or found with *Search...* |
+| **Actions** | Move Over Time (Mover), Show / Hide Object, Horde, Crescendo, Spawn Zombie (a spot, or the game picks; *Only If Fewer Than*), Play Sound, Teleport Survivors, Camera (first person / the game's over-the-shoulder third person; Player empty: whoever set it off, or everyone). **All Game Functions**: all 419 of the game's script functions, grouped (Player, Director, Nav Mesh, Entity, Find Entities, Spawning, Sound...) or found with *Search...* |
 | **Director** | Director, Director Settings, Director Setting (any of the ~140 Director settings, changed while playing), Director Mood (the Director's intensity, 0 calm to 1 furious, and warnings 60 s and 20 s before a mob) |
 | **HUD & Messages** | Show Message, Objective, HUD Text, HUD Hide |
 | **Overrides** | Override, Answer |
@@ -109,6 +109,8 @@ The game only asks the map before doing things (Override nodes) and only shows a
 |---|---|---|
 | 42 | Power-Up: Nuke | A kill may drop a glowing pickup (spawned with Spawn Entity From Table); walking over it blows up the common infected within a Radius in a wave, five per tenth of a second; a Delay keeps new ones from dropping for 30 s |
 | 43 | Slow Motion Headshots | A headshot on a common (infected_death) or a special (player_death) slows the game to 30% for about 2 s with Console Variable calls (host_timescale only works with cheats on, so they're on during it), then back |
+| 44 | Third Person Zone | Volume On Enter / On Leave into Camera nodes with Player empty: only the player who walked in or out switches |
+| 45 | Third Person Everywhere | Game event player_spawn, its Userid wired into a Camera's Player |
 
 `demo/hl_test_nuke.blend` (made by `tests/fixtures/nuke_test.py`) is the demo level with it, set so the first kill drops it, and 40 commons on the field.
 
@@ -135,3 +137,7 @@ Settings: direction, distance (*auto* = the object's own size in that direction)
 ## Debugging
 
 *Settings > Debug > Debug Log* prints every wire as it fires (`HAMMERLESS_EVENT`) and each random roll to `left4dead2/console.log`.
+
+## Cheats
+
+When a graph uses something that only works with cheats on (a cheat console setting such as host_timescale, a cheat command such as z_spawn or give, or turning sv_cheats on), Build lists one warning for the graph naming its nodes: "Needs cheats: ...". In a normal game those do nothing; a map that turns cheats on itself makes the game announce it, turns achievements off for that game and lets players use any cheat meanwhile, and public servers usually don't allow it. The list of names is the game's own (hammerless/core/data/cheat_commands.txt, made by scripts/cheat_commands.py).

@@ -105,3 +105,44 @@ class TestCompileCancel(unittest.TestCase):
             job.start().wait()
             self.assertTrue(job.failed)
             self.assertFalse(job.cancelled)
+
+
+class TestCheatWarning(unittest.TestCase):
+    """Logic that only works with cheats on is reported once per graph, naming its nodes."""
+
+    def setUp(self):
+        from hammerless.core import cheats
+        self._saved = cheats._NAMES
+        cheats._NAMES = {"sv_cheats", "host_timescale", "god"}
+
+    def tearDown(self):
+        from hammerless.core import cheats
+        cheats._NAMES = self._saved
+
+    def test_graph_with_cheats(self):
+        from hammerless.core.logic import LNode, compile_graph
+        nodes = [LNode("on", "SCRIPT_CALL", {"fn": "Convars.SetValue"}, consts={"p0": "sv_cheats"}),
+                 LNode("slow", "SCRIPT_CALL", {"fn": "Convars.SetValue"}, consts={"p0": "host_timescale"}),
+                 LNode("fine", "SCRIPT_CALL", {"fn": "Convars.SetValue"}, consts={"p0": "z_common_limit"}),
+                 LNode("cmd", "SCRIPT_CALL", {"fn": "SendToServerConsole"}, consts={"p0": "say hi; god 1"}),
+                 LNode("code", "SCRIPT_CODE", {"code": 'Convars.SetValue("host_timescale", 0.5);'})]
+        warnings = [p for p in compile_graph(nodes, [], MapIR()) if p.startswith("Needs cheats")]
+        self.assertEqual(len(warnings), 1, warnings)
+        w = warnings[0]
+        for nid in ("'on'", "'slow'", "'cmd'", "'code'"):
+            self.assertIn(nid, w)
+        self.assertNotIn("'fine'", w)
+        self.assertIn("turns cheats on", w)
+        self.assertIn("host_timescale", w)
+        self.assertIn("god", w)
+
+    def test_graph_without_cheats(self):
+        from hammerless.core.logic import LNode, compile_graph
+        nodes = [LNode("fine", "SCRIPT_CALL", {"fn": "Convars.SetValue"}, consts={"p0": "z_common_limit"}),
+                 LNode("say", "SCRIPT_CALL", {"fn": "SendToServerConsole"}, consts={"p0": "say god mode"})]
+        self.assertFalse([p for p in compile_graph(nodes, [], MapIR()) if p.startswith("Needs cheats")])
+
+    def test_only_cheats_used_is_a_setting(self):
+        from hammerless.core import cheats
+        w = cheats.warning("x", ["host_timescale"])
+        self.assertIn("only work with cheats on", w)

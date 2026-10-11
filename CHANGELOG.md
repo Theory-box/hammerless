@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Camera node (Actions):** switches players to the game's over-the-shoulder third person view or back to first person, no cheats needed. With Player empty it acts on whoever set it off (walked into a Volume, pressed a Button), or everyone. New examples: Third Person Zone and Third Person Everywhere. Tested in game.
+- **Warning when logic needs cheats:** a graph using a cheat-only console setting or command, or turning cheats on, gets one "Needs cheats" warning in Problems naming its nodes (public servers usually don't allow cheats; achievements are off once they're on). The list of cheat-only names comes from the game itself.
 - **New logic example, Slow Motion Headshots (Examples 3):** every headshot slows the whole game to 30% for about two seconds. Built only from existing nodes (Game Event, If, Game Function, Delay). The game only changes its speed with cheats on, so they are on during the slow motion (the game says so, and achievements are off for that game). Tested in game.
 - **Cancel any build or bake:** while Build & Play, Build, Bake Lighting or Compute Visibility runs, a red **Cancel** button replaces its button (Esc does the same). The compilers are stopped at once, the nav mesh and its analysis stop at their next stage, and nothing is copied to the game; the next build compiles the map again. Before, Esc only stopped watching and the compile carried on in the background. The navmesh's Build and Analyze have their own Cancel, which now also stops the compile Analyze started.
 - **The Cycles bake no longer freezes Blender:** it runs in a background Blender (about half a second to start), so you can keep working while it bakes, and Cancel stops it.

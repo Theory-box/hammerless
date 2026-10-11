@@ -324,6 +324,23 @@ def check(run: Run, n: int, b: Bench):
         assert back == 1.0 and cheats == 0, f"after it: time scale {back}, sv_cheats {cheats}"
         assert rate < 0.5, f"the game ran at {rate:.2f}x during the slow motion"
         return f"headshot: game at {rate:.2f}x, then back to normal with cheats off"
+    if n in (44, 45):
+        # the camera is the player's own: the game doesn't tell scripts, so these are pictures to look at
+        shots = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shots")
+        assert b.value('T.ent("hl_clientcommand") != null'), "no point_clientcommand in the map"
+        if n == 45:
+            b.run("T.host().SetHealth(100);")
+            return "look: " + b.screenshot("45_after_spawn_third", out_dir=shots)
+        room = b.value('(function() { for (local e = null; e = Entities.FindByClassname(e, "trigger_multiple");) '
+                       'if (e.GetName().find("third_person_zone") != null) return e.GetCenter(); return null; })()')
+        assert room is not None, "the zone's trigger isn't in the map"
+        away = [room[0], room[1] - 600, room[2]]
+        b.run(f"T.to(T.host(), Vector({away[0]}, {away[1]}, {away[2]}));"); time.sleep(1.5)
+        b.run(f"T.to(T.host(), Vector({room[0]}, {room[1]}, {room[2] - 40}));"); time.sleep(1.5)
+        inside = b.screenshot("44_inside_third", out_dir=shots)
+        b.run(f"T.to(T.host(), Vector({away[0]}, {away[1]}, {away[2]}));"); time.sleep(1.5)
+        outside = b.screenshot("44_outside_first", out_dir=shots)
+        return f"look: {inside} (third person), {outside} (first person)"
     raise SkipTest("not automated (needs real play: " + SKIP_WHY.get(n, "timing") + ")")
 
 

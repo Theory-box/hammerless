@@ -10,3 +10,4 @@ demo/hl_test_*.blend
 native/hlvrad32.exe
 hammerless/core/embree4.dll
 hammerless/core/tbb12.dll
+tests/ingame/shots/

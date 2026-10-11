@@ -954,7 +954,14 @@ def test_logic_examples_build():
         # (Blender draws wires in an event loop red; they work. A real circle of value wires shows up as
         # a build warning below)
         blocks, log = export()
-        if blocks is None or tree.name in log:
+        # (an example that needs cheats on purpose gets that warning, and only that one)
+        needs_cheats = ex["title"] == "Slow Motion Headshots"
+        warned = [ln for ln in log.splitlines() if tree.name in ln]
+        if needs_cheats:
+            ok = len(warned) == 1 and "Needs cheats" in warned[0]
+        else:
+            ok = not warned
+        if blocks is None or not ok:
             bad.append(f"{tree.name}:\n{log}")
     assert not bad, "\n".join(bad)
 

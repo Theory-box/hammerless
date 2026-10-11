@@ -163,4 +163,23 @@ EXAMPLES_3 = [
                 ("Cheats on (the game's speed only changes with them), then slow it down",
                  ["on", "cheats_on", "speed", "slow"]),
                 ("After the slow motion: normal speed, cheats off", ["wait", "full", "normal", "off", "cheats_off"])]),
+    dict(title="Third Person Zone", level="Simple",
+         objects={"room": ("ROOM", (0.0, 0.0, 1.5))},
+         about="The Camera node switches players to the game's over-the-shoulder third person view and back "
+               "(no cheats needed). Its Player is left empty, so it acts on whoever set it off: walking into "
+               "the room switches only that player to third person, walking out switches them back. "
+               "Untick Third Person on a Camera node for first person.",
+         nodes=[N("room", "HL_NodeVolume", 0, 0, sockets={"object": "@room"}, once=False),
+                N("third", "HL_NodeCamera", 1, 0),
+                N("first", "HL_NodeCamera", 1, 2, sockets={"third": False})],
+         links=[("room.enter", "third.run"), ("room.leave", "first.run")],
+         steps=[("In: third person; out: first person, for the player who walked in or out",
+                 ["room", "third", "first"])]),
+    dict(title="Third Person Everywhere", level="Simple",
+         about="The whole map in third person: each player is switched when they spawn (at map start players "
+               "aren't in yet). The game event's Userid is the player, wired into the Camera's Player.",
+         nodes=[ev("spawn", "player_spawn", 0, 0),
+                N("third", "HL_NodeCamera", 1, 0)],
+         links=[("spawn.happened", "third.run"), ("spawn.userid", "third.player")],
+         steps=[("Every player who spawns: third person", ["spawn", "third"])]),
 ]

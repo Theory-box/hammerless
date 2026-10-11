@@ -819,6 +819,20 @@ class HL_NodeTeleport(_Node, bpy.types.Node):
         return self.with_object(context, super().to_lnode(context), position=True)
 
 
+class HL_NodeCamera(_Node, bpy.types.Node):
+    """Switches players between first person and the over-the-shoulder third person camera (the game's own
+    thirdpersonshoulder: no cheats needed). Player empty: whoever set it off (walked into a Volume, pressed a
+    Button), or everyone when nobody did (a Timer, Map Start)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeCamera", "Camera", "CAMERA_DATA"
+    kind, category = "CAMERA", "Actions"
+
+    def make_sockets(self):
+        self.ev_in("run", "Set")
+        _data_socket(self.inputs, "bool", "third", "Third Person").value = True
+        _data_socket(self.inputs, "thing", "player", "Player")
+        self.ev_out("then", "Then")
+
+
 class HL_NodeMessage(_Node, bpy.types.Node):
     """Shows text on the survivors' screens: hints, warnings"""
     bl_idname, bl_label, bl_icon = "HL_NodeMessage", "Show Message", "INFO"
@@ -1956,7 +1970,7 @@ CATEGORIES = [
     ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
               HL_NodeCounter, HL_NodeRandom]),
     ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
-                 HL_NodeTeleport, HL_NodeMessage]),
+                 HL_NodeTeleport, HL_NodeMessage, HL_NodeCamera]),
     ("Director", [HL_NodeDirector, HL_NodeDirectorSettings]),
     ("Objectives", [HL_NodeObjective]),
 ]
