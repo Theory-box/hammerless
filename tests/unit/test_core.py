@@ -1220,6 +1220,24 @@ class TestLaddersAndClimbs(unittest.TestCase):
         _c, problems = collect_climbs(ir)
         self.assertTrue(any("both a bottom and a top" in p for p in problems))
 
+    def test_unreachable_areas_get_no_zombies(self):
+        """Areas survivors can't walk to from the start (a roof with only drops down) get EMPTY | NO_MOBS: the
+        Director picks spawn areas at random by count and fills hidden roofs first (measured: 26 of 30 there)."""
+        from hammerless.core.navfile import NavArea, NavMesh
+        from hammerless.core.navpredict import mark_unreachable
+        mesh = NavMesh(analyzed=False)
+        start, street, roof = (NavArea(i, 0, (0, 0, 0), (50, 50, 0), 0, 0) for i in (1, 2, 3))
+        start.spawn_attributes = 0x80
+        start.connections, street.connections = [[2], [], [], []], [[1], [], [], []]
+        roof.connections = [[2], [], [], []]            # (drops down to the street; nothing leads up)
+        for a in (start, street, roof):
+            a.ladders = [[], []]
+        mesh.areas = [start, street, roof]
+        self.assertEqual(mark_unreachable(mesh), 1)
+        self.assertEqual(roof.spawn_attributes & 0x2002, 0x2002)
+        self.assertEqual(street.spawn_attributes, 0)
+        self.assertEqual(mark_unreachable(NavMesh(analyzed=False)), 0)     # (no start room: nothing marked)
+
     def test_nav_in_its_own_process(self):
         """navworker: the same mesh as in-process (remembered for the next Build), errors come back, Cancel kills it."""
         from hammerless.core import navworker

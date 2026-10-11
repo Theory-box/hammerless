@@ -202,14 +202,50 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     if not gen.areas and any(len(c) > 3 and c[3] for c in gen.cuts):
         problems.insert(0, "No nav mesh: nothing walkable is inside the Control Volumes set to Only inside (nav). "
                            "Each needs floor in it that survivors can reach from a spawn (or a seed)")
-    mesh.problems = problems + spawn_block_problems(mesh, regions)
+    blocked = spawn_block_problems(mesh, regions)        # (the user's own no-spawn boxes, before the marks below)
+    unreachable = mark_unreachable(mesh)
+    if unreachable and unreachable / max(1, len(mesh.areas)) > 0.2:
+        problems.append(f"{unreachable} of {len(mesh.areas)} nav areas can't be walked to from the start (roofs, "
+                        "ledges, closed-off spots): no zombies spawn there (they could never reach the survivors). "
+                        "Lots of these usually means a Control Volume or the map lets the nav mesh onto roofs")
+    mesh.problems = problems + blocked
     return mesh
+
+
+def mark_unreachable(mesh: NavMesh) -> int:
+    """Areas survivors can't walk (or climb) to from the start room get EMPTY | NO_MOBS. Measured on the user's
+    map: the Director put 26 of its 30 start-of-map commons on roofs and a raised walkway the survivors can't get
+    to (they're hidden from view: the Director's favourite spots), leaving 4 on the street. Returns how many."""
+    start = [a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START]
+    if not start:
+        return 0                      # (no start room: nothing to measure from; the nav report says so)
+    by = mesh.by_id()
+    lad = {l.id: l for l in mesh.ladders}
+    seen, todo = set(start), list(start)
+    while todo:
+        a = by[todo.pop()]
+        nxt = [i for d in a.connections for i in d]
+        for k in (0, 1):
+            for lid in (a.ladders[k] if a.ladders else []):
+                l = lad.get(lid)
+                if l is not None:
+                    nxt += [l.bottom_area, l.top_forward, l.top_left, l.top_right, l.top_behind]
+        for i in nxt:
+            if i in by and i not in seen:
+                seen.add(i)
+                todo.append(i)
+    n = 0
+    for a in mesh.areas:
+        if a.id not in seen:
+            a.spawn_attributes |= EMPTY | NO_MOBS
+            n += 1
+    return n
 
 
 MAX_NODES = 500000           # navgen.Generator.sample's default
 
 
-EMPTY, NO_MOBS = 2, 8192
+EMPTY, NO_MOBS, PLAYER_START = 2, 8192, 128
 SPAWN_BLOCK_SHARE = 0.4      # warn when one box stops spawns on more than this share of the nav
 
 
