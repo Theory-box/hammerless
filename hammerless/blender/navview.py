@@ -397,7 +397,7 @@ class HL_OT_nav_predict(bpy.types.Operator):
         self._box = box
         self._owner = _owner(context)
         wall_climbs = context.scene.hammerless.wall_climbs        # (read here, not in the thread)
-        roofs = context.scene.hammerless.nav_roofs
+        roofs = not context.scene.hammerless.nav_culling
 
         def work():
             try:
@@ -518,7 +518,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         box = {"stage": "Building the navmesh", "mesh": None, "error": None, "compiled": compiled, "stop": False}
         self._box = box
         wall_climbs = context.scene.hammerless.wall_climbs
-        roofs = context.scene.hammerless.nav_roofs
+        roofs = not context.scene.hammerless.nav_culling
 
         def work():
             try:

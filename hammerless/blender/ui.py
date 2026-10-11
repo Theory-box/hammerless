@@ -756,7 +756,7 @@ class HL_PT_navmesh(_Panel, bpy.types.Panel):
         sub.enabled = s.nav_source == "BLENDER"
         sub.prop(s, "nav_analysis")
         sub.prop(s, "wall_climbs")
-        sub.prop(s, "nav_roofs")
+        sub.prop(s, "nav_culling")
         col.prop(s, "generate_nav", text="Rebuild Nav Next Time")
         _hint(self.layout, _nav_status(context)[1])
         from .navview import draw_buttons

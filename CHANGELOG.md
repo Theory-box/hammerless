@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Nav on Every Rooftop is now a setting (Nav Mesh panel), off by default:** like the game's own generator, nav grows only from the item spawns and Landmarks, so put a Landmark on each roof you want (smoker spots). On, every flat top inside the map gets nav (0.13.2's behaviour). The Director spreads its commons over every nav area, so lots of roof areas cost street commons: on a real map the preview shows ~30 starting commons with it off and landmarks on the roofs you want, ~17 with it on.
+- **Nav Culling (Nav Mesh panel), on by default:** like the game's own generator, nav grows only from the item spawns and Landmarks, so put a Landmark on each roof you want (smoker spots). Off, every flat top inside the map gets nav (0.13.2's behaviour). The Director spreads its commons over every nav area, so lots of roof areas cost street commons: on a real map the preview shows ~30 starting commons with culling on and landmarks on the roofs you want, ~17 with it off.
 - **Copies of an imported map's props and other point entities are built** (Shift+D on a van, a light, a spawn): they used to be left out with only a warning. Copies of brush entities still aren't (add a new one, or duplicate it in Hammer).
 
 ## 0.13.2 (test release, 2026-10-11)

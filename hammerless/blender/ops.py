@@ -1026,7 +1026,7 @@ def _nav_key(vmf_path: str, rep, s, opts) -> str | None:
         with open(vmf_path, encoding="utf-8", errors="replace") as f:
             text = f.read()
         o = cc.PRESETS[opts] if isinstance(opts, str) else opts
-        extra = f"{o.vis}|{o.vis_tool}|{o.vis_exact}|{s.nav_analysis}|{s.nav_roofs}"   # (analysis reads the vis)
+        extra = f"{o.vis}|{o.vis_tool}|{o.vis_exact}|{s.nav_analysis}|{not s.nav_culling}"   # (analysis reads the vis)
         # (instance files and the map's own models: props' collision)
         extra += "|" + o.assets + "|" + cc.instances_hash(vmf_path, text.encode())
         return inputs_key(text, rep.nav_regions, rep.nav_climbs, s.wall_climbs, extra)
@@ -1332,7 +1332,8 @@ class HL_OT_build(bpy.types.Operator):
                     and cc.nav_inputs_same(tools, s.map_name, self._nav_key)):
                 self._nav_kept = True        # (only logic changed: the nav on disk still fits the map)
             else:
-                self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs, s.nav_roofs)
+                self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs,
+                                                  not s.nav_culling)
         self._job.snapshot_vis = self._nav is not None and s.nav_analysis == "BLENDER"
         try:
             self._job.start()
