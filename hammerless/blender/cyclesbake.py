@@ -333,3 +333,92 @@ def bake_bsp(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = 
              f"{samples} samples{', denoised' if denoise else ''}, "
              f"{len(lights)} light{'s' if len(lights) != 1 else ''}" + (" + sun and sky" if sun else "")]
     return lines + ([seam_note] if seam_note else []) + [f"Cycles: {n}" for n in notes]
+
+
+# The bake runs in a background Blender: this one stays usable meanwhile, and Cancel can stop it.
+
+def start_process(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bool = False, stitch: bool = True,
+                  eyes: np.ndarray | None = None) -> dict:
+    """Start bake_bsp in a background Blender. Returns {"proc", "result", "log"}; read it with process_result."""
+    import json
+    import os
+    import subprocess
+    base = os.path.splitext(bsp_path)[0]
+    eyes_path = ""
+    if eyes is not None:
+        eyes_path = base + ".eyes.npy"
+        np.save(eyes_path, eyes)
+    result, log = base + ".cycles.json", base + ".cycles.log"
+    if os.path.exists(result):
+        os.remove(result)
+    devices = {"type": "NONE", "use": []}      # (this Blender's GPU choice: the background one starts without it)
+    try:
+        prefs = bpy.context.preferences.addons["cycles"].preferences
+        devices = {"type": prefs.compute_device_type, "use": [d.id for d in prefs.devices if d.use]}
+    except (KeyError, AttributeError):
+        pass
+    job = {"bsp": bsp_path, "upm": upm, "samples": samples, "denoise": denoise, "stitch": stitch,
+           "eyes": eyes_path, "result": result, "devices": devices}
+    job_path = base + ".cycles_job.json"
+    with open(job_path, "w", encoding="utf-8") as f:
+        json.dump(job, f)
+    pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = (f"import sys; sys.path.insert(0, {os.path.dirname(pkg_dir)!r}); import importlib; "
+            f"importlib.import_module({os.path.basename(pkg_dir) + '.blender.cyclesbake'!r}).run_job({job_path!r})")
+    with open(log, "w", encoding="utf-8") as out:
+        proc = subprocess.Popen([bpy.app.binary_path, "-b", "--factory-startup", "--python-expr", code],
+                                stdout=out, stderr=subprocess.STDOUT,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
+    return {"proc": proc, "result": result, "log": log}
+
+
+def process_result(bake: dict) -> tuple[list[str], bool]:
+    """A finished background bake: its log lines and whether it baked."""
+    import json
+    import os
+    try:
+        with open(bake["result"], encoding="utf-8") as f:
+            done = json.load(f)
+        lines, ok = done["lines"], done["ok"]
+    except (OSError, ValueError, KeyError):
+        return [f"!! Cycles bake failed (Blender stopped with code {bake['proc'].returncode}, see {bake['log']}): "
+                "the map keeps vrad's lighting"], False
+    base = bake["result"][:-len(".cycles.json")]
+    for p in (bake["result"], base + ".cycles_job.json", base + ".eyes.npy") + (() if not ok else (bake["log"],)):
+        try:
+            os.remove(p)                 # (the log stays when it failed)
+        except OSError:
+            pass
+    return lines, ok
+
+
+def run_job(job_path: str) -> None:
+    """The background Blender: bake as the job file says, write the result, quit."""
+    import json
+    import os
+    import sys
+    import traceback
+    with open(job_path, encoding="utf-8") as f:
+        job = json.load(f)
+    try:
+        dev = job["devices"]
+        if dev["type"] != "NONE":
+            try:
+                prefs = bpy.context.preferences.addons["cycles"].preferences
+                prefs.compute_device_type = dev["type"]
+                prefs.refresh_devices()
+                for d in prefs.devices:
+                    d.use = d.id in dev["use"]
+            except (KeyError, TypeError, AttributeError):
+                pass                       # (bake_bsp picks a GPU itself)
+        eyes = np.load(job["eyes"]) if job["eyes"] else None
+        lines, ok = bake_bsp(job["bsp"], job["upm"], job["samples"], job["denoise"], job["stitch"], eyes), True
+    except Exception as ex:          # the map still has vrad's lighting
+        traceback.print_exc()
+        lines, ok = [f"!! Cycles bake failed ({ex}): the map keeps vrad's lighting"], False
+    with open(job["result"] + ".tmp", "w", encoding="utf-8") as f:
+        json.dump({"lines": lines, "ok": ok}, f)
+    os.replace(job["result"] + ".tmp", job["result"])
+    sys.stdout.flush()
+    os._exit(0)

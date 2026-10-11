@@ -59,3 +59,49 @@ class TestCollisionLimits(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCompileCancel(unittest.TestCase):
+    """Cancel stops the running compiler at once, runs nothing after it and copies nothing to the game."""
+
+    def _job(self, folder, steps):
+        from hammerless.core import compile as cc
+        vmf = os.path.join(folder, "hl_test_cancel.vmf")
+        with open(vmf, "w") as f:
+            f.write("world\n{\n}\n")
+        job = cc.CompileJob(cc.Tools(os.path.join(folder, "game")), vmf, "FAST", copy_to_game=True)
+        job.steps = steps
+        return job
+
+    def test_cancel_kills_the_compiler_and_skips_the_rest(self):
+        import tempfile
+        import time
+        slow = [sys.executable, "-c", "import time; time.sleep(30)"]
+        marker = None
+        with tempfile.TemporaryDirectory() as folder:
+            marker = os.path.join(folder, "second_step_ran")
+            job = self._job(folder, [("vbsp", slow),
+                                     ("vvis", [sys.executable, "-c", f"open({marker!r}, 'w')"])])
+            job.start()
+            t0 = time.time()
+            while job._proc is None and time.time() - t0 < 10:
+                time.sleep(0.05)
+            proc = job._proc
+            job.cancel()
+            job._thread.join(10)
+            self.assertFalse(job._thread.is_alive())
+            self.assertIsNotNone(proc.poll())                  # the compiler was killed, not waited for
+            self.assertLess(time.time() - t0, 10)
+            job.poll()
+            self.assertTrue(job.done and job.failed and job.cancelled)
+            self.assertFalse(os.path.exists(marker))
+            self.assertFalse(os.path.exists(os.path.join(folder, "game", "left4dead2", "maps")))
+            self.assertFalse(os.path.exists(os.path.join(folder, "hl_test_cancel.stamp")))
+
+    def test_a_job_that_isnt_cancelled_isnt_marked_cancelled(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            job = self._job(folder, [("vbsp", [sys.executable, "-c", "raise SystemExit(3)"])])
+            job.start().wait()
+            self.assertTrue(job.failed)
+            self.assertFalse(job.cancelled)

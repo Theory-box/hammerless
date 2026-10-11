@@ -16,7 +16,8 @@ _state = {"path": None, "mtime": None, "mesh": None, "report": None, "batches": 
           "source": None,         # "game" (read from maps/<map>.nav) or "predicted" (our generator)
           "vis": None,            # expanded visibility lists {area id: {area id: attributes}} (analyzed navs)
           "owner": None,          # (scene name, map name) the nav on screen is for
-          "busy": None}           # "build" / "analyze" while a nav thread runs
+          "busy": None,           # "build" / "analyze" while a nav thread runs
+          "cancel": False}        # Cancel pressed: the running one stops on its next tick
 _handlers = []
 
 COLORS = {
@@ -342,20 +343,22 @@ class HL_OT_nav_predict(bpy.types.Operator):
             return {"CANCELLED"}
         regions, _ = collect_regions(ir)
         climbs, _ = collect_climbs(ir)
-        box = {"stage": "Starting", "nodes": 0, "mesh": None, "error": None}
+        box = {"stage": "Starting", "nodes": 0, "mesh": None, "error": None, "stop": False}
         self._box = box
         self._owner = _owner(context)
         wall_climbs = context.scene.hammerless.wall_climbs        # (read here, not in the thread)
 
         def work():
             try:
-                box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage, nodes=n), climbs,
+                box["mesh"] = predict(text, regions, lambda stage, n: _progress(box, stage, nodes=n), climbs,
                                       wall_climbs)
             except Exception as ex:          # shown to the user
                 box["error"] = str(ex)
         self._thread = threading.Thread(target=work, daemon=True)
         self._thread.start()
         _state["busy"] = "build"
+        _state["cancel"] = False
+        _redraw()
         self._timer = context.window_manager.event_timer_add(0.3, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
@@ -364,9 +367,10 @@ class HL_OT_nav_predict(bpy.types.Operator):
         _end_job(context, self._timer)
 
     def modal(self, context, event):
-        if event.type == "ESC" and event.value == "PRESS":
+        if (event.type == "ESC" and event.value == "PRESS") or _state["cancel"]:
+            self._box["stop"] = True
             _end_job(context, self._timer)
-            self.report({"WARNING"}, "Stopped the navmesh build")
+            self.report({"WARNING"}, "Navmesh build cancelled")
             return {"CANCELLED"}
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
@@ -459,7 +463,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         compiled = threading.Event()
         if self._job is None:
             compiled.set()
-        box = {"stage": "Building the navmesh", "mesh": None, "error": None, "compiled": compiled}
+        box = {"stage": "Building the navmesh", "mesh": None, "error": None, "compiled": compiled, "stop": False}
         self._box = box
         wall_climbs = context.scene.hammerless.wall_climbs
 
@@ -469,19 +473,22 @@ class HL_OT_nav_analyze(bpy.types.Operator):
                 from ..core.vpk import GameContent
                 mesh = cached(text, regions, climbs, wall_climbs)      # Build Navmesh made this one already
                 if mesh is None:
-                    mesh = predict(text, regions, None, climbs, wall_climbs)     # needs no compiled map
+                    mesh = predict(text, regions, lambda stage, n: _progress(box, None), climbs,
+                                   wall_climbs)     # needs no compiled map
                 box["stage"] = "Compiling the map"
                 compiled.wait()
                 if box["error"]:
                     return
                 analyze(mesh, text, base + ".bsp", GameContent(root), os.path.join(root, "left4dead2"),
-                        progress=lambda stage: box.update(stage=stage))
+                        progress=lambda stage: _progress(box, stage))
                 box["mesh"] = mesh
             except Exception as ex:          # shown to the user
                 box["error"] = str(ex)
         self._thread = threading.Thread(target=work, daemon=True)
         self._thread.start()
         _state["busy"] = "analyze"
+        _state["cancel"] = False
+        _redraw()
         self._owner = _owner(context)
         self._settings = (context.scene.hammerless.map_name, context.scene.hammerless.nav_source)
         self._timer = context.window_manager.event_timer_add(0.5, window=context.window)
@@ -493,15 +500,18 @@ class HL_OT_nav_analyze(bpy.types.Operator):
 
     def _stop(self, context):
         box = self._box
+        box["stop"] = True
+        if self._job is not None and not self._job.done:
+            self._job.cancel()                    # (the compile it started stops too)
         if box.get("compiled") is not None and not box["compiled"].is_set():
             box["error"] = box.get("error") or "stopped"
             box["compiled"].set()                 # let the thread end instead of waiting for ever
         _end_job(context, self._timer)
 
     def modal(self, context, event):
-        if event.type == "ESC" and event.value == "PRESS":
+        if (event.type == "ESC" and event.value == "PRESS") or _state["cancel"]:
             self._stop(context)
-            self.report({"WARNING"}, "Stopped the nav analysis (a compile it started finishes in the background)")
+            self.report({"WARNING"}, "Nav analysis cancelled")
             return {"CANCELLED"}
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
@@ -544,8 +554,28 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _progress(box, stage, **more) -> None:
+    """A nav thread's progress: also where it stops when cancelled (at its next stage)."""
+    if box["stop"]:
+        raise RuntimeError("cancelled")
+    if stage is not None:
+        box.update(stage=stage, **more)
+
+
+class HL_OT_nav_cancel(bpy.types.Operator):
+    bl_idname = "hammerless.nav_cancel"
+    bl_label = "Cancel"
+    bl_description = "Stop building or analyzing the navmesh (Esc does it too)"
+
+    def execute(self, context):
+        _state["cancel"] = True
+        return {"FINISHED"}
+
+
 def _end_job(context, timer) -> None:
     _state["busy"] = None
+    _state["cancel"] = False
+    _redraw()
     if timer is not None:
         try:
             context.window_manager.event_timer_remove(timer)
@@ -681,6 +711,11 @@ def draw_panel(layout, context):
     s = context.scene.hammerless
     rep = _state["report"]
     # what to show: built from the scene, or the game's (each clears what it made: small buttons beside them)
+    if _state["busy"]:
+        row = layout.row()
+        row.scale_y = 1.2
+        row.alert = True
+        row.operator("hammerless.nav_cancel", text="Cancel", icon="CANCEL")
     row = layout.row(align=True)
     row.scale_y = 1.2
     row.operator("hammerless.nav_predict", text="From the Scene", icon="VIEWZOOM")
@@ -735,7 +770,7 @@ def draw_panel(layout, context):
         legend.label(text=line, icon="INFO" if i == 0 else "BLANK1")
 
 
-CLASSES = (HL_OT_nav_load, HL_OT_nav_predict, HL_OT_nav_analyze, HL_OT_nav_clear, HL_OT_nav_clear_analysis)
+CLASSES = (HL_OT_nav_load, HL_OT_nav_predict, HL_OT_nav_analyze, HL_OT_nav_clear, HL_OT_nav_clear_analysis, HL_OT_nav_cancel)
 
 
 @bpy.app.handlers.persistent

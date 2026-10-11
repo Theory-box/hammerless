@@ -591,6 +591,10 @@ def bsp_fog_farz(bsp: str) -> float:
     return best
 
 
+class _Cancelled(Exception):
+    """CompileJob.cancel() was called: the compile ends where it is."""
+
+
 class CompileJob:
     """Runs the compile steps one after another without blocking the caller.
 
@@ -660,6 +664,7 @@ class CompileJob:
         self.log: list[str] = []
         self.done = False
         self.failed = False
+        self.cancelled = False       # stopped by cancel(): nothing was copied to the game
         self.summary: LogSummary | None = None
         self.lighting: list = []     # bspcheck.lighting_problems after vrad: (message, location, object)
         self._q: queue.Queue = queue.Queue()
@@ -786,7 +791,7 @@ class CompileJob:
                 box["reader"] = threading.Thread(target=lambda: box["lines"].extend(proc.stdout), daemon=True)
                 box["reader"].start()
                 box["proc"] = proc
-                if box.get("cancel"):             # (the build ended while it was starting: not left running)
+                if box.get("cancel") or self._stopping:   # (the build ended while it was starting: not left running)
                     proc.kill()
             except Exception:
                 box["proc"] = None                # (the usual way: vrad after vis prepares and reports it)
@@ -852,6 +857,8 @@ class CompileJob:
             # below-normal priority: the PC stays responsive while vvis/vrad use every core
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
             | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
+        if self._stopping:                   # (cancelled while it was starting)
+            proc.kill()
         out = []
         for line in proc.stdout:
             self._q.put(line.rstrip("\n"))
@@ -903,6 +910,7 @@ class CompileJob:
             self._keep_last_light(steps)
             prt, kept_prt = self.base + ".prt", self.base + ".built.prt"
             for k, (name, cmd) in enumerate(steps):
+                self._check_stop()
                 self._q.put(f"==== {name} ====")
                 if name == "vvis" and not os.path.exists(prt) and os.path.exists(kept_prt):
                     shutil.copy2(kept_prt, prt)      # vbsp -onlyents deletes the portal file; geometry is the same
@@ -914,6 +922,7 @@ class CompileJob:
                 done = self._finish_light_alongside() if name == "vrad" and self._light is not None else None
                 if done is not None:
                     code, out = done
+                    self._check_stop()
                     cmd = [HLVRAD]                   # (ours ran: a failure falls back to Valve's vrad below)
                     if code != 0 and self._valve_vrad and not self._stopping:
                         self._fallback(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead", True)
@@ -974,6 +983,7 @@ class CompileJob:
                     # ours only replaces the map at the very end, so the map and portals are untouched
                     self._fallback(f"!! Hammerless vis failed (exit code {code}): running Valve's vvis instead", True)
                     code, out = self._exec(self._valve_vvis)
+                self._check_stop()
                 self.timings.append((name, time.time() - t0))
                 if name == "vvis" and self._light is not None:
                     open(self.base + ".bsp" + (".visdone" if code == 0 else ".visfailed"), "w").close()
@@ -998,9 +1008,11 @@ class CompileJob:
                         self._q.put(f"!! {msg}")
                     if self._opts.light_tool == "CYCLES" and not self._cycles_bake():
                         self._built_rad = "SKIP"     # (vrad's lighting only: the next build bakes again)
+                    self._check_stop()
             if self.plan != "full":
                 from .buildplan import strip_stale
                 strip_stale(self.base + ".bsp")
+            self._check_stop()
             if self.copy_to_game:
                 os.makedirs(self.tools.maps_dir, exist_ok=True)
                 self._copy_bsp(os.path.join(self.tools.maps_dir, self.name + ".bsp"))
@@ -1021,6 +1033,9 @@ class CompileJob:
                     f.write(self._stamp(self._vmf_bytes))                     # whole record is written)
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
             self._q.put(("OK",))
+        except _Cancelled:
+            self._q.put("Build cancelled: nothing was copied to the game")
+            self._q.put(("CANCELLED",))
         except Exception as ex:  # surfaced to the user in the log
             self._q.put(f"!! {ex}")
             self._q.put(("FAILED",))
@@ -1035,12 +1050,31 @@ class CompileJob:
         while not self._bake_done.wait(0.25):
             if self._stopping or self.bake_abandoned:
                 self.bake_request = None
-                self._q.put("Cycles bake skipped (not watching the build): the map keeps vrad's lighting")
+                if not self._stopping:
+                    self._q.put("Cycles bake skipped (not watching the build): the map keeps vrad's lighting")
                 return False
         for line in self._bake_lines:
             self._q.put(line)
         self.timings.append(("cycles", time.time() - t0))
         return self._bake_ok
+
+    def cancel(self) -> None:
+        """Stop the compile now: the running compiler is killed, no fallback runs after it and nothing is
+        copied to the game (the next build compiles the map again: the build records are already removed)."""
+        self._stopping = True
+        self.bake_abandoned = True
+        if self._light is not None:
+            self._light["cancel"] = True
+        for proc in (self._proc, self._light_proc()):
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+
+    def _check_stop(self) -> None:
+        if self._stopping:
+            raise _Cancelled()
 
     def bake_finished(self, lines: list[str], ok: bool = True):
         """Main thread: the bake is written (or failed: lines say so, vrad's lighting stays)."""
@@ -1148,7 +1182,8 @@ class CompileJob:
                 break
             if isinstance(item, tuple):
                 self.done = True
-                self.failed = item[0] == "FAILED"
+                self.failed = item[0] != "OK"
+                self.cancelled = item[0] == "CANCELLED"
                 self.summary = parse_log("\n".join(self.log))
                 if self.failed and not self.summary.errors and not self.summary.leaked:
                     self.summary.errors = [failure_reason(self.log)]

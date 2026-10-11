@@ -186,7 +186,12 @@ def _start_nav_analysis(mesh, vmf_path: str, bsp_path: str, root: str) -> dict:
     """Run navanalyze (visibility, hiding spots) on our nav mesh in a background thread."""
     import threading
     import time
-    box = {"stage": "starting", "done": False, "error": None, "seconds": 0.0}
+    box = {"stage": "starting", "done": False, "error": None, "seconds": 0.0, "stop": False}
+
+    def progress(stage):
+        if box["stop"]:                  # (cancelled: ends at the next stage)
+            raise RuntimeError("cancelled")
+        box.update(stage=stage.lower())
 
     def work():
         t0 = time.time()
@@ -195,8 +200,7 @@ def _start_nav_analysis(mesh, vmf_path: str, bsp_path: str, root: str) -> dict:
             from ..core.vpk import GameContent
             with open(vmf_path, encoding="utf-8") as f:
                 text = f.read()
-            analyze(mesh, text, bsp_path, GameContent(root), os.path.join(root, "left4dead2"),
-                    progress=lambda stage: box.update(stage=stage.lower()))
+            analyze(mesh, text, bsp_path, GameContent(root), os.path.join(root, "left4dead2"), progress=progress)
             box["done"] = True
         except Exception as ex:          # reported; the game analyzes the nav mesh instead
             box["error"] = str(ex)
@@ -995,7 +999,7 @@ def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False, 
     from ..core.navpredict import cached, predict
     with open(vmf_path, encoding="utf-8") as f:
         text = f.read()
-    box = {"stage": "starting", "mesh": None, "error": None, "seconds": 0.0}
+    box = {"stage": "starting", "mesh": None, "error": None, "seconds": 0.0, "stop": False}
     reuse = cached(text, regions, climbs, wall_climbs)  # Build Navmesh was pressed on this exact map: no waiting
     if reuse is not None:
         box["mesh"] = reuse
@@ -1004,13 +1008,19 @@ def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False, 
         box["thread"].join()
         return box
 
+    def progress(stage, _n):
+        if box["stop"]:                  # (cancelled: ends at the next stage)
+            raise RuntimeError("cancelled")
+        box.update(stage=stage.lower())
+
     def work():
         if after is not None:
             after.wait(30)
         t0 = time.time()
         try:
-            box["mesh"] = predict(text, regions, lambda stage, n: box.update(stage=stage.lower()), climbs,
-                                  wall_climbs)
+            if box["stop"]:
+                raise RuntimeError("cancelled")
+            box["mesh"] = predict(text, regions, progress, climbs, wall_climbs)
         except Exception as ex:          # reported; the game makes the nav mesh instead
             box["error"] = str(ex)
         box["seconds"] = time.time() - t0
@@ -1067,6 +1077,32 @@ def _view_volume(context) -> str | None:
 
 
 _BUILDING: set = set()       # maps whose Build operator is still running (its nav, analysis or bake after the compile)
+_CANCEL: set = set()         # of those, the ones Cancel was pressed for (their operator stops on its next tick)
+_BAKES: list = []            # background Cycles bakes running (stopped if Blender closes)
+
+
+def _kill_bakes():
+    for bake in _BAKES:
+        if bake["proc"].poll() is None:
+            try:
+                bake["proc"].kill()
+            except OSError:
+                pass
+
+
+import atexit                                             # noqa: E402
+atexit.register(_kill_bakes)
+
+
+class HL_OT_cancel_build(bpy.types.Operator):
+    bl_idname = "hammerless.cancel_build"
+    bl_label = "Cancel"
+    bl_description = ("Stop the build or bake now (Esc does it too): the compilers, nav mesh and Cycles bake stop, "
+                      "and nothing is copied to the game. The next build compiles the map again")
+
+    def execute(self, context):
+        _CANCEL.update(_BUILDING)
+        return {"FINISHED"}
 
 
 def _build_key(vmf: str) -> str:
@@ -1121,6 +1157,7 @@ class HL_OT_build(bpy.types.Operator):
     _t0 = 0.0
     _export_s = 0.0
     _nav: dict | None = None        # our nav generator running alongside the compile
+    _bake: dict | None = None       # its Cycles bake running in a background Blender
 
     def execute(self, context):
         import time
@@ -1250,14 +1287,14 @@ class HL_OT_build(bpy.types.Operator):
         context.window_manager.modal_handler_add(self)
         self._key = _build_key(self._job.base + ".vmf")
         _BUILDING.add(self._key)
+        from .lightview import _redraw
+        _redraw()                        # (the panels show Cancel)
         self.report({"INFO"}, "Compiling... (see the hammerless_log text block)")
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
-        if event.type == "ESC" and event.value == "PRESS":
-            self.report({"WARNING"}, "Stopped watching the compile (it continues in the background; the next "
-                                     "Build & Play makes the nav mesh)")
-            return self._finish(context, {"CANCELLED"})
+        if (event.type == "ESC" and event.value == "PRESS") or self._key in _CANCEL:
+            return self._cancel_build(context)
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
         try:
@@ -1281,15 +1318,46 @@ class HL_OT_build(bpy.types.Operator):
             nav["analysis"] = _start_nav_analysis(nav["mesh"], self._job.vmf, bsp, self._root)
             nav["analysis_early"] = not self._job.done
 
+    def _cancel_build(self, context):
+        """Esc or Cancel: everything this build runs stops (the compile, nav mesh and analysis, Cycles bake)."""
+        self._job.cancel()
+        if self._nav is not None:
+            self._nav["stop"] = True
+            if self._nav.get("analysis") is not None:
+                self._nav["analysis"]["stop"] = True
+        self._stop_bake()
+        compiled = self._job.done and not self._job.failed      # (cancelled while the nav mesh was being made)
+        msg = ("Build cancelled: the map was already compiled and is in the game; its nav mesh wasn't finished "
+               "(the next build makes it)" if compiled else
+               "Build cancelled: nothing was copied to the game (the next build compiles the map again)")
+        write_log(self._job.poll() + [msg], append=True)
+        self.report({"WARNING"}, msg)
+        return self._finish(context, {"CANCELLED"})
+
+    def _stop_bake(self):
+        bake = getattr(self, "_bake", None)
+        if bake is not None:
+            if bake["proc"].poll() is None:
+                try:
+                    bake["proc"].kill()
+                except OSError:
+                    pass
+            if bake in _BAKES:
+                _BAKES.remove(bake)
+            self._bake = None
+
     def _step(self, context):
-        if self._job.bake_request:
-            if not getattr(self, "_bake_shown", False):      # the bake blocks Blender: show the status first,
-                self._bake_shown = True                       # bake on the next tick (after the redraw)
-                context.workspace.status_text_set("Hammerless: baking the lighting with Cycles "
-                                                  "(Blender pauses until it's done)...")
-                return {"PASS_THROUGH"}
-            self._bake_shown = False
+        if self._job.bake_request and getattr(self, "_bake", None) is None:
             self._cycles_bake(context)
+        bake = getattr(self, "_bake", None)
+        if bake is not None and bake["proc"].poll() is not None:
+            from .cyclesbake import process_result
+            lines, ok = process_result(bake)
+            if not ok:
+                self.report({"WARNING"}, lines[0].lstrip("! ")[:200])
+            _BAKES.remove(bake)
+            self._bake = None
+            self._job.bake_finished(lines, ok)
         new = self._job.poll()
         if new:
             for line in new:                    # vis progress from Hammerless's vis compiler, for the panel header
@@ -1306,6 +1374,9 @@ class HL_OT_build(bpy.types.Operator):
         if not self._job.done:
             return {"PASS_THROUGH"}
         summ = self._job.summary
+        if self._job.cancelled:
+            self.report({"WARNING"}, "Build cancelled: nothing was copied to the game")
+            return self._finish(context, {"CANCELLED"})
         if self._job.failed:
             msg = "Map leaks! Use 'Load Leak' to see where." if summ and summ.leaked else \
                   (summ.errors[0] if summ and summ.errors else "Compile failed, see the log")
@@ -1429,27 +1500,30 @@ class HL_OT_build(bpy.types.Operator):
         return eye_points(mesh.areas)
 
     def _cycles_bake(self, context):
-        """The compile waits after vrad: bake its lighting with Cycles here (Blender's main thread)."""
+        """The compile waits after vrad: start its Cycles bake in a background Blender (this one stays usable,
+        and Cancel can stop it); _step reads the result when it ends."""
         bsp = self._job.bake_request
-        ok = True
         try:
-            from .cyclesbake import bake_bsp
+            from .cyclesbake import start_process
             opts = self._job._opts
-            lines = bake_bsp(bsp, context.scene.hammerless.units_per_meter, opts.cycles_samples,
-                             opts.cycles_denoise, opts.cycles_stitch, self._eye_points(context))
+            self._bake = start_process(bsp, context.scene.hammerless.units_per_meter, opts.cycles_samples,
+                                       opts.cycles_denoise, opts.cycles_stitch, self._eye_points(context))
+            _BAKES.append(self._bake)
+            context.workspace.status_text_set("Hammerless: baking the lighting with Cycles (Esc cancels)...")
         except Exception as ex:          # the map still has vrad's lighting
             import traceback
             traceback.print_exc()
             lines = [f"!! Cycles bake failed ({ex}): the map keeps vrad's lighting"]
             self.report({"WARNING"}, lines[0][3:])
-            ok = False
-        self._job.bake_finished(lines, ok)
+            self._job.bake_finished(lines, False)
 
     def cancel(self, context):
         """Blender ended the operator itself (File > Open / New, the window closed): let the job end too."""
         if self._job is not None:
             self._job.bake_abandoned = True
+        self._stop_bake()
         _BUILDING.discard(getattr(self, "_key", None))
+        _CANCEL.discard(getattr(self, "_key", None))
         try:
             context.window_manager.event_timer_remove(self._timer)
         except Exception:
@@ -1457,7 +1531,9 @@ class HL_OT_build(bpy.types.Operator):
         BUILD_PROGRESS["vis"] = ""
 
     def _finish(self, context, result):
+        self._stop_bake()
         _BUILDING.discard(getattr(self, "_key", None))
+        _CANCEL.discard(getattr(self, "_key", None))
         if self._job is not None:
             self._job.bake_abandoned = True      # stopped watching: nobody is left to bake
         snap = self._job.base + ".analysis.bsp" if self._job is not None else None
@@ -1470,6 +1546,8 @@ class HL_OT_build(bpy.types.Operator):
         context.window_manager.event_timer_remove(self._timer)
         BUILD_PROGRESS["vis"] = ""
         context.workspace.status_text_set(None)
+        from .lightview import _redraw
+        _redraw()
         return result
 
 
@@ -1873,7 +1951,7 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
 
 
 CLASSES = (HL_OT_pick_sky, HL_OT_pick_model, HL_OT_pick_material, HL_OT_refresh_previews, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_entity_class, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
-           HL_OT_export_vmf, HL_OT_build, HL_OT_start_fresh, HL_OT_launch, HL_OT_load_leak,
+           HL_OT_export_vmf, HL_OT_build, HL_OT_cancel_build, HL_OT_start_fresh, HL_OT_launch, HL_OT_load_leak,
            HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues, HL_OT_kv_set)
 
 

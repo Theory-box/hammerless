@@ -67,6 +67,18 @@ def _status(layout, text, alert=False):
 
 # ---------------------------------------------------------------- Build & Play
 
+def _cancel_button(layout, scale=1.6) -> bool:
+    """While a build or bake runs: a Cancel button in place of the one that started it (True: drawn)."""
+    from .ops import _BUILDING
+    if not _BUILDING:
+        return False
+    row = layout.row()
+    row.scale_y = scale
+    row.alert = True
+    row.operator("hammerless.cancel_build", text="Cancel", icon="CANCEL")
+    return True
+
+
 class HL_PT_build(_Panel, bpy.types.Panel):
     bl_label = "Map"
     bl_order = 0
@@ -105,9 +117,10 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         org.operator("hammerless.organize_scene", text="", icon="OUTLINER_COLLECTION")
         col.prop(s, "compile_preset", text="Quality")
         layout.separator()
-        big = layout.row()
-        big.scale_y = 1.6
-        big.operator("hammerless.build", text="Build & Play", icon="PLAY").play = True
+        if not _cancel_button(layout):
+            big = layout.row()
+            big.scale_y = 1.6
+            big.operator("hammerless.build", text="Build & Play", icon="PLAY").play = True
         row = layout.row(align=True)
         row.scale_y = 1.2
         row.operator("hammerless.build", text="Build", icon="FILE_REFRESH").play = False
@@ -509,11 +522,12 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
         partial = area != "MAP"
         row = layout.row(align=True)
         row.scale_y = 1.3
-        row.enabled = s.light_quality != "OFF" and (ours or not partial)
-        op = row.operator("hammerless.build", text="Bake Lighting", icon="LIGHT_SUN")
-        op.play, op.bake, op.view = False, True, view
-        op.volume = area[4:] if area.startswith("VOL:") else ""
-        op.selected = area == "SELECTED"
+        if not _cancel_button(row, 1.0):
+            row.enabled = s.light_quality != "OFF" and (ours or not partial)
+            op = row.operator("hammerless.build", text="Bake Lighting", icon="LIGHT_SUN")
+            op.play, op.bake, op.view = False, True, view
+            op.volume = area[4:] if area.startswith("VOL:") else ""
+            op.selected = area == "SELECTED"
         row.prop(s, "bake_area", text="")
         if view:
             dist = layout.row(align=True)
@@ -712,10 +726,11 @@ class HL_PT_visibility(_Panel, bpy.types.Panel):
         col.prop(s, "vis_mode", text="Quality")
         col.prop(s, "vis_tool", text="Vis Compiler")
         col.prop(s, "extra_vvis", text="Extra vvis Options")
-        row = self.layout.row()
-        row.scale_y = 1.3
-        row.enabled = s.vis_mode != "SKIP"
-        row.operator("hammerless.build", text="Compute Visibility", icon="HIDE_OFF").vis_only = True
+        if not _cancel_button(self.layout, 1.3):
+            row = self.layout.row()
+            row.scale_y = 1.3
+            row.enabled = s.vis_mode != "SKIP"
+            row.operator("hammerless.build", text="Compute Visibility", icon="HIDE_OFF").vis_only = True
         self.layout.separator()
         draw_panel(self.layout, context)
 
