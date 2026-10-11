@@ -98,12 +98,12 @@ def run(kind: str, args: dict, on_stage=None, should_stop=None):
             pass
 
 
-def predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False, should_stop=None):
+def predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False, should_stop=None, roofs=False):
     """navpredict.predict in its own process (and remembered here for navpredict.cached)."""
     from .navpredict import remember
     mesh = run("predict", dict(vmf_text=vmf_text, regions=list(regions), climbs=list(climbs),
-                               wall_climbs=wall_climbs), progress, should_stop)
-    return remember(mesh, vmf_text, regions, climbs, wall_climbs)
+                               wall_climbs=wall_climbs, roofs=roofs), progress, should_stop)
+    return remember(mesh, vmf_text, regions, climbs, wall_climbs, roofs)
 
 
 def analyze(mesh, vmf_text: str, bsp_path: str, root: str, progress=None, should_stop=None) -> None:
@@ -123,7 +123,7 @@ def _child(job_path: str, out_path: str) -> None:
     try:
         if job["kind"] == "predict":
             from .navpredict import predict
-            res = predict(a["vmf_text"], a["regions"], stage, a["climbs"], a["wall_climbs"])
+            res = predict(a["vmf_text"], a["regions"], stage, a["climbs"], a["wall_climbs"], a.get("roofs", False))
         elif job["kind"] == "analyze":
             from .navanalyze import analyze
             from .vpk import GameContent

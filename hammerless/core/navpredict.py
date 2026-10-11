@@ -113,30 +113,32 @@ def inputs_key(vmf_text: str, regions, climbs=(), wall_climbs=False, extra: str 
     return h.hexdigest()
 
 
-def _key(vmf_text: str, regions, climbs=(), wall_climbs=False) -> str:
+def _key(vmf_text: str, regions, climbs=(), wall_climbs=False, roofs=False) -> str:
     import hashlib
     return hashlib.sha1((vmf_text + repr([(r.mins, r.maxs, r.bits, r.hulls, r.source) for r in regions])
-                         + repr([(c.bottom, c.top, c.source) for c in climbs]) + repr(wall_climbs)).encode()).hexdigest()
+                         + repr([(c.bottom, c.top, c.source) for c in climbs]) + repr(wall_climbs)
+                         + ("|roofs" if roofs else "")).encode()).hexdigest()
 
 
-def cached(vmf_text: str, regions, climbs=(), wall_climbs=False) -> NavMesh | None:
+def cached(vmf_text: str, regions, climbs=(), wall_climbs=False, roofs=False) -> NavMesh | None:
     """The last prediction, if it was made for exactly this map (e.g. by the Predict button)."""
-    if _last["key"] == _key(vmf_text, regions, climbs, wall_climbs) and _last["mesh"] is not None:
+    if _last["key"] == _key(vmf_text, regions, climbs, wall_climbs, roofs) and _last["mesh"] is not None:
         import copy
         return copy.deepcopy(_last["mesh"])
     return None
 
 
-def predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False) -> NavMesh:
+def predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False, roofs=False) -> NavMesh:
     """progress(stage: str, count: int) is called between stages (from any thread).
-    climbs: nav.NavClimb links to add (Zombie Climb markers)."""
-    return remember(_predict(vmf_text, regions, progress, climbs, wall_climbs), vmf_text, regions, climbs, wall_climbs)
+    climbs: nav.NavClimb links to add (Zombie Climb markers). roofs: Nav on Every Rooftop (top_seeds)."""
+    return remember(_predict(vmf_text, regions, progress, climbs, wall_climbs, roofs=roofs), vmf_text, regions, climbs,
+                    wall_climbs, roofs)
 
 
-def remember(mesh: NavMesh, vmf_text: str, regions, climbs=(), wall_climbs=False) -> NavMesh:
+def remember(mesh: NavMesh, vmf_text: str, regions, climbs=(), wall_climbs=False, roofs=False) -> NavMesh:
     """Keep a copy for cached() (also for meshes made in another process: navworker)."""
     import copy
-    _last.update(key=_key(vmf_text, regions, climbs, wall_climbs), mesh=copy.deepcopy(mesh))
+    _last.update(key=_key(vmf_text, regions, climbs, wall_climbs, roofs), mesh=copy.deepcopy(mesh))
     return mesh
 
 
@@ -191,7 +193,7 @@ def top_seeds(world) -> list[tuple[float, float, float]]:
     return out
 
 
-def _generator(vmf_text: str, regions=()) -> Generator:
+def _generator(vmf_text: str, regions=(), roofs=False) -> Generator:
     from .nav import nav_cuts
     world = CollisionWorld.from_vmf(vmf_text)
     if PROP_COLLISION:
@@ -202,11 +204,12 @@ def _generator(vmf_text: str, regions=()) -> Generator:
     gen.cuts = nav_cuts(regions)          # (before the seeds: none start inside a No Nav Volume)
     for p in seed_positions(vmf_text):
         gen.add_seed(p)
-    from . import fastnav
-    if fastnav.available():
-        fastnav.load_world(world)          # (the up traces below in the DLL; sampling loads it again, memo kept)
-    for p in top_seeds(world):
-        gen.add_seed(p)
+    if roofs:                              # Nav on Every Rooftop (off: like the game, nav only grows from the seeds)
+        from . import fastnav
+        if fastnav.available():
+            fastnav.load_world(world)      # (the up traces below in the DLL; sampling loads it again, memo kept)
+        for p in top_seeds(world):
+            gen.add_seed(p)
     for mins, maxs in ladder_bounds(vmf_text):
         gen.add_ladder(mins, maxs)
     return gen
@@ -219,12 +222,12 @@ def mesh_signature(mesh: NavMesh):
               l.top_behind, l.bottom_area) for l in mesh.ladders])
 
 
-def check_native(vmf_text: str, regions=(), climbs=(), wall_climbs=False) -> str | None:
+def check_native(vmf_text: str, regions=(), climbs=(), wall_climbs=False, roofs=False) -> str | None:
     """Builds the mesh with the DLL's area pipeline and with the Python steps; None when they
     match exactly, else where they first differ. (Set HAMMERLESS_NAV_CHECK=1 to run this on
     every Build Navmesh.)"""
-    fast = _predict(vmf_text, regions, None, climbs, wall_climbs, native_areas=True)
-    slow = _predict(vmf_text, regions, None, climbs, wall_climbs, native_areas=False)
+    fast = _predict(vmf_text, regions, None, climbs, wall_climbs, native_areas=True, roofs=roofs)
+    slow = _predict(vmf_text, regions, None, climbs, wall_climbs, native_areas=False, roofs=roofs)
     a, b = mesh_signature(fast), mesh_signature(slow)
     if a == b:
         return None
@@ -236,24 +239,25 @@ def check_native(vmf_text: str, regions=(), climbs=(), wall_climbs=False) -> str
     return "ladders differ"
 
 
-def _predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False, native_areas=None) -> NavMesh:
+def _predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False, native_areas=None,
+             roofs=False) -> NavMesh:
     from . import fastnav
     with fastnav.LOCK:                 # the DLL's world is shared with the nav analysis (other threads)
         if fastnav.available():
             fastnav._lib.hl_oom()          # (a stale flag from an earlier failure)
-        mesh = _predict_locked(vmf_text, regions, progress, climbs, wall_climbs, native_areas)
+        mesh = _predict_locked(vmf_text, regions, progress, climbs, wall_climbs, native_areas, roofs)
         if fastnav.available():
             fastnav.check_memory()
         return mesh
 
 
-def _predict_locked(vmf_text: str, regions, progress, climbs, wall_climbs, native_areas) -> NavMesh:
+def _predict_locked(vmf_text: str, regions, progress, climbs, wall_climbs, native_areas, roofs=False) -> NavMesh:
     import os
     if native_areas is None and os.environ.get("HAMMERLESS_NAV_CHECK"):
-        problem = check_native(vmf_text, regions, climbs, wall_climbs)
+        problem = check_native(vmf_text, regions, climbs, wall_climbs, roofs)
         if problem:
             raise RuntimeError(f"native nav pipeline doesn't match the Python one: {problem}")
-    gen = _generator(vmf_text, regions)
+    gen = _generator(vmf_text, regions, roofs)
     from . import fastnav
     if native_areas is not False and fastnav.available():   # the area pipeline in the DLL: same mesh, faster
         steps = (("Sampling walkable space", lambda: gen.sample(collect=False)),

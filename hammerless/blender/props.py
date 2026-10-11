@@ -819,6 +819,13 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         name="Zombies Climb Walls", default=False,
         description="Common infected can climb any wall up to 160 units (about 3 m) high, as if it had a "
                     "ladder, and get back down. Only with Nav Mesh: Made in Blender")
+    nav_roofs: BoolProperty(
+        name="Nav on Every Rooftop", default=False,
+        description="Grow nav on every flat top inside the map big enough to stand on (roofs, ledges, walkways), "
+                    "not only where it spreads from the item spawns and landmarks like the game's own generator. "
+                    "Off: put a Landmark on the roofs you want. Roof areas survivors can't walk to keep commons off "
+                    "(smokers and the other specials still use them), but the Director's commons budget is spread "
+                    "over every nav area, so many of them mean fewer commons. Only with Nav Mesh: Made in Blender")
     generate_nav: BoolProperty(
         name="Rebuild Nav Mesh", default=False,
         description="Force a fresh nav mesh (how bots and zombies find their way) on the next Build & Play. "

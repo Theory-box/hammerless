@@ -397,11 +397,12 @@ class HL_OT_nav_predict(bpy.types.Operator):
         self._box = box
         self._owner = _owner(context)
         wall_climbs = context.scene.hammerless.wall_climbs        # (read here, not in the thread)
+        roofs = context.scene.hammerless.nav_roofs
 
         def work():
             try:
                 box["mesh"] = predict(text, regions, lambda stage, n: _progress(box, stage, nodes=n), climbs,
-                                      wall_climbs, lambda: box["stop"])     # (its own process: Blender stays quick)
+                                      wall_climbs, lambda: box["stop"], roofs)  # (its own process: Blender stays quick)
             except Exception as ex:          # shown to the user
                 box["error"] = str(ex)
         self._thread = threading.Thread(target=work, daemon=True)
@@ -517,13 +518,14 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         box = {"stage": "Building the navmesh", "mesh": None, "error": None, "compiled": compiled, "stop": False}
         self._box = box
         wall_climbs = context.scene.hammerless.wall_climbs
+        roofs = context.scene.hammerless.nav_roofs
 
         def work():
             try:
-                mesh = cached(text, regions, climbs, wall_climbs)      # Build Navmesh made this one already
+                mesh = cached(text, regions, climbs, wall_climbs, roofs)      # Build Navmesh made this one already
                 if mesh is None:
                     mesh = predict(text, regions, lambda stage, n: _progress(box, None), climbs,
-                                   wall_climbs, lambda: box["stop"])     # needs no compiled map
+                                   wall_climbs, lambda: box["stop"], roofs)     # needs no compiled map
                 box["stage"] = "Compiling the map"
                 compiled.wait()
                 if box["error"]:
