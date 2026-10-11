@@ -117,7 +117,7 @@ def analyse(mesh, horde_min: float = 90.0, horde_max: float = 180.0, hordes_off:
     if wanderers_off:
         return r
     if not r.analyzed:
-        r.rows.append(("INFO", "Analyze the nav (Nav Mesh panel) to also find stretches where no zombies can "
+        r.rows.append(("INFO", "Build the nav with its analysis (Nav Mesh panel: Build Nav Mesh) to also find stretches where no zombies can "
                        "appear ahead of the survivors", None))
         return r
     vset = set(valid)

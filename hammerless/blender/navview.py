@@ -457,11 +457,11 @@ class HL_OT_nav_predict(bpy.types.Operator):
 
 class HL_OT_nav_analyze(bpy.types.Operator):
     bl_idname = "hammerless.nav_analyze"
-    bl_label = "Analyze Navmesh"
-    bl_description = ("Build the navmesh and run the game's nav analysis on it here (visibility between areas, "
-                      "hiding spots). When the walls changed since the last build, it first compiles what the "
-                      "analysis looks through (walls and visibility, not the lighting). Then colour the nav by "
-                      "what the area under the 3D cursor can see. Build puts the result in the game")
+    bl_label = "Build Nav Mesh"
+    bl_description = ("Build the nav mesh from this scene and run the game's nav analysis on it (visibility between "
+                      "areas, hiding spots), as Build does. When the walls changed since the last build, it first "
+                      "compiles what the analysis looks through (walls and visibility, not the lighting). Build & "
+                      "Play puts the result in the game")
 
     _timer = None
     _thread = None
@@ -489,7 +489,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
                                    "Left 4 Dead 2 Authoring Tools): the analysis needs the compiled map")
             return {"CANCELLED"}
         if cc.compile_running(base + ".vmf"):
-            self.report({"ERROR"}, "This map is still compiling: wait for it to finish, then Analyze again")
+            self.report({"ERROR"}, "This map is still compiling: wait for it to finish, then Build Nav Mesh again")
             return {"CANCELLED"}
         path, _root, rep = export_vmf(self, context)         # exactly what Build exports
         surface_report(self, rep)
@@ -771,18 +771,19 @@ def draw_buttons(layout, context):
         row.operator("hammerless.nav_cancel", text="Cancel", icon="CANCEL")
     row = layout.row(align=True)
     row.scale_y = 1.2
-    row.operator("hammerless.nav_predict", text="Build Nav Mesh", icon="VIEWZOOM")
+    # (the nav and its analysis together, as Build makes them: the analysis needs the compiled walls, so without
+    # the Authoring Tools only the nav is built)
+    from ..core import compile as cc
+    from .ops import game_root
+    root = game_root(context)
+    if root and not cc.Tools(root).missing():
+        row.operator("hammerless.nav_analyze", text="Build Nav Mesh", icon="VIEWZOOM")
+    else:
+        row.operator("hammerless.nav_predict", text="Build Nav Mesh (no analysis)", icon="VIEWZOOM")
     row.operator("hammerless.nav_load", text="Show Game's Nav", icon="MOD_MESHDEFORM")
     on_disk = _nav_on_disk(context)
     if rep is not None or on_disk:
         row.operator("hammerless.nav_clear", text="", icon="TRASH")
-    row = layout.row(align=True)
-    if analysis_shown():
-        row.operator("hammerless.nav_analyze", text="Analyzed", icon="CHECKMARK")
-    else:
-        row.operator("hammerless.nav_analyze", text="Analyze (visibility, hiding spots)", icon="HIDE_OFF")
-    if analysis_shown() or on_disk == "analyzed":
-        row.operator("hammerless.nav_clear_analysis", text="", icon="X")
 
 
 def draw_panel(layout, context):
@@ -845,7 +846,7 @@ def draw_panel(layout, context):
     lines = list(_LEGEND.get(s.nav_color_mode, ["Red: no zombies. Pink: no wanderers. Violet: no hordes",
                                                 "Orange: Zombie Spawn Area. Light blue: normal"]))
     if s.nav_color_mode in ("WHY", "VIS", "AHEAD") and not visibility_lists():
-        lines.append("(Analyze to also show what's in view)")
+        lines.append("(Build Nav Mesh with the analysis to also show what's in view)")
     lines.append("Blue: start room. Purple: end room")
     legend = layout.column(align=True)
     legend.scale_y = 0.8
