@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.13.3 (test release, 2026-10-11)
 
+- **The commons-only mark only goes where infected can't get out to the survivors** (sealed spots, roofs too high to drop from): commons on a roof or car with a way down jump down when they hear the survivors, so they're no longer lost picks.
 - **Drop links off cars, crates and balconies:** the nav generator (the game's own too: 33 such islands on a real map) leaves the tops of props and small ledges with no link down, so commons placed there were lost picks. Now an area nothing can get out of gets a one-way drop link wherever a crouching player-sized box can move off its edge and fall clear (400 units at most). On a real map: 164 links, prop tops with the commons-only mark 61 -> 4, lost commons picks 32 -> 13.
 - **Build Nav Mesh builds and analyzes** in one go, as Build does (the separate Analyze button is gone). Without the Authoring Tools it builds the nav only.
 - **Nav Area (Add > Volumes):** one nav area exactly where you put it, at its outline from above and its bottom height. The nav made there is replaced by it; it's linked both ways to level nav beside its edges and one way to nav a drop below them (up to 400 units, like the generator). One big area on a roof is one pick in the Director's draw instead of dozens, and smokers and the other specials use it like any roof (commons stay off where survivors can't walk). Only for nav made in Blender.
@@ -11,7 +12,7 @@
 ## 0.13.2 (test release, 2026-10-11)
 
 - **Roofs, ledges and walkways get nav automatically:** every flat top big enough to stand on inside the map seeds the nav, so places the flood from the item spawns never climbs onto (the game's own nav_generate leaves them empty too) get nav without a landmark on each. On a real map: 628 -> 1425 areas, roofs covered, built in 2.7 s. Areas survivors can't walk to are marked EMPTY, which (read from the game's code) only the wandering commons' placement reads: smokers, the other specials and hordes still use the roofs. The Director spreads its commons over all areas by count, so roof areas still cost street commons: the preview on that map goes from 30 to about 17 starting commons.
-- **Smokers and the other specials can spawn on roofs again:** 0.13.1 marked areas survivors can't walk to EMPTY | NO_MOBS, which kept them off. The mark is now EMPTY alone, which keeps only the wandering commons off (they'd fill hidden roofs first). (Unreleased: only areas the infected can't get out of to the survivors are marked, sealed spots and roofs too high to drop from: commons on a roof with a drop down jump down to the survivors, so they're not wasted.)
+- **Smokers and the other specials can spawn on roofs again:** 0.13.1 marked areas survivors can't walk to EMPTY | NO_MOBS, which kept them off. The mark is now EMPTY alone, which keeps only the wandering commons off (they'd fill hidden roofs first).
 - A new Landmark gets a free name (`landmark_2`, ...) instead of a second `landmark_1` (two with one name stop the build). 
 
 ## 0.13.1 (test release, 2026-10-11)
