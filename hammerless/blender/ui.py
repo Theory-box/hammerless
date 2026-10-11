@@ -758,6 +758,8 @@ class HL_PT_navmesh(_Panel, bpy.types.Panel):
         sub.prop(s, "wall_climbs")
         col.prop(s, "generate_nav", text="Rebuild Nav Next Time")
         _hint(self.layout, _nav_status(context)[1])
+        from .navview import draw_buttons
+        draw_buttons(self.layout, context)
 
 
 class HL_PT_view_nav(_Panel, bpy.types.Panel):

@@ -758,10 +758,10 @@ _LEGEND = {
 }
 
 
-def draw_panel(layout, context):
-    s = context.scene.hammerless
+def draw_buttons(layout, context):
+    """Build / show / analyze (in the Nav Mesh panel, above the Preview): built from the scene, or the game's (each
+    clears what it made: small buttons beside them)."""
     rep = _state["report"]
-    # what to show: built from the scene, or the game's (each clears what it made: small buttons beside them)
     if _state["busy"]:
         row = layout.row()
         row.scale_y = 1.2
@@ -781,7 +781,13 @@ def draw_panel(layout, context):
         row.operator("hammerless.nav_analyze", text="Analyze (visibility, hiding spots)", icon="HIDE_OFF")
     if analysis_shown() or on_disk == "analyzed":
         row.operator("hammerless.nav_clear_analysis", text="", icon="X")
+
+
+def draw_panel(layout, context):
+    s = context.scene.hammerless
+    rep = _state["report"]
     if rep is None:
+        layout.label(text="Build Nav Mesh or Show Game's Nav (above) to see it here")
         return
     box = layout.box()
     col = box.column(align=True)
