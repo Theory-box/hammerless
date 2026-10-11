@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 (test release, 2026-10-11)
 
 - **Import the game's own maps** (File > Import > *L4D2 Map (from the game)* or *Compiled Map (.bsp)*): decompiled into brushes, terrain, entities, props and decals, to study or remix. Checked by compiling the result again and comparing it with Valve's: on c1m1_hotel every brush comes back with the same planes, every terrain vertex and prop is the same, and 149 of 156 decals (the other 7 draw nothing). Lost in a compiled map: instances, visgroups, brush grouping.
 - **Hammerless's own compilers are now the defaults for everything:** the vis and light compilers join the map and model compilers (Valve's are still in the menus). Maps and settings you already changed keep your choice.
