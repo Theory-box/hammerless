@@ -107,9 +107,39 @@ def remember(mesh: NavMesh, vmf_text: str, regions, climbs=(), wall_climbs=False
     return mesh
 
 
+PROP_COLLISION = True        # static props are solid to the nav (False: brushes only, as before 2026-10-11)
+
+
+def static_prop_brushes(vmf_text: str) -> list:
+    """The map's prop_static collision as convex brushes (their models' .phy, or the hull box for solid 2): the game's
+    nav_generate walks around them (measured on the user's styleguide_urban: the game's nav lies under 9% of the
+    big props, ours under 74% before this), which also cuts open streets into the small areas the Director needs."""
+    from .compile import find_game_root
+    from .navanalyze import _prop_pieces
+    from .vmf import parse
+    from .vpk import GameContent
+    root = find_game_root()
+    if not root:
+        return []
+    content, cache, out = GameContent(root), {}, []
+    for ent in (b for b in parse(vmf_text) if b.name == "entity"):
+        if (ent.get("classname") or "").lower() != "prop_static":
+            continue
+        try:
+            out.extend(_prop_pieces(ent, content, cache))
+        except Exception:            # (a damaged model: that prop just isn't solid to the nav)
+            pass
+    return out
+
+
 def _generator(vmf_text: str, regions=()) -> Generator:
     from .nav import nav_cuts
-    gen = Generator(CollisionWorld.from_vmf(vmf_text))
+    world = CollisionWorld.from_vmf(vmf_text)
+    if PROP_COLLISION:
+        props = static_prop_brushes(vmf_text)
+        if props:
+            world = CollisionWorld(world.brushes + props)
+    gen = Generator(world)
     gen.cuts = nav_cuts(regions)          # (before the seeds: none start inside a No Nav Volume)
     for p in seed_positions(vmf_text):
         gen.add_seed(p)
