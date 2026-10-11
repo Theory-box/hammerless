@@ -555,6 +555,8 @@ class TestSmartBuild(unittest.TestCase):
         self.assertNotEqual(inputs_key(self.vmf(wall=160), []), base)
         self.assertNotEqual(inputs_key(self.vmf(), [], wall_climbs=True), base)
         self.assertNotEqual(inputs_key(self.vmf(), [], extra="FULL"), base)
+        named = self.vmf().replace('"classname" "prop_static"', '"classname" "prop_static"\n\t"targetname" "hl_box_2"')
+        self.assertEqual(inputs_key(named, []), base)               # (logic nodes name what they use)
 
     def test_nav_follows_new_bsp(self):
         """A kept nav gets the new map's size in its header (the game checks it) and isn't outdated."""
@@ -1590,6 +1592,11 @@ class TestNoBake(unittest.TestCase):
         self.assertEqual(cc._opts_rest(repr(part)), cc._opts_rest(repr(whole)))
         old = repr(whole).replace(", no_bake=''", "")              # (a build from before the volumes)
         self.assertTrue(cc._serves(old, whole))
+        # (a partial bake's rest is only current when the rest was baked with the same settings)
+        same = cc._light_sans_area
+        self.assertEqual(same(cc._opts_rad(repr(part))), same(cc._opts_rad(repr(whole))))
+        fast = cc.CompileOptions(light_tool="HAMMERLESS", vis="FAST", rad="FAST")
+        self.assertNotEqual(same(cc._opts_rad(repr(fast))), same(cc._opts_rad(repr(whole))))
 
     def test_bake_records_what_a_build_bakes(self):
         """After a bake, a build with nothing changed doesn't bake again: the bake records the build's volumes. Not a

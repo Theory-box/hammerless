@@ -275,6 +275,13 @@ def _opts_rad(text: str) -> str | None:
     return "|".join([m.group(1), "cycles" if cycles else "vrad"] + [f"{n}={v}" for n, v in values.items()])
 
 
+def _light_sans_area(rad: str | None) -> str | None:
+    """_opts_rad without where it bakes (no_bake, keep_light): the settings the whole map's lighting was baked with."""
+    if rad is None:
+        return None
+    return "|".join(p for p in rad.split("|") if not p.startswith(("no_bake=", "keep_light=")))
+
+
 def _with_light(text: str, source: str) -> str:
     """Options text with the lighting settings `source` was baked with (lighting kept from an earlier build)."""
     for name in _ALL_LIGHT_FIELDS + ("light_tool",):
@@ -596,6 +603,23 @@ class _Cancelled(Exception):
     """CompileJob.cancel() was called: the compile ends where it is."""
 
 
+def instances_hash(vmf: str, vmf_bytes: bytes) -> str:
+    """What the map's instance files hold (func_instance: they're compiled into it)."""
+    import hashlib
+    if b"func_instance" not in vmf_bytes:
+        return ""
+    try:
+        from .mapcompiler import vmf_instances
+        h = hashlib.sha1()
+        for _key, path in vmf_instances(vmf):
+            with open(path, "rb") as f:
+                h.update(f.read())
+        return h.hexdigest()
+    except Exception:                 # (unreadable or unparsable: unknown, which never matches a record)
+        import time
+        return f"unreadable {time.time()}"
+
+
 class CompileJob:
     """Runs the compile steps one after another without blocking the caller.
 
@@ -719,20 +743,7 @@ class CompileJob:
                             + _opts_rest(repr(self._opts)).encode()).hexdigest()
 
     def _instances_hash(self, vmf_bytes: bytes) -> str:
-        """What the map's instance files hold (func_instance: they're compiled into it)."""
-        import hashlib
-        if b"func_instance" not in vmf_bytes:
-            return ""
-        try:
-            from .mapcompiler import vmf_instances
-            h = hashlib.sha1()
-            for _key, path in vmf_instances(self.vmf):
-                with open(path, "rb") as f:
-                    h.update(f.read())
-            return h.hexdigest()
-        except Exception:                 # (unreadable or unparsable: unknown, which never matches a record)
-            import time
-            return f"unreadable {time.time()}"
+        return instances_hash(self.vmf, vmf_bytes)
 
     def _built_opts(self) -> str:
         with open(self.base + ".built.opts", encoding="utf-8") as f:
@@ -1154,7 +1165,7 @@ class CompileJob:
             vis_cmd = next((c for n, c in self.steps if n == "vvis"), [])
             if "-radius_override" in vis_cmd or bsp_fog_farz(self.base + ".bsp") > 0:
                 lights_changed = True            # (radial vis changes which leaves see the sky: relight after it)
-        self._rest_stale = lights_changed
+        self._rest_stale = lights_changed or _light_sans_area(built_rad) != _light_sans_area(_opts_rad(repr(self._opts)))
         want = self._opts.rad != "SKIP"
         add_rad = want and (lights_changed or built_rad != _opts_rad(repr(self._opts)))
         self._built_vis = self._opts.vis if add_vis else built_vis

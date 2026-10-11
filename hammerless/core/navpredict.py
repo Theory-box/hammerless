@@ -82,7 +82,8 @@ _last: dict = {"key": None, "mesh": None}
 # entities the nav generator and analysis never read: logic (adding logic nodes doesn't make a new nav mesh)
 _NOT_NAV = ("logic_", "math_", "filter_", "point_clientcommand", "point_servercommand", "point_broadcastclientcommand",
             "ambient_generic", "game_text", "env_fade", "env_shake", "env_hudhint", "env_instructor_hint",
-            "info_director", "trigger_")     # (triggers aren't solid to the nav)
+            "info_director", "trigger_", "commentary_zombie_spawner", "func_nav_blocker")
+# (triggers aren't solid to the nav; nav blockers act in the game only)
 
 
 def inputs_key(vmf_text: str, regions, climbs=(), wall_climbs=False, extra: str = "") -> str:
@@ -98,13 +99,15 @@ def inputs_key(vmf_text: str, regions, climbs=(), wall_climbs=False, extra: str 
             cls = (b.get("classname") or "").lower()
             if cls.startswith(_NOT_NAV):
                 continue
-            b.items = [it for it in b.items if not (hasattr(it, "name") and it.name.lower() == "connections")]
+            # (outputs and names: logic nodes name the doors and props they use)
+            b.items = [it for it in b.items if not (hasattr(it, "name") and it.name.lower() == "connections")
+                       and not (isinstance(it, tuple) and it[0].lower() == "targetname")]
         kept.append(b)
     h = hashlib.sha1(repr(_split(kept)).encode())
     h.update(_key("", regions, climbs, wall_climbs).encode() + extra.encode())
     here = os.path.dirname(os.path.abspath(__file__))
     for name in sorted(os.listdir(here)):            # (a new Hammerless version makes a new nav)
-        if name.startswith("nav") and name.endswith(".py"):
+        if "nav" in name.lower() and name.endswith((".py", ".dll")):
             with open(os.path.join(here, name), "rb") as f:
                 h.update(f.read())
     return h.hexdigest()

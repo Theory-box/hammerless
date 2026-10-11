@@ -1005,6 +1005,8 @@ def _nav_key(vmf_path: str, rep, s, opts) -> str | None:
             text = f.read()
         o = cc.PRESETS[opts] if isinstance(opts, str) else opts
         extra = f"{o.vis}|{o.vis_tool}|{o.vis_exact}|{s.nav_analysis}"     # (the analysis reads the visibility)
+        # (instance files and the map's own models: props' collision)
+        extra += "|" + o.assets + "|" + cc.instances_hash(vmf_path, text.encode())
         return inputs_key(text, rep.nav_regions, rep.nav_climbs, s.wall_climbs, extra)
     except Exception:
         return None
