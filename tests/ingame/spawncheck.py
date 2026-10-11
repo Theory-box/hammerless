@@ -1,16 +1,19 @@
-"""The user's test: 5 s after the survivors spawn (nobody moves), more than 12 commons in the area right outside the
-start safe room. Counts commons within RADIUS of the start room's centre (outside the room itself) at 5 and 10 s,
-lists where every common is, and screenshots the area from above the room. Respects the shared game lock.
+"""Are there enough zombies at the start? The bar (the user's): 5 s after the survivors spawn (nobody moves), more
+than 12 commons on the STREET right outside the start safe room. Counts commons within RADIUS of the first survivor
+AND within 120 units of its height (roofs and walkways above the street don't count: they're hidden spots the
+Director fills first, and a horizontal radius alone counts them as near), at 5 and 10 s; lists every common
+(x, y, z, distance) and screenshots the area from above. Waits for %TEMP%\\hl_game.lock if another test holds the
+game. See docs/dev/ZOMBIE_SPAWNING.md.
 
-    python spawncheck.py <map> [radius]
+    python tests/ingame/spawncheck.py <map> [radius]
 """
 import os, subprocess, sys, time
-sys.path.insert(0, r"C:\Users\John\Documents\Hammerless")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from tests.ingame.bench import Bench  # noqa: E402
 MAP = sys.argv[1]
 RADIUS = float(sys.argv[2]) if len(sys.argv) > 2 else 1400.0
 LOCK = os.path.join(os.environ["TEMP"], "hl_game.lock")
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spawncheck")
+OUT = os.path.join(os.environ["TEMP"], "hammerless_spawncheck")
 os.makedirs(OUT, exist_ok=True)
 while os.path.exists(LOCK):
     print("game busy:", open(LOCK).read().strip(), flush=True); time.sleep(10)
