@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Roofs survivors can't climb onto are spawnable again** (smokers and the other specials use them): only closed-off spots, where nothing could ever get out to the survivors, are marked no-spawn. 0.13.1 marked every area survivors can't walk to, which also kept specials off roofs. With the nav going around props, the zombie preview on a real map puts only about 4 of 30 starting commons on such roofs (they drop down when they hear you).
+- A new Landmark gets a free name (`landmark_2`, ...) instead of a second `landmark_1` (two with one name stop the build). A landmark on a roof also seeds the nav there (the nav grows from landmarks and item spawns).
+
 ## 0.13.1 (test release, 2026-10-11)
 
 **Zombies**

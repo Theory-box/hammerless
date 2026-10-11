@@ -248,7 +248,8 @@ def python_steps(gen):
 
 def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     problems = []
-    # where survivors can get to, before the zombie-only climb links (they lead up onto roofs and ledges)
+    # where infected can't get out of to the survivors: worked out before the zombie-only climb links (they lead up
+    # onto roofs and ledges: a roof only reached by one is still a way down)
     unreachable_ids = unreachable_areas(to_navmesh(gen.areas, regions, gen.ladders))
     if wall_climbs:
         from .entities import ZOMBIE_CLIMB_MAX
@@ -270,19 +271,21 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     blocked = spawn_block_problems(mesh, regions)        # (the user's own no-spawn boxes, before the marks below)
     unreachable = mark_unreachable(mesh, unreachable_ids)
     if unreachable and unreachable / max(1, len(mesh.areas)) > 0.2:
-        problems.append(f"{unreachable} of {len(mesh.areas)} nav areas can't be walked to from the start (roofs, "
-                        "ledges, closed-off spots): no zombies spawn there (they could never reach the survivors). "
-                        "Lots of these usually means a Control Volume or the map lets the nav mesh onto roofs")
+        problems.append(f"{unreachable} of {len(mesh.areas)} nav areas are closed off: nothing there can get to the "
+                        "survivors (no way down or out), so no zombies spawn there. Lots of these usually means a "
+                        "Control Volume or the map lets the nav mesh into sealed spots")
     mesh.problems = problems + blocked
     return mesh
 
 
 def mark_unreachable(mesh: NavMesh, ids: set | None = None) -> int:
-    """Areas survivors can't walk (or climb a ladder) to from the start room get EMPTY | NO_MOBS. Measured on the
-    user's map: the Director put 26 of its 30 start-of-map commons on roofs and a raised walkway the survivors can't
-    get to (hidden from view: the Director's favourite spots), leaving 4 on the street. ids: the areas to mark,
-    worked out before the zombie-only climb links were added (they lead up onto exactly these roofs). Returns how
-    many were marked."""
+    """Closed-off areas (unreachable_areas) get EMPTY | NO_MOBS: anything spawned there could never get to the
+    survivors. ids: the areas to mark (worked out before the zombie-only climb links). Returns how many.
+
+    History: this first marked every area survivors can't walk to (the old nav put 26 of 30 start-of-map commons on
+    such roofs), but that also kept smokers and the other specials off the roofs they use. With props solid to the
+    nav the streets have many more areas, and the preview on the user's map puts only ~4 of 30 starting commons on
+    those roofs (they drop down when they hear the survivors), so roofs with a way down stay spawnable."""
     if ids is None:
         ids = unreachable_areas(mesh)
     n = 0
@@ -294,27 +297,40 @@ def mark_unreachable(mesh: NavMesh, ids: set | None = None) -> int:
 
 
 def unreachable_areas(mesh: NavMesh) -> set:
-    """Ids of the areas survivors can't get to from the start room (along links, drops and ladders); empty when
-    there's no start room (nothing to measure from: the nav report says so)."""
+    """Ids of the closed-off areas: from them nothing can get (along links, drops and ladders) to anywhere the
+    survivors can walk from the start room. A roof survivors can't climb onto but that drops down to the street
+    isn't one. Empty when there's no start room (nothing to measure from: the nav report says so)."""
     start = [a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START]
     if not start:
         return set()
     by = mesh.by_id()
     lad = {l.id: l for l in mesh.ladders}
-    seen, todo = set(start), list(start)
-    while todo:
-        a = by[todo.pop()]
-        nxt = [i for d in a.connections for i in d]
+    out: dict[int, list] = {}
+    for a in mesh.areas:
+        nxt = [i for d in a.connections for i in d if i in by]
         for k in (0, 1):
             for lid in (a.ladders[k] if a.ladders else []):
                 l = lad.get(lid)
                 if l is not None:
-                    nxt += [l.bottom_area, l.top_forward, l.top_left, l.top_right, l.top_behind]
+                    nxt += [i for i in (l.bottom_area, l.top_forward, l.top_left, l.top_right, l.top_behind)
+                            if i in by]
+        out[a.id] = nxt
+
+    def walk(sources, edges):
+        seen, todo = set(sources), list(sources)
+        while todo:
+            for i in edges.get(todo.pop(), ()):
+                if i not in seen:
+                    seen.add(i)
+                    todo.append(i)
+        return seen
+    survivors = walk(start, out)                       # where survivors can go
+    back: dict[int, list] = {}
+    for a, nxt in out.items():
         for i in nxt:
-            if i in by and i not in seen:
-                seen.add(i)
-                todo.append(i)
-    return {a.id for a in mesh.areas if a.id not in seen}
+            back.setdefault(i, []).append(a)
+    can_reach = walk(survivors, back)                  # everything with a way to them
+    return {a.id for a in mesh.areas if a.id not in can_reach}
 
 
 MAX_NODES = 500000           # navgen.Generator.sample's default
