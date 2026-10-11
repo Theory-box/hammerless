@@ -205,6 +205,7 @@ def _start_nav_analysis(mesh, vmf_path: str, bsp_path: str, root: str) -> dict:
         except Exception as ex:          # reported; the game analyzes the nav mesh instead
             box["error"] = str(ex)
         box["seconds"] = time.time() - t0
+        box["span"] = (t0, time.time())
     box["thread"] = threading.Thread(target=work, daemon=True)
     box["thread"].start()
     return box
@@ -930,7 +931,7 @@ class HL_OT_export_vmf(bpy.types.Operator):
         return {"FINISHED"} if path else {"CANCELLED"}
 
 
-def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
+def _watch_load(before_launch: float, timing: str, nav: bool, timeline=None, launched: float = 0.0) -> None:
     """Once survivors are in the map, log how long Build & Play took; then show the game's
     start-to-end path report in the problem list (each map load sends one)."""
     from .problems import store_flow
@@ -956,6 +957,9 @@ def _watch_load(before_launch: float, timing: str, nav: bool) -> None:
                     + (", then nav mesh generation and two reloads" if nav else "") + ")")
             write_log([line], append=True)
             print("Hammerless:", line)
+            if timeline is not None:
+                timeline.add("game load (to survivors)", launched, launched + secs)
+                write_log(timeline.chart(), append=True)
         if cc.LOAD_STATUS["flow_seq"] != state["flow_seq"] and cc.LOAD_STATUS["flow"]:
             state["flow_seq"] = cc.LOAD_STATUS["flow_seq"]
             report = cc.LOAD_STATUS["flow"]
@@ -1024,6 +1028,7 @@ def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False, 
         except Exception as ex:          # reported; the game makes the nav mesh instead
             box["error"] = str(ex)
         box["seconds"] = time.time() - t0
+        box["span"] = (t0, time.time())
     box["thread"] = threading.Thread(target=work, daemon=True)
     box["thread"].start()
     return box
@@ -1451,6 +1456,9 @@ class HL_OT_build(bpy.types.Operator):
                 s.generate_nav = False
                 timing += f", nav mesh {self._nav['seconds']:.1f}s (during the compile)"
         write_log([timing], append=True)       # (once: the waits above return before this)
+        tl = self._timeline()
+        if not self.play:                      # (Build & Play writes it once the game has loaded)
+            write_log(tl.chart(), append=True)
         if self.play and (context.scene.name, context.scene.hammerless.map_name) != self._owner:
             self.report({"WARNING"}, f"{compiled} '{self._owner[1]}', but the scene or Map Name changed meanwhile: "
                                      "not launching (press Play)")
@@ -1462,7 +1470,7 @@ class HL_OT_build(bpy.types.Operator):
             nav_note = ("" if analyzed else " (the game adds its visibility data: one reload)" if written else
                         " (building its nav mesh first: the map reloads twice)" if nav else "")
             launch(context, self._root, nav_written=written, analyzed=analyzed)
-            _watch_load(time.time() - self._t0, timing, nav)
+            _watch_load(time.time() - self._t0, timing, nav, tl, time.time())
             self.report({"INFO"}, f"{compiled}. Launching L4D2 on {s.map_name}{nav_note}  [{timing}]")
         elif self.vis_only:
             self.report({"INFO"}, f"{compiled}: visibility worked out. Build and Build & Play reuse it  [{timing}]")
@@ -1479,6 +1487,21 @@ class HL_OT_build(bpy.types.Operator):
             note = (" Nav mesh made" + (" and analyzed" if self._nav.get("analyzed") else "") if made else "")
             self.report({"INFO"}, f"{compiled}.{note}  [{timing}]")
         return self._finish(context, {"FINISHED"})
+
+    def _timeline(self):
+        """When each step of this build ran (core/timeline.py)."""
+        from ..core.timeline import Timeline
+        tl = Timeline(self._t0)
+        tl.add("export", self._t0, self._t0 + self._export_s)
+        for name, t0, t1 in self._job.events:
+            tl.add(name, t0, t1)
+        if self._nav is not None:
+            if self._nav.get("span"):
+                tl.add("nav mesh", *self._nav["span"])
+            an = self._nav.get("analysis")
+            if an and an.get("span"):
+                tl.add("nav analysis", *an["span"])
+        return tl
 
     def _eye_points(self, context):
         """Where players can see from, for skipping faces nobody sees: over this build's nav mesh (waiting
