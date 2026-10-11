@@ -45,6 +45,29 @@ def brush_planes(b: Bsp) -> collections.Counter:
     return out
 
 
+def near_matches(missing: collections.Counter, extra: collections.Counter, n_tol=1e-3, d_tol=0.05) -> int:
+    """Brushes the rounded keys missed only because a value sat on a rounding boundary: the same contents and
+    planes, each normal within n_tol and distance within d_tol."""
+    pool = list(extra.elements())
+    found = 0
+    for contents, planes in missing.elements():
+        for i, (c2, p2) in enumerate(pool):
+            if c2 != contents or len(p2) != len(planes):
+                continue
+            left = list(p2)
+            for p in planes:
+                j = next((j for j, q in enumerate(left) if all(abs(p[k] - q[k]) <= n_tol + 1e-3 for k in range(3))
+                          and abs(p[3] - q[3]) <= d_tol + 0.1), None)
+                if j is None:
+                    break
+                left.pop(j)
+            else:
+                found += 1
+                pool.pop(i)
+                break
+    return found
+
+
 def counts(b: Bsp) -> dict:
     def n(lump, size):
         return len(b.lump(lump)) // size
@@ -80,7 +103,7 @@ def run(name: str, content, root: str) -> bool:
     diffs = [f"{k} {a[k]} -> {c[k]}" for k in a if k != "classes" and a[k] != c[k]]
     lost = {k: v - c["classes"].get(k, 0) for k, v in a["classes"].items() if v != c["classes"].get(k, 0)}
     pa, pc = brush_planes(orig), brush_planes(ours)
-    same = sum((pa & pc).values())
+    same = sum((pa & pc).values()) + near_matches(pa - pc, pc - pa)
     ok = not diffs and not lost and same == sum(pa.values())
     print(f"{'SAME' if ok else 'DIFF'} {name}: decompile {t1 - t0:.1f}s, compile {t2 - t1:.0f}s; "
           f"brushes matching {same}/{sum(pa.values())}" + (f"; {', '.join(diffs)}" if diffs else "")

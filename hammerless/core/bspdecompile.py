@@ -26,8 +26,46 @@ L_ENTITIES, L_PLANES, L_TEXDATA, L_NODES, L_TEXINFO, L_LEAFS = 0, 1, 2, 5, 6, 10
 L_MODELS, L_LEAFBRUSHES, L_BRUSHES, L_BRUSHSIDES = 14, 17, 18, 19
 L_AREAPORTALS, L_GAME, L_CLIPPORTALVERTS, L_CUBEMAPS, L_TEXSTRDATA, L_TEXSTRTABLE = 21, 35, 41, 42, 43, 44
 
-CONTENTS_DETAIL = 0x8000000
+CONTENTS_SOLID, CONTENTS_WINDOW, CONTENTS_GRATE, CONTENTS_BLOCKLOS, CONTENTS_OPAQUE = 0x1, 0x2, 0x8, 0x40, 0x80
+CONTENTS_AREAPORTAL, CONTENTS_PLAYERCLIP, CONTENTS_MONSTERCLIP = 0x8000, 0x10000, 0x20000
+CONTENTS_DETAIL, CONTENTS_TRANSLUCENT, CONTENTS_LADDER = 0x8000000, 0x10000000, 0x20000000
 DEFAULT_LIGHTMAP_SCALE = 16
+# compiling gives a side no face of its own its texture from another side with the same flags (vbsp's
+# CompactTexinfos): a tool brush's sides come out nodraw or clip. Its contents say what it was.
+TOOL_GENERIC = ("TOOLS/TOOLSNODRAW", "TOOLS/TOOLSCLIP")
+
+
+def tool_texture(contents: int) -> str | None:
+    """The tool texture a brush with these contents (and no visible face) had, or None for a solid brush."""
+    if contents & CONTENTS_AREAPORTAL:
+        return "TOOLS/TOOLSAREAPORTAL"
+    if contents & CONTENTS_LADDER:
+        return "TOOLS/CLIMB"
+    clip = contents & (CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP)
+    if clip == CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP:
+        return "TOOLS/TOOLSCLIP"
+    if clip == CONTENTS_PLAYERCLIP:
+        return "TOOLS/TOOLSPLAYERCLIP"
+    if clip == CONTENTS_MONSTERCLIP:
+        return "TOOLS/TOOLSNPCCLIP"
+    if contents & CONTENTS_SOLID:
+        return None
+    if contents & CONTENTS_OPAQUE:
+        return "TOOLS/TOOLSBLOCKLIGHT"
+    if contents & CONTENTS_BLOCKLOS:
+        return "TOOLS/TOOLSBLOCK_LOS"
+    if contents & (CONTENTS_GRATE | CONTENTS_TRANSLUCENT) and not contents & CONTENTS_WINDOW:
+        return "TOOLS/TOOLSINVISIBLE"
+    return None
+
+
+_PATCHED = re.compile(r"^MAPS/[^/]+/(.+?)(?:_WVT_PATCH|_DEPTH_\d+|_-?\d+_-?\d+_-?\d+)*$")
+
+
+def original_material(name: str) -> str:
+    """A material vbsp made for the map (maps/<map>/X_x_y_z for cubemaps, X_wvt_patch, X_depth_N) -> X."""
+    m = _PATCHED.match(name)
+    return m.group(1) if m else name
 
 
 class Bsp:
@@ -75,8 +113,20 @@ class Bsp:
     def brushsides(self):
         return self.records(L_BRUSHSIDES, "H2h2B")               # planenum, texinfo, dispinfo, bevel, thin
 
+    def model_ranges(self) -> list[tuple[int, int]]:
+        """Each model's brushes as (first, last) indexes: vbsp writes them in entity order, so a model's are the
+        range from the lowest to the highest brush in its leaves (some brushes are in no leaf: buried in solid,
+        or moved into the world, like func_detail's and areaportals'). (-1, -1): none."""
+        out = []
+        for _mins, _maxs, _origin, head in self.models():
+            found = self.model_brushes(head)
+            out.append((found[0], found[-1]) if found else (-1, -1))
+        if out and out[0][0] >= 0:
+            out[0] = (0, out[0][1])
+        return out
+
     def model_brushes(self, headnode: int) -> list[int]:
-        """The brushes in the leaves under a node (a model's brushes), in brush order."""
+        """The brushes in the leaves under a node, in brush order."""
         nodes = self.records(L_NODES, "3i6h2H2h")                 # planenum, children[2], ...
         leafs = self.records(L_LEAFS, "i2h6h4H2h")                # ..., firstleafbrush, numleafbrushes, ...
         leafbrushes = [t[0] for t in self.records(L_LEAFBRUSHES, "H")]
@@ -164,9 +214,9 @@ class Bsp:
 def _num(x: float) -> str:
     """A coordinate as Hammer writes it: whole when it's within a hair of whole, else 3 decimals."""
     r = round(x)
-    if abs(x - r) < 1e-3:
+    if abs(x - r) < 0.01:
         return str(int(r))
-    return f"{x:.3f}".rstrip("0").rstrip(".")
+    return f"{x:.6f}".rstrip("0").rstrip(".")
 
 
 def _vec(v) -> str:
@@ -183,6 +233,29 @@ def _axis(vec4) -> tuple[str, float]:
     return (f"[{x * scale:.6g} {y * scale:.6g} {z * scale:.6g} {shift:.6g}] {scale:.6g}"), scale
 
 
+SPREAD = 256.0         # units between a side's three plane points
+
+
+def plane_points(n, d, w):
+    """Three points on the plane n.x = d, wound so Hammer's normal points out (n): spread SPREAD apart around the
+    face's middle, not the face's corners (a tiny face's corners, rounded, tilt the plane), and whole numbers
+    wherever the plane passes through them."""
+    c = [sum(p[k] for p in w) / len(w) for k in range(3)]
+    off = sum(c[k] * n[k] for k in range(3)) - d
+    c = [c[k] - n[k] * off for k in range(3)]
+    a = (0.0, 0.0, 1.0) if abs(n[2]) < 0.9 else (1.0, 0.0, 0.0)
+    u = (a[1] * n[2] - a[2] * n[1], a[2] * n[0] - a[0] * n[2], a[0] * n[1] - a[1] * n[0])
+    ln = math.sqrt(sum(x * x for x in u))
+    u = tuple(x / ln for x in u)
+    v = (n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0])      # u x v = n
+    pts = []
+    for p in (tuple(c[k] + u[k] * SPREAD for k in range(3)), tuple(c), tuple(c[k] + v[k] * SPREAD for k in range(3))):
+        r = tuple(float(round(x)) for x in p)
+        on = abs(sum(r[k] * n[k] for k in range(3)) - d) < 1e-3
+        pts.append(r if on else p)
+    return pts                     # (p0 - p1) x (p2 - p1) = SPREAD^2 (u x v): along n
+
+
 class Decompiler:
     def __init__(self, data: bytes):
         self.bsp = Bsp(data)
@@ -192,6 +265,7 @@ class Decompiler:
         self.brushes = self.bsp.brushes()
         self.sides = self.bsp.brushsides()
         self._id = 0
+        self.side_polys: dict[int, list] = {}      # plane -> [(side block, polygon)] (world brushes: for disps, overlays)
         self.notes: list[str] = []
         self.skipped_brushes = 0
 
@@ -203,12 +277,13 @@ class Decompiler:
         if texinfo < 0 or texinfo >= len(self.texinfos):
             return "TOOLS/TOOLSNODRAW"
         td = self.texinfos[texinfo][3]
-        return (self.names[td] if 0 <= td < len(self.names) else "TOOLS/TOOLSNODRAW").upper()
+        return original_material((self.names[td] if 0 <= td < len(self.names) else "TOOLS/TOOLSNODRAW").upper())
 
     def solid(self, b: int, offset=(0.0, 0.0, 0.0)) -> Block | None:
         """Brush b as a VMF solid (moved by offset: a brush entity's brushes are stored around its origin)."""
-        first, count, _contents = self.brushes[b]
+        first, count, contents = self.brushes[b]
         sides = [s for s in self.sides[first:first + count] if not s[3]]          # (not bevels)
+        tool = tool_texture(contents)
         planes = []
         for s in sides:
             n, d = self.planes[s[0]]
@@ -226,11 +301,15 @@ class Decompiler:
                 continue
             if sum(a * b for a, b in zip(_newell(w), n)) < 0:      # counter-clockwise around the normal
                 w.reverse()
-            p1, p2, p3 = _plane_points(list(reversed(w)))          # (Hammer: clockwise seen from outside)
+            p1, p2, p3 = plane_points(n, d, w)
             side = out.add(Block("side"))
             side.kv("id", self.new_id())
             side.kv("plane", f"({_vec(p1)}) ({_vec(p2)}) ({_vec(p3)})")
-            side.kv("material", self.material(s[1]))
+            mat = self.material(s[1])
+            if tool and (mat in TOOL_GENERIC or mat.startswith("TOOLS/")):
+                mat = tool
+            side.kv("material", mat)
+            self.side_polys.setdefault(s[0], []).append((side, w))
             if 0 <= s[1] < len(self.texinfos):
                 (tu, tv), (lu, _lv), _flags, _td = self.texinfos[s[1]]
                 # (moved: the shift follows the texture across the offset)
@@ -253,6 +332,39 @@ class Decompiler:
             return None
         ed = out.add(Block("editor"))
         ed.kv("color", "0 180 255").kv("visgroupshown", 1).kv("visgroupautoshown", 1)
+        return out
+
+    def all_trigger(self, b: int) -> bool:
+        first, count, _c = self.brushes[b]
+        return all(self.material(s[1]) == "TOOLS/TOOLSTRIGGER" for s in self.sides[first:first + count] if not s[3])
+
+    def brush_bounds(self, b: int):
+        first, count, _c = self.brushes[b]
+        planes = [self.planes[s[0]] for s in self.sides[first:first + count] if not s[3]]
+        pts = []
+        for i, (n, d) in enumerate(planes):
+            w = _base_winding(n, d)
+            for j, (n2, d2) in enumerate(planes):
+                if j != i and w:
+                    w = _clip(w, n2, d2)
+            pts += w
+        if not pts:
+            return None
+        return (tuple(min(p[k] for p in pts) for k in range(3)), tuple(max(p[k] for p in pts) for k in range(3)))
+
+    def match_portals(self, portals: dict, brushes: list[int]) -> dict[int, int]:
+        """Portal key -> its areaportal brush: in order when there are as many (vbsp numbers them as it reads
+        them), else the brush whose box holds the portal's outline."""
+        keys = sorted(portals)
+        if len(keys) == len(brushes):
+            return dict(zip(keys, brushes))
+        out, boxes = {}, {b: self.brush_bounds(b) for b in brushes}
+        for k in keys:
+            c = [sum(p[i] for p in portals[k]) / len(portals[k]) for i in range(3)]
+            for b, bb in boxes.items():
+                if bb and b not in out.values() and all(bb[0][i] - 1 <= c[i] <= bb[1][i] + 1 for i in range(3)):
+                    out[k] = b
+                    break
         return out
 
     def portal_solid(self, outline: list[tuple]) -> Block | None:
@@ -287,7 +399,7 @@ class Decompiler:
         e.kv("id", self.new_id())
         conn = None
         for k, v in pairs:
-            if k == "hammerid" or k == "model" and v.startswith("*"):
+            if k in ("hammerid", "world_mins", "world_maxs") or k == "model" and v.startswith("*"):
                 continue
             if "\x1b" in v or (v.count(",") >= 4 and k[:2] in ("On", "on")):   # an output
                 conn = conn or Block("connections")
@@ -304,13 +416,25 @@ class Decompiler:
 
     def decompile(self) -> str:
         models = self.bsp.models()
-        world_brushes = self.bsp.model_brushes(models[0][3]) if models else []
+        ranges = self.bsp.model_ranges()
+        first_model = min((r[0] for r in ranges[1:] if r[0] >= 0), default=len(self.brushes))
+        covered = set(range(0, first_model))
+        for a, z in ranges[1:]:
+            if a >= 0:
+                covered.update(range(a, z + 1))
+        # brushes in no model's range are in world coordinates: trigger-textured ones are func_viscluster's (vbsp
+        # uses them for vis and removes the entity, leaving the brushes), the rest the world's
+        unclaimed = [i for i in range(len(self.brushes)) if i not in covered]
+        viscluster = [i for i in unclaimed if self.all_trigger(i)]
+        world_brushes = list(range(0, first_model)) + [i for i in unclaimed if i not in viscluster]
+        portal_brushes = [b for b in world_brushes if self.brushes[b][2] & CONTENTS_AREAPORTAL]
         world = Block("world")
         world.kv("id", self.new_id())
         entities: list[Block] = []
         detail: list[Block] = []
         ents = self.bsp.entities()
         portals = self.bsp.areaportals()
+        portal_owner = self.match_portals(portals, portal_brushes)
         for e in ents:
             if dict(e).get("classname") == "worldspawn":
                 for k, v in e:
@@ -318,15 +442,22 @@ class Decompiler:
                         world.kv(k, v)
                 break
         for b in world_brushes:
+            if self.brushes[b][2] & CONTENTS_AREAPORTAL:
+                continue                                     # (their func_areaportal's)
             s = self.solid(b)
             if s is None:
                 continue
-            if self.brushes[b][2] & CONTENTS_DETAIL:
+            c = self.brushes[b][2]
+            if c & CONTENTS_DETAIL and c & (CONTENTS_SOLID | CONTENTS_TRANSLUCENT):
                 detail.append(s)
             else:
                 world.add(s)
         if detail:
             entities.append(self.entity_block([("classname", "func_detail")], detail))
+        for b in viscluster:
+            sb = self.solid(b)
+            if sb is not None:
+                entities.append(self.entity_block([("classname", "func_viscluster")], [sb]))
         for e in ents:
             d = dict(e)
             cls = d.get("classname", "")
@@ -339,13 +470,16 @@ class Decompiler:
                     mi = int(model[1:])
                 except ValueError:
                     mi = -1
-                if 0 < mi < len(models):
+                if 0 < mi < len(models) and ranges[mi][0] >= 0:
                     origin = tuple(float(x) for x in d.get("origin", "0 0 0").split()[:3]) \
                         if d.get("origin") else (0.0, 0.0, 0.0)
-                    solids = [s for s in (self.solid(b, origin) for b in self.bsp.model_brushes(models[mi][3])) if s]
+                    a, z = ranges[mi]
+                    solids = [s for s in (self.solid(b, origin) for b in range(a, z + 1)) if s]
             if cls in ("func_areaportal", "func_areaportalwindow") and not solids:
-                outline = portals.get(int(d.get("portalnumber", "0") or 0))
-                s = self.portal_solid(outline) if outline else None
+                key = int(d.get("portalnumber", "0") or 0)
+                outline = portals.get(key)
+                b = portal_owner.get(key)
+                s = self.solid(b) if b is not None else (self.portal_solid(outline) if outline else None)
                 if s is None:
                     self.notes.append(f"func_areaportal {d.get('portalnumber')}: no outline found, left out")
                     continue
