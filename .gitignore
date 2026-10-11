@@ -13,3 +13,5 @@ hammerless/core/tbb12.dll
 tests/ingame/shots/
 tests/compile/vis_rays.exe
 tests/compile/vis_rays.pdb
+tests/compile/vis_certify.exe
+tests/compile/vis_certify.pdb
