@@ -255,6 +255,29 @@ class TestNavReportAudit(unittest.TestCase):
 
 
 class TestBuild(unittest.TestCase):
+    def test_stale_game_files(self):
+        """A build removes this map's files the last build wrote and it doesn't (every logic graph deleted), and an
+        old logic script from before the list was kept; never another map's or anything outside scripts/ and maps/."""
+        import tempfile
+        from hammerless.core.gamefiles import record_game_files, stale_game_files
+        game = tempfile.mkdtemp()
+
+        def put(rel):
+            full = os.path.join(game, *rel.split("/"))
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            open(full, "w").close()
+        for rel in ("scripts/vscripts/hammerless/logic_m.nut", "scripts/vscripts/hammerless/logic_other.nut",
+                    "maps/m_hammerless.nut", "scripts/vscripts/hammerless/navmark_m.nut"):
+            put(rel)
+        now = {"scripts/vscripts/hammerless/navmark_m.nut": ""}
+        self.assertEqual(stale_game_files(game, "m", now),
+                         ["maps/m_hammerless.nut", "scripts/vscripts/hammerless/logic_m.nut"])
+        put("scripts/vscripts/hammerless/hammerless_m_crescendo_x.nut")
+        record_game_files(game, "m", {**now, "scripts/vscripts/hammerless/hammerless_m_crescendo_x.nut": "",
+                                      "../outside_m.txt": ""})
+        self.assertIn("scripts/vscripts/hammerless/hammerless_m_crescendo_x.nut", stale_game_files(game, "m", now))
+        self.assertNotIn("../outside_m.txt", stale_game_files(game, "m", now))
+
     def test_box_room_builds(self):
         text, rep = build_vmf(box_room_ir())
         self.assertTrue(rep.ok, rep.errors)

@@ -503,16 +503,50 @@ def _note(tree, name, lines, x, y, width):
     return frame
 
 
-def build_example(context, index: int, problems: list | None = None):
-    """Make example number index (0-based): its graph, notes and objects. Returns the tree. Sockets
-    that aren't there (an entity's events need the game's definitions) go into problems."""
+_new_frames: list = []        # (the step frames build_example just made)
+
+
+def _free_x(tree) -> float:
+    """Where a new example starts in a graph that has nodes: right of all of them."""
+    xs = []
+    for n in tree.nodes:
+        if n.bl_idname == "NodeFrame":
+            continue
+        loc = getattr(n, "location_absolute", n.location)
+        xs.append(loc[0] + n.width)
+    return max(xs) + 2 * COL if xs else 0.0
+
+
+def main_tree(context):
+    """The logic graph examples go into: the one open in the node editor, else this scene's first graph that isn't an
+    example of its own (older versions made one per example), else a new one."""
+    from .logic import TREE, logic_trees
+    space = getattr(context, "space_data", None)
+    tree = getattr(space, "edit_tree", None) if space is not None and space.type == "NODE_EDITOR" else None
+    if tree is not None and tree.bl_idname == TREE:
+        return tree
+    trees = logic_trees(context.scene)
+    mine = [t for t in trees if not t.name.startswith("Example ")]
+    return (mine or trees or [None])[0] or new_tree(context)
+
+
+def build_example(context, index: int, problems: list | None = None, into=None):
+    """Make example number index (0-based): its nodes, notes and objects. Returns the tree. into: the graph to add it
+    to (inside a frame named after it, right of what's there); None: a graph of its own (the in-game regression
+    builds every example that way). Sockets that aren't there (an entity's events need the game's definitions) go
+    into problems."""
     problems = problems if problems is not None else []
     ex = all_examples()[index]
     number = index + 1
     title = f"Example {number:02d}: {ex['title']}"
     objects = _objects(context, number, ex)
-    tree = new_tree(context)
-    tree.name = title
+    if into is None:
+        tree = new_tree(context)
+        tree.name = title
+        x0 = 0.0
+    else:
+        tree = into
+        x0 = _free_x(tree)
     nodes = {}
     for spec in ex["nodes"]:
         node = tree.nodes.new(spec["type"])
@@ -537,15 +571,17 @@ def build_example(context, index: int, problems: list | None = None):
             continue
         tree.links.new(out, inp)
     # steps: a frame around each group of nodes, numbered in the order things happen
+    _new_frames.clear()
     for i, (label, ids) in enumerate(ex.get("steps", []), 1):
         frame = tree.nodes.new("NodeFrame")
+        _new_frames.append(frame)
         frame.name = frame.label = f"{i}. {label}"
         frame.label_size = 14
         for nid in ids:
             nodes[nid].parent = frame
     for spec in ex["nodes"]:
         c, r = spec["pos"]
-        _place(nodes[spec["id"]], c * COL, r * ROW)
+        _place(nodes[spec["id"]], x0 + c * COL, r * ROW)
     # what it does, above the graph
     cols = max(s["pos"][0] for s in ex["nodes"]) + 1
     width = max(600.0, min(cols * COL, 1200.0))
@@ -553,9 +589,16 @@ def build_example(context, index: int, problems: list | None = None):
     if objects:
         lines += [""] + textwrap.wrap("Its objects are in the collection " + f"'Example {number:02d} objects', "
                                       "at the 3D cursor: move them where you need them.", int(width / 8.5))
-    lines += [""] + textwrap.wrap("Delete this graph (and its objects) when you don't want it in your map.",
-                                  int(width / 8.5))
-    _note(tree, title, lines, 0.0, 120.0 + 22 * len(lines) + 60, width)
+    lines += [""] + textwrap.wrap(("Delete this graph" if into is None else "Delete this frame and the nodes in it")
+                                  + " (and its objects) when you don't want it in your map.", int(width / 8.5))
+    note = _note(tree, title, lines, x0, 120.0 + 22 * len(lines) + 60, width)
+    if into is not None:                  # the whole example in one frame, so it's easy to find, move or delete
+        outer = tree.nodes.new("NodeFrame")
+        outer.name = outer.label = title
+        outer.label_size = 20
+        for n in [*nodes.values(), note, *_new_frames]:      # (nodes in a step frame stay in it)
+            if n.parent is None:
+                n.parent = outer
     return tree
 
 
@@ -578,12 +621,13 @@ class HL_OT_logic_example(bpy.types.Operator):
         if not 0 <= self.index < len(all_examples()):
             return {"CANCELLED"}
         problems = []
-        tree = build_example(context, self.index, problems)
+        tree = build_example(context, self.index, problems, into=main_tree(context))
         _show_tree(context, tree)
+        title = f"Example {self.index + 1:02d}: {all_examples()[self.index]['title']}"
         if problems:
-            self.report({"WARNING"}, f"Added '{tree.name}', but: " + "; ".join(problems))
+            self.report({"WARNING"}, f"Added '{title}' to '{tree.name}', but: " + "; ".join(problems))
         else:
-            self.report({"INFO"}, f"Added '{tree.name}'")
+            self.report({"INFO"}, f"Added '{title}' to '{tree.name}' (in a frame named after it)")
         return {"FINISHED"}
 
 

@@ -454,6 +454,11 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
                 os.makedirs(os.path.dirname(full), exist_ok=True)
                 with open(full, "w", encoding="utf-8") as f:
                     f.write(content)
+            from ..core.gamefiles import record_game_files, stale_game_files
+            for rel in stale_game_files(gamedir, s.map_name, files):   # (e.g. every logic graph deleted)
+                os.remove(os.path.join(gamedir, *rel.split("/")))
+                rep2.info.append(f"Removed {rel} (this build no longer makes it)")
+            record_game_files(gamedir, s.map_name, files)
             cc.set_map_owner(cc.Tools(root), s.map_name, path)
             if ir.scripted_mode:
                 _write_mode_addon(gamedir, rep2)

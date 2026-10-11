@@ -968,6 +968,46 @@ def test_logic_examples_build():
     assert not bad, "\n".join(bad)
 
 
+def test_logic_examples_into_main_graph():
+    # Add Example puts the example into the main graph (the one open, else the scene's own), in a frame named after
+    # it, right of what's there: every example into one graph keeps all its nodes and wires (names that clash get
+    # Blender's .001) and the map still builds
+    from hammerless.blender.logic import new_tree
+    from hammerless.blender.logic_examples import all_examples, build_example, main_tree
+    from hammerless.core.compile import find_game_root
+    real = find_game_root()
+    has_fgd = bool(real) and os.path.exists(os.path.join(real, "bin", "left4dead2.fgd"))
+    reset_scene()
+    add_box("floor", (40, 40, 0.5), (0, 0, -0.25))
+    bpy.ops.object.empty_add(location=(2, 0, 0.1))
+    sp = bpy.context.object
+    sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
+    mine = new_tree(bpy.context)
+    mine.name = "L4D2 Logic"
+    old = build_example(bpy.context, 0)                # (an example graph from an older version: not the main one)
+    assert main_tree(bpy.context) == mine
+    want_links, spans = 0, []
+    for i, ex in enumerate(all_examples()):
+        if not has_fgd and any(n["type"] in ("HL_NodeObject", "HL_NodeDirector") for n in ex["nodes"]):
+            continue
+        before = set(mine.nodes)
+        problems = []
+        assert build_example(bpy.context, i, problems, into=mine) == mine
+        assert not problems, (ex["title"], problems)
+        made = [n for n in mine.nodes if n not in before]
+        assert len([n for n in made if n.bl_idname != "NodeFrame"]) == len(ex["nodes"]), ex["title"]
+        outer = [n for n in made if n.bl_idname == "NodeFrame" and n.parent is None]
+        assert len(outer) == 1 and outer[0].label.startswith(f"Example {i + 1:02d}:"), (ex["title"], outer)
+        xs = [getattr(n, "location_absolute", n.location)[0] for n in made if n.bl_idname != "NodeFrame"]
+        spans.append((min(xs), max(xs)))
+        want_links += len(ex["links"])
+    assert len(mine.links) == want_links, (len(mine.links), want_links)
+    assert all(b[0] > a[1] for a, b in zip(spans, spans[1:])), "examples overlap"
+    bpy.data.node_groups.remove(old)
+    blocks, log = export()
+    assert blocks is not None, log
+
+
 SMALL_VMF = """versioninfo
 {
 \t"editorversion" "400"

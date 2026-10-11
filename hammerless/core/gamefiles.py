@@ -7,6 +7,8 @@ they work without sv_cheats.
 """
 from __future__ import annotations
 
+import os
+
 from .ir import MapIR
 from .nav import collect_climbs, collect_regions, navmark_script
 
@@ -349,6 +351,35 @@ def mode_addon_files() -> dict[str, bytes]:
 
 
 # ---------------------------------------------------------------- all files
+
+def stale_game_files(gamedir: str, name: str, files: dict[str, str]) -> list[str]:
+    """This map's files in the game that the last build wrote and this one doesn't (a logic graph deleted, scripted
+    mode turned off...): from the list the last build kept (files_<map>.txt), and Hammerless's own per-map names for
+    builds from before that list. Only paths under scripts/ and maps/ that name this map."""
+    listed = set()
+    try:
+        with open(os.path.join(gamedir, *SCRIPT_DIR.split("/"), f"files_{name}.txt"), encoding="utf-8") as f:
+            listed = {ln.strip() for ln in f if ln.strip()}
+    except OSError:
+        pass
+    known = {f"{SCRIPT_DIR}/logic_{name}.nut", f"{SCRIPT_DIR}/debug_{name}.nut", f"{SCRIPT_DIR}/autotest_{name}.nut",
+             f"maps/{name}_hammerless.nut"}
+    out = []
+    for rel in sorted(listed | known):
+        if rel in files or ".." in rel or not rel.startswith(("scripts/", "maps/")) or name not in rel:
+            continue
+        if os.path.isfile(os.path.join(gamedir, *rel.split("/"))):
+            out.append(rel)
+    return out
+
+
+def record_game_files(gamedir: str, name: str, files: dict[str, str]) -> None:
+    """Remember what this build wrote (stale_game_files reads it next time)."""
+    path = os.path.join(gamedir, *SCRIPT_DIR.split("/"), f"files_{name}.txt")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("".join(rel + "\n" for rel in sorted(files)))
+
 
 def game_files(ir: MapIR) -> dict[str, str]:
     """relative path (under left4dead2/) -> file contents."""
