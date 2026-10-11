@@ -38,6 +38,8 @@ only drop down to the street). They're hidden from the survivors, so they're the
 and fill the 30-common cap. Hammerless now marks every area not reachable from the start room (walking, drops,
 ladders, zombie climbs) EMPTY | NO_MOBS, and warns when over 20% of the nav is unreachable.
 
+**Removed later the same day:** the mark also kept smokers and the other specials off the roofs they use. With static props solid to the nav (f8b7c89) the streets have many more areas, and the spawn preview on the user's map put only ~4 of 30 starting commons on those roofs with no mark, so Hammerless no longer marks any area automatically (a Control Volume with Zombie Spawns keeps zombies off a spot). A mark that keeps only commons off such roofs, if the game has one, is the open question.
+
 ## The second limit: the wanderer budget (Audit 1, measured)
 
 With the fix, the Director keeps only 12-15 live wanderers for the whole ring around the start

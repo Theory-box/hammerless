@@ -1329,34 +1329,6 @@ class TestLaddersAndClimbs(unittest.TestCase):
         _c, problems = collect_climbs(ir)
         self.assertTrue(any("both a bottom and a top" in p for p in problems))
 
-    def test_unreachable_areas_get_no_zombies(self):
-        """Closed-off areas (nothing there can get to where survivors walk) get EMPTY | NO_MOBS; a roof survivors
-        can't climb onto but that drops down to the street stays spawnable (smokers and the other specials use those
-        roofs)."""
-        from hammerless.core.navfile import NavArea, NavMesh
-        from hammerless.core.navpredict import mark_unreachable, unreachable_areas
-        mesh = NavMesh(analyzed=False)
-        start, street, roof, sealed = (NavArea(i, 0, (0, 0, 0), (50, 50, 0), 0, 0) for i in (1, 2, 3, 4))
-        start.spawn_attributes = 0x80
-        start.connections, street.connections = [[2], [], [], []], [[1], [], [], []]
-        roof.connections = [[2], [], [], []]            # (drops down to the street; nothing leads up)
-        sealed.connections = [[], [], [], []]           # (a closed-off room)
-        for a in (start, street, roof, sealed):
-            a.ladders = [[], []]
-        mesh.areas = [start, street, roof, sealed]
-        self.assertEqual(unreachable_areas(mesh), {4})
-        self.assertEqual(mark_unreachable(mesh), 1)
-        self.assertEqual(sealed.spawn_attributes & 0x2002, 0x2002)
-        self.assertEqual(roof.spawn_attributes, 0)
-        self.assertEqual(street.spawn_attributes, 0)
-        self.assertEqual(mark_unreachable(NavMesh(analyzed=False)), 0)     # (no start room: nothing marked)
-        # a pocket with a ladder down to the street isn't closed off
-        from hammerless.core.navfile import NavLadder
-        sealed.spawn_attributes = 0
-        sealed.ladders = [[1], []]
-        mesh.ladders = [NavLadder(1, 20.0, (0, 0, 100), (0, 0, 0), 100.0, 0, 4, 0, 0, 0, 2)]
-        self.assertEqual(unreachable_areas(mesh), set())
-
     def test_zombie_spawn_simulation(self):
         """core/spawnsim.py: budget from the route, wanderers on areas picked by count; a no-spawn roof loses its
         share; the same seed gives the same roll."""
