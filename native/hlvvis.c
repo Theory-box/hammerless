@@ -1,6 +1,9 @@
 /* hlvvis: Hammerless's visibility compiler, a drop-in for L4D2's vvis.exe.
  *
- *   hlvvis [-fast] [-threads N] [-radius_override R] [-game <dir>] <map>     (reads <map>.bsp and <map>.prt, writes <map>.bsp)
+ *   hlvvis [-fast] [-exact] [-threads N] [-radius_override R] [-game <dir>] <map>     (reads <map>.bsp and <map>.prt, writes <map>.bsp)
+ *
+ * By default the exact pass merges windows (see "merged-window flow" below): several times faster, about 1% looser,
+ * never hiding a pair seen through a real opening. -exact runs vvis's own path search and gives its output.
  *
  * The method is the portal-flow visibility id Software published with Quake's vis tool (GPL): every
  * one-way portal floods through chains of portals, clipping what can be seen at each step with
@@ -58,7 +61,8 @@ static void *xcalloc(size_t c, size_t n) {
 static const double ON_EPS = 0.01;        /* compared as double, like vvis (float d > 0.01) */
 static float EPS_UP;                      /* d > 0.01  <=>  d >= EPS_UP (the first float above 0.01) */
 static float LEN_LO;                      /* len < 0.01  <=>  len <= LEN_LO (the last float below 0.01) */
-#define MAXPTS 12                         /* chopped windings: a chop needing more keeps its input */
+#define MAXPTS 64                         /* winding buffers (merged hulls) */
+static int g_maxpts = 12;                 /* chopped windings: a chop needing more keeps its input (vvis: 12) */
 #define MAXIN 64                          /* portal windings as read */
 
 typedef struct { float x, y, z; } V;
@@ -130,11 +134,11 @@ static Win *chop(Win *in, Stack *s, const Plane *split) {
     nw->n = 0;
     for (int i = 0; i < n; i++) {
         V p1 = in->p[i];
-        if (nw->n == MAXPTS) { free_w(nw, s); return in; }
+        if (nw->n == g_maxpts) { free_w(nw, s); return in; }
         if (sides[i] == 2) { nw->p[nw->n++] = p1; continue; }
         if (sides[i] == 0) nw->p[nw->n++] = p1;
         if (sides[i + 1] == 2 || sides[i + 1] == sides[i]) continue;
-        if (nw->n == MAXPTS) { free_w(nw, s); return in; }
+        if (nw->n == g_maxpts) { free_w(nw, s); return in; }
         V p2 = in->p[(i + 1) % n], mid;
         float t = dists[i] / (dists[i] - dists[i + 1]);
         mid.x = split->n.x == 1 ? split->d : split->n.x == -1 ? -split->d : p1.x + t * (p2.x - p1.x);
@@ -333,12 +337,265 @@ static void portal_flow(int pi) {
     InterlockedIncrement(&g_done);
 }
 
+/* ================================================================== merged-window flow (the default)
+   One (source, pass) state per portal per flow instead of one per path: a portal's source is the convex hull
+   of every source that reached it (on the base portal's plane), its pass the hull of every pass (on its own
+   plane), its might-see the union. A portal is re-expanded only when its state grew. Superset of the path
+   search in exact arithmetic (bigger windows give bigger separator regions), so it never hides what the
+   path search shows except where that search only sees through its own tolerance (measured: such pairs have no
+   straight line through the portals at all). About 1% looser than vvis, a fraction of the work: a portal is
+   reached a few times per flow instead of once per path (urban: 22M steps instead of 534M).
+   A hull of more than MAXPTS points becomes the MAXPTS-gon of its supporting lines (a superset). A portal that
+   keeps growing (MAX_GROW times) opens to the whole base and the whole portal (supersets: still safe). */
+static int g_merge = 1;           /* 0: -exact (vvis's path search) */
+typedef struct { int gen, queued, has, grows; WinBuf S, W; double areaS, areaW; } MState;
+#define MAX_GROW 64
+static volatile LONG64 g_capped;
+static _Thread_local MState *t_ms;
+static _Thread_local uint64_t *t_mm;      /* NPD rows of PW words: each portal's merged might-see */
+static _Thread_local int *t_queue, t_mgen;
+static volatile LONG64 g_msteps, g_mpush;
+
+static double poly_area(const Win *w, V n) {
+    double sx = 0, sy = 0, sz = 0;
+    for (int i = 0; i < w->n; i++) {
+        V p = w->p[i], q = w->p[(i + 1) % w->n];
+        sx += (double)p.y * q.z - (double)p.z * q.y; sy += (double)p.z * q.x - (double)p.x * q.z; sz += (double)p.x * q.y - (double)p.y * q.x;
+    }
+    return fabs(sx * n.x + sy * n.y + sz * n.z) * 0.5;
+}
+
+/* convex hull of a's and b's points (coplanar, plane normal n), wound like `like` (around n the same way) */
+static void hull2(const Win *a, const Win *b, V n, int ccw, WinBuf *out) {
+    V pts[2 * MAXPTS]; int np = 0;
+    for (int i = 0; i < a->n; i++) pts[np++] = a->p[i];
+    for (int i = 0; i < b->n; i++) pts[np++] = b->p[i];
+    V u = fabs(n.x) < 0.9f ? (V){0, -n.z, n.y} : (V){n.z, 0, -n.x};
+    double ul = sqrt((double)u.x * u.x + (double)u.y * u.y + (double)u.z * u.z);
+    double ux = u.x / ul, uy = u.y / ul, uz = u.z / ul;
+    double vx = n.y * uz - n.z * uy, vy = n.z * ux - n.x * uz, vz = n.x * uy - n.y * ux;
+    double px[2 * MAXPTS], py[2 * MAXPTS]; int idx[2 * MAXPTS];
+    for (int i = 0; i < np; i++) { px[i] = pts[i].x * ux + pts[i].y * uy + pts[i].z * uz; py[i] = pts[i].x * vx + pts[i].y * vy + pts[i].z * vz; idx[i] = i; }
+    for (int i = 1; i < np; i++) { int k = idx[i], j = i - 1;
+        while (j >= 0 && (px[idx[j]] > px[k] || (px[idx[j]] == px[k] && py[idx[j]] > py[k]))) { idx[j + 1] = idx[j]; j--; }
+        idx[j + 1] = k; }
+    int h[4 * MAXPTS], m = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        int start = m;
+        for (int ii = 0; ii < np; ii++) {
+            int i = pass ? idx[np - 1 - ii] : idx[ii];
+            while (m >= start + 2) {
+                int a0 = h[m - 2], b0 = h[m - 1];
+                double cr = (px[b0] - px[a0]) * (py[i] - py[a0]) - (py[b0] - py[a0]) * (px[i] - px[a0]);
+                if (cr <= 0) m--; else break;
+            }
+            h[m++] = i;
+        }
+        m--;
+    }
+    if (m > MAXPTS) {
+        /* too many corners: the 64-gon of supporting lines in 64 directions around the hull (contains it) */
+        static const int K = MAXPTS;
+        double lx[MAXPTS], ly[MAXPTS], ld[MAXPTS];
+        for (int k = 0; k < K; k++) {
+            double a = 2 * 3.14159265358979323846 * k / K;
+            lx[k] = cos(a); ly[k] = sin(a); ld[k] = -1e300;
+            for (int i = 0; i < m; i++) { double d = px[h[i]] * lx[k] + py[h[i]] * ly[k]; if (d > ld[k]) ld[k] = d; }
+            ld[k] += 1e-2;                                   /* (outside by more than float corners can drift) */
+        }
+        double ox = 0, oy = 0, oz = 0;                       /* the plane's offset along n */
+        for (int i = 0; i < np; i++) { ox += pts[i].x; oy += pts[i].y; oz += pts[i].z; }
+        ox /= np; oy /= np; oz /= np;
+        double on = ox * n.x + oy * n.y + oz * n.z;
+        out->n = K;
+        for (int k = 0; k < K; k++) {                        /* corner k: lines k and k+1 meet (counter-clockwise) */
+            int j = (k + 1) % K;
+            double det = lx[k] * ly[j] - ly[k] * lx[j];
+            double cu = (ld[k] * ly[j] - ly[k] * ld[j]) / det, cv = (lx[k] * ld[j] - ld[k] * lx[j]) / det;
+            V q = {(float)(cu * ux + cv * vx + on * n.x), (float)(cu * uy + cv * vy + on * n.y),
+                   (float)(cu * uz + cv * vz + on * n.z)};
+            out->p[ccw ? k : K - 1 - k] = q;
+        }
+        return;
+    }
+    out->n = m;
+    /* hull is counter-clockwise in (u, v): around u x v = n; flip if the original winding goes the other way */
+    for (int i = 0; i < m; i++) out->p[i] = pts[h[ccw ? i : m - 1 - i]];
+}
+
+static int winding_ccw(const Win *w, V n) {
+    double sx = 0, sy = 0, sz = 0;
+    for (int i = 0; i < w->n; i++) {
+        V p = w->p[i], q = w->p[(i + 1) % w->n];
+        sx += (double)p.y * q.z - (double)p.z * q.y; sy += (double)p.z * q.x - (double)p.x * q.z; sz += (double)p.x * q.y - (double)p.y * q.x;
+    }
+    return sx * n.x + sy * n.y + sz * n.z > 0;
+}
+
+/* some point of a lies outside convex polygon h (both on the plane with normal n), by any margin */
+static int outside_hull(const Win *a, const Win *h, V n) {
+    double sx = 0, sy = 0, sz = 0;
+    for (int i = 0; i < h->n; i++) {
+        V p = h->p[i], q = h->p[(i + 1) % h->n];
+        sx += (double)p.y * q.z - (double)p.z * q.y; sy += (double)p.z * q.x - (double)p.x * q.z; sz += (double)p.x * q.y - (double)p.y * q.x;
+    }
+    double o = sx * n.x + sy * n.y + sz * n.z;
+    if (o == 0) return 1;
+    for (int i = 0; i < h->n; i++) {
+        V p = h->p[i], q = h->p[(i + 1) % h->n];
+        double ex = (double)q.x - p.x, ey = (double)q.y - p.y, ez = (double)q.z - p.z;
+        for (int k = 0; k < a->n; k++) {
+            double ax = (double)a->p[k].x - p.x, ay = (double)a->p[k].y - p.y, az = (double)a->p[k].z - p.z;
+            double c = (ey * az - ez * ay) * n.x + (ez * ax - ex * az) * n.y + (ex * ay - ey * ax) * n.z;
+            double el = sqrt(ex * ex + ey * ey + ez * ez);
+            if ((o > 0 && c < -0.01 * el * fabs(o) / (fabs(o) > 0 ? fabs(o) : 1)) || (o < 0 && c > 0.01 * el)) return 1;
+        }
+    }
+    return 0;
+}
+
+static void m_merge(Thread *th, int pnum, Win *source, Win *pass, const uint64_t *might) {
+    MState *ms = &t_ms[pnum];
+    uint64_t *mm = t_mm + (size_t)pnum * PW;
+    Portal *p = &P[pnum];
+    int grew = 0;
+    if (ms->gen != t_mgen) {
+        ms->gen = t_mgen; ms->queued = 0; ms->has = 1; ms->grows = 0;
+        memcpy(&ms->S, source, sizeof(int) + source->n * sizeof(V));
+        memcpy(&ms->W, pass, sizeof(int) + pass->n * sizeof(V));
+        ms->areaS = poly_area(source, th->base->pl.n); ms->areaW = poly_area(pass, p->pl.n);
+        memcpy(mm, might, PW * 8);
+        grew = 1;
+    } else {
+        for (int k = 0; k < PW; k++) { uint64_t nb = might[k] & ~mm[k]; if (nb) { mm[k] |= nb; grew = 1; } }
+        /* grown: any new point outside the old hull at all (not by an area threshold: a sliver counts) */
+        if (outside_hull(source, (Win *)&ms->S, th->base->pl.n)) {
+            WinBuf ns; hull2((Win *)&ms->S, source, th->base->pl.n, winding_ccw(th->base->w, th->base->pl.n), &ns);
+            ms->S = ns; grew = 1;
+        }
+        if (outside_hull(pass, (Win *)&ms->W, p->pl.n)) {
+            WinBuf nw; hull2((Win *)&ms->W, pass, p->pl.n, winding_ccw(p->w, p->pl.n), &nw);
+            ms->W = nw; grew = 1;
+        }
+    }
+    if (grew && ++ms->grows > MAX_GROW && ms->grows < 1000000) {
+        /* (it keeps growing: open it fully, once; nothing can grow it after that) */
+        memcpy(&ms->S, th->base->w, sizeof(int) + th->base->w->n * sizeof(V));
+        memcpy(&ms->W, p->w, sizeof(int) + p->w->n * sizeof(V));
+        ms->grows = 1000000;
+        InterlockedIncrement64(&g_capped);
+    } else if (ms->grows >= 1000000) {
+        grew = grew && ms->grows == 1000000;           /* (opened: only the first push after it) */
+        ms->grows++;
+    }
+    if (grew && !ms->queued) {
+        if (t_queue[-1] >= NPD * (MAX_GROW + 3)) { printf("merge queue overflow\n"); exit(3); }
+        ms->queued = 1; t_queue[t_queue[-1]++] = pnum; InterlockedIncrement64(&g_mpush);
+    }
+}
+
+static void merged_flow(int pi) {
+    Portal *b = &P[pi];
+    LARGE_INTEGER t0, t1;
+    QueryPerformanceCounter(&t0);
+    b->status = 1;
+    Thread th; memset(&th, 0, sizeof th);
+    th.base = b; th.head.source = b->w; th.head.pass = NULL; th.head.portalplane = b->pl;
+    if (!t_ms) {
+        t_ms = calloc(NPD, sizeof(MState));
+        t_mm = malloc((size_t)NPD * PW * 8);
+        int *q = malloc(((size_t)NPD * (MAX_GROW + 3) + 1) * sizeof(int)); q[0] = 0; t_queue = q + 1;
+    }
+    t_mgen++;
+    t_queue[-1] = 0;
+    int qhead = 0;
+    uint8_t *vis = b->vis;
+    const uint64_t *vis64 = (const uint64_t *)vis;
+    uint64_t *might = malloc(PW * 8), *cur = malloc(PW * 8);
+    /* first openings: as the path search (no separators yet) */
+    {
+        const uint64_t *bf = (const uint64_t *)b->flood;
+        int leaf = b->leaf;
+        for (int i = 0; i < lf_count[leaf]; i++) {
+            int pnum = lf_list[lf_first[leaf] + i];
+            Portal *p = &P[pnum];
+            if (!((bf[pnum >> 6] >> (pnum & 63)) & 1)) continue;
+            const uint64_t *test = (const uint64_t *)(p->status == 2 ? p->vis : p->flood);
+            uint64_t more = 0;
+            for (int k = 0; k < PW; k++) { might[k] = bf[k] & test[k]; more |= might[k] & ~vis64[k]; }
+            Stack st; memset(&st, 0, sizeof st); st.freew[0] = st.freew[1] = st.freew[2] = 1;
+            Plane back = {{-p->pl.n.x, -p->pl.n.y, -p->pl.n.z}, -p->pl.d};
+            float d = dotv(p->origin, th.head.portalplane.n) - th.head.portalplane.d;
+            if (d < -p->radius) continue;
+            Win *pass = d > p->radius ? p->w : chop(p->w, &st, &th.head.portalplane);
+            if (!pass) continue;
+            d = dotv(b->origin, p->pl.n) - p->pl.d;
+            if (d > b->radius) continue;
+            Win *source = d < -b->radius ? b->w : chop(b->w, &st, &back);
+            if (!source) continue;
+            vis[pnum >> 3] |= 1 << (pnum & 7);
+            InterlockedIncrement64(&g_msteps);
+            if (more) m_merge(&th, pnum, source, pass, might);
+        }
+    }
+    while (qhead < t_queue[-1]) {
+        int xn = t_queue[qhead++];
+        MState *xs = &t_ms[xn];
+        xs->queued = 0;
+        WinBuf S = xs->S, W = xs->W;                         /* (a snapshot: merging may grow them meanwhile) */
+        memcpy(cur, t_mm + (size_t)xn * PW, PW * 8);
+        Portal *x = &P[xn];
+        int leaf = x->leaf;
+        Plane sep0[4 * MAXPTS * MAXPTS / 4 + 8], sep1[4 * MAXPTS * MAXPTS / 4 + 8];
+        int nsep0 = -1, nsep1 = 0;
+        for (int i = 0; i < lf_count[leaf]; i++) {
+            int pnum = lf_list[lf_first[leaf] + i];
+            Portal *p = &P[pnum];
+            if (!((cur[pnum >> 6] >> (pnum & 63)) & 1)) continue;
+            const uint64_t *test = (const uint64_t *)(p->status == 2 ? p->vis : p->flood);
+            uint64_t more = 0;
+            for (int k = 0; k < PW; k++) { might[k] = cur[k] & test[k]; more |= might[k] & ~vis64[k]; }
+            if (!more && (vis[pnum >> 3] & (1 << (pnum & 7)))) continue;
+            Stack st; memset(&st, 0, sizeof st); st.freew[0] = st.freew[1] = st.freew[2] = 1;
+            Plane back = {{-p->pl.n.x, -p->pl.n.y, -p->pl.n.z}, -p->pl.d};
+            float d = dotv(p->origin, th.head.portalplane.n) - th.head.portalplane.d;
+            if (d < -p->radius) continue;
+            Win *pass = d > p->radius ? p->w : chop(p->w, &st, &th.head.portalplane);
+            if (!pass) continue;
+            d = dotv(b->origin, p->pl.n) - p->pl.d;
+            if (d > b->radius) continue;
+            Win *source = d < -b->radius ? (Win *)&S : chop((Win *)&S, &st, &back);
+            if (!source) continue;
+            if (source == (Win *)&S) {
+                if (nsep0 < 0) {
+                    nsep0 = sep_planes((Win *)&S, (Win *)&W, 0, sep0);
+                    nsep1 = sep_planes((Win *)&W, (Win *)&S, 1, sep1);
+                }
+                pass = apply_planes(sep0, nsep0, pass, &st); if (!pass) continue;
+                pass = apply_planes(sep1, nsep1, pass, &st); if (!pass) continue;
+            } else {
+                pass = clip_sep(source, (Win *)&W, pass, 0, &st); if (!pass) continue;
+                pass = clip_sep((Win *)&W, source, pass, 1, &st); if (!pass) continue;
+            }
+            vis[pnum >> 3] |= 1 << (pnum & 7);
+            InterlockedIncrement64(&g_msteps);
+            if (more) m_merge(&th, pnum, source, pass, might);
+        }
+    }
+    free(might); free(cur);
+    MemoryBarrier();
+    b->status = 2;
+    QueryPerformanceCounter(&t1);
+    g_pdur[pi] = (double)(t1.QuadPart - t0.QuadPart) / g_freq.QuadPart;
+    InterlockedIncrement(&g_done);
+}
+
 static DWORD WINAPI flow_worker(LPVOID arg) {
     (void)arg;
     for (;;) {
         LONG k = InterlockedIncrement(&g_next) - 1;
         if (k >= NPD) break;
-        portal_flow(g_order[k]);
+        if (g_merge) merged_flow(g_order[k]); else portal_flow(g_order[k]);
     }
     return 0;
 }
@@ -632,12 +889,16 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!_stricmp(argv[i], "-threads") && i + 1 < argc) threads = atoi(argv[++i]);
         else if (!_stricmp(argv[i], "-fast")) fast = 1;
+        else if (!_stricmp(argv[i], "-exact")) g_merge = 0;
         else if (!_stricmp(argv[i], "-game") && i + 1 < argc) i++;
         else if (!_stricmp(argv[i], "-radius_override") && i + 1 < argc) radius_override = argv[++i];
         else if (argv[i][0] == '-') { printf("Error: unsupported option %s\n", argv[i]); return 2; }
         else map = argv[i];
     }
-    if (!map) { printf("usage: hlvvis [-fast] [-threads N] [-radius_override R] [-game dir] <map>\n"); return 2; }
+    if (!map) { printf("usage: hlvvis [-fast] [-exact] [-threads N] [-radius_override R] [-game dir] <map>\n"); return 2; }
+    if (g_merge) g_maxpts = MAXPTS;
+    printf(g_merge ? "visibility: merged windows\n"
+                   : "visibility: exact (vvis's path search, its output)\n");
     if (threads <= 0) {
         threads = (int)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
         if (threads <= 0) threads = 1;
