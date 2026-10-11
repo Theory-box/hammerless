@@ -31,6 +31,28 @@ list.sort(function(x, y) { return x[0] > y[0] ? 1 : (x[0] < y[0] ? -1 : 0); });
 foreach (p in list) ::HL_NukeQueue.append(p[1]);
 result = ::HL_NukeQueue.len();"""
 
+MUZZLE_FLASH = """local p = a;      // (the event's Userid wire gives the player)
+local w = p != null ? p.GetActiveWeapon() : null;
+if (w != null && w.LookupAttachment("muzzle_flash") > 0) {
+    local name = "hl_muzzle_light_" + p.GetEntityIndex();
+    local l = Entities.FindByName(null, name);
+    if (l == null) {      // this player's light: made once
+        l = SpawnEntityFromTable("light_dynamic", {targetname = name, origin = w.GetOrigin(),
+            _light = "255 190 110 255", brightness = b.tostring(), distance = c.tostring(),
+            spotlight_radius = "0", _inner_cone = "0", _cone = "0", spawnflags = "0"});
+        DoEntFire("!self", "TurnOff", "", 0.0, null, l);
+        l.ValidateScriptScope();
+    }
+    local s = l.GetScriptScope();
+    if (!("gun" in s) || s.gun != w) {      // a new gun in hand: on its muzzle
+        s.gun <- w;
+        DoEntFire("!self", "SetParent", "!activator", 0.0, w, l);
+        DoEntFire("!self", "SetParentAttachment", "muzzle_flash", 0.0, w, l);
+    }
+    DoEntFire("!self", "TurnOn", "", 0.0, null, l);
+    DoEntFire("!self", "TurnOff", "", 0.03, null, l);      // (one server tick: full-auto flickers)
+}"""
+
 EXAMPLES_3 = [
     dict(title="Power-Up: Nuke", level="Power-Ups",
          about="Like the power-ups in Call of Duty's zombies: each common infected killed has a "
@@ -198,4 +220,16 @@ EXAMPLES_3 = [
                 ("scale.then", "hitboxes.run"), ("each.item", "hitboxes.p0")],
          steps=[("Every half second, each common still at normal size", ["timer", "each", "now", "new", "if_new"]),
                 ("A random size, and hitboxes that follow it", ["size", "scale", "hitboxes"])]),
+    dict(title="Third Person Muzzle Flash", level="Scripting",
+         about="In third person the game's muzzle flashes light only models, not the walls and floor. This gives "
+               "every player one small light on their gun's muzzle (made at their first shot, moved to each new gun) "
+               "and flashes it on each shot for one server tick (0.03 s), so full-auto fire flickers. Brightness and Reach (units) set how strong and how far. "
+               "Use it with the third person examples. No cheats; tested in the game (one light per player).",
+         nodes=[ev("fire", "weapon_fire", 0, 0),
+                N("bright", "HL_NodeValue", 0, 2, label="Brightness", sockets={"value": 3.0}),
+                N("reach", "HL_NodeValue", 0, 3, label="Reach", sockets={"value": 220.0}),
+                N("flash", "HL_NodeScriptCode", 1, 0, label="Flash the shooter's muzzle light", code=MUZZLE_FLASH)],
+         links=[("fire.happened", "flash.run"), ("fire.userid", "flash.a"), ("bright.value", "flash.b"),
+                ("reach.value", "flash.c")],
+         steps=[("Every shot: the shooter's own muzzle light, on for a moment", ["fire", "bright", "reach", "flash"])]),
 ]
