@@ -718,8 +718,8 @@ def draw_panel(layout, context):
         row.operator("hammerless.nav_cancel", text="Cancel", icon="CANCEL")
     row = layout.row(align=True)
     row.scale_y = 1.2
-    row.operator("hammerless.nav_predict", text="From the Scene", icon="VIEWZOOM")
-    row.operator("hammerless.nav_load", text="The Game's", icon="MOD_MESHDEFORM")
+    row.operator("hammerless.nav_predict", text="Build Nav Mesh", icon="VIEWZOOM")
+    row.operator("hammerless.nav_load", text="Show Game's Nav", icon="MOD_MESHDEFORM")
     on_disk = _nav_on_disk(context)
     if rep is not None or on_disk:
         row.operator("hammerless.nav_clear", text="", icon="TRASH")

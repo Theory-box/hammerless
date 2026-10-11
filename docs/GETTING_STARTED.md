@@ -80,7 +80,7 @@ Each of the panels below has everything for its job, including what it draws ove
 
 **Visibility**: Quality (*Off*, *Fast*, *Full*), **Compute Visibility** (compiles the map and runs vis only: Build, Build & Play and Bake Lighting then reuse it), the Vis Compiler, extra vvis options, and its view: *Portals* (how vis split the map up; tiny slivers in red), *Rendering Load* (the map coloured by how much the game draws from each spot, with a button to the worst spot), *Vis Cost* (where the vis compile spent its time and the objects behind it, each with a Select button).
 
-**Nav Mesh**: made in Blender or by the game, the analysis, Zombies Climb Walls, Rebuild Nav Next Time. *Preview* (the eye in its header shows it): the nav From the Scene or The Game's, 🗑 to delete it, Analyze (✕ clears the analysis), colour modes, Drops and Jumps, Hiding Spots, X-Ray.
+**Nav Mesh**: made in Blender or by the game, the analysis, Zombies Climb Walls, Rebuild Nav Next Time. *Preview* (the eye in its header shows it): Build Nav Mesh (from the scene) or Show Game's Nav (the one the game uses), 🗑 to delete it, Analyze (✕ clears the analysis), colour modes, Drops and Jumps, Hiding Spots, X-Ray.
 
 **Sound**: *Automatic Reverb*, or *Reverb + City Ambience* with the outside heard through doorways and windows; **Trace Sound** shows outdoors, sheltered, indoors, and where the outside comes in.
 

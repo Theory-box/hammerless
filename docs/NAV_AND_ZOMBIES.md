@@ -19,8 +19,8 @@ The *Preview* header says whether the nav is up to date (its eye shows or hides 
 
 | Button | What it does |
 |---|---|
-| **From the Scene** | Builds the nav mesh from the scene (no compile) and shows it. |
-| **The Game's** | Shows the nav the game is actually using (`maps/<map>.nav`). |
+| **Build Nav Mesh** | Builds the nav mesh from the scene (no compile) and shows it. |
+| **Show Game's Nav** | Shows the nav the game is actually using (`maps/<map>.nav`). |
 | 🗑 | Deletes this map's nav mesh (asks first): the next Build makes a new one. |
 | **Analyze** | Builds the nav and runs the game's analysis (visibility, hiding spots). If walls changed since the last compile, it **compiles the map first** (the analysis looks through the compiled map). Shows **Analyzed** once done; ✕ beside it clears the analysis. |
 
