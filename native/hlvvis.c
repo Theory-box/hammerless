@@ -353,7 +353,7 @@ typedef struct { int gen, queued, has, grows; WinBuf S, W; double areaS, areaW; 
 static volatile LONG64 g_capped;
 static _Thread_local MState *t_ms;
 static _Thread_local uint64_t *t_mm;      /* NPD rows of PW words: each portal's merged might-see */
-static _Thread_local int *t_queue, t_mgen;
+static _Thread_local int *t_queue, t_mgen, t_qtail, t_qlen;   /* (a ring of NPD + 1: wrapped indices, no overflow) */
 static volatile LONG64 g_msteps, g_mpush;
 
 static double poly_area(const Win *w, V n) {
@@ -454,39 +454,90 @@ static int outside_hull(const Win *a, const Win *h, V n) {
     return 0;
 }
 
-/* w widened in its plane: every edge moved out by d (corners along the miter: they stay d from both edges) */
+/* w widened in its plane by d: contains every point within d of w. Worked in 2D doubles on w's convex hull (float
+   windings with tiny edges aren't quite convex: their edge directions are noise): each hull edge moves out by d; a
+   corner turning up to 90 degrees moves along its miter (at most d*sqrt(2)); a sharper one gets a bevel of two points
+   tangent to the rounded corner (a convex polygon has at most 3). Too many points, or no area: the 64-gon of lines in
+   64 directions, each d and a hair out from w's farthest point that way. Lifted back onto w's mean plane. */
 static void inflate(const Win *w, V n, double d, WinBuf *out) {
-    double ox[MAXPTS], oy[MAXPTS], oz[MAXPTS];
-    double sx = 0, sy = 0, sz = 0;
-    for (int i = 0; i < w->n; i++) {
-        V p = w->p[i], q = w->p[(i + 1) % w->n];
-        sx += (double)p.y * q.z - (double)p.z * q.y; sy += (double)p.z * q.x - (double)p.x * q.z; sz += (double)p.x * q.y - (double)p.y * q.x;
+    const int N = w->n;
+    V u0 = fabs(n.x) < 0.9f ? (V){0, -n.z, n.y} : (V){n.z, 0, -n.x};
+    double ul = sqrt((double)u0.x * u0.x + (double)u0.y * u0.y + (double)u0.z * u0.z);
+    double ux = u0.x / ul, uy = u0.y / ul, uz = u0.z / ul;
+    double vx = n.y * uz - n.z * uy, vy = n.z * ux - n.x * uz, vz = n.x * uy - n.y * ux;   /* v = n x u: (u, v) turns about n */
+    double px[MAXPTS], py[MAXPTS], on = 0, sx = 0, sy = 0, sz = 0;
+    int idx[MAXPTS];
+    for (int i = 0; i < N; i++) {
+        V q = w->p[i], r = w->p[(i + 1) % N];
+        px[i] = q.x * ux + q.y * uy + q.z * uz; py[i] = q.x * vx + q.y * vy + q.z * vz; idx[i] = i;
+        on += (double)q.x * n.x + (double)q.y * n.y + (double)q.z * n.z;
+        sx += (double)q.y * r.z - (double)q.z * r.y; sy += (double)q.z * r.x - (double)q.x * r.z; sz += (double)q.x * r.y - (double)q.y * r.x;
     }
-    double sign = sx * n.x + sy * n.y + sz * n.z >= 0 ? 1 : -1;     /* counter-clockwise about n: outward = e x n */
-    int have = 0;
-    for (int i = 0; i < w->n; i++) {
-        V p = w->p[i], q = w->p[(i + 1) % w->n];
-        double ex = (double)q.x - p.x, ey = (double)q.y - p.y, ez = (double)q.z - p.z;
-        double cx = sign * (ey * n.z - ez * n.y), cy = sign * (ez * n.x - ex * n.z), cz = sign * (ex * n.y - ey * n.x);
-        double l = sqrt(cx * cx + cy * cy + cz * cz);
-        if (l > 1e-6) { ox[i] = cx / l; oy[i] = cy / l; oz[i] = cz / l; have = 1; }
-        else ox[i] = oy[i] = oz[i] = 0;
+    on /= N;
+    int ccw = sx * n.x + sy * n.y + sz * n.z >= 0;      /* w's own winding, kept */
+    for (int i = 1; i < N; i++) { int k = idx[i], j = i - 1;
+        while (j >= 0 && (px[idx[j]] > px[k] || (px[idx[j]] == px[k] && py[idx[j]] > py[k]))) { idx[j + 1] = idx[j]; j--; }
+        idx[j + 1] = k; }
+    int h[2 * MAXPTS + 2], m = 0;                       /* the hull, counter-clockwise in (u, v) */
+    for (int pass = 0; pass < 2; pass++) {
+        int start = m;
+        for (int ii = 0; ii < N; ii++) {
+            int i = pass ? idx[N - 1 - ii] : idx[ii];
+            while (m >= start + 2) {
+                int a0 = h[m - 2], b0 = h[m - 1];
+                if ((px[b0] - px[a0]) * (py[i] - py[a0]) - (py[b0] - py[a0]) * (px[i] - px[a0]) <= 0) m--; else break;
+            }
+            h[m++] = i;
+        }
+        m--;
     }
-    out->n = w->n;
-    if (!have) { for (int i = 0; i < w->n; i++) out->p[i] = w->p[i]; return; }
-    for (int i = 0; i < w->n; i++) {                  /* (a zero-length edge takes its neighbour's direction) */
-        if (ox[i] == 0 && oy[i] == 0 && oz[i] == 0) {
-            int j = i; do { j = (j + w->n - 1) % w->n; } while (ox[j] == 0 && oy[j] == 0 && oz[j] == 0);
-            ox[i] = ox[j]; oy[i] = oy[j]; oz[i] = oz[j];
+    double cu[MAXPTS + 4], cv[MAXPTS + 4]; int c = 0;
+    if (m >= 3) {
+        double nxs[MAXPTS], nys[MAXPTS];                /* outward normal of hull edge i -> i+1 */
+        int sharp = 0;
+        for (int i = 0; i < m; i++) {
+            double ex = px[h[(i + 1) % m]] - px[h[i]], ey = py[h[(i + 1) % m]] - py[h[i]], l = sqrt(ex * ex + ey * ey);
+            nxs[i] = ey / l; nys[i] = -ex / l;
+        }
+        for (int i = 0; i < m; i++) { int a = (i + m - 1) % m; if (nxs[a] * nxs[i] + nys[a] * nys[i] < 0) sharp++; }
+        if (m + sharp <= MAXPTS) {
+            for (int i = 0; i < m; i++) {
+                int a = (i + m - 1) % m;
+                double X = px[h[i]], Y = py[h[i]], dot = nxs[a] * nxs[i] + nys[a] * nys[i];
+                if (dot >= 0) {
+                    double k = d / (1 + dot);
+                    cu[c] = X + k * (nxs[a] + nxs[i]); cv[c++] = Y + k * (nys[a] + nys[i]);
+                    continue;
+                }
+                double bx = nxs[a] + nxs[i], by = nys[a] + nys[i], bl = sqrt(bx * bx + by * by);
+                if (bl < 1e-12) { bx = -nys[a]; by = nxs[a]; bl = 1; }      /* (turning right back: along edge a) */
+                bx /= bl; by /= bl;
+                double t = d * tan(acos(dot < -1 ? -1 : dot) / 4);
+                double tx = -by, ty = bx;                                    /* across b; edge a's side first */
+                if (tx * nxs[a] + ty * nys[a] < 0) { tx = -tx; ty = -ty; }
+                cu[c] = X + d * bx + t * tx; cv[c++] = Y + d * by + t * ty;
+                cu[c] = X + d * bx - t * tx; cv[c++] = Y + d * by - t * ty;
+            }
         }
     }
-    for (int i = 0; i < w->n; i++) {
-        int a = (i + w->n - 1) % w->n;
-        double dot = ox[a] * ox[i] + oy[a] * oy[i] + oz[a] * oz[i];
-        double k = d / (1 + dot > 1e-9 ? 1 + dot : 1e-9);   /* (a sharp corner reaches far: still containing) */
-        V p = w->p[i];
-        out->p[i] = (V){(float)(p.x + k * (ox[a] + ox[i])), (float)(p.y + k * (oy[a] + oy[i])), (float)(p.z + k * (oz[a] + oz[i]))};
+    if (c == 0) {                                       /* the 64-gon */
+        double lx[MAXPTS], ly[MAXPTS], ld[MAXPTS];
+        for (int k = 0; k < MAXPTS; k++) {
+            double ang = 2 * 3.14159265358979323846 * k / MAXPTS;
+            lx[k] = cos(ang); ly[k] = sin(ang); ld[k] = -1e300;
+            for (int i = 0; i < N; i++) { double dd = px[i] * lx[k] + py[i] * ly[k]; if (dd > ld[k]) ld[k] = dd; }
+            ld[k] += d + 1e-2;
+        }
+        for (int k = 0; k < MAXPTS; k++) {
+            int j = (k + 1) % MAXPTS;
+            double det = lx[k] * ly[j] - ly[k] * lx[j];
+            cu[c] = (ld[k] * ly[j] - ly[k] * ld[j]) / det; cv[c++] = (lx[k] * ld[j] - ld[k] * lx[j]) / det;
+        }
     }
+    out->n = c;
+    for (int k = 0; k < c; k++)
+        out->p[ccw ? k : c - 1 - k] = (V){(float)(cu[k] * ux + cv[k] * vx + on * n.x), (float)(cu[k] * uy + cv[k] * vy + on * n.y),
+                                          (float)(cu[k] * uz + cv[k] * vz + on * n.z)};
 }
 
 static void m_merge(Thread *th, int pnum, Win *source, Win *pass, const uint64_t *might) {
@@ -526,7 +577,7 @@ static void m_merge(Thread *th, int pnum, Win *source, Win *pass, const uint64_t
         ms->grows = 1000001;
     }
     if (grew && !ms->queued) {             /* (a ring: each portal is in it at most once at a time) */
-        ms->queued = 1; t_queue[t_queue[-1]++ % (NPD + 1)] = pnum; InterlockedIncrement64(&g_mpush);
+        ms->queued = 1; t_queue[t_qtail] = pnum; t_qtail = (t_qtail + 1) % (NPD + 1); t_qlen++; InterlockedIncrement64(&g_mpush);
     }
 }
 
@@ -540,10 +591,10 @@ static void merged_flow(int pi) {
     if (!t_ms) {
         t_ms = calloc(NPD, sizeof(MState));
         t_mm = malloc((size_t)NPD * PW * 8);
-        int *q = malloc(((size_t)NPD + 2) * sizeof(int)); q[0] = 0; t_queue = q + 1;
+        t_queue = malloc(((size_t)NPD + 1) * sizeof(int));
     }
     t_mgen++;
-    t_queue[-1] = 0;
+    t_qtail = t_qlen = 0;
     int qhead = 0;
     uint8_t *vis = b->vis;
     const uint64_t *vis64 = (const uint64_t *)vis;
@@ -574,8 +625,8 @@ static void merged_flow(int pi) {
             if (more) m_merge(&th, pnum, source, pass, might);
         }
     }
-    while (qhead < t_queue[-1]) {
-        int xn = t_queue[qhead++ % (NPD + 1)];
+    while (t_qlen > 0) {
+        int xn = t_queue[qhead]; qhead = (qhead + 1) % (NPD + 1); t_qlen--;
         MState *xs = &t_ms[xn];
         xs->queued = 0;
         WinBuf S, W;                       /* (a snapshot: merging may grow them meanwhile; widened, see inflate) */
