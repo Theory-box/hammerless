@@ -226,8 +226,8 @@ EXAMPLES_3 = [
                "and flashes it on each shot for one server tick (0.03 s), so full-auto fire flickers. Brightness and Reach (units) set how strong and how far. "
                "Use it with the third person examples. No cheats; tested in the game (one light per player).",
          nodes=[ev("fire", "weapon_fire", 0, 0),
-                N("bright", "HL_NodeValue", 0, 2, label="Brightness", sockets={"value": 3.0}),
-                N("reach", "HL_NodeValue", 0, 3, label="Reach", sockets={"value": 220.0}),
+                N("bright", "HL_NodeValue", 0, 2, label="Brightness", sockets={"value": 0.3}),
+                N("reach", "HL_NodeValue", 0, 3, label="Reach", sockets={"value": 700.0}),
                 N("flash", "HL_NodeScriptCode", 1, 0, label="Flash the shooter's muzzle light", code=MUZZLE_FLASH)],
          links=[("fire.happened", "flash.run"), ("fire.userid", "flash.a"), ("bright.value", "flash.b"),
                 ("reach.value", "flash.c")],
