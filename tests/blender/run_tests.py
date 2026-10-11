@@ -1139,6 +1139,38 @@ def test_vmf_import_roundtrip():
     assert world.blocks("hidden"), "the world's hidden blocks stay"
 
 
+def test_vmf_import_copied_entities():
+    # a copy of an imported point entity (Shift+D on a prop or a light) is built where it is, with the original's
+    # settings; the original stays as imported. A brush entity's copy still isn't (its shape is in the original's parts)
+    from hammerless.blender import vmfimport
+    reset_scene()
+    path = os.path.join(TMP, "small_copy.vmf")
+    with open(path, "w", encoding="latin-1") as f:
+        f.write(SMALL_VMF)
+    vmfimport.import_text(bpy.context, SMALL_VMF, path)
+    bpy.context.scene.hammerless.map_name = "test_map"
+    upm = bpy.context.scene.hammerless.units_per_meter
+    lamp = next(o for o in bpy.data.objects if o.get("hl_vmf_kind") == "entity" and o.hammerless.classname == "light")
+    copy = lamp.copy()
+    lamp.users_collection[0].objects.link(copy)
+    copy.location.x += 100 / upm
+    detail = next(o for o in bpy.data.objects if o.get("hl_vmf_kind") == "entity"
+                  and o.hammerless.classname == "func_detail")
+    dcopy = detail.copy()
+    detail.users_collection[0].objects.link(dcopy)
+    bpy.context.view_layer.update()
+    blocks, log = export()
+    assert blocks is not None, log
+    lights = [b for b in blocks if b.name == "entity" and b.get("classname") == "light"]
+    assert len(lights) == 2, [b.get("origin") for b in lights]
+    orig = next(b for b in lights if b.get("id") == "30")
+    assert orig.get("origin") == "8 16 48", orig.get("origin")
+    new = next(b for b in lights if b.get("id") != "30")
+    assert [round(float(c)) for c in new.get("origin").split()] == [108, 16, 48], new.get("origin")
+    assert new.get("_light") == "255 240 200 300" and new.get("targetname") == "lamp"
+    assert "copy of an imported brush entity" in log, log
+
+
 def test_vmf_import_lightmap_scale():
     # an imported map's brushes keep their own lightmap scale unless Imported Brushes Too is on (then the scene's,
     # or the material's own)

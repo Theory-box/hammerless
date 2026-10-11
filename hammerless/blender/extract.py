@@ -720,9 +720,17 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
 
     hidden = []
     from .mapcollection import map_collection, map_objects, outside_but_built
-    from .vmfimport import written_back
+    from .vmfimport import INDEX, _originals, written_back
     inside = map_objects(context.scene)
     back = written_back([o for o in context.scene.objects if o.name in inside])
+    originals = _originals([o for o in context.scene.objects if o.name in inside], "entity", INDEX)
+
+    def point_copy(obj) -> bool:
+        """A copy of an imported point entity (a prop, a light, a spawn): it's built like a new entity. A brush
+        entity's copy isn't (its shape is in the parts under the original)."""
+        orig = originals.get(obj.get(INDEX))
+        model = orig if orig is not None and orig is not obj else obj
+        return obj.name not in back and not any(c.type == "MESH" for c in model.children)
     for obj in context.scene.objects:
         if obj.name not in inside:
             continue                  # (outside the map collection: not part of the map)
@@ -734,13 +742,14 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
                                 and obj.parent.get("hl_vmf_kind") == "entity"):
             continue                  # (an imported map's: Build writes those back itself, blender/vmfimport.py;
             #                            new meshes under its brush entities become their brushes there)
-        if obj.get("hl_vmf_kind") == "entity" or (obj.parent is not None and obj.parent.name not in back
-                                                  and obj.parent.get("hl_vmf_kind") == "entity"):
+        copy = obj.get("hl_vmf_kind") == "entity" and point_copy(obj)
+        if not copy and (obj.get("hl_vmf_kind") == "entity" or (obj.parent is not None and obj.parent.name not in back
+                                                              and obj.parent.get("hl_vmf_kind") == "entity")):
             # (a copy of an imported entity: its preview shape isn't its own, and a brush entity's parts are
             # under an Empty: built as it is, it would come out wrong)
             if obj.get("hl_vmf_kind") == "entity":
-                report.warnings.append(f"'{obj.name}': a copy of an imported entity isn't built yet: add a new one "
-                                       "(Add panel), or duplicate it in Hammer")
+                report.warnings.append(f"'{obj.name}': a copy of an imported brush entity isn't built yet: add a "
+                                       "new one (Add panel), or duplicate it in Hammer")
             continue
         if not obj.visible_get():
             # hidden (H, the eye or monitor icon) or in an excluded / hidden collection: left out of
@@ -750,7 +759,7 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
                     and effective_role(obj) in ("BRUSH", "TERRAIN", "BRUSH_ENTITY", "ENTITY")):
                 hidden.append(obj.name)
             continue
-        role = effective_role(obj)
+        role = "ENTITY" if copy else effective_role(obj)
         if (role == "IGNORE" and obj.hammerless.role == "AUTO" and obj.type in ("CURVE", "SURFACE", "META", "FONT")
                 and collection_role(obj) in ("BRUSH", "TERRAIN")):
             role = collection_role(obj)          # (in a Brush / Terrain collection: say why it isn't built)

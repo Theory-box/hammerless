@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Copies of an imported map's props and other point entities are built** (Shift+D on a van, a light, a spawn): they used to be left out with only a warning. Copies of brush entities still aren't (add a new one, or duplicate it in Hammer).
+
 ## 0.13.2 (test release, 2026-10-11)
 
 - **Roofs, ledges and walkways get nav automatically:** every flat top big enough to stand on inside the map seeds the nav, so places the flood from the item spawns never climbs onto (the game's own nav_generate leaves them empty too) get nav without a landmark on each. On a real map: 628 -> 1425 areas, roofs covered, built in 2.7 s. Areas survivors can't walk to are marked EMPTY, which (read from the game's code) only the wandering commons' placement reads: smokers, the other specials and hordes still use the roofs. The Director spreads its commons over all areas by count, so roof areas still cost street commons: the preview on that map goes from 30 to about 17 starting commons.
