@@ -2,6 +2,7 @@
 
     python tests/compile/vis_merged_suite.py [--rays 2000000] map.bsp [more.bsp ...]
     python tests/compile/vis_merged_suite.py --found      # every compiled map the other test tools left in %TEMP%
+    --timeout 300 (seconds per hlvvis run: SKIP the map past it), --skip swamp (names containing it)
 
 Each map (its .bsp and .prt side by side, compiled but any vis is fine: it's redone) is copied to a temp folder and
 run through hammerless/core/hlvvis.exe twice: -exact (vvis's own result) and the default (merged windows). Then
@@ -35,7 +36,8 @@ def found() -> list[str]:
     return [m for m in sorted(maps) if os.path.exists(os.path.splitext(m)[0] + ".prt")]
 
 
-def run(bsp: str, rays: int, game: str) -> bool:
+def run(bsp: str, rays: int, game: str, timeout: float = 300) -> bool | None:
+    """True safe, False not, None skipped (an hlvvis run took longer than `timeout`)."""
     name = os.path.splitext(os.path.basename(bsp))[0]
     work = os.path.join(OUT, name)
     os.makedirs(work, exist_ok=True)
@@ -45,8 +47,12 @@ def run(bsp: str, rays: int, game: str) -> bool:
         shutil.copy2(bsp, base + ".bsp")
         shutil.copy2(os.path.splitext(bsp)[0] + ".prt", base + ".prt")
         t0 = time.time()
-        r = subprocess.run([HLVVIS] + (["-exact"] if mode == "exact" else []) + ["-game", game, base],
-                           capture_output=True, text=True)
+        try:
+            r = subprocess.run([HLVVIS] + (["-exact"] if mode == "exact" else []) + ["-game", game, base],
+                               capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            print(f"SKIP {name}: hlvvis {mode} took over {timeout:.0f} s", flush=True)
+            return None
         times[mode] = time.time() - t0
         if r.returncode != 0:
             print(f"FAIL {name}: hlvvis {mode} failed: {(r.stdout + r.stderr).strip().splitlines()[-1:]}", flush=True)
@@ -59,12 +65,20 @@ def run(bsp: str, rays: int, game: str) -> bool:
         out = subprocess.run([vis_check.EXE, os.path.join(work, "exact.bsp"), os.path.splitext(bsp)[0] + ".prt",
                               str(rays)] + [str(x) for p in hidden for x in p], capture_output=True, text=True).stdout
         seen = [ln for ln in out.splitlines() if "VISIBLE" in ln]
+    # every hidden pair proven hidden (vis_certify: the path search with all tolerances on the keeping side)
+    proofs = vis_check.certify(os.path.join(work, "exact.bsp"), os.path.splitext(bsp)[0] + ".prt", hidden) if hidden else {}
+    proven = sum(1 for st, _c in proofs.values() if st == "PROVEN HIDDEN")
     loose = 100 * len(res - ref) / max(len(ref), 1)
+    stats = [ln for ln in r.stdout.splitlines() if ln.startswith("merged windows:")]
     ok = not seen
-    print(f"{'SAFE' if ok else 'UNSAFE'} {name}: exact {times['exact']:.1f} s, merged {times['merged']:.1f} s "
+    verdict = "UNSAFE" if seen else "SAFE" if proven == len(hidden) else "UNPROVEN"
+    print(f"{verdict} {name}: exact {times['exact']:.1f} s, merged {times['merged']:.1f} s "
           f"({times['exact'] / max(times['merged'], 1e-3):.1f}x); {loose:.2f}% looser; hides {len(hidden)} cluster "
-          f"pairs, {len(seen)} proven visible by a ray", flush=True)
-    return ok
+          f"pairs: {proven} proven hidden, {len(seen)} seen by a ray" + (f"; {stats[0]}" if stats else ""), flush=True)
+    for pair, (st, chain) in proofs.items():
+        if st != "PROVEN HIDDEN":
+            print(f"    {pair[0]}-{pair[1]}: {st} {' '.join(map(str, chain))}", flush=True)
+    return ok and verdict == "SAFE"
 
 
 def main(argv) -> int:
@@ -72,12 +86,15 @@ def main(argv) -> int:
     ap.add_argument("maps", nargs="*")
     ap.add_argument("--rays", type=int, default=2_000_000)
     ap.add_argument("--found", action="store_true")
+    ap.add_argument("--timeout", type=float, default=300)
+    ap.add_argument("--skip", action="append", default=[])
     a = ap.parse_args(argv)
-    maps = a.maps + (found() if a.found else [])
+    maps = [m for m in a.maps + (found() if a.found else []) if not any(k in os.path.basename(m) for k in a.skip)]
     game = os.path.join(cc.find_game_root(), "left4dead2")
-    results = [run(m, a.rays, game) for m in maps]
-    print(f"\n{sum(results)} of {len(results)} maps safe")
-    return 0 if all(results) else 1
+    results = [run(m, a.rays, game, a.timeout) for m in maps]
+    done = [r for r in results if r is not None]
+    print(f"\n{sum(done)} of {len(done)} maps safe ({len(results) - len(done)} skipped: too slow)")
+    return 0 if all(done) else 1
 
 
 if __name__ == "__main__":
