@@ -788,6 +788,42 @@ class TestNavAnalysis(unittest.TestCase):
 class TestNavGen(unittest.TestCase):
     """Our reimplementation of the game's nav sampling (stage A)."""
 
+    def test_native_brushes_match_python(self):
+        """native/hlbrush.c builds the same brushes as the Python, bit for bit (tests/compile/nav_native_exact.py
+        checks whole maps): slanted, turned, terrain slabs."""
+        import math
+        from hammerless.core import collision, fastnav
+        from hammerless.core.collision import Side
+        if not fastnav.available():
+            self.skipTest("_hlnav.dll not built")
+        from hammerless.core.vmf import Block
+        cases = []
+        for yaw in (0.0, 17.0, 45.0, 133.3):
+            c, s = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
+            cases.append([Side((c, s, 0.0), 40.5), Side((-c, -s, 0.0), 12.0), Side((-s, c, 0.0), 30.0),
+                          Side((s, -c, 0.0), 7.25), Side((0.0, 0.6, 0.8), 64.0), Side((0.0, 0.0, -1.0), 0.0, "x", True)])
+        disp = Block("dispinfo", [("power", "2"), ("startposition", "[0 0 0]"), ("elevation", "0")])
+        dist = Block("distances", [(f"row{i}", " ".join(str((i * 7 + j * 3) % 5 - 2.3) for j in range(5)))
+                                   for i in range(5)])
+        nrm = Block("normals", [(f"row{i}", " ".join("0 0 1" for _ in range(5))) for i in range(5)])
+        disp.items += [dist, nrm]
+        slabs = []
+        orig = collision.make_brush
+        collision.make_brush = lambda sides, source="": slabs.append(list(sides)) or orig(sides, source)
+        try:
+            collision.displacement_brushes("(0 0 0) (0 256 0) (256 256 0)", disp)
+        finally:
+            collision.make_brush = orig
+        cases += slabs
+
+        def sig(b):
+            return None if b is None else ([(tuple(map(float.hex, s.normal)), s.dist.hex(), s.material, s.bevel)
+                                            for s in b.sides], tuple(map(float.hex, b.mins + b.maxs)))
+        self.assertGreater(len(slabs), 10)
+        for sides in cases:
+            self.assertEqual(sig(collision._make_brush_py(sides)),
+                             sig(collision._make_brush_native(sides, "", fastnav._lib)))
+
     def world(self, step=0.0):
         from hammerless.core.collision import CollisionWorld
         ir = box_room_ir()                       # 512x512 floor at z=0, walls, sealed

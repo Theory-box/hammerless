@@ -80,6 +80,15 @@ class CollisionBrush:
     source: str = ""
 
 
+def _plain_sum(values) -> float:
+    """Left to right, rounding at every step (sum() rounds less since Python 3.12: the same on every version, and
+    as native/hlbrush.c adds)."""
+    total = 0.0
+    for v in values:
+        total += v
+    return total
+
+
 def _windings(planes):
     """Vertices of a convex brush per plane (intersections of plane triples inside the brush)."""
     pts_on = [[] for _ in planes]
@@ -103,7 +112,7 @@ def _windings(planes):
         if len(pts) < 3:
             out.append([])
             continue
-        c = tuple(sum(p[a] for p in pts) / len(pts) for a in range(3))
+        c = tuple(_plain_sum(p[a] for p in pts) / len(pts) for a in range(3))
         u, _ = _norm(_sub(pts[0], c))
         v = _cross(n, u)
         pts.sort(key=lambda p: math.atan2(_dot(_sub(p, c), v), _dot(_sub(p, c), u)))
@@ -130,6 +139,37 @@ def make_brush(sides: list[Side], source: str = "") -> CollisionBrush | None:
 
 
 def _make_brush(sides: list[Side], source: str = "") -> CollisionBrush | None:
+    """native/hlbrush.c when the DLL is there (the same numbers, bit for bit: tests compare them), else Python."""
+    from . import fastnav
+    if fastnav.available():
+        return _make_brush_native(sides, source, fastnav._lib)
+    return _make_brush_py(sides, source)
+
+
+def _make_brush_native(sides: list[Side], source, lib) -> CollisionBrush | None:
+    import ctypes
+    n = len(sides)
+    planes = (ctypes.c_double * (4 * n))(*[v for s in sides for v in (*s.normal, s.dist)])
+    bevel = (ctypes.c_int * n)(*[1 if s.bevel else 0 for s in sides])
+    cap = 8 * n + 64
+    while True:
+        out = (ctypes.c_double * (4 * cap))()
+        src, bev = (ctypes.c_int * cap)(), (ctypes.c_int * cap)()
+        box = (ctypes.c_double * 6)()
+        count = lib.hl_make_brush(ctypes.c_int(n), planes, bevel, out, src, bev, ctypes.c_int(cap), box)
+        if count != -1:
+            break
+        cap *= 4
+    if count == -2:
+        raise MemoryError("not enough memory to build the nav collision")
+    if count == 0:
+        return None
+    made = [Side((out[4 * i], out[4 * i + 1], out[4 * i + 2]), out[4 * i + 3], sides[src[i]].material, bool(bev[i]))
+            for i in range(count)]
+    return CollisionBrush(made, (box[0], box[1], box[2]), (box[3], box[4], box[5]), source)
+
+
+def _make_brush_py(sides: list[Side], source: str = "") -> CollisionBrush | None:
     planes = [(s.normal, s.dist) for s in sides]
     wind = _windings(planes)
     verts = [p for w in wind for p in w]

@@ -39,6 +39,7 @@ def available() -> bool:
                 lib.hl_memo_invalidate.restype = ctypes.c_int
                 lib.hl_memo_hits.restype = ctypes.c_longlong
                 lib.hl_memo_misses.restype = ctypes.c_longlong
+                lib.hl_make_brush.restype = ctypes.c_int
                 _lib = lib
             except OSError:
                 _lib = False
