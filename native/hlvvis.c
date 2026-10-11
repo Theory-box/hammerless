@@ -348,7 +348,13 @@ static void portal_flow(int pi) {
    A hull of more than MAXPTS points becomes the MAXPTS-gon of its supporting lines (a superset). A portal that
    keeps growing (MAX_GROW times) opens to the whole base and the whole portal (supersets: still safe). */
 static int g_merge = 1;           /* 0: -exact (vvis's path search) */
-typedef struct { int gen, queued, has, grows; WinBuf S, W; double areaS, areaW; } MState;
+typedef struct { int gen, queued, has, grows, dirty, popped; WinBuf S, W, PS, PW_; double areaS, areaW; } MState;
+static double g_merge_eps = 1e-4;   /* a point this far outside the stored hull is merged (float noise is less) */
+static double g_grow_eps = 0.01;    /* a point this far outside the hull of the last pop re-expands the portal now */
+static double g_inflate = 0;        /* widening of the windows at a pop (0: none; the sweeps make it unnecessary) */
+static int g_max_sweeps = 1000;     /* rounds re-expanding silently grown portals; past that they open fully */
+static volatile LONG64 g_sweeps, g_sweep_pops;
+static _Thread_local int *t_touched, t_ntouched;   /* portals with a state in this flow */
 #define MAX_GROW 64
 static volatile LONG64 g_capped;
 static _Thread_local MState *t_ms;
@@ -433,7 +439,7 @@ static int winding_ccw(const Win *w, V n) {
 }
 
 /* some point of a lies outside convex polygon h (both on the plane with normal n), by any margin */
-static int outside_hull(const Win *a, const Win *h, V n) {
+static int outside_hull(const Win *a, const Win *h, V n, double eps) {
     double sx = 0, sy = 0, sz = 0;
     for (int i = 0; i < h->n; i++) {
         V p = h->p[i], q = h->p[(i + 1) % h->n];
@@ -448,7 +454,7 @@ static int outside_hull(const Win *a, const Win *h, V n) {
             double ax = (double)a->p[k].x - p.x, ay = (double)a->p[k].y - p.y, az = (double)a->p[k].z - p.z;
             double c = (ey * az - ez * ay) * n.x + (ez * ax - ex * az) * n.y + (ex * ay - ey * ax) * n.z;
             double el = sqrt(ex * ex + ey * ey + ez * ez);
-            if ((o > 0 && c < -0.01 * el * fabs(o) / (fabs(o) > 0 ? fabs(o) : 1)) || (o < 0 && c > 0.01 * el)) return 1;
+            if ((o > 0 && c < -eps * el) || (o < 0 && c > eps * el)) return 1;
         }
     }
     return 0;
@@ -546,22 +552,28 @@ static void m_merge(Thread *th, int pnum, Win *source, Win *pass, const uint64_t
     Portal *p = &P[pnum];
     int grew = 0, bits = 0;
     if (ms->gen != t_mgen) {
-        ms->gen = t_mgen; ms->queued = 0; ms->has = 1; ms->grows = 0;
+        ms->gen = t_mgen; ms->queued = 0; ms->has = 1; ms->grows = 0; ms->dirty = 0; ms->popped = 0;
         memcpy(&ms->S, source, sizeof(int) + source->n * sizeof(V));
         memcpy(&ms->W, pass, sizeof(int) + pass->n * sizeof(V));
         ms->areaS = poly_area(source, th->base->pl.n); ms->areaW = poly_area(pass, p->pl.n);
         memcpy(mm, might, PW * 8);
+        t_touched[t_ntouched++] = pnum;
         grew = 1;
     } else {
         for (int k = 0; k < PW; k++) { uint64_t nb = might[k] & ~mm[k]; if (nb) { mm[k] |= nb; grew = bits = 1; } }
-        /* grown: any new point outside the old hull at all (not by an area threshold: a sliver counts) */
-        if (outside_hull(source, (Win *)&ms->S, th->base->pl.n)) {
+        /* the stored hulls are the union of everything that arrived (a point outside by more than float noise is
+           merged). The portal is re-expanded now only when a point lies clearly (g_grow_eps) outside the hull it was
+           last expanded with; smaller growth marks it dirty, and the sweeps at the end re-expand dirty portals
+           (with the exact hull, no widening), so no growth is ever left out of the separators. */
+        if (ms->grows < 1000000 && outside_hull(source, (Win *)&ms->S, th->base->pl.n, g_merge_eps)) {
             WinBuf ns; hull2((Win *)&ms->S, source, th->base->pl.n, winding_ccw(th->base->w, th->base->pl.n), &ns);
-            ms->S = ns; grew = 1;
+            ms->S = ns; ms->dirty = 1;
+            if (!ms->popped || outside_hull(source, (Win *)&ms->PS, th->base->pl.n, g_grow_eps)) grew = 1;
         }
-        if (outside_hull(pass, (Win *)&ms->W, p->pl.n)) {
+        if (ms->grows < 1000000 && outside_hull(pass, (Win *)&ms->W, p->pl.n, g_merge_eps)) {
             WinBuf nw; hull2((Win *)&ms->W, pass, p->pl.n, winding_ccw(p->w, p->pl.n), &nw);
-            ms->W = nw; grew = 1;
+            ms->W = nw; ms->dirty = 1;
+            if (!ms->popped || outside_hull(pass, (Win *)&ms->PW_, p->pl.n, g_grow_eps)) grew = 1;
         }
     }
     if (grew && ++ms->grows > MAX_GROW && ms->grows < 1000000) {
@@ -576,6 +588,7 @@ static void m_merge(Thread *th, int pnum, Win *source, Win *pass, const uint64_t
         grew = bits;
         ms->grows = 1000001;
     }
+    if (grew) ms->dirty = 1;
     if (grew && !ms->queued) {             /* (a ring: each portal is in it at most once at a time) */
         ms->queued = 1; t_queue[t_qtail] = pnum; t_qtail = (t_qtail + 1) % (NPD + 1); t_qlen++; InterlockedIncrement64(&g_mpush);
     }
@@ -592,8 +605,11 @@ static void merged_flow(int pi) {
         t_ms = calloc(NPD, sizeof(MState));
         t_mm = malloc((size_t)NPD * PW * 8);
         t_queue = malloc(((size_t)NPD + 1) * sizeof(int));
+        t_touched = malloc(((size_t)NPD + 1) * sizeof(int));
     }
     t_mgen++;
+    t_ntouched = 0;
+    int sweeps = 0;
     t_qtail = t_qlen = 0;
     int qhead = 0;
     uint8_t *vis = b->vis;
@@ -625,13 +641,36 @@ static void merged_flow(int pi) {
             if (more) m_merge(&th, pnum, source, pass, might);
         }
     }
-    while (t_qlen > 0) {
+    for (;;) {
+      if (t_qlen == 0) {
+        /* the queue ran dry: portals whose hulls grew since they were last expanded (by less than g_grow_eps, or
+           they would have been re-queued) are expanded once more with their exact hulls. Repeated until nothing
+           grew; past g_max_sweeps rounds the rest open fully (a superset, so still safe). */
+        int pushed = 0;
+        for (int i = 0; i < t_ntouched; i++) {
+            MState *ms = &t_ms[t_touched[i]];
+            if (!ms->dirty || ms->queued) continue;
+            if (sweeps >= g_max_sweeps && ms->grows < 1000000) {
+                Portal *p = &P[t_touched[i]];
+                memcpy(&ms->S, b->w, sizeof(int) + b->w->n * sizeof(V));
+                memcpy(&ms->W, p->w, sizeof(int) + p->w->n * sizeof(V));
+                ms->grows = 1000000;
+                InterlockedIncrement64(&g_capped);
+            }
+            ms->queued = 1; t_queue[t_qtail] = t_touched[i]; t_qtail = (t_qtail + 1) % (NPD + 1); t_qlen++;
+            pushed++;
+        }
+        if (!pushed) break;
+        sweeps++;
+        InterlockedIncrement64(&g_sweeps); InterlockedAdd64(&g_sweep_pops, pushed);
+      }
         int xn = t_queue[qhead]; qhead = (qhead + 1) % (NPD + 1); t_qlen--;
         MState *xs = &t_ms[xn];
-        xs->queued = 0;
-        WinBuf S, W;                       /* (a snapshot: merging may grow them meanwhile; widened, see inflate) */
-        inflate((Win *)&xs->S, b->pl.n, 0.02, &S);
-        inflate((Win *)&xs->W, P[xn].pl.n, 0.02, &W);
+        xs->queued = 0; xs->dirty = 0; xs->popped = 1;
+        xs->PS = xs->S; xs->PW_ = xs->W;   /* (the hulls this expansion is made with) */
+        WinBuf S, W;
+        if (g_inflate > 0) { inflate((Win *)&xs->S, b->pl.n, g_inflate, &S); inflate((Win *)&xs->W, P[xn].pl.n, g_inflate, &W); }
+        else { S = xs->S; W = xs->W; }
         memcpy(cur, t_mm + (size_t)xn * PW, PW * 8);
         Portal *x = &P[xn];
         int leaf = x->leaf;
@@ -986,6 +1025,10 @@ int main(int argc, char **argv) {
     }
     if (!map) { printf("usage: hlvvis [-fast] [-exact] [-threads N] [-radius_override R] [-game dir] <map>\n"); return 2; }
     if (g_merge) g_maxpts = MAXPTS;
+    if (getenv("HL_MERGE_EPS")) g_merge_eps = atof(getenv("HL_MERGE_EPS"));
+    if (getenv("HL_GROW_EPS")) g_grow_eps = atof(getenv("HL_GROW_EPS"));
+    if (getenv("HL_INFLATE")) g_inflate = atof(getenv("HL_INFLATE"));
+    if (getenv("HL_SWEEPS")) g_max_sweeps = atoi(getenv("HL_SWEEPS"));
     printf(g_merge ? "visibility: merged windows\n"
                    : "visibility: exact (vvis's path search, its output)\n");
     if (threads <= 0) {
@@ -1095,7 +1138,8 @@ int main(int argc, char **argv) {
         QueryPerformanceCounter(&fn);
         double flow_wall = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
         printf("PortalFlow:          done (%.1f s)\n", flow_wall);
-        if (g_merge) printf("merged windows: %lld steps, %lld pushes, %lld portals opened fully\n", (long long)g_msteps, (long long)g_mpush, (long long)g_capped);
+        if (g_merge) printf("merged windows: %lld steps, %lld pushes, %lld portals opened fully, %lld sweep rounds re-expanding %lld\n",
+                            (long long)g_msteps, (long long)g_mpush, (long long)g_capped, (long long)g_sweeps, (long long)g_sweep_pops);
         /* where the time went, per portal (both directions), for Hammerless's vis cost view */
         snprintf(path, sizeof path, "%s.viscost", base);
         FILE *cf = fopen(path, "w");
