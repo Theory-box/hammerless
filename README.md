@@ -17,6 +17,7 @@ No Hammer, no VMF editing, no console commands.
   - **Light compiler**: lights the map **on the graphics card** (Vulkan ray tracing): looks the same as vrad's lighting and is several times faster (Final quality on a real map: 1.5 s against vrad's 16 s). **Exact Lighting** reproduces vrad byte for byte on the CPU instead. Fast, Normal, Final and **Ultra** quality (beyond vrad: finer supersampling, vrad's oddities fixed), each setting visible and adjustable; prop and grass lighting.
   - **Model compiler**: Custom Models without studiomdl.
   - Anything one of them doesn't do yet goes to Valve's tool, with a note in the log.
+- **Import maps:** Hammer maps (.vmf), written back exactly, and the game's own maps (c1m1_hotel...) or any compiled .bsp, decompiled to remix.
 - **Meshes become brushes.** Any convex mesh is a wall or floor; non-convex meshes can use a convex hull. **Terrain** objects become displacements (sculpt them however you like).
 - **Custom Models**: any mesh becomes a game prop (static, dynamic or physics), with collision, your own textures or the game's, and no extra tools.
 - **Game content in Blender**: all 8,000+ L4D2 materials and 5,500 models, with real textured previews in the viewport. Your own image textures are converted automatically.

@@ -89,3 +89,5 @@ Each of the panels below has everything for its job, including what it draws ove
 **Logic Graphs**: see [Logic Nodes](LOGIC_NODES.md).
 
 **Settings**: *Game & Folders* (L4D2 folder, work folder, reload game data, refresh previews, **Export VMF** to open the map in Hammer, Start Fresh), *Map & Model Compilers* (and extra vbsp options), *Map Defaults* (Auto Seal, Auto Detail, scale, default material, checks), *Game Window* (monitor, size, borderless, difficulty, launch options), *Debug* (*Debug Log* of Director events, *Bot Walkthrough Test* where bots play the map).
+
+**Importing maps** (File > Import): *Hammer Map (.vmf)* brings in a Hammer map; Build writes it back exactly, with your changes. *L4D2 Map (from the game)* brings in one of the game's own maps (type to search: c1m1_hotel, c2m1_highway...) to study or remix, and *Compiled Map (.bsp)* any compiled map: they're decompiled into brushes, terrain, entities, props and decals. A compiled map has lost its instances, visgroups and brush grouping, and the Map Name becomes *<map>_remix* so Build never replaces the game's own map. Publishing a remix of Valve's maps is up to you: they're still Valve's content.
