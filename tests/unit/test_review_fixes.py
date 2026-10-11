@@ -194,3 +194,18 @@ class TestDecompilerRules(unittest.TestCase):
         nn, dd = self._plane(plane_points(n, d, w))
         self.assertAlmostEqual(dd, d, places=4)
         self.assertGreater(sum(nn[k] * n[k] for k in range(3)), 0.999999)
+
+
+class TestBuildTimeline(unittest.TestCase):
+    def test_chart_and_waited_on(self):
+        from hammerless.core.timeline import Timeline
+        t = Timeline(100.0)
+        t.add("export", 100.0, 102.0)
+        t.add("map compiler", 102.0, 103.0)
+        t.add("nav mesh", 102.1, 102.5)              # (alongside: not waited on)
+        t.add("vis", 103.0, 107.0)
+        t.add("game load", 107.2, 115.0)
+        lines = t.chart()
+        self.assertIn("15.0 s from pressing Build", lines[0])
+        self.assertEqual(t.critical_path(), ["export", "map compiler", "vis", "game load"])
+        self.assertEqual(Timeline().chart(), [])

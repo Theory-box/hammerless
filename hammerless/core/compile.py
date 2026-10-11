@@ -608,6 +608,7 @@ class CompileJob:
         self.tools = tools
         self.skip_if_unchanged = skip_if_unchanged
         self.timings: list[tuple[str, float]] = []
+        self.events: list[tuple[str, float, float]] = []     # (step, start, end): time.time(), for the timeline
         self.skipped = False
         self.vmf = os.path.abspath(vmf_path)
         self.base = os.path.splitext(self.vmf)[0]
@@ -790,7 +791,10 @@ class CompileJob:
                                         stderr=subprocess.STDOUT, text=True, errors="replace",
                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
                                         | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
-                box["reader"] = threading.Thread(target=lambda: box["lines"].extend(proc.stdout), daemon=True)
+                def read():
+                    box["lines"].extend(proc.stdout)
+                    box["t_end"] = time.time()               # (when the lighting finished, for the timeline)
+                box["reader"] = threading.Thread(target=read, daemon=True)
                 box["reader"].start()
                 box["proc"] = proc
                 if box.get("cancel") or self._stopping:   # (the build ended while it was starting: not left running)
@@ -930,6 +934,8 @@ class CompileJob:
                         self._fallback(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead", True)
                         code, out = self._exec(self._valve_vrad)
                     self.timings.append(("vrad (alongside vis)", time.time() - self._light_t0))
+                    self.events.append(("light (alongside vis)", self._light_t0,
+                                        (self._light or {}).get("t_end", time.time()) if self._light else time.time()))
                     if code != 0:
                         self._q.put(f"!! {name} failed (exit code {code})")
                         self._q.put(("FAILED",))
@@ -987,6 +993,8 @@ class CompileJob:
                     code, out = self._exec(self._valve_vvis)
                 self._check_stop()
                 self.timings.append((name, time.time() - t0))
+                self.events.append(({"vbsp": "map compiler", "vvis": "vis", "vrad": "light"}.get(name.split()[0], name),
+                                    t0, time.time()))
                 if name == "vvis" and self._light is not None:
                     open(self.base + ".bsp" + (".visdone" if code == 0 else ".visfailed"), "w").close()
                 if code != 0 or (name == "vbsp" and os.path.exists(self.base + ".lin")):
@@ -1058,6 +1066,7 @@ class CompileJob:
         for line in self._bake_lines:
             self._q.put(line)
         self.timings.append(("cycles", time.time() - t0))
+        self.events.append(("Cycles bake", t0, time.time()))
         return self._bake_ok
 
     def cancel(self) -> None:

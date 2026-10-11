@@ -333,7 +333,7 @@ class HL_OT_nav_predict(bpy.types.Operator):
     def execute(self, context):
         import threading
         from ..core.nav import collect_climbs, collect_regions
-        from ..core.navpredict import predict
+        from ..core.navworker import predict
         from .ops import build_map_text, game_root
         # the map exactly as Build exports it (gates are movers, volumes triggers...), so Build & Play
         # can reuse this navmesh
@@ -351,7 +351,7 @@ class HL_OT_nav_predict(bpy.types.Operator):
         def work():
             try:
                 box["mesh"] = predict(text, regions, lambda stage, n: _progress(box, stage, nodes=n), climbs,
-                                      wall_climbs)
+                                      wall_climbs, lambda: box["stop"])     # (its own process: Blender stays quick)
             except Exception as ex:          # shown to the user
                 box["error"] = str(ex)
         self._thread = threading.Thread(target=work, daemon=True)
@@ -424,7 +424,8 @@ class HL_OT_nav_analyze(bpy.types.Operator):
     def execute(self, context):
         import threading
         from ..core import compile as cc
-        from ..core.navpredict import cached, predict
+        from ..core.navpredict import cached
+        from ..core.navworker import analyze, predict
         from .ops import compile_options, export_vmf, game_root, surface_report, work_dir
         root = game_root(context)
         if not root:
@@ -469,18 +470,16 @@ class HL_OT_nav_analyze(bpy.types.Operator):
 
         def work():
             try:
-                from ..core.navanalyze import analyze
-                from ..core.vpk import GameContent
                 mesh = cached(text, regions, climbs, wall_climbs)      # Build Navmesh made this one already
                 if mesh is None:
                     mesh = predict(text, regions, lambda stage, n: _progress(box, None), climbs,
-                                   wall_climbs)     # needs no compiled map
+                                   wall_climbs, lambda: box["stop"])     # needs no compiled map
                 box["stage"] = "Compiling the map"
                 compiled.wait()
                 if box["error"]:
                     return
-                analyze(mesh, text, base + ".bsp", GameContent(root), os.path.join(root, "left4dead2"),
-                        progress=lambda stage: _progress(box, stage))
+                analyze(mesh, text, base + ".bsp", root, lambda stage: _progress(box, stage),
+                        lambda: box["stop"])
                 box["mesh"] = mesh
             except Exception as ex:          # shown to the user
                 box["error"] = str(ex)

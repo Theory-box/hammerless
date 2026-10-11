@@ -97,8 +97,12 @@ def cached(vmf_text: str, regions, climbs=(), wall_climbs=False) -> NavMesh | No
 def predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False) -> NavMesh:
     """progress(stage: str, count: int) is called between stages (from any thread).
     climbs: nav.NavClimb links to add (Zombie Climb markers)."""
+    return remember(_predict(vmf_text, regions, progress, climbs, wall_climbs), vmf_text, regions, climbs, wall_climbs)
+
+
+def remember(mesh: NavMesh, vmf_text: str, regions, climbs=(), wall_climbs=False) -> NavMesh:
+    """Keep a copy for cached() (also for meshes made in another process: navworker)."""
     import copy
-    mesh = _predict(vmf_text, regions, progress, climbs, wall_climbs)
     _last.update(key=_key(vmf_text, regions, climbs, wall_climbs), mesh=copy.deepcopy(mesh))
     return mesh
 
