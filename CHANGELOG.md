@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.3 (test release, 2026-10-10)
 
 - **Camera node (Actions):** switches players to the game's over-the-shoulder third person view or back to first person, no cheats needed. With Player empty it acts on whoever set it off (walked into a Volume, pressed a Button), or everyone. New examples: Third Person Zone and Third Person Everywhere. Tested in game.
 - **Warning when logic needs cheats:** a graph using a cheat-only console setting or command, or turning cheats on, gets one "Needs cheats" warning in Problems naming its nodes (public servers usually don't allow cheats; achievements are off once they're on). The list of cheat-only names comes from the game itself.
