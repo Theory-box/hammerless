@@ -1220,6 +1220,22 @@ class TestLaddersAndClimbs(unittest.TestCase):
         _c, problems = collect_climbs(ir)
         self.assertTrue(any("both a bottom and a top" in p for p in problems))
 
+    def test_nav_in_its_own_process(self):
+        """navworker: the same mesh as in-process (remembered for the next Build), errors come back, Cancel kills it."""
+        from hammerless.core import navworker
+        from hammerless.core.navpredict import _key, _last, mesh_signature, predict
+        text, _rep = build_vmf(self.tower_map())
+        stages = []
+        mesh = navworker.predict(text, [], lambda s, n: stages.append(s))
+        self.assertEqual(_last["key"], _key(text, []))
+        self.assertEqual(mesh_signature(mesh), mesh_signature(predict(text, [])))
+        self.assertEqual(len(mesh.ladders), 1)
+        self.assertIn("Building areas", stages)
+        with self.assertRaisesRegex(RuntimeError, "unknown nav job"):
+            navworker.run("nonsense", {})
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            navworker.run("predict", dict(vmf_text=text, regions=[], climbs=[], wall_climbs=False), None, lambda: True)
+
 
 class TestNavCut(unittest.TestCase):
     """No Nav Volume: the nav builder makes no nav inside it (and stops there like at a wall)."""

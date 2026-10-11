@@ -183,7 +183,8 @@ def launch(context, root, nav_written: bool = False, analyzed: bool = False) -> 
 
 
 def _start_nav_analysis(mesh, vmf_path: str, bsp_path: str, root: str) -> dict:
-    """Run navanalyze (visibility, hiding spots) on our nav mesh in a background thread."""
+    """Run navanalyze (visibility, hiding spots) on our nav mesh in its own process (core/navworker.py), watched
+    from a background thread."""
     import threading
     import time
     box = {"stage": "starting", "done": False, "error": None, "seconds": 0.0, "stop": False}
@@ -196,11 +197,10 @@ def _start_nav_analysis(mesh, vmf_path: str, bsp_path: str, root: str) -> dict:
     def work():
         t0 = time.time()
         try:
-            from ..core.navanalyze import analyze
-            from ..core.vpk import GameContent
+            from ..core.navworker import analyze
             with open(vmf_path, encoding="utf-8") as f:
                 text = f.read()
-            analyze(mesh, text, bsp_path, GameContent(root), os.path.join(root, "left4dead2"), progress=progress)
+            analyze(mesh, text, bsp_path, root, progress, lambda: box["stop"])
             box["done"] = True
         except Exception as ex:          # reported; the game analyzes the nav mesh instead
             box["error"] = str(ex)
@@ -995,12 +995,13 @@ def _popup(message: str) -> None:
         pass
 
 
-def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False, after=None) -> dict:
-    """Run our copy of the game's nav generator on the VMF in a background thread (once `after`, an Event, is
-    set: the build's own Python work first, as both need Python's lock; measured 3.8 s against 0.3 s)."""
+def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False) -> dict:
+    """Run our copy of the game's nav generator on the VMF in its own process (core/navworker.py: not sharing
+    Python's lock with Blender and the build), watched from a background thread."""
     import threading
     import time
-    from ..core.navpredict import cached, predict
+    from ..core.navpredict import cached
+    from ..core.navworker import predict
     with open(vmf_path, encoding="utf-8") as f:
         text = f.read()
     box = {"stage": "starting", "mesh": None, "error": None, "seconds": 0.0, "stop": False}
@@ -1018,13 +1019,11 @@ def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False, 
         box.update(stage=stage.lower())
 
     def work():
-        if after is not None:
-            after.wait(30)
         t0 = time.time()
         try:
             if box["stop"]:
                 raise RuntimeError("cancelled")
-            box["mesh"] = predict(text, regions, progress, climbs, wall_climbs)
+            box["mesh"] = predict(text, regions, progress, climbs, wall_climbs, lambda: box["stop"])
         except Exception as ex:          # reported; the game makes the nav mesh instead
             box["error"] = str(ex)
         box["seconds"] = time.time() - t0
@@ -1280,8 +1279,7 @@ class HL_OT_build(bpy.types.Operator):
         if self.bake or self.vis_only:
             pass                     # lighting / visibility only: the nav is made by the next Build / Build & Play
         elif s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root) or unanalyzed):
-            self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs,
-                                              after=self._job.prepared)
+            self._nav = _start_nav_generation(path, rep.nav_regions, rep.nav_climbs, s.wall_climbs)
         self._job.snapshot_vis = self._nav is not None and s.nav_analysis == "BLENDER"
         try:
             self._job.start()
