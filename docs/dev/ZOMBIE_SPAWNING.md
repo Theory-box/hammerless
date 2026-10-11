@@ -38,13 +38,33 @@ only drop down to the street). They're hidden from the survivors, so they're the
 and fill the 30-common cap. Hammerless now marks every area not reachable from the start room (walking, drops,
 ladders, zombie climbs) EMPTY | NO_MOBS, and warns when over 20% of the nav is unreachable.
 
+## The second limit: the wanderer budget (Audit 1, measured)
+
+With the fix, the Director keeps only 12-15 live wanderers for the whole ring around the start
+(`director_report`, sv_cheats 1: "Population: 12-15 (out of 30 max)"). Tripling the density
+(`z_wandering_density 0.09`, a cheat cvar) gives **27-28 commons on the street at 5 s**: the hidden spots exist,
+the budget is what's short. Valve's c1m1 reaches 30 at default density (1582 nav areas, 287 valid within 1400 u of
+the start, vs 435 / 65 here: props chop Valve's floors into 25-75 u areas, a clean Hammerless street is one
+537x537 area). The "budget = 0.03 x route length" reading is wrong as a count of live commons (that would be 219).
+Wanderers appear only in the ~550-1500 u ring (z_spawn_safety_range .. z_spawn_range) and as survivors advance.
+
+The shipping knob would be `DirectorOptions.WanderingZombieDensityModifier`, but it must be set before the
+Director counts its wanderers. Tried in game, **none were early enough** (5-12 on the street each time):
+- map-wide Director script via logic_auto RunScriptCode, 1 s after spawn;
+- the same script applying it at file load (logic_script entity spawn);
+- `scripts/vscripts/<mapname>.nut`: not loaded by the game at all;
+- mapspawn.nut: runs too early (`DirectorScript` doesn't exist yet).
+
+Next to try: an earlier map-specific hook (mode script `<mode>.nut` / the mode add-on's scripts, `director_base_addon.nut`
+keyed on the map name), re-triggering the count after the option is set (`OnFlowDistancesRecomputed` exists:
+nav reload, nav blocker change; or a round restart), or making the nav itself earn a larger budget (more, smaller
+areas around the start like Valve's: Audit 1's 1210-area split gave 15 and 30 on two loads, inconclusive).
+
 ## Still open
 
-- With the fix the street gets 10-11 at 5 s: better, but at or under the user's bar. The total drops to 12-14 because
-  most remaining street areas are within 550 u or in sight of the start (in the screenshot the start "room" looks
-  open-air, so the courtyard is in view). To test: is the start room enclosed (roof, closed door)? Does
-  `WanderingZombieDensityModifier` change it? Run spawncheck with `director_debug_threat_placement 1` to print
-  "Total wandering zombie population".
+- With the fix the street gets 7-13 at 5 s (the budget, above). Sight isn't the limit (the x3 density test fills it).
+  `director_debug_threat_placement` prints nothing; use `director_report`. c2m1_highway is a bad reference (no safe
+  room start: no wanderers); use c1m1_hotel.
 - The full-map nav getting 0-1 commons is unexplained.
 - (Solved by Audit 2) "Average clusters visible 891" was a stale Valve log (`<map>.log`, an earlier `vvis -fast`
   build): our compilers don't write that file. The map played had ~519 (vvis 507).
