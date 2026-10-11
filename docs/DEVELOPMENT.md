@@ -67,6 +67,15 @@ python native/build.py            # both; or: python native/build.py hlvvis
 python tests/compile/compare_vis.py path/to/map.vmf
 ```
 
+All of that is its `-exact` mode (*Match vvis Exactly*). The default is **merged windows**: per base portal, each portal it reaches keeps one hull of every source and one of every pass window that reached it, and is re-pushed only when they (or its might-see bits) grow, so routes through the same opening are worked out once. Its windows are only ever supersets, so it never hides a pair a real sight line connects; it can be tighter than vvis where vvis gives up on a chop needing more than 12 points. Its tests: a pair it hides must be proven hidden, not just missed by random rays:
+
+```bash
+python tests/compile/vis_merged_suite.py --found --skip swamp      # -exact vs merged on every test map in %TEMP%
+python tests/compile/vis_check.py exact.bsp merged.bsp map.prt     # rays at each pair merged hides, then a proof
+```
+
+The proof is `tests/compile/vis_certify.c`: vvis's path search on the .prt in doubles with every tolerance on the keeping side, so an empty search means no sight line.
+
 `core/hlvbsp.exe` is Hammerless's map compiler (*Settings > Map & Model Compilers*, the default), a drop-in for L4D2's `vbsp.exe` (sources in `native/hlvbsp/`, built 32-bit so it can load the game's `vphysics.dll`). It follows the Quake 2 tools' method (GPL) with every detail matched to L4D2's vbsp, several of them read from its binary where L4D2 differs from the 2013 SDK (see each file's top comment). Python writes the tables it reads from the game (materials, surface properties, prop models, detail.vbsp, cubemap and blend-material patches: `core/mapcompiler.py`, `core/cubemappatch.py`). Maps with water overlays or instances, and any failure, go to Valve's vbsp. After changing it, run the suite: 20 generated maps compiled by both, compared lump by lump and by portal file (needs the Authoring Tools):
 
 ```bash
