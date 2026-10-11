@@ -156,6 +156,15 @@ static double g_deadline;
 static Plane g_base;                     /* the base portal's plane */
 static V g_base_origin; static double g_base_radius;
 static int g_found_depth;
+/* -all N: every surviving chain (distinct portal sequences, at most N) is recorded and the search goes on */
+static int g_all, g_nchains, *g_chains, *g_chainlen;
+static int record_chain(int depth) {
+    for (int i = 0; i < g_nchains; i++)
+        if (g_chainlen[i] == depth + 1 && !memcmp(g_chains + (size_t)i * MAXDEPTH, g_chain, (depth + 1) * sizeof(int))) return 0;
+    if (g_nchains >= g_all) return 1;
+    memcpy(g_chains + (size_t)g_nchains * MAXDEPTH, g_chain, (depth + 1) * sizeof(int)); g_chainlen[g_nchains++] = depth + 1;
+    return 0;
+}
 
 static double now(void) { return (double)clock() / CLOCKS_PER_SEC; }
 
@@ -191,7 +200,12 @@ static int search(int depth, int leaf) {
         if (d < -g_base_radius - EPS) *nsrc = *source; else if (!cut(source, &back, nsrc)) continue;
         if (pass && !clip_separators(nsrc, pass, npass)) continue;
         g_chain[depth] = q;
-        if (target) { g_found_depth = depth; return FOUND; }
+        if (target) {
+            g_found_depth = depth;
+            if (!g_all) return FOUND;
+            if (record_chain(depth)) return FOUND;        /* (the cap: stop) */
+            continue;
+        }
         g_onpath[p->leaf] = 1;
         int r = search(depth + 1, p->leaf);
         g_onpath[p->leaf] = 0;
@@ -280,7 +294,7 @@ static int certify_dir(int A, int B) {
         int p0 = lf_list[lf_first[A] + i];
         if (!((g_mask[p0 >> 6] >> (p0 & 63)) & 1)) continue;
         Portal *b = &P[p0];
-        if ((g_targets[p0 >> 6] >> (p0 & 63)) & 1) { g_chain[0] = p0; g_found_depth = 0; result = FOUND; break; }
+        if ((g_targets[p0 >> 6] >> (p0 & 63)) & 1) { g_chain[0] = p0; g_found_depth = 0; if (!g_all || record_chain(0)) { result = FOUND; break; } continue; }
         ensure_flood(p0);
         uint64_t more = 0;
         for (int w = 0; w < PW; w++) { g_might[w] = b->flood[w] & g_mask[w]; more |= g_might[w] & g_targets[w]; }
@@ -293,6 +307,7 @@ static int certify_dir(int A, int B) {
         result = search(1, b->leaf);
         g_onpath[b->leaf] = 0;
     }
+    if (g_all && result == NOTHING && g_nchains) result = FOUND;
     return result;
 }
 
@@ -303,6 +318,7 @@ int main(int argc, char **argv) {
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "-budget") && i + 1 < argc) budget = atoll(argv[++i]);
         else if (!strcmp(argv[i], "-seconds") && i + 1 < argc) seconds = atof(argv[++i]);
+        else if (!strcmp(argv[i], "-all") && i + 1 < argc) g_all = atoi(argv[++i]);
         else if (i + 1 < argc && np < 1024) { pairs[np][0] = atoi(argv[i]); pairs[np][1] = atoi(argv[++i]); np++; }
     }
     load(argv[1]);
@@ -317,6 +333,20 @@ int main(int argc, char **argv) {
         /* a sight line reversed is a sight line: a proof in either direction is a proof of the pair. Both
            directions are tried (their windows differ); the chain reported is the forward one. */
         g_deadline = t0 + seconds; g_steps = 0; g_budget = budget;
+        if (g_all) {
+            g_nchains = 0;
+            if (!g_chains) { g_chains = malloc((size_t)g_all * MAXDEPTH * sizeof(int)); g_chainlen = malloc(g_all * sizeof(int)); }
+            int r = certify_dir(A, B);
+            printf("pair %d-%d: %s, %d chains%s   (%lld steps, %.2f s)\n", A, B,
+                   r == NOTHING ? "PROVEN HIDDEN" : "UNDECIDED", g_nchains, g_nchains >= g_all ? " (cap)" : "", g_steps, now() - t0);
+            for (int c = 0; c < g_nchains; c++) {
+                printf("  chain:");
+                for (int i = 0; i < g_chainlen[c]; i++) printf(" %d", g_chains[(size_t)c * MAXDEPTH + i]);
+                printf("\n");
+            }
+            fflush(stdout);
+            continue;
+        }
         int fwd = certify_dir(A, B), found_depth = g_found_depth;
         int chain[MAXDEPTH]; long long steps = g_steps;
         if (fwd == FOUND) memcpy(chain, g_chain, (found_depth + 1) * sizeof(int));
