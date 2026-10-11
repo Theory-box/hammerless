@@ -242,9 +242,10 @@ def surface_report(op, rep: Report) -> None:
     for e in rep.errors[:5]:
         op.report({"ERROR"}, e)
     if rep.errors:
-        op.report({"ERROR"}, f"{len(rep.errors)} error(s). See the '{LOG_TEXT}' text block for details")
+        op.report({"ERROR"}, f"{len(rep.errors)} error(s): see Problems (top of the Hammerless panel; the "
+                             f"'{LOG_TEXT}' text block has the full log)")
     elif rep.warnings:
-        op.report({"WARNING"}, f"{len(rep.warnings)} warning(s). See the '{LOG_TEXT}' text block")
+        op.report({"WARNING"}, f"{len(rep.warnings)} warning(s): see Problems (top of the Hammerless panel)")
 
 
 def build_map_text(context, root: str | None):
