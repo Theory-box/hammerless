@@ -303,7 +303,14 @@ def game_map_names(context) -> list[str]:
     content = game_content(root) if root else None
     if content is None:
         return []
-    return sorted(f[5:-4] for f in content.files if f.startswith("maps/") and f.endswith(".bsp") and "/" not in f[5:])
+    names = {f[5:-4] for f in content.files if f.startswith("maps/") and f.endswith(".bsp") and "/" not in f[5:]}
+    for sub in ("left4dead2", "update", "left4dead2_dlc1", "left4dead2_dlc2", "left4dead2_dlc3"):
+        folder = os.path.join(root, sub, "maps")       # (the campaigns' maps are loose files here)
+        try:
+            names |= {f[:-4] for f in os.listdir(folder) if f.lower().endswith(".bsp")}
+        except OSError:
+            pass
+    return sorted(names, key=str.lower)
 
 
 def _search_maps(self, context, edit_text):

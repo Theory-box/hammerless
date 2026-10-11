@@ -146,3 +146,51 @@ class TestCheatWarning(unittest.TestCase):
         from hammerless.core import cheats
         w = cheats.warning("x", ["host_timescale"])
         self.assertIn("only work with cheats on", w)
+
+
+class TestDecompilerRules(unittest.TestCase):
+    """The BSP decompiler's small rules (core/bspdecompile.py)."""
+
+    def test_tool_textures_from_contents(self):
+        from hammerless.core import bspdecompile as b
+        self.assertEqual(b.tool_texture(b.CONTENTS_SOLID), None)
+        self.assertEqual(b.tool_texture(b.CONTENTS_PLAYERCLIP | b.CONTENTS_DETAIL), "TOOLS/TOOLSPLAYERCLIP")
+        self.assertEqual(b.tool_texture(b.CONTENTS_PLAYERCLIP | b.CONTENTS_MONSTERCLIP | b.CONTENTS_DETAIL),
+                         "TOOLS/TOOLSCLIP")
+        self.assertEqual(b.tool_texture(b.CONTENTS_OPAQUE | b.CONTENTS_DETAIL), "TOOLS/TOOLSBLOCKLIGHT")
+        ladder = b.CONTENTS_LADDER | b.CONTENTS_TRANSLUCENT | b.CONTENTS_GRATE
+        self.assertEqual(b.tool_texture(ladder), "TOOLS/TOOLSINVISIBLELADDER")
+        self.assertEqual(b.tool_texture(ladder | b.CONTENTS_TEAM2), "TOOLS/CLIMB")
+        self.assertIsNone(b.tool_texture(b.CONTENTS_WATER | b.CONTENTS_TRANSLUCENT))     # (water keeps its sides)
+
+    def test_patched_material_names(self):
+        from hammerless.core.bspdecompile import original_material
+        self.assertEqual(original_material("MAPS/C1M1_HOTEL/GLASS/GLASS01_2306_7502_2536"), "GLASS/GLASS01")
+        self.assertEqual(original_material("MAPS/C1M1_HOTEL/BUILDINGS/BLEND_ROOF_01_WVT_PATCH"), "BUILDINGS/BLEND_ROOF_01")
+        self.assertEqual(original_material("CONCRETE/CONCRETE_FLOOR_10"), "CONCRETE/CONCRETE_FLOOR_10")
+
+    def _plane(self, pts):
+        from hammerless.core.vmfimport import plane_of
+        return plane_of(*pts)
+
+    def test_plane_points_keep_hammer_grid_points(self):
+        from hammerless.core.bspdecompile import plane_points
+        import math
+        # an oblique wall through whole-number corners, stored rounded as a compiled map does
+        n = (0.7071068, -0.7071068, 0.0)
+        d = -2307.9966                       # (3264 / sqrt(2), as a compiled map stores it: float)
+        w = [(2320.0, 5584.0, -872.0), (2320.0, 5584.0, -616.0), (2576.0, 5840.0, -616.0), (2576.0, 5840.0, -872.0)]
+        pts = plane_points(n, d, w)
+        self.assertTrue(all(c == round(c) for p in pts for c in p))           # Hammer's own grid points
+        nn, dd = self._plane(pts)
+        self.assertAlmostEqual(dd, -3264 / math.sqrt(2), places=9)              # exactly Hammer's plane
+        self.assertGreater(sum(nn[k] * n[k] for k in range(3)), 0.9999)         # facing out the same way
+
+    def test_plane_points_off_grid_still_on_the_plane(self):
+        from hammerless.core.bspdecompile import plane_points
+        n, d = (0.6, 0.8, 0.0), 123.4567
+        w = [(10.123, 146.78, 0.0), (10.123, 146.78, 50.0), (-20.4, 169.67, 50.0), (-20.4, 169.67, 0.0)]
+        w = [(p[0], (d - 0.6 * p[0]) / 0.8, p[2]) for p in w]
+        nn, dd = self._plane(plane_points(n, d, w))
+        self.assertAlmostEqual(dd, d, places=4)
+        self.assertGreater(sum(nn[k] * n[k] for k in range(3)), 0.999999)

@@ -117,8 +117,12 @@ def main(argv):
     content = GameContent(root)
     names = [a for a in argv if not a.startswith("--")]
     if "--all" in argv:
-        names = sorted(p[5:-4] for p in content.files if p.startswith("maps/") and p.endswith(".bsp")
-                       and "/" not in p[5:])
+        names = {p[5:-4] for p in content.files if p.startswith("maps/") and p.endswith(".bsp") and "/" not in p[5:]}
+        for sub in ("left4dead2", "update", "left4dead2_dlc1", "left4dead2_dlc2", "left4dead2_dlc3"):
+            folder = os.path.join(root, sub, "maps")      # (the campaigns' maps are loose files)
+            if os.path.isdir(folder):
+                names |= {f[:-4] for f in os.listdir(folder) if f.lower().endswith(".bsp") and not f.startswith("hl_")}
+        names = sorted(names)
     suite.OUT = OUT
     results = [run(n, content, root) for n in names]
     print(f"\n{sum(results)} of {len(results)} the same")

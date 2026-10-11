@@ -31,18 +31,21 @@ L_AREAPORTALS, L_GAME, L_CLIPPORTALVERTS, L_CUBEMAPS, L_TEXSTRDATA, L_TEXSTRTABL
 CONTENTS_SOLID, CONTENTS_WINDOW, CONTENTS_GRATE, CONTENTS_BLOCKLOS, CONTENTS_OPAQUE = 0x1, 0x2, 0x8, 0x40, 0x80
 CONTENTS_AREAPORTAL, CONTENTS_PLAYERCLIP, CONTENTS_MONSTERCLIP = 0x8000, 0x10000, 0x20000
 CONTENTS_DETAIL, CONTENTS_TRANSLUCENT, CONTENTS_LADDER = 0x8000000, 0x10000000, 0x20000000
+CONTENTS_SLIME, CONTENTS_WATER, CONTENTS_TEAM1, CONTENTS_TEAM2 = 0x10, 0x20, 0x800, 0x1000
 DEFAULT_LIGHTMAP_SCALE = 16
 # compiling gives a side no face of its own its texture from another side with the same flags (vbsp's
 # CompactTexinfos): a tool brush's sides come out nodraw or clip. Its contents say what it was.
-TOOL_GENERIC = ("TOOLS/TOOLSNODRAW", "TOOLS/TOOLSCLIP")
 
 
 def tool_texture(contents: int) -> str | None:
     """The tool texture a brush with these contents (and no visible face) had, or None for a solid brush."""
+    if contents & (CONTENTS_WATER | CONTENTS_SLIME):
+        return None                                  # (water's own sides are nodraw: as they were)
     if contents & CONTENTS_AREAPORTAL:
         return "TOOLS/TOOLSAREAPORTAL"
     if contents & CONTENTS_LADDER:
-        return "TOOLS/CLIMB"
+        # L4D2's tools/climb (infected-only climbing) also sets a team flag; Valve's invisible ladder doesn't
+        return "TOOLS/CLIMB" if contents & (CONTENTS_TEAM1 | CONTENTS_TEAM2) else "TOOLS/TOOLSINVISIBLELADDER"
     clip = contents & (CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP)
     if clip == CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP:
         return "TOOLS/TOOLSCLIP"
@@ -129,9 +132,11 @@ class Bsp:
 
     def model_brushes(self, headnode: int) -> list[int]:
         """The brushes in the leaves under a node, in brush order."""
-        nodes = self.records(L_NODES, "3i6h2H2h")                 # planenum, children[2], ...
-        leafs = self.records(L_LEAFS, "i2h6h4H2h")                # ..., firstleafbrush, numleafbrushes, ...
-        leafbrushes = [t[0] for t in self.records(L_LEAFBRUSHES, "H")]
+        if not hasattr(self, "_tree"):
+            self._tree = (self.records(L_NODES, "3i6h2H2h"),          # planenum, children[2], ...
+                          self.records(L_LEAFS, "i2h6h4H2h"),         # ..., firstleafbrush, numleafbrushes, ...
+                          [t[0] for t in self.records(L_LEAFBRUSHES, "H")])
+        nodes, leafs, leafbrushes = self._tree
         found, todo = set(), [headnode]
         while todo:
             n = todo.pop()
@@ -146,7 +151,7 @@ class Bsp:
     def entities(self) -> list[list[tuple[str, str]]]:
         text = self.lump(L_ENTITIES).decode("latin-1").rstrip("\0")
         out, cur = [], None
-        for m in re.finditer(r'"((?:[^"\\]|\\.)*)"|(\{)|(\})', text):
+        for m in re.finditer(r'"([^"]*)"|(\{)|(\})', text):
             if m.group(2):
                 cur = []
             elif m.group(3):
@@ -256,6 +261,18 @@ def _vec(v) -> str:
     return " ".join(_num(c) for c in v)
 
 
+def _exact(x: float) -> str:
+    """A plane point's coordinate: as computed (plane_points already snaps whole points that stay on the plane;
+    rounding one coordinate on its own tilts the plane)."""
+    if x == round(x):
+        return str(int(round(x)))
+    return f"{x:.6f}".rstrip("0").rstrip(".")
+
+
+def _pvec(v) -> str:
+    return " ".join(_exact(c) for c in v)
+
+
 def _axis(vec4) -> tuple[str, float]:
     """A texinfo row (axis / scale, shift) -> '[x y z shift] scale'."""
     x, y, z, shift = vec4
@@ -263,7 +280,7 @@ def _axis(vec4) -> tuple[str, float]:
     if ln < 1e-9:
         return "[1 0 0 0] 0.25", 0.25
     scale = 1.0 / ln
-    return (f"[{x * scale:.6g} {y * scale:.6g} {z * scale:.6g} {shift:.6g}] {scale:.6g}"), scale
+    return f"[{_exact(x * scale)} {_exact(y * scale)} {_exact(z * scale)} {_exact(shift)}] {_exact(scale)}", scale
 
 
 SPREAD = 256.0         # units between a side's three plane points
@@ -271,10 +288,52 @@ DISP_DEPTH = 8.0
 PROP_NUDGE = 0.05      # units a prop exactly on a wall face moves out of it       # a rebuilt displacement brush's thickness behind its face
 
 
+GRID_SNAP = 0.01       # a corner this close to whole numbers (and still on the plane) was a Hammer grid point
+
+
+def grid_points(n, d, w):
+    """Three of the face's corners that are whole numbers (Hammer's grid) and on the plane, spanning the biggest
+    triangle, wound so the normal is n; None if there aren't three. The compiled plane was made by Hammer from such
+    points and stored rounded to floats: the same points give vbsp exactly the same plane again."""
+    cand = []
+    for q in w:
+        r = tuple(float(round(x)) for x in q)
+        if max(abs(r[k] - q[k]) for k in range(3)) < GRID_SNAP and abs(sum(r[k] * n[k] for k in range(3)) - d) < GRID_SNAP:
+            if r not in cand:
+                cand.append(r)
+    if len(cand) < 3:
+        return None
+    best, area = None, 0.0
+    m = len(cand)
+    for i in range(m):
+        for j in range(i + 1, m):
+            for k in range(j + 1, m):
+                a, b, c = cand[i], cand[j], cand[k]
+                u = [a[t] - b[t] for t in range(3)]
+                v = [c[t] - b[t] for t in range(3)]
+                x = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+                ar = math.sqrt(sum(t * t for t in x))
+                if ar > area:
+                    area, best = ar, (a, b, c, x)
+    if best is None or area < 1.0:
+        return None
+    a, b, c, x = best
+    nx = [t / area for t in x]
+    if sum(nx[t] * n[t] for t in range(3)) < 0.999999:   # (the other way round, or not quite this plane)
+        if sum(nx[t] * n[t] for t in range(3)) < -0.999999:
+            a, c = c, a
+        else:
+            return None
+    return [a, b, c]
+
+
 def plane_points(n, d, w):
-    """Three points on the plane n.x = d, wound so Hammer's normal points out (n): spread SPREAD apart around the
-    face's middle, not the face's corners (a tiny face's corners, rounded, tilt the plane), and whole numbers
-    wherever the plane passes through them."""
+    """Three points on the plane n.x = d, wound so Hammer's normal points out (n). Hammer's own grid points when
+    the face has them (grid_points); else spread SPREAD apart around the face's middle, not the face's corners
+    (a tiny face's corners, rounded, tilt the plane)."""
+    g = grid_points(n, d, w)
+    if g is not None:
+        return g
     c = [sum(p[k] for p in w) / len(w) for k in range(3)]
     off = sum(c[k] * n[k] for k in range(3)) - d
     c = [c[k] - n[k] * off for k in range(3)]
@@ -286,7 +345,7 @@ def plane_points(n, d, w):
     pts = []
     for p in (tuple(c[k] + u[k] * SPREAD for k in range(3)), tuple(c), tuple(c[k] + v[k] * SPREAD for k in range(3))):
         r = tuple(float(round(x)) for x in p)
-        on = abs(sum(r[k] * n[k] for k in range(3)) - d) < 1e-3
+        on = abs(sum(r[k] * n[k] for k in range(3)) - d) < 1e-6      # (looser tilts far planes)
         pts.append(r if on else p)
     return pts                     # (p0 - p1) x (p2 - p1) = SPREAD^2 (u x v): along n
 
@@ -320,6 +379,8 @@ class Decompiler:
         first, count, contents = self.brushes[b]
         sides = [s for s in self.sides[first:first + count] if not s[3]]          # (not bevels)
         tool = tool_texture(contents)
+        if tool and not all(self.material(s[1]).startswith("TOOLS/") for s in sides):
+            tool = None                                   # (a visible brush: its hidden sides stay as they are)
         planes = []
         for s in sides:
             n, d = self.planes[s[0]]
@@ -340,12 +401,12 @@ class Decompiler:
             p1, p2, p3 = plane_points(n, d, w)
             side = out.add(Block("side"))
             side.kv("id", self.new_id())
-            side.kv("plane", f"({_vec(p1)}) ({_vec(p2)}) ({_vec(p3)})")
+            side.kv("plane", f"({_pvec(p1)}) ({_pvec(p2)}) ({_pvec(p3)})")
             mat = self.material(s[1])
-            if tool and (mat in TOOL_GENERIC or mat.startswith("TOOLS/")):
+            if tool:
                 mat = tool
             side.kv("material", mat)
-            self.side_polys.setdefault(s[0], []).append((side, w))
+            self.side_polys.setdefault(s[0], []).append((side, w, d))
             self.texture_keys(side, s[1], offset)
             made += 1
         if made < 4:
@@ -375,21 +436,6 @@ class Decompiler:
         if lost:
             self.notes.append(f"{lost} displacements had no face to rebuild them from and were left out")
 
-    def side_for(self, plane: int, w: list[tuple]):
-        n = self.planes[plane]
-        best, err = None, 1.0
-        for cand_plane, polys in self.side_polys.items():
-            n2 = self.planes[cand_plane]
-            if abs(n2[1] - n[1]) > 0.01 or any(abs(n2[0][k] - n[0][k]) > 1e-4 for k in range(3)):
-                continue
-            for side, poly in polys:
-                if len(poly) != len(w):
-                    continue
-                e = max(min(max(abs(p[k] - q[k]) for k in range(3)) for q in poly) for p in w)
-                if e < err:
-                    best, err = side, e
-        return best
-
     def dispinfo_block(self, info: dict, verts, tris, normal) -> Block:
         p = info["power"]
         n = (1 << p) + 1
@@ -407,12 +453,12 @@ class Decompiler:
                 x, y, z, dist, alpha = verts[info["vert_start"] + i * n + j]
                 ln = math.sqrt(x * x + y * y + z * z)
                 if ln > 1e-9:
-                    nrow.append(f"{x / ln:.6g} {y / ln:.6g} {z / ln:.6g}")
-                    drow.append(f"{ln * dist:.6g}")
+                    nrow.append(f"{_exact(x / ln)} {_exact(y / ln)} {_exact(z / ln)}")
+                    drow.append(_exact(ln * dist))
                 else:
                     nrow.append(nrm)
                     drow.append("0")
-                arow.append(f"{alpha:.6g}")
+                arow.append(_exact(alpha))
             blocks["normals"].kv(f"row{i}", " ".join(nrow))
             blocks["distances"].kv(f"row{i}", " ".join(drow))
             blocks["offsets"].kv(f"row{i}", " ".join(["0 0 0"] * n))
@@ -438,9 +484,10 @@ class Decompiler:
         """Brush sides by plane (rounded), for finding the side a face of the map is on."""
         idx = {}
         for plane, polys in self.side_polys.items():
-            n, d = self.planes[plane]
-            key = (round(n[0], 3), round(n[1], 3), round(n[2], 3), round(d))
-            idx.setdefault(key, []).extend(polys)
+            n = self.planes[plane][0]
+            for side, w, d in polys:
+                key = (round(n[0], 3), round(n[1], 3), round(n[2], 3), round(d))
+                idx.setdefault(key, []).append((side, w))
         return idx
 
     @staticmethod
@@ -454,17 +501,36 @@ class Decompiler:
                 return False
         return True
 
-    def face_side_id(self, face, idx) -> str | None:
+    def face_side_id(self, face, idx, offset=(0.0, 0.0, 0.0)) -> str | None:
         plane, w, _ti, disp = face
         if disp >= 0:
             return self.disp_side_ids.get(disp)
         n, d = self.planes[plane]
-        c = [sum(p[k] for p in w) / len(w) for k in range(3)]
+        d += sum(n[k] * offset[k] for k in range(3))      # (a brush entity's faces are stored around its origin)
+        c = [sum(p[k] for p in w) / len(w) + offset[k] for k in range(3)]
         for key in {(round(n[0], 3), round(n[1], 3), round(n[2], 3), round(d) + o) for o in (0, -1, 1)}:
             for side, poly in idx.get(key, ()):
                 if self._inside(c, poly, n):
                     return side.get("id")
         return None
+
+    def face_offsets(self) -> dict[int, tuple]:
+        """Faces of brush entities with an origin -> that origin (their faces are stored around it)."""
+        models = self.bsp.records(14, "9f3i")
+        out = {}
+        for e in self.bsp.entities():
+            d = dict(e)
+            m, o = d.get("model", ""), d.get("origin", "")
+            if not m.startswith("*") or not o:
+                continue
+            try:
+                mi, org = int(m[1:]), tuple(float(x) for x in o.split()[:3])
+            except ValueError:
+                continue
+            if 0 < mi < len(models) and any(org):
+                first, num = models[mi][10], models[mi][11]
+                out.update({f: org for f in range(first, first + num)})
+        return out
 
     def overlay_entities(self, accessors: dict[int, str]) -> list[Block]:
         """info_overlay from the map's overlays (vbsp removes the entities): their faces become the sides they
@@ -474,12 +540,13 @@ class Decompiler:
             return []
         faces = self.bsp.face_windings()
         idx = self.side_index()
+        offsets = self.face_offsets()
         out, lost = [], 0
         for o in overlays:
             ids = []
             for f in o["faces"]:
                 if 0 <= f < len(faces):
-                    sid = self.face_side_id(faces[f], idx)
+                    sid = self.face_side_id(faces[f], idx, offsets.get(f, (0.0, 0.0, 0.0)))
                     if sid is not None and sid not in ids:
                         ids.append(sid)
             if not ids:
@@ -492,15 +559,15 @@ class Decompiler:
             bv = tuple(c / ln * (-1 if o["uv"][3][2] == 1 else 1) for c in bv)
             kv = [("classname", "info_overlay"), ("material", self.material(o["texinfo"]).lower()),
                   ("sides", " ".join(str(i) for i in ids)), ("RenderOrder", str(o["render_order"])),
-                  ("StartU", f"{o['u'][0]:.6g}"), ("EndU", f"{o['u'][1]:.6g}"),
-                  ("StartV", f"{o['v'][0]:.6g}"), ("EndV", f"{o['v'][1]:.6g}"),
+                  ("StartU", _exact(o['u'][0])), ("EndU", _exact(o['u'][1])),
+                  ("StartV", _exact(o['v'][0])), ("EndV", _exact(o['v'][1])),
                   ("BasisOrigin", _vec(o["origin"])), ("BasisNormal", _vec(n)),
                   ("BasisU", _vec(bu)), ("BasisV", _vec(bv)), ("origin", _vec(o["origin"]))]
             for k in range(4):
-                kv.append((f"uv{k}", f"{o['uv'][k][0]:.6g} {o['uv'][k][1]:.6g} 0"))
+                kv.append((f"uv{k}", f"{_exact(o['uv'][k][0])} {_exact(o['uv'][k][1])} 0"))
             fmin, fmax = o["fade"]
-            kv += [("fademindist", f"{math.sqrt(fmin):.6g}" if fmin > 0 else "-1"),
-                   ("fademaxdist", f"{math.sqrt(fmax):.6g}" if fmax > 0 else "0")]
+            kv += [("fademindist", _exact(math.sqrt(fmin)) if fmin > 0 else "-1"),
+                   ("fademaxdist", _exact(math.sqrt(fmax)) if fmax > 0 else "0")]
             if o["id"] in accessors:
                 kv.append(("targetname", accessors[o["id"]]))
             out.append(self.entity_block(kv))
@@ -526,8 +593,9 @@ class Decompiler:
             on = [i for i, x in enumerate(ds) if x > -1e-3]
             if not on:
                 continue                                   # (really inside: leave it as the map had it)
-            n = planes[on[0]][0]
-            return tuple(origin[k] + n[k] * PROP_NUDGE for k in range(3))
+            out = [sum(planes[i][0][k] for i in on) for k in range(3)]     # (an edge or corner: out of both)
+            ln = math.sqrt(sum(x * x for x in out)) or 1.0
+            return tuple(origin[k] + out[k] / ln * PROP_NUDGE for k in range(3))
         return origin
 
     def all_trigger(self, b: int) -> bool:
@@ -605,7 +673,7 @@ class Decompiler:
             p1, p2, p3 = plane_points(fn, fd, poly)
             side = out.add(Block("side"))
             side.kv("id", self.new_id())
-            side.kv("plane", f"({_vec(p1)}) ({_vec(p2)}) ({_vec(p3)})")
+            side.kv("plane", f"({_pvec(p1)}) ({_pvec(p2)}) ({_pvec(p3)})")
             side.kv("material", self.material(ti) if ti >= 0 else "TOOLS/TOOLSNODRAW")
             self.texture_keys(side, ti)
             if disp is not None:
@@ -636,7 +704,7 @@ class Decompiler:
             p1, p2, p3 = _plane_points(w)
             side = out.add(Block("side"))
             side.kv("id", self.new_id())
-            side.kv("plane", f"({_vec(p1)}) ({_vec(p2)}) ({_vec(p3)})")
+            side.kv("plane", f"({_pvec(p1)}) ({_pvec(p2)}) ({_pvec(p3)})")
             side.kv("material", mat)
             side.kv("uaxis", "[1 0 0 0] 0.25").kv("vaxis", "[0 -1 0 0] 0.25").kv("rotation", 0)
             side.kv("lightmapscale", DEFAULT_LIGHTMAP_SCALE).kv("smoothing_groups", 0)
@@ -665,8 +733,8 @@ class Decompiler:
     def decompile(self) -> str:
         models = self.bsp.models()
         ranges = self.bsp.model_ranges()
-        first_model = min((r[0] for r in ranges[1:] if r[0] >= 0), default=len(self.brushes))
-        covered = set(range(0, first_model))
+        world_end = ranges[0][1] + 1 if ranges and ranges[0][1] >= 0 else 0
+        covered = set(range(0, world_end))
         for a, z in ranges[1:]:
             if a >= 0:
                 covered.update(range(a, z + 1))
@@ -674,7 +742,7 @@ class Decompiler:
         # uses them for vis and removes the entity, leaving the brushes), the rest the world's
         unclaimed = [i for i in range(len(self.brushes)) if i not in covered]
         viscluster = [i for i in unclaimed if self.all_trigger(i)]
-        world_brushes = list(range(0, first_model)) + [i for i in unclaimed if i not in viscluster]
+        world_brushes = list(range(0, world_end)) + [i for i in unclaimed if i not in viscluster]
         portal_brushes = [b for b in world_brushes if self.brushes[b][2] & CONTENTS_AREAPORTAL]
         world = self.world = Block("world")
         world.kv("id", self.new_id())
@@ -683,10 +751,13 @@ class Decompiler:
         ents = self.bsp.entities()
         portals = self.bsp.areaportals()
         portal_owner = self.match_portals(portals, portal_brushes)
+        unmatched = len(set(portal_brushes) - set(portal_owner.values()))
+        if unmatched:
+            self.notes.append(f"{unmatched} areaportal brushes matched no func_areaportal and were left out")
         for e in ents:
             if dict(e).get("classname") == "worldspawn":
                 for k, v in e:
-                    if k not in ("id",):
+                    if k not in ("id", "hammerid", "world_mins", "world_maxs"):
                         world.kv(k, v)
                 break
         for b in world_brushes:
@@ -696,7 +767,7 @@ class Decompiler:
             if s is None:
                 continue
             c = self.brushes[b][2]
-            if c & CONTENTS_DETAIL and c & (CONTENTS_SOLID | CONTENTS_TRANSLUCENT):
+            if c & CONTENTS_DETAIL:
                 detail.append(s)
             else:
                 world.add(s)
@@ -732,6 +803,9 @@ class Decompiler:
                         if d.get("origin") else (0.0, 0.0, 0.0)
                     a, z = ranges[mi]
                     solids = [s for s in (self.solid(b, origin) for b in range(a, z + 1)) if s]
+                if not solids:
+                    self.notes.append(f"{cls} '{d.get('targetname', model)}' has no brushes left in the map: "
+                                      "kept without them")
             if cls in ("func_areaportal", "func_areaportalwindow") and not solids:
                 key = int(d.get("portalnumber", "0") or 0)
                 outline = portals.get(key)
@@ -743,6 +817,7 @@ class Decompiler:
                 solids = [s]
             entities.append(self.entity_block(e, solids))
         solid_world = [b for b in world_brushes if self.brushes[b][2] & CONTENTS_SOLID]
+        lighting = {}                                    # lighting origin -> its info_lighting's name
         for p in self.bsp.static_props():
             origin = self.off_walls(p["origin"], solid_world)
             kv = [("classname", "prop_static"), ("model", p["model"]), ("origin", _vec(origin)),
@@ -760,6 +835,15 @@ class Decompiler:
                        ("rendercolor", " ".join(str(c) for c in p["rendercolor"][:3]))]
             if "disableX360" in p:
                 kv.append(("disableX360", str(p["disableX360"])))
+            if "rendercolor" in p:
+                kv.append(("renderamt", str(p["rendercolor"][3])))
+            if p["flags"] & 0x2:                            # (lit from a point other than its origin)
+                key = tuple(round(c, 2) for c in p["lightingorigin"])
+                if key not in lighting:
+                    lighting[key] = f"sprp_lighting_{len(lighting)}"
+                    entities.append(self.entity_block([("classname", "info_lighting"), ("targetname", lighting[key]),
+                                                       ("origin", _vec(p["lightingorigin"]))]))
+                kv.append(("lightingorigin", lighting[key]))
             entities.append(self.entity_block(kv))
         entities += self.overlay_entities(accessors)
         for origin, size in self.bsp.cubemaps():
