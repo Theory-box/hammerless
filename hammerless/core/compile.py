@@ -791,6 +791,8 @@ class CompileJob:
                                         stderr=subprocess.STDOUT, text=True, errors="replace",
                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
                                         | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
+                from .childkill import adopt
+                adopt(proc)                          # (ends with Blender)
                 def read():
                     box["lines"].extend(proc.stdout)
                     box["t_end"] = time.time()               # (when the lighting finished, for the timeline)
@@ -863,6 +865,8 @@ class CompileJob:
             # below-normal priority: the PC stays responsive while vvis/vrad use every core
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
             | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
+        from .childkill import adopt
+        adopt(proc)                          # (the compilers end with Blender: closing it mid-build stops them)
         if self._stopping:                   # (cancelled while it was starting)
             proc.kill()
         out = []

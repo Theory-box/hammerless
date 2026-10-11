@@ -370,6 +370,8 @@ def start_process(bsp_path: str, upm: float, samples: int = SAMPLES, denoise: bo
                                 stdout=out, stderr=subprocess.STDOUT,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
                                 | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
+    from ..core.childkill import adopt
+    adopt(proc)                      # (ends with Blender)
     return {"proc": proc, "result": result, "log": log}
 
 
