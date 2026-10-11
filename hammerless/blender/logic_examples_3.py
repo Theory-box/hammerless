@@ -34,23 +34,26 @@ result = ::HL_NukeQueue.len();"""
 MUZZLE_FLASH = """local p = a;      // (the event's Userid wire gives the player)
 local w = p != null ? p.GetActiveWeapon() : null;
 if (w != null && w.LookupAttachment("muzzle_flash") > 0) {
-    local name = "hl_muzzle_light_" + p.GetEntityIndex();
-    local l = Entities.FindByName(null, name);
-    if (l == null) {      // this player's light: made once
-        l = SpawnEntityFromTable("light_dynamic", {targetname = name, origin = w.GetOrigin(),
-            _light = "255 190 110 255", brightness = b.tostring(), distance = c.tostring(),
-            spotlight_radius = "0", _inner_cone = "0", _cone = "0", spawnflags = "0"});
-        DoEntFire("!self", "TurnOff", "", 0.0, null, l);
-        l.ValidateScriptScope();
+    // two lights per player: one for the walls and floor (Brightness), one for zombies and survivors (Model Brightness)
+    foreach (part in [["world", b, "2"], ["models", d, "1"]]) {      // (spawnflags 2: not models; 1: not the world)
+        local name = "hl_muzzle_" + part[0] + "_" + p.GetEntityIndex();
+        local l = Entities.FindByName(null, name);
+        if (l == null) {      // made once
+            l = SpawnEntityFromTable("light_dynamic", {targetname = name, origin = w.GetOrigin(),
+                _light = "255 190 110 255", brightness = part[1].tostring(), distance = c.tostring(),
+                spotlight_radius = "0", _inner_cone = "0", _cone = "0", spawnflags = part[2]});
+            DoEntFire("!self", "TurnOff", "", 0.0, null, l);
+            l.ValidateScriptScope();
+        }
+        local s = l.GetScriptScope();
+        if (!("gun" in s) || s.gun != w) {      // a new gun in hand: on its muzzle
+            s.gun <- w;
+            DoEntFire("!self", "SetParent", "!activator", 0.0, w, l);
+            DoEntFire("!self", "SetParentAttachment", "muzzle_flash", 0.0, w, l);
+        }
+        DoEntFire("!self", "TurnOn", "", 0.0, null, l);
+        DoEntFire("!self", "TurnOff", "", 0.03, null, l);      // (one server tick: full-auto flickers)
     }
-    local s = l.GetScriptScope();
-    if (!("gun" in s) || s.gun != w) {      // a new gun in hand: on its muzzle
-        s.gun <- w;
-        DoEntFire("!self", "SetParent", "!activator", 0.0, w, l);
-        DoEntFire("!self", "SetParentAttachment", "muzzle_flash", 0.0, w, l);
-    }
-    DoEntFire("!self", "TurnOn", "", 0.0, null, l);
-    DoEntFire("!self", "TurnOff", "", 0.03, null, l);      // (one server tick: full-auto flickers)
 }"""
 
 EXAMPLES_3 = [
@@ -222,14 +225,17 @@ EXAMPLES_3 = [
                 ("A random size, and hitboxes that follow it", ["size", "scale", "hitboxes"])]),
     dict(title="Third Person Muzzle Flash", level="Scripting",
          about="In third person the game's muzzle flashes light only models, not the walls and floor. This gives "
-               "every player one small light on their gun's muzzle (made at their first shot, moved to each new gun) "
-               "and flashes it on each shot for one server tick (0.03 s), so full-auto fire flickers. Brightness and Reach (units) set how strong and how far. "
-               "Use it with the third person examples. No cheats; tested in the game (one light per player).",
+               "every player two small lights on their gun's muzzle (made at their first shot, moved to each new gun): "
+               "one for the walls and floor (Brightness), one for zombies and survivors (Model Brightness: models need "
+               "more light to look lit) "
+               "and flashes them on each shot for one server tick (0.03 s), so full-auto fire flickers. Brightness and Reach (units) set how strong and how far. "
+               "Use it with the third person examples. No cheats; tested in the game (two lights per shooter, parented to the gun).",
          nodes=[ev("fire", "weapon_fire", 0, 0),
                 N("bright", "HL_NodeValue", 0, 2, label="Brightness", sockets={"value": 0.3}),
                 N("reach", "HL_NodeValue", 0, 3, label="Reach", sockets={"value": 700.0}),
+                N("model_bright", "HL_NodeValue", 0, 4, label="Model Brightness", sockets={"value": 2.0}),
                 N("flash", "HL_NodeScriptCode", 1, 0, label="Flash the shooter's muzzle light", code=MUZZLE_FLASH)],
          links=[("fire.happened", "flash.run"), ("fire.userid", "flash.a"), ("bright.value", "flash.b"),
-                ("reach.value", "flash.c")],
-         steps=[("Every shot: the shooter's own muzzle light, on for a moment", ["fire", "bright", "reach", "flash"])]),
+                ("reach.value", "flash.c"), ("model_bright.value", "flash.d")],
+         steps=[("Every shot: the shooter's own muzzle light, on for a moment", ["fire", "bright", "reach", "model_bright", "flash"])]),
 ]
