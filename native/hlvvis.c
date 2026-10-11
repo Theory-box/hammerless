@@ -454,11 +454,46 @@ static int outside_hull(const Win *a, const Win *h, V n) {
     return 0;
 }
 
+/* w widened in its plane: every edge moved out by d (corners along the miter: they stay d from both edges) */
+static void inflate(const Win *w, V n, double d, WinBuf *out) {
+    double ox[MAXPTS], oy[MAXPTS], oz[MAXPTS];
+    double sx = 0, sy = 0, sz = 0;
+    for (int i = 0; i < w->n; i++) {
+        V p = w->p[i], q = w->p[(i + 1) % w->n];
+        sx += (double)p.y * q.z - (double)p.z * q.y; sy += (double)p.z * q.x - (double)p.x * q.z; sz += (double)p.x * q.y - (double)p.y * q.x;
+    }
+    double sign = sx * n.x + sy * n.y + sz * n.z >= 0 ? 1 : -1;     /* counter-clockwise about n: outward = e x n */
+    int have = 0;
+    for (int i = 0; i < w->n; i++) {
+        V p = w->p[i], q = w->p[(i + 1) % w->n];
+        double ex = (double)q.x - p.x, ey = (double)q.y - p.y, ez = (double)q.z - p.z;
+        double cx = sign * (ey * n.z - ez * n.y), cy = sign * (ez * n.x - ex * n.z), cz = sign * (ex * n.y - ey * n.x);
+        double l = sqrt(cx * cx + cy * cy + cz * cz);
+        if (l > 1e-6) { ox[i] = cx / l; oy[i] = cy / l; oz[i] = cz / l; have = 1; }
+        else ox[i] = oy[i] = oz[i] = 0;
+    }
+    out->n = w->n;
+    if (!have) { for (int i = 0; i < w->n; i++) out->p[i] = w->p[i]; return; }
+    for (int i = 0; i < w->n; i++) {                  /* (a zero-length edge takes its neighbour's direction) */
+        if (ox[i] == 0 && oy[i] == 0 && oz[i] == 0) {
+            int j = i; do { j = (j + w->n - 1) % w->n; } while (ox[j] == 0 && oy[j] == 0 && oz[j] == 0);
+            ox[i] = ox[j]; oy[i] = oy[j]; oz[i] = oz[j];
+        }
+    }
+    for (int i = 0; i < w->n; i++) {
+        int a = (i + w->n - 1) % w->n;
+        double dot = ox[a] * ox[i] + oy[a] * oy[i] + oz[a] * oz[i];
+        double k = d / (1 + dot > 1e-9 ? 1 + dot : 1e-9);   /* (a sharp corner reaches far: still containing) */
+        V p = w->p[i];
+        out->p[i] = (V){(float)(p.x + k * (ox[a] + ox[i])), (float)(p.y + k * (oy[a] + oy[i])), (float)(p.z + k * (oz[a] + oz[i]))};
+    }
+}
+
 static void m_merge(Thread *th, int pnum, Win *source, Win *pass, const uint64_t *might) {
     MState *ms = &t_ms[pnum];
     uint64_t *mm = t_mm + (size_t)pnum * PW;
     Portal *p = &P[pnum];
-    int grew = 0;
+    int grew = 0, bits = 0;
     if (ms->gen != t_mgen) {
         ms->gen = t_mgen; ms->queued = 0; ms->has = 1; ms->grows = 0;
         memcpy(&ms->S, source, sizeof(int) + source->n * sizeof(V));
@@ -467,7 +502,7 @@ static void m_merge(Thread *th, int pnum, Win *source, Win *pass, const uint64_t
         memcpy(mm, might, PW * 8);
         grew = 1;
     } else {
-        for (int k = 0; k < PW; k++) { uint64_t nb = might[k] & ~mm[k]; if (nb) { mm[k] |= nb; grew = 1; } }
+        for (int k = 0; k < PW; k++) { uint64_t nb = might[k] & ~mm[k]; if (nb) { mm[k] |= nb; grew = bits = 1; } }
         /* grown: any new point outside the old hull at all (not by an area threshold: a sliver counts) */
         if (outside_hull(source, (Win *)&ms->S, th->base->pl.n)) {
             WinBuf ns; hull2((Win *)&ms->S, source, th->base->pl.n, winding_ccw(th->base->w, th->base->pl.n), &ns);
@@ -485,12 +520,13 @@ static void m_merge(Thread *th, int pnum, Win *source, Win *pass, const uint64_t
         ms->grows = 1000000;
         InterlockedIncrement64(&g_capped);
     } else if (ms->grows >= 1000000) {
-        grew = grew && ms->grows == 1000000;           /* (opened: only the first push after it) */
-        ms->grows++;
+        /* (opened: its windows can't grow any more, but new might-see bits must still be passed on; bits are only
+           ever added, so this ends) */
+        grew = bits;
+        ms->grows = 1000001;
     }
-    if (grew && !ms->queued) {
-        if (t_queue[-1] >= NPD * (MAX_GROW + 3)) { printf("merge queue overflow\n"); exit(3); }
-        ms->queued = 1; t_queue[t_queue[-1]++] = pnum; InterlockedIncrement64(&g_mpush);
+    if (grew && !ms->queued) {             /* (a ring: each portal is in it at most once at a time) */
+        ms->queued = 1; t_queue[t_queue[-1]++ % (NPD + 1)] = pnum; InterlockedIncrement64(&g_mpush);
     }
 }
 
@@ -504,7 +540,7 @@ static void merged_flow(int pi) {
     if (!t_ms) {
         t_ms = calloc(NPD, sizeof(MState));
         t_mm = malloc((size_t)NPD * PW * 8);
-        int *q = malloc(((size_t)NPD * (MAX_GROW + 3) + 1) * sizeof(int)); q[0] = 0; t_queue = q + 1;
+        int *q = malloc(((size_t)NPD + 2) * sizeof(int)); q[0] = 0; t_queue = q + 1;
     }
     t_mgen++;
     t_queue[-1] = 0;
@@ -539,10 +575,12 @@ static void merged_flow(int pi) {
         }
     }
     while (qhead < t_queue[-1]) {
-        int xn = t_queue[qhead++];
+        int xn = t_queue[qhead++ % (NPD + 1)];
         MState *xs = &t_ms[xn];
         xs->queued = 0;
-        WinBuf S = xs->S, W = xs->W;                         /* (a snapshot: merging may grow them meanwhile) */
+        WinBuf S, W;                       /* (a snapshot: merging may grow them meanwhile; widened, see inflate) */
+        inflate((Win *)&xs->S, b->pl.n, 0.02, &S);
+        inflate((Win *)&xs->W, P[xn].pl.n, 0.02, &W);
         memcpy(cur, t_mm + (size_t)xn * PW, PW * 8);
         Portal *x = &P[xn];
         int leaf = x->leaf;
@@ -1006,6 +1044,7 @@ int main(int argc, char **argv) {
         QueryPerformanceCounter(&fn);
         double flow_wall = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
         printf("PortalFlow:          done (%.1f s)\n", flow_wall);
+        if (g_merge) printf("merged windows: %lld steps, %lld pushes, %lld portals opened fully\n", (long long)g_msteps, (long long)g_mpush, (long long)g_capped);
         /* where the time went, per portal (both directions), for Hammerless's vis cost view */
         snprintf(path, sizeof path, "%s.viscost", base);
         FILE *cf = fopen(path, "w");
