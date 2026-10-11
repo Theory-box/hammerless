@@ -74,6 +74,9 @@ def simulate(mesh, seed: int = 1, progress: float = 0.0, density_scale: float = 
     if not start or not end or not mesh.areas:
         return plan
     from_start = _walk(mesh, start, edges, centre)
+    # the end room: the far checkpoint areas (Valve marks some areas by the start door CHECKPOINT too)
+    far = max((from_start[e] for e in end if e in from_start), default=0.0)
+    end = [e for e in end if from_start.get(e, -1.0) >= 0.5 * far] or end
     back = {a: [] for a in by}
     for a, out in edges.items():
         for b in out:
