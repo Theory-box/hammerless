@@ -161,3 +161,33 @@ class TestBuildTimeline(unittest.TestCase):
         self.assertIn("15.0 s from pressing Build", lines[0])
         self.assertEqual(t.critical_path(), ["export", "map compiler", "vis", "game load"])
         self.assertEqual(Timeline().chart(), [])
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows job objects")
+class TestChildKill(unittest.TestCase):
+    """core/childkill.py: a process tied to Blender dies with it (closed or crashed); one not tied (the game) lives."""
+
+    def test_tied_child_dies_with_parent(self):
+        import subprocess
+        import time
+        dn = subprocess.DEVNULL
+        parent = ("import os, subprocess, sys, time; sys.path.insert(0, sys.argv[1]);"
+                  "from hammerless.core.childkill import adopt;"
+                  "c = ['ping', '-n', '60', '127.0.0.1'];"
+                  "t = subprocess.Popen(c, stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL);"
+                  "f = subprocess.Popen(c, stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL);"
+                  "print(t.pid, f.pid, adopt(t), flush=True); time.sleep(0.5); os._exit(1)")
+        root = os.path.join(os.path.dirname(__file__), "..", "..")
+        out = subprocess.run([sys.executable, "-c", parent, root], stdout=subprocess.PIPE, stdin=dn, text=True).stdout
+        tied, free, ok = out.split()
+        time.sleep(1.5)
+
+        def alive(pid):
+            return f" {pid} " in subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True,
+                                                text=True).stdout
+        try:
+            self.assertEqual(ok, "True")
+            self.assertFalse(alive(tied))
+            self.assertTrue(alive(free))
+        finally:
+            subprocess.run(["taskkill", "/PID", free, "/F"], capture_output=True)
