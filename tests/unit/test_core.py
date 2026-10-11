@@ -1945,7 +1945,7 @@ class TestLightCompilerGpu(unittest.TestCase):
                 self.assertEqual("-gpu" in vrad, not exact)
                 self.assertEqual(vrad[-1], job.base)        # (options before the map)
                 self.assertNotIn("-gpu", job._valve_vrad)   # Valve's vrad never gets it
-            job = TestVisCompiler._job(self, cc.CompileOptions())
+            job = TestVisCompiler._job(self, cc.CompileOptions(light_tool="VALVE"))
             self.assertNotIn("-gpu", dict(job.steps)["vrad"])
         finally:
             cc.HLVRAD, cc.HLPHYS = old
@@ -1957,7 +1957,8 @@ class TestLightCompilerGpu(unittest.TestCase):
         gpu, exact = cc.CompileOptions(light_tool="HAMMERLESS"), cc.CompileOptions(light_tool="HAMMERLESS", light_exact=True)
         self.assertEqual(cc._opts_rest(repr(gpu)), cc._opts_rest(repr(exact)))
         self.assertNotEqual(cc._opts_rad(repr(gpu)), cc._opts_rad(repr(exact)))
-        self.assertEqual(cc._opts_rad(repr(cc.CompileOptions())), cc._opts_rad(repr(cc.CompileOptions(light_exact=True))))
+        self.assertEqual(cc._opts_rad(repr(cc.CompileOptions(light_tool="VALVE"))),
+                         cc._opts_rad(repr(cc.CompileOptions(light_tool="VALVE", light_exact=True))))
 
     def test_lighting_settings(self):
         # each lighting setting is a vrad / hlvrad option; changing one relights only, and ours count only for hlvrad
@@ -1973,7 +1974,7 @@ class TestLightCompilerGpu(unittest.TestCase):
         for changed in (replace(a, bounces=10), replace(a, ss_points=8), replace(a, extra_vrad="-smooth 30")):
             self.assertEqual(cc._opts_rest(repr(a)), cc._opts_rest(repr(changed)))
             self.assertNotEqual(cc._opts_rad(repr(a)), cc._opts_rad(repr(changed)))
-        v = cc.CompileOptions()
+        v = cc.CompileOptions(light_tool="VALVE")
         self.assertEqual(cc._opts_rad(repr(v)), cc._opts_rad(repr(replace(v, ss_points=8))))
 
     def test_gi_bounce(self):
