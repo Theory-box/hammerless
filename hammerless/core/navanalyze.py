@@ -422,6 +422,27 @@ def compress_visibility(mesh, lists: list[dict[int, int]]) -> None:
         out = [(k, v) for k, v in mine.items() if other.get(k) != v]
         out += [(k, NOT_VISIBLE) for k in other if k not in mine]
         return out
+
+    def delta_size(i, j, limit):     # len(delta(i, j)), or limit + 1 once it's over the limit
+        mine, other = full[i], full[j]
+        n = abs(len(mine) - len(other))
+        if n > limit:
+            return limit + 1
+        n = 0
+        get = other.get
+        for k, v in mine.items():
+            if get(k) != v:
+                n += 1
+                if n > limit:
+                    return n
+        for k in other:
+            if k not in mine:
+                n += 1
+                if n > limit:
+                    return n
+        return n
+    # (only a delta of at most MAX_VIS_DELTA entries is ever stored, so larger ones are only counted that far: the
+    # neighbour chosen is the same, the first with the smallest delta)
     for i, a in enumerate(mesh.areas):
         if inherited_from[i]:
             continue
@@ -435,12 +456,12 @@ def compress_visibility(mesh, lists: list[dict[int, int]]) -> None:
                     j = inherit[j]
                     if j == i:
                         continue
-                dl = delta(i, j)
-                if anchor is None or len(dl) < len(best):
-                    best, anchor = dl, j
-        if anchor is not None and len(best) <= MAX_VIS_DELTA and anchor != i:
+                size = delta_size(i, j, MAX_VIS_DELTA if best is None else min(best, MAX_VIS_DELTA))
+                if size <= MAX_VIS_DELTA and (best is None or size < best):
+                    best, anchor = size, j
+        if anchor is not None and anchor != i:
             inherit[i] = anchor
-            stored[i] = best
+            stored[i] = delta(i, anchor)
             inherited_from[anchor] = True
     for i, a in enumerate(mesh.areas):
         a.visible = [(k, v) for k, v in stored[i]]
