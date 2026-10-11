@@ -57,13 +57,146 @@ EXPORT void hl_world_drop(int slot) {
     while (g_nslots > 0 && !SL[g_nslots - 1].used) g_nslots--;
 }
 
+/* ---------------------------------------------------------------- brush trees for the visibility run
+ * A bounding-box tree per slot, built when a run starts: a trace's candidate brushes are those whose box (grown by
+ * the trace's extents and a unit) the swept segment passes through, instead of every brush in a strip of grid cells.
+ * Every brush clip() can hit (or that holds the start) is among them; the brushes the cell gather adds besides never
+ * change a result (clip leaves the trace alone when the segment misses the grown box), and the callers don't depend
+ * on order (see trace_w_any / vis_line_clear). Same results, far fewer candidates to look at. */
+typedef struct { double lo[3], hi[3]; int first, count, right; } BNode;    /* count > 0: leaf of idx[first..] */
+typedef struct { BNode *n; int *idx; int nn; } Bvh;
+static Bvh SB[MAX_SLOTS];
+
+static void bvh_free(Bvh *b) { free(b->n); free(b->idx); memset(b, 0, sizeof *b); }
+static const Brush *g_sort_br; static int g_sort_axis;
+static int cmp_centroid(const void *x, const void *y) {
+    const double *a = g_sort_br[*(const int *)x].b, *b = g_sort_br[*(const int *)y].b;
+    double ca = a[g_sort_axis] + a[3 + g_sort_axis], cb = b[g_sort_axis] + b[3 + g_sort_axis];
+    return (ca > cb) - (ca < cb);
+}
+static int bvh_build(Bvh *B, const World *W) {          /* 0: out of memory (the run then uses the cell grid) */
+    memset(B, 0, sizeof *B);
+    if (W->nb <= 0) return 1;
+    B->idx = malloc(sizeof(int) * W->nb);
+    B->n = malloc(sizeof(BNode) * (2 * W->nb + 1));
+    int *stack = malloc(sizeof(int) * 3 * (2 * W->nb + 1));
+    if (!B->idx || !B->n || !stack) { free(stack); bvh_free(B); return 0; }
+    for (int i = 0; i < W->nb; i++) B->idx[i] = i;
+    g_sort_br = W->brushes;
+    int sp = 0; B->nn = 1;
+    stack[sp++] = 0; stack[sp++] = 0; stack[sp++] = W->nb;            /* node, first, count */
+    while (sp) {
+        int count = stack[--sp], first = stack[--sp], node = stack[--sp];
+        BNode *nd = &B->n[node];
+        double clo[3] = {1e300, 1e300, 1e300}, chi[3] = {-1e300, -1e300, -1e300};
+        for (int k = 0; k < 3; k++) { nd->lo[k] = 1e300; nd->hi[k] = -1e300; }
+        for (int i = first; i < first + count; i++) {
+            const double *b = W->brushes[B->idx[i]].b;
+            for (int k = 0; k < 3; k++) {
+                if (b[k] < nd->lo[k]) nd->lo[k] = b[k];
+                if (b[3 + k] > nd->hi[k]) nd->hi[k] = b[3 + k];
+                double c = b[k] + b[3 + k];
+                if (c < clo[k]) clo[k] = c;
+                if (c > chi[k]) chi[k] = c;
+            }
+        }
+        if (count <= 4) { nd->first = first; nd->count = count; nd->right = -1; continue; }
+        int axis = 0;
+        for (int k = 1; k < 3; k++) if (chi[k] - clo[k] > chi[axis] - clo[axis]) axis = k;
+        g_sort_axis = axis;
+        qsort(B->idx + first, count, sizeof(int), cmp_centroid);
+        int half = count / 2;
+        int left = B->nn++, right = B->nn++;
+        nd->count = 0; nd->first = left; nd->right = right;
+        stack[sp++] = left; stack[sp++] = first; stack[sp++] = half;
+        stack[sp++] = right; stack[sp++] = first + half; stack[sp++] = count - half;
+    }
+    free(stack);
+    return 1;
+}
+/* does the segment p + t d (0 <= t <= 1) meet the box lo..hi grown by g? (conservative: NaN keeps the box) */
+static int seg_box(const double *p, const double *d, const double *lo, const double *hi, const double *g) {
+    double t0 = 0.0, t1 = 1.0;
+    for (int k = 0; k < 3; k++) {
+        double a = lo[k] - g[k], b = hi[k] + g[k];
+        if (d[k] == 0.0) { if (p[k] < a || p[k] > b) return 0; continue; }
+        double inv = 1.0 / d[k], ta = (a - p[k]) * inv, tb = (b - p[k]) * inv;
+        if (ta > tb) { double t = ta; ta = tb; tb = t; }
+        if (ta > t0) t0 = ta;
+        if (tb < t1) t1 = tb;
+        if (t0 > t1) return 0;
+    }
+    return 1;
+}
+/* the candidate brushes of a trace p1 -> p2 with extents e, into S->ids; -1: no tree for this slot */
+static int bvh_collect(Scratch *S, int slot, const double *p1, const double *p2, double ex, double ey, double ez) {
+    const Bvh *B = &SB[slot];
+    if (!B->n) return SL[slot].w.nb > 0 ? -1 : 0;
+    for (int k = 0; k < 3; k++)                       /* (as gather: absurd coordinates touch nothing) */
+        if (!(fabs(p1[k]) < 1e7) || !(fabs(p2[k]) < 1e7)) return 0;
+    double d[3] = {p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]}, g[3] = {ex + 1, ey + 1, ez + 1};
+    int stack[128], sp = 0, n = 0;
+    stack[sp++] = 0;
+    while (sp) {
+        const BNode *nd = &B->n[stack[--sp]];
+        if (!seg_box(p1, d, nd->lo, nd->hi, g)) continue;
+        if (nd->count == 0) {
+            if (sp + 2 > 128) return -1;              /* (deeper than a median split gets: use the cell grid) */
+            stack[sp++] = nd->right; stack[sp++] = nd->first;
+            continue;
+        }
+        for (int i = nd->first; i < nd->first + nd->count; i++) {
+            int id = B->idx[i];
+            const Brush *br = &SL[slot].w.brushes[id];
+            if (!seg_box(p1, d, br->b, br->b + 3, g)) continue;
+            if (n >= S->cap) {
+                int *q = realloc(S->ids, sizeof(int) * (n * 2 + 64));
+                if (!q) return -1;
+                S->ids = q; S->cap = n * 2 + 64;
+            }
+            S->ids[n++] = id;
+        }
+    }
+    return n;
+}
+/* trace_w_any(..., unordered=1) on slot k with the tree's candidates */
+static Tr vis_hull(Scratch *S, int slot, const double *start, const double *end, const double *mins, const double *maxs) {
+    const World *W = &SL[slot].w;
+    double ex = (maxs[0] - mins[0]) * 0.5, ey = (maxs[1] - mins[1]) * 0.5, ez = (maxs[2] - mins[2]) * 0.5;
+    double ox = (maxs[0] + mins[0]) * 0.5, oy = (maxs[1] + mins[1]) * 0.5, oz = (maxs[2] + mins[2]) * 0.5;
+    double p1[3] = {start[0] + ox, start[1] + oy, start[2] + oz}, p2[3] = {end[0] + ox, end[1] + oy, end[2] + oz};
+    int n = bvh_collect(S, slot, p1, p2, ex, ey, ez);
+    if (n < 0) return trace_w_any(W, S, NULL, start, end, mins, maxs, 1);
+    int is_point = (ex == 0.0 && ey == 0.0 && ez == 0.0);
+    Tr tr; memset(&tr, 0, sizeof tr); tr.fraction = 1.0;
+    for (int k = 0; k < n; k++) {
+        const double *b = W->brushes[S->ids[k]].b;
+        if (p1[0] >= b[0] - ex - 1 && p1[0] <= b[3] + ex + 1 && p1[1] >= b[1] - ey - 1 && p1[1] <= b[4] + ey + 1
+                && p1[2] >= b[2] - ez - 1 && p1[2] <= b[5] + ez + 1) {
+            qsort(S->ids, n, sizeof(int), cmp_int);
+            break;
+        }
+    }
+    S->last_n = n;
+    for (int k = 0; k < n; k++) {
+        clip(W->sides, &W->brushes[S->ids[k]], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], ex, ey, ez, is_point, &tr);
+        if (tr.allsolid) break;
+    }
+    if (tr.fraction == 1.0) { tr.ex = end[0]; tr.ey = end[1]; tr.ez = end[2]; }
+    else {
+        double f = tr.fraction;
+        tr.ex = start[0] + f * (end[0] - start[0]); tr.ey = start[1] + f * (end[1] - start[1]); tr.ez = start[2] + f * (end[2] - start[2]);
+    }
+    return tr;
+}
+
 /* UTIL_TraceHull / UTIL_TraceLine with MASK_NAV_VISION through every slot */
 static volatile LONG64 g_st_rays, g_st_hulls, g_st_cands, g_st_slots, g_st_pvsms;
 static Tr vis_trace(Scratch *S, const float *a, const float *b, const float *mn, const float *mx) {
     double A[3] = {a[0], a[1], a[2]}, B[3] = {b[0], b[1], b[2]}, MN[3] = {mn[0], mn[1], mn[2]}, MX[3] = {mx[0], mx[1], mx[2]};
     int is_ray = mn[0] == 0 && mn[1] == 0 && mn[2] == 0 && mx[0] == 0 && mx[1] == 0 && mx[2] == 0;
     if (g_stats) { if (is_ray) InterlockedIncrement64(&g_st_rays); else InterlockedIncrement64(&g_st_hulls); }
-    Tr best = trace_w_any(&SL[0].w, S, NULL, A, B, MN, MX, 1);
+    Tr best = vis_hull(S, 0, A, B, MN, MX);
     if (g_stats) InterlockedAdd64(&g_st_cands, S->last_n);
     double lo[3], hi[3];                 /* the swept box, with trace_w's 1-unit candidate margin */
     for (int i = 0; i < 3; i++) {
@@ -75,7 +208,7 @@ static Tr vis_trace(Scratch *S, const float *a, const float *b, const float *mn,
         if (s->lo[0] > hi[0] || s->hi[0] < lo[0] || s->lo[1] > hi[1] || s->hi[1] < lo[1] || s->lo[2] > hi[2] || s->hi[2] < lo[2])
             continue;                    /* trace_w would find no candidate brush: no hit */
         if (g_stats) InterlockedIncrement64(&g_st_slots);
-        Tr t = trace_w_any(&s->w, S, NULL, A, B, MN, MX, 1);
+        Tr t = vis_hull(S, k, A, B, MN, MX);
         if (s->physics && t.startsolid) { t.fraction = 0.0; t.ex = A[0]; t.ey = A[1]; t.ez = A[2]; }
         if (t.fraction < best.fraction) best = t;
     }
@@ -215,9 +348,10 @@ static const float ZERO3[3] = {0, 0, 0};
 /* line_clear_w for slot k, sooner: rays come in runs from one start point (an eye), and a blocked ray is usually
  * blocked by the brush that blocked the one before (59% on c2m1). When the start is inside no brush of the slot
  * (looked up once per start point), the first hit is the answer (line_clear_w), so that brush is tried first. */
-static int start_inside(const World *W, Scratch *S, const double *p) {
+static int start_inside(const World *W, Scratch *S, int slot, const double *p) {
     double box[6] = {p[0] - 1, p[1] - 1, p[2] - 1, p[0] + 1, p[1] + 1, p[2] + 1};
-    int n = gather_any(W, S, p[0], p[1], p[0], p[1], 0.0, 0.0, box, 0);
+    int n = bvh_collect(S, slot, p, p, 0.0, 0.0, 0.0);
+    if (n < 0) n = gather_any(W, S, p[0], p[1], p[0], p[1], 0.0, 0.0, box, 0);
     for (int k = 0; k < n; k++) {
         const Brush *b = &W->brushes[S->ids[k]];
         if (p[0] < b->b[0] || p[0] > b->b[3] || p[1] < b->b[1] || p[1] > b->b[4] || p[2] < b->b[2] || p[2] > b->b[5]) continue;
@@ -241,7 +375,7 @@ static int vis_line_clear(Scratch *S, int slot, const double *A, const double *B
     RayCache *c = &S->rc[slot];
     if (!c->valid || c->p[0] != A[0] || c->p[1] != A[1] || c->p[2] != A[2]) {
         c->p[0] = A[0]; c->p[1] = A[1]; c->p[2] = A[2]; c->valid = 1;
-        c->inside = start_inside(W, S, A);
+        c->inside = start_inside(W, S, slot, A);
     }
     if (c->inside) return line_clear_w(W, S, A, B, inside_out);
     if (inside_out) *inside_out = 0;
@@ -253,7 +387,8 @@ static int vis_line_clear(Scratch *S, int slot, const double *A, const double *B
     double x0 = (A[0] < B[0] ? A[0] : B[0]) - 1, y0 = (A[1] < B[1] ? A[1] : B[1]) - 1, z0 = (A[2] < B[2] ? A[2] : B[2]) - 1;
     double x1 = (A[0] > B[0] ? A[0] : B[0]) + 1, y1 = (A[1] > B[1] ? A[1] : B[1]) + 1, z1 = (A[2] > B[2] ? A[2] : B[2]) + 1;
     double box[6] = {x0, y0, z0, x1, y1, z1};
-    int n = gather_any(W, S, A[0], A[1], B[0], B[1], 0.0, 0.0, box, 0);
+    int n = bvh_collect(S, slot, A, B, 0.0, 0.0, 0.0);
+    if (n < 0) n = gather_any(W, S, A[0], A[1], B[0], B[1], 0.0, 0.0, box, 0);
     for (int k = 0; k < n; k++) {
         Tr tr; memset(&tr, 0, sizeof tr); tr.fraction = 1.0;
         clip(W->sides, &W->brushes[S->ids[k]], A[0], A[1], A[2], B[0], B[1], B[2], 0, 0, 0, 1, &tr);
@@ -420,6 +555,7 @@ static int vis_run_impl(float radius) {
     NVL = NVA;
     if (radius <= 0.0f) radius = 1500.0f;
     g_vis_r2 = radius * radius;
+    for (int k = 0; k < g_nslots; k++) if (SL[k].used) bvh_build(&SB[k], &SL[k].w);
     int threads = g_vis_threads;
     if (threads <= 0) { SYSTEM_INFO si; GetSystemInfo(&si); threads = (int)si.dwNumberOfProcessors; }
     if (threads > 64) threads = 64;
@@ -440,6 +576,7 @@ static int vis_run_impl(float radius) {
         for (int t = 0; t < made; t++) CloseHandle(h[t]);
     }
     t_oom_jmp = armed;
+    for (int k = 0; k < MAX_SLOTS; k++) bvh_free(&SB[k]);
     for (int i = 0; i < NVA; i++) {
         il_push(&VL[i], (i << 2) | VIS_COMPLETE);
         for (int k = 0; k < VR[i].n; k += 2) {
@@ -462,7 +599,12 @@ EXPORT int hl_vis_get(int *counts, int *entries, int cap) {
     }
     return k;
 }
-static int vis_compute_impl(int ti, int ai) { return compute_vis(&g_scr, ti, ai); }   /* one direction (tests) */
+static int vis_compute_impl(int ti, int ai) {                     /* one direction (tests) */
+    free(g_scr.rc); g_scr.rc = NULL;                               /* (its cache could hold another world's brushes) */
+    int r = compute_vis(&g_scr, ti, ai);
+    free(g_scr.rc); g_scr.rc = NULL;
+    return r;
+}
 
 /* ---------------------------------------------------------------- allocation failures */
 static void oom_cleanup(void) {               /* back to an empty, consistent state */
