@@ -58,6 +58,7 @@ _ALIASES = {
     "ZOMBIE_SPAWN_AREA": "commons nav obscured", "trigger_once": "touch", "func_detail": "world brush",
     "env_player_blocker": "invisible wall clip", "prop_static": "model", "prop_physics": "model barrel",
     "hammerless_control": "no nav cut bake lightmap skip vis detail sound spawn only exclude volume",
+    "hammerless_nav_area": "nav square area manual roof smoker ledge mesh",
 }
 _TIPS = {
     "START_SAFE_ROOM": "Comes with 4 survivor spawns, weapons and a door. One per map.",
@@ -85,6 +86,7 @@ BRUSH_BOXES = {
     "hammerless_nav_cut": ((-512, -512, -64), (512, 512, 256)),
     "hammerless_no_bake": ((-512, -512, -64), (512, 512, 256)),
     "hammerless_control": ((-512, -512, -64), (512, 512, 256)),
+    "hammerless_nav_area": ((-256, -256, 0), (256, 256, 8)),
     "info_changelevel": ((0, 0, 0), (320, 256, 128)),
 }
 DEFAULT_BRUSH_BOX = ((-64, -64, 0), (64, 64, 128))

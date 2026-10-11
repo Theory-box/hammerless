@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Nav Area (Add > Volumes):** one nav area exactly where you put it, at its outline from above and its bottom height. The nav made there is replaced by it; it's linked both ways to level nav beside its edges and one way to nav a drop below them (up to 400 units, like the generator). One big area on a roof is one pick in the Director's draw instead of dozens, and smokers and the other specials use it like any roof (commons stay off where survivors can't walk). Only for nav made in Blender.
 - **Nav Culling (Nav Mesh panel), on by default:** like the game's own generator, nav grows only from the item spawns and Landmarks, so put a Landmark on each roof you want (smoker spots). Off, every flat top inside the map gets nav (0.13.2's behaviour). The Director spreads its commons over every nav area, so lots of roof areas cost street commons: on a real map the preview shows ~30 starting commons with culling on and landmarks on the roofs you want, ~17 with it off.
 - **Copies of an imported map's props and other point entities are built** (Shift+D on a van, a light, a spawn): they used to be left out with only a warning. Copies of brush entities still aren't (add a new one, or duplicate it in Hammer).
 

@@ -29,6 +29,8 @@ SPAWN_ATTRIBUTES = {
 NAV_CUT_BIT = 1 << 30        # a region that is a No Nav Volume (not an attribute: never written to areas)
 NAV_ONLY_BIT = 1 << 29       # a region the nav is made only inside (Control Volume, Only inside)
 NAV_VOLUME_BITS = NAV_CUT_BIT | NAV_ONLY_BIT
+NAV_AREA_BIT = 1 << 28       # a Nav Area: one area of its own (not an attribute either)
+NOT_ATTRIBUTE_BITS = NAV_VOLUME_BITS | NAV_AREA_BIT
 CUT_EPSILON = 1.0            # (a floor point on the volume's bottom face counts as inside)
 
 # Nav area centres sit slightly above the floor; pad regions so floor-level areas count.
@@ -88,7 +90,14 @@ def collect_regions(ir: MapIR) -> tuple[list[NavRegion], list[str]]:
         if "spawns" in v.aspects and not v.only:
             regions.append(NavRegion(v.mins, v.maxs, SPAWN_ATTRIBUTES["EMPTY"] | SPAWN_ATTRIBUTES["NO_MOBS"], v.name,
                                      _region_hulls(v.entity.brushes, padded=False)))
+    from .entities import NAV_AREA
     for e in ir.entities:
+        if e.classname == NAV_AREA:
+            pts = [v for b in e.brushes for f in b.faces for v in f.verts]
+            if pts:
+                mins, maxs = g.bounds(pts)
+                regions.append(NavRegion(tuple(mins), tuple(maxs), NAV_AREA_BIT, e.source, None))
+            continue
         if e.classname == NAV_REGION:
             bits, unknown = parse_attributes(e.keyvalues.get("attributes", ""))
             if unknown:
@@ -221,6 +230,9 @@ def navmark_script(regions: list[NavRegion], map_name: str, climbs: list[NavClim
         "}",
     ]
     for r in regions:
+        if r.bits & NAV_AREA_BIT:        # (made in Blender only; listed so moving one makes a new nav)
+            lines.append(f"// Nav Area {sq_text(r.source)}: {_vec(r.mins)} {_vec(r.maxs)}")
+            continue
         if r.bits & NAV_VOLUME_BITS:
             continue
         lines.append(f'printl("HAMMERLESS_NAVMARK {sq_text(r.source)}: " + HL_Mark(areas, {_vec(r.mins)}, {_vec(r.maxs)}, {r.bits}, {_hulls_sq(r.hulls)}) + " areas");')

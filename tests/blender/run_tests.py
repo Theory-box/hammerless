@@ -925,6 +925,23 @@ def test_logic_loops():
     assert "circle of value wires" in log, log
 
 
+def test_nav_area_volume():
+    # Add > Volumes > Nav Area: never written into the map, but the nav builder gets it as one area of its own
+    from hammerless.blender.ops import build_map_text, game_root
+    from hammerless.core.nav import NAV_AREA_BIT, collect_regions
+    reset_scene()
+    add_box("floor", (20, 20, 0.5), (0, 0, -0.25))
+    assert bpy.ops.hammerless.spawn_item(item="entity:hammerless_nav_area") == {"FINISHED"}
+    area = bpy.context.object
+    assert area.hammerless.classname == "hammerless_nav_area", area.hammerless.classname
+    ir, text, rep = build_map_text(bpy.context, game_root(bpy.context))
+    assert text is not None, rep.errors
+    assert "hammerless_nav_area" not in text
+    regions, problems = collect_regions(ir)
+    mine = [r for r in regions if r.bits & NAV_AREA_BIT]
+    assert len(mine) == 1 and mine[0].maxs[0] - mine[0].mins[0] > 100, [(r.mins, r.maxs) for r in mine]
+
+
 def test_new_landmarks_get_free_names():
     # each Landmark added gets a name no other landmark has (two with one name stop the build)
     reset_scene()

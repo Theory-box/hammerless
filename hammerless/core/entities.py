@@ -55,7 +55,8 @@ CONTROL = "hammerless_control"        # pseudo-entity: where nav / light / vis /
 LEGACY_VOLUMES = {NAV_CUT, NO_BAKE}   # (older volumes a Control Volume replaces: still read, not in the Add menu)
 CRESCENDO = "hammerless_crescendo"     # pseudo-entity, see gamefiles.py
 CLIMB = "hammerless_zombie_climb"      # pseudo-entity, see nav.py collect_climbs
-PSEUDO_ENTITIES = {NAV_REGION, NAV_CUT, NO_BAKE, CONTROL, CRESCENDO, CLIMB}  # never written to the map
+NAV_AREA = "hammerless_nav_area"       # pseudo-entity: one nav area of its own (navpredict.add_nav_areas)
+PSEUDO_ENTITIES = {NAV_REGION, NAV_CUT, NO_BAKE, CONTROL, CRESCENDO, CLIMB, NAV_AREA}  # never written to the map
 # Tallest wall common infected climbed from a hand-made nav link in our tests (160 yes, 172 no)
 ZOMBIE_CLIMB_MAX = 160.0
 ZOMBIES_ONLY = ("2", "zombies", "zombie", "infected")   # func_ladder "team" values meaning zombies only
@@ -318,6 +319,14 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
                KeyDef("sound", "0", "Sound", (("0", "No"), ("1", "Yes"))),
                KeyDef("spawns", "0", "Zombie Spawns", (("0", "No"), ("1", "Yes")))),
               brush=True),
+
+    EntityDef(NAV_AREA, "Nav Area", "Brush Entities",
+              "One nav area exactly where you put it: its outline from above, at its bottom height (keep it "
+              "square to the world). The nav made there is replaced by it, it's linked to the nav touching its "
+              "edges and drops to the nav below them. For roofs and ledges: one big area is one pick in the "
+              "Director's draw instead of dozens (it spreads its commons over every area). Only for nav made "
+              "in Blender. Not written into the map.",
+              (), brush=True),
 
     EntityDef(CLIMB, "Zombie Climb Point", "Infected",
               "One end of a Zombie Climb (use the Zombie Climb preset: a bottom and a top point). "

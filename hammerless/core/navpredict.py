@@ -10,7 +10,7 @@ from __future__ import annotations
 from .collision import CollisionWorld
 from .navareas import NAV_MESH_JUMP, Generator
 from .navfile import NavArea, NavLadder, NavMesh
-from .nav import NAV_VOLUME_BITS
+from .nav import NAV_VOLUME_BITS, NOT_ATTRIBUTE_BITS
 from .navgen import NAV_MESH_NO_MERGE
 from .vmf import parse_shared
 
@@ -63,7 +63,7 @@ def to_navmesh(areas, regions, ladders=()) -> NavMesh:
         n.connections = [[ids[id(b)] for b in a.connect[d] if id(b) in ids] for d in range(4)]
         c = n.centre
         for r in regions:
-            if not r.bits & NAV_VOLUME_BITS and r.contains(c):
+            if not r.bits & NOT_ATTRIBUTE_BITS and r.contains(c):
                 n.spawn_attributes |= r.bits
         mesh.areas.append(n)
     lids = {id(lad): i + 1 for i, lad in enumerate(ladders)}
@@ -285,8 +285,8 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     problems = []
     # where survivors can walk from the start room: worked out before the zombie-only climb links
     pre = to_navmesh(gen.areas, regions, gen.ladders)
-    walk = survivor_areas(pre)
-    survivors = None if walk is None else {id(a) for a, m in zip(gen.areas, pre.areas) if m.id in walk}
+    obj = {m.id: id(a) for a, m in zip(gen.areas, pre.areas)}
+    walkable = {(obj[a], obj[b]) for a, nxt in _links(pre).items() for b in nxt}   # (links survivors can use too)
     if wall_climbs:
         from .entities import ZOMBIE_CLIMB_MAX
         if progress:
@@ -304,13 +304,22 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     if not gen.areas and any(len(c) > 3 and c[3] for c in gen.cuts):
         problems.insert(0, "No nav mesh: nothing walkable is inside the Control Volumes set to Only inside (nav). "
                            "Each needs floor in it that survivors can reach from a spawn (or a seed)")
+    final = {m.id: id(a) for a, m in zip(gen.areas, mesh.areas)}
+    made, made_links = add_nav_areas(mesh, regions)
+    walkable = {(a, b) for a, nxt in _links(mesh).items() for b in nxt
+                if (a, b) in made_links or (a in final and b in final and (final[a], final[b]) in walkable)}
     blocked = spawn_block_problems(mesh, regions)        # (the user's own no-spawn boxes)
-    if survivors is not None:
+    start = [a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START]
+    if start:
         # commons off the roofs and ledges survivors can't walk to (the old nav put 26 of 30 starting commons there):
         # EMPTY is only read by the wandering commons' placement (server.dll); specials (smokers prefer spawning
-        # above the survivors) and hordes still use these areas
-        for a, m in zip(gen.areas, mesh.areas):
-            if id(a) not in survivors:
+        # above the survivors) and hordes still use these areas. (The zombie-only climb links don't count)
+        edges: dict[int, list] = {}
+        for a, b in walkable:
+            edges.setdefault(a, []).append(b)
+        survivors = _spread(start, edges)
+        for m in mesh.areas:
+            if m.id not in survivors:
                 m.spawn_attributes |= EMPTY
     mesh.problems = problems + blocked
     return mesh
@@ -342,6 +351,76 @@ def _spread(sources, edges) -> set:
     return seen
 
 
+NAV_AREA_HEIGHT = 48.0       # nav this far above or below a Nav Area, under it, is what it replaces
+NAV_AREA_GAP = 40.0          # nav whose edge is this close beside a Nav Area's (and level with it) is linked to it
+NAV_AREA_DROP_GAP = 64.0     # nav this close beside it and lower or higher (a drop) is linked one way
+
+
+def add_nav_areas(mesh: NavMesh, regions) -> tuple[list[int], set]:
+    """The Nav Area volumes (Add > Volumes > Nav Area) as one nav area each: its outline from above at its bottom
+    height. The areas under it (within NAV_AREA_HEIGHT of its height) go; it's linked both ways to the areas level
+    with it beside its edges (steps up to STEP_HEIGHT) and one way to the ones a drop away (up to DEATH_DROP: the
+    infected take no fall damage), like the generator links its own. Returns (the new area ids, the links made)."""
+    from .nav import NAV_AREA_BIT, NOT_ATTRIBUTE_BITS
+    from .navgen import DEATH_DROP, STEP_HEIGHT
+    made, links = [], set()
+    for r in regions:
+        if not r.bits & NAV_AREA_BIT:
+            continue
+        (x0, y0, z), (x1, y1, _top) = r.mins, r.maxs
+        if x1 - x0 < 1.0 or y1 - y0 < 1.0:
+            continue
+
+        def under(a):
+            ox0, ox1 = max(x0, min(a.nw[0], a.se[0])), min(x1, max(a.nw[0], a.se[0]))
+            oy0, oy1 = max(y0, min(a.nw[1], a.se[1])), min(y1, max(a.nw[1], a.se[1]))
+            return ox1 > ox0 and oy1 > oy0 and abs(a.z_at((ox0 + ox1) / 2, (oy0 + oy1) / 2) - z) <= NAV_AREA_HEIGHT
+        gone = {a.id for a in mesh.areas if under(a)}
+        if gone:
+            mesh.areas = [a for a in mesh.areas if a.id not in gone]
+            for a in mesh.areas:
+                a.connections = [[i for i in d if i not in gone] for d in a.connections]
+            for lad in mesh.ladders:
+                for f in ("top_forward", "top_left", "top_right", "top_behind", "bottom_area"):
+                    if getattr(lad, f) in gone:
+                        setattr(lad, f, 0)
+        new = NavArea(max((a.id for a in mesh.areas), default=0) + 1, 0, (x0, y0, z), (x1, y1, z), z, z)
+        c = new.centre
+        for q in regions:
+            if not q.bits & NOT_ATTRIBUTE_BITS and q.contains(c):
+                new.spawn_attributes |= q.bits
+        for b in mesh.areas:
+            bx0, bx1 = min(b.nw[0], b.se[0]), max(b.nw[0], b.se[0])
+            by0, by1 = min(b.nw[1], b.se[1]), max(b.nw[1], b.se[1])
+            # (side, b's edge distance outward from ours, the span both have along it, where to read b's height)
+            sides = []
+            ox0, ox1, oy0, oy1 = max(x0, bx0), min(x1, bx1), max(y0, by0), min(y1, by1)
+            if ox1 - ox0 > 1.0:
+                sides.append((0, y0 - by1, ((ox0 + ox1) / 2, by1)))      # north (-y)
+                sides.append((2, by0 - y1, ((ox0 + ox1) / 2, by0)))      # south (+y)
+            if oy1 - oy0 > 1.0:
+                sides.append((1, bx0 - x1, (bx0, (oy0 + oy1) / 2)))      # east (+x)
+                sides.append((3, x0 - bx1, (bx1, (oy0 + oy1) / 2)))      # west (-x)
+            for d, gap, (px, py) in sides:
+                if gap < -1.0:
+                    continue
+                dz = b.z_at(px, py) - z
+                level = abs(dz) <= STEP_HEIGHT
+                if gap > (NAV_AREA_GAP if level else NAV_AREA_DROP_GAP) or abs(dz) > DEATH_DROP:
+                    continue
+                back = (d + 2) % 4
+                if dz <= STEP_HEIGHT:                   # (level, or a drop down from the Nav Area)
+                    new.connections[d].append(b.id)
+                    links.add((new.id, b.id))
+                if dz >= -STEP_HEIGHT:                  # (level, or a drop down onto it)
+                    b.connections[back].append(new.id)
+                    links.add((b.id, new.id))
+                break
+        mesh.areas.append(new)
+        made.append(new.id)
+    return made, links
+
+
 def survivor_areas(mesh: NavMesh) -> set | None:
     """Ids of the areas survivors can walk (drop, climb a ladder) to from the start room; None without one."""
     start = [a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START]
@@ -361,7 +440,7 @@ def spawn_block_problems(mesh: NavMesh, regions) -> list[str]:
     out = []
     total = len(mesh.areas) or 1
     for r in regions:
-        if not r.bits & (EMPTY | NO_MOBS) or r.bits & NAV_VOLUME_BITS:
+        if not r.bits & (EMPTY | NO_MOBS) or r.bits & NOT_ATTRIBUTE_BITS:
             continue
         n = sum(1 for a in mesh.areas if all(r.mins[i] <= a.centre[i] <= r.maxs[i] for i in range(3)))
         if n / total > SPAWN_BLOCK_SHARE:

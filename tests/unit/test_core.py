@@ -1329,6 +1329,32 @@ class TestLaddersAndClimbs(unittest.TestCase):
         _c, problems = collect_climbs(ir)
         self.assertTrue(any("both a bottom and a top" in p for p in problems))
 
+    def test_nav_area_volume(self):
+        """A Nav Area is one area at its outline and bottom height: the small areas under it go, it's linked both ways
+        to a level neighbour beside its edge and one way (a drop) to the street below; nav far below isn't touched."""
+        from hammerless.core.nav import NAV_AREA_BIT, NavRegion
+        from hammerless.core.navfile import NavArea, NavMesh
+        from hammerless.core.navpredict import add_nav_areas
+        mesh = NavMesh(analyzed=False)
+        pieces = [NavArea(i + 1, 0, (x, 0.0, 200.0), (x + 50.0, 100.0, 200.0), 200.0, 200.0)
+                  for i, x in enumerate((0.0, 50.0, 100.0))]               # a cut-up roof, 0..150 x 0..100
+        ledge = NavArea(4, 0, (-100.0, 0.0, 210.0), (-20.0, 100.0, 210.0), 210.0, 210.0)   # level (a step up), west
+        street = NavArea(5, 0, (180.0, -50.0, 0.0), (400.0, 150.0, 0.0), 0.0, 0.0)        # 200 below, east
+        below = NavArea(6, 0, (0.0, 0.0, 0.0), (150.0, 100.0, 0.0), 0.0, 0.0)              # under the roof
+        mesh.areas = pieces + [ledge, street, below]
+        region = NavRegion((0.0, 0.0, 200.0), (150.0, 100.0, 208.0), NAV_AREA_BIT, "roof", None)
+        made, links = add_nav_areas(mesh, [region])
+        ids = {a.id for a in mesh.areas}
+        self.assertEqual(ids, {4, 5, 6, made[0]})
+        new = next(a for a in mesh.areas if a.id == made[0])
+        self.assertEqual((new.nw, new.se), ((0.0, 0.0, 200.0), (150.0, 100.0, 200.0)))
+        self.assertIn(4, new.connections[3])                     # west: the ledge, both ways
+        self.assertIn(new.id, ledge.connections[1])
+        self.assertIn(5, new.connections[1])                     # east: drop to the street, one way
+        self.assertNotIn(new.id, street.connections[3])
+        self.assertEqual({(new.id, 4), (4, new.id), (new.id, 5)}, links)
+        self.assertEqual(below.connections, [[], [], [], []])
+
     def test_top_seeds(self):
         """Every flat top inside the map gets a nav seed (a roof the flood from the spawns never climbs onto); the top
         of the map's own roof, with nothing above it, doesn't; nor does a thin wall top."""
