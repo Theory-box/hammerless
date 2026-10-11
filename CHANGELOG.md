@@ -1,9 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.13.1 (test release, 2026-10-11)
 
+**Zombies**
+- **Zombie Spawns preview** (Nav Mesh > Preview): where the AI Director puts its wandering common infected, from a seed (Reroll for another), with the survivors at the start or any point along the route. It shows which appear right away, which wait until the survivors come near, and which are lost to areas that can't hold zombies. It uses the Director panel's Max Common Infected as its cap. Checked against the game on a real map: the predicted counts matched what spawned closely.
+- **Zombie report in Problems:** why a map has few zombies: budget lost to areas that can't hold wanderers (roofs, ledges, no-spawn marks), a short route, no horde in a normal run-through, and **dead zones** (stretches with almost nowhere hidden ahead of the survivors for zombies to come from). A new nav colour mode, *Hidden spawn spots ahead*, shows them on the map.
+- **Areas survivors can't walk to from the start get no zombies** (the game wasted spawns on them).
+- **The nav mesh goes around static props, like the game's own nav_generate:** nav under big props went from 74% to 8% (the game: 9%), which also splits open streets into the smaller areas the Director spawns in.
+
+**Faster builds**
+- **Build & Play keeps the nav mesh when only logic changed** (a new node, a delay): before, any change rebuilt and re-analyzed it.
+- **Nav mesh 4-7x faster:** on styleguide_urban generation 12.7 s -> 1.7 s and analysis 11.4 s -> about 3 s; on Valve's big outdoor maps analysis about halves (c2m1 53 s -> 26 s, c3m1 61 s -> 31 s). The nav file is byte-for-byte the same as before.
+- **Adding logic nodes never forces a full compile:** on maps where the map origin is solid (logic entities sit there) every new node recompiled geometry, visibility and lighting.
 - **Builds use your Light Baking Control Volumes again:** with a Control Volume set to *Only inside* + *Light Baking*, Build and Build & Play bake only inside it (inside all such volumes); the rest of the map keeps its last bake. (For a while builds baked the whole map.)
-- **Build & Play no longer bakes again what a bake just did:** after *Bake Lighting* (a volume, the view, the selection or the whole map), a build with nothing changed kept nothing and baked the whole map, because the bake's area counted as a changed lighting setting. A partial bake made after lights or the map changed still leaves the next build to bake the rest.
+- **Build & Play no longer bakes again what a bake just did:** after *Bake Lighting* (a volume, the view, the selection or the whole map), a build with nothing changed baked the whole map again, because the bake's area counted as a changed lighting setting. A partial bake made after lights or the map changed still leaves the next build to bake the rest.
+- Each build's messages (what it compiled and why, timings, nav kept) are kept in `<map>.lastbuild.log` in the build folder.
+
+**Other**
+- **Add Example puts the example into your main logic graph** (the one open in the node editor), in a frame named after it, right of your nodes, instead of a graph of its own.
+- **Deleting logic (or other features) now removes their files from the game:** a build deletes this map's script files the last build wrote and it doesn't (deleting every logic graph used to leave the old logic script in the game).
+- Nav Mesh panel: Build Nav Mesh, Show Game's Nav and Analyze sit above the Preview.
+- Visibility: the claim about the fast vis is now exact (it never hides a view through an opening wider than vvis's own 0.01-unit tolerance), with tools that check it.
+- A build's warning count points at Problems, not the log text block.
 
 ## 0.13.0 (test release, 2026-10-11)
 
