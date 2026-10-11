@@ -11,3 +11,4 @@ native/hlvrad32.exe
 hammerless/core/embree4.dll
 hammerless/core/tbb12.dll
 tests/ingame/shots/
+tests/compile/vis_rays.exe
