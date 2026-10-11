@@ -29,8 +29,8 @@ def no_bake_text(ir: MapIR) -> str:
 
 
 def bake_only_volumes(ir: MapIR) -> dict[str, str]:
-    """Volumes to bake only inside (Light Baking, Only inside), by name: hlvrad text for each. Only a bake that picks
-    one uses it (Lighting's Bake choice); builds bake the whole map."""
+    """Volumes to bake only inside (Light Baking, Only inside), by name: hlvrad text for each. Builds bake inside all of
+    them (the rest keeps its last bake); Lighting's Bake choice can pick one."""
     from .control import of, volumes
     out = {}
     for v in of(volumes(ir), "light", only=True):

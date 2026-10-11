@@ -582,7 +582,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     bake_area: EnumProperty(name="Bake", items=_bake_area_items, get=_bake_area_get, set=_bake_area_set,
                             description="What Bake Lighting bakes: the whole map, what the 3D viewport sees, the "
                                         "selected objects, or a Control Volume set to Only inside with Light Baking. The rest "
-                                        "keeps the last bake's lighting. Builds always bake the whole map")
+                                        "keeps the last bake's lighting. Builds bake inside every Only inside volume (the whole map if there's none)")
     bake_area_name: StringProperty(default="MAP", options={"HIDDEN"})
     light_view_distance: FloatProperty(name="Distance", default=3000.0, min=64.0, soft_max=20000.0, step=1000,
                                        precision=0, description="Bake What the View Sees: how far from the viewport to "

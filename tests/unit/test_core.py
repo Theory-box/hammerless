@@ -1543,6 +1543,22 @@ class TestNoBake(unittest.TestCase):
         old = repr(whole).replace(", no_bake=''", "")              # (a build from before the volumes)
         self.assertTrue(cc._serves(old, whole))
 
+    def test_bake_records_what_a_build_bakes(self):
+        """After a bake, a build with nothing changed doesn't bake again: the bake records the build's volumes. Not a
+        partial bake made after the lights or the map changed (the rest of the map is out of date)."""
+        import tempfile
+        from hammerless.core import compile as cc
+        vmf = os.path.join(tempfile.mkdtemp(), "m.vmf")
+        with open(vmf, "w") as f:
+            f.write("world {}")
+        vol, view = "1 1 0 0 1 10\n", "1 1 1 0 0 5\n"
+        build = cc.CompileOptions(light_tool="HAMMERLESS", vis="FAST", no_bake=vol, keep_light=True)
+        for partial, stale, kept in ((True, False, True), (False, True, True), (True, True, False)):
+            bake = cc.CompileOptions(light_tool="HAMMERLESS", vis="FAST", no_bake=view, keep_light=partial)
+            job = cc.CompileJob(cc.Tools(tempfile.mkdtemp()), vmf, bake, copy_to_game=False)
+            job.light_as, job.partial_bake, job._rest_stale = (vol, True), partial, stale
+            self.assertEqual(cc._serves(job._record(), build), kept, (partial, stale))
+
     def test_keep_light_passes_last_build(self):
         """A partial bake keeps the last build's lighting outside its area: hlvrad -keeplight <copy of it>."""
         import tempfile

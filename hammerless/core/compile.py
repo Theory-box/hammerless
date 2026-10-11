@@ -678,6 +678,12 @@ class CompileJob:
         self._built_vis = opts.vis            # the visibility the BSP ends up with
         self._built_rad = opts.rad            # and its lighting (SKIP: none, or out of date)
         self._built_light: str | None = None  # (lighting kept from the last build: its options, for its settings)
+        # (no_bake, keep_light) to record for lighting baked now: a partial bake (the view, a selection, one volume)
+        # keeps the rest, so it records what a plain build bakes and the next unchanged build doesn't bake again
+        # (not when the lights or the map changed: then the rest is out of date, and the next build bakes it)
+        self.light_as: tuple[str, bool] | None = None
+        self.partial_bake = False    # (a whole-map bake covers what a build bakes whatever changed)
+        self._rest_stale = True       # (a full compile; a smart build decides in _choose_steps)
         self.vis_bsp: str | None = None        # a copy of the BSP once geometry and visibility are final:
                                                # the nav analysis can start on it while vrad still runs
         self.snapshot_vis = False              # make that copy (only when an analysis will use it)
@@ -1041,8 +1047,7 @@ class CompileJob:
                 with open(self.base + ".built.inst", "w", encoding="utf-8") as f:   # (and its instance files)
                     f.write(self._instances_hash(self._vmf_bytes))
                 with open(self.base + ".built.opts", "w", encoding="utf-8") as f:
-                    built = repr(replace(self._opts, vis=self._built_vis, rad=self._built_rad))
-                    f.write(_with_light(built, self._built_light) if self._built_light else built)
+                    f.write(self._record())
                 with open(self.base + ".stamp", "w", encoding="utf-8") as f:   # (last: up to date only once the
                     f.write(self._stamp(self._vmf_bytes))                     # whole record is written)
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
@@ -1098,6 +1103,14 @@ class CompileJob:
         self.bake_request = None
         self._bake_done.set()
 
+    def _record(self) -> str:
+        """The options to record for the map this build made (.built.opts)."""
+        rec = self._opts
+        if self.light_as is not None and not self._built_light and not (self.partial_bake and self._rest_stale):
+            rec = replace(rec, no_bake=self.light_as[0], keep_light=self.light_as[1])
+        built = repr(replace(rec, vis=self._built_vis, rad=self._built_rad))
+        return _with_light(built, self._built_light) if self._built_light else built
+
     def _choose_steps(self) -> list[tuple[str, list[str]]]:
         """Smart build: the least work that gives the same map as a full compile, judged against
         the VMF the current BSP was compiled from (buildplan.plan). A doubt means a full compile."""
@@ -1129,16 +1142,19 @@ class CompileJob:
                 kind, why = "full", "an entity is now where the map was solid (a room no entity reached before)"
         if kind == "full":
             self.plan = "full"
+            self._rest_stale = True
             return self.steps
         add_vis = VIS_RANK[built_vis] < VIS_RANK[self._opts.vis]
         if add_vis and not os.path.exists(self.base + ".built.prt"):
             self.plan = "full"                   # no portal file kept (an older build): compile it all
+            self._rest_stale = True
             return self.steps
         lights_changed = kind == "lighting"      # lights or static props moved: the bake is out of date
         if add_vis and not lights_changed:
             vis_cmd = next((c for n, c in self.steps if n == "vvis"), [])
             if "-radius_override" in vis_cmd or bsp_fog_farz(self.base + ".bsp") > 0:
                 lights_changed = True            # (radial vis changes which leaves see the sky: relight after it)
+        self._rest_stale = lights_changed
         want = self._opts.rad != "SKIP"
         add_rad = want and (lights_changed or built_rad != _opts_rad(repr(self._opts)))
         self._built_vis = self._opts.vis if add_vis else built_vis

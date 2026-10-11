@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Builds use your Light Baking Control Volumes again:** with a Control Volume set to *Only inside* + *Light Baking*, Build and Build & Play bake only inside it (inside all such volumes); the rest of the map keeps its last bake. (For a while builds baked the whole map.)
+- **Build & Play no longer bakes again what a bake just did:** after *Bake Lighting* (a volume, the view, the selection or the whole map), a build with nothing changed kept nothing and baked the whole map, because the bake's area counted as a changed lighting setting. A partial bake made after lights or the map changed still leaves the next build to bake the rest.
+
 ## 0.13.0 (test release, 2026-10-11)
 
 - **Import the game's own maps** (File > Import > *L4D2 Map (from the game)* or *Compiled Map (.bsp)*): decompiled into brushes, terrain, entities, props and decals, to study or remix. Checked by compiling the result again and comparing it with Valve's: on c1m1_hotel every brush comes back with the same planes, every terrain vertex and prop is the same, and 149 of 156 decals (the other 7 draw nothing). Lost in a compiled map: instances, visgroups, brush grouping.

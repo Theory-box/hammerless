@@ -1127,13 +1127,13 @@ class HL_OT_build(bpy.types.Operator):
                     "Build & Play then reuse it and only add what's missing")
         if properties.bake and properties.selected:
             return ("Bake only around the selected objects (when they've changed): the rest of the map keeps its "
-                    "last bake. Build & Play bakes the whole map again")
+                    "last bake. The next build doesn't bake it again unless something changed")
         if properties.bake and properties.volume:
             return (f"Bake only inside '{properties.volume}' (a quick look at that area): the rest of the map "
-                    "keeps its last bake. Build & Play bakes the whole map again")
+                    "keeps its last bake. Builds bake inside every Only inside volume")
         if properties.bake and properties.view:
             return ("Bake only what this viewport sees, out to the distance set (a quick look at one spot): the "
-                    "rest of the map keeps its last bake. Build & Play bakes the whole map again")
+                    "rest of the map keeps its last bake. The next build doesn't bake it again unless something changed")
         if properties.bake:
             return ("Bake the map's lighting quickly and show it (about a third of a full build: the visibility "
                     "step runs in its fast mode). Build & Play then reuses this lighting and only adds the full "
@@ -1229,7 +1229,11 @@ class HL_OT_build(bpy.types.Operator):
         elif context.scene.hammerless.sky_light != "FLAT" and opts.rad != "SKIP":
             write_log(["Sky Light from the sky needs the Hammerless light compiler: the sky lights the map with "
                        "one colour"], append=True)
-        no_bake = rep.no_bake
+        # what a build bakes: everywhere but the Not-inside volumes, and only inside the Only-inside ones (if any:
+        # the rest keeps the last bake)
+        only = "".join(rep.bake_only[k] for k in sorted(rep.bake_only))
+        build_light = (rep.no_bake + only, bool(only))
+        no_bake = rep.no_bake if self.bake else build_light[0]
         if self.bake and self.view:
             vol = _view_volume(context)
             if vol is None:
@@ -1257,7 +1261,8 @@ class HL_OT_build(bpy.types.Operator):
                 self.report({"ERROR"}, "Baking part of the map needs the Hammerless light compiler (Lighting > Advanced)")
                 return {"CANCELLED"}
             no_bake += vol
-        if self.bake and (self.view or self.volume or self.selected):
+        partial = self.bake and (self.view or self.volume or self.selected)
+        if partial or (not self.bake and build_light[1]):
             import dataclasses
             opts = dataclasses.replace(opts, keep_light=True)    # (the rest keeps the last bake)
         try:
@@ -1275,6 +1280,8 @@ class HL_OT_build(bpy.types.Operator):
                 write_log(["Control Volumes (Light Baking) need the Hammerless light compiler: Valve's vrad bakes everything"],
                           append=True)
         self._job = cc.CompileJob(tools, path, opts, skip_if_unchanged=True)
+        if self.bake and opts.no_bake == no_bake and cc.use_hlvrad(opts):
+            self._job.light_as, self._job.partial_bake = build_light, partial
         self._nav = None
         s = context.scene.hammerless
         unanalyzed = s.nav_analysis == "BLENDER" and cc.nav_analyzed(tools, s.map_name) is False
