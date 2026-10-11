@@ -22,7 +22,9 @@ from .vmf import Block, _plane_points
 from .vmfimport import _base_winding, _clip, _dedupe, _newell
 
 # lump numbers
-L_ENTITIES, L_PLANES, L_TEXDATA, L_NODES, L_TEXINFO, L_LEAFS = 0, 1, 2, 5, 6, 10
+L_ENTITIES, L_PLANES, L_TEXDATA, L_VERTEXES, L_NODES, L_TEXINFO, L_FACES, L_LEAFS = 0, 1, 2, 3, 5, 6, 7, 10
+L_EDGES, L_SURFEDGES, L_DISPINFO, L_DISPVERTS, L_DISPTRIS = 12, 13, 26, 33, 48
+L_OVERLAYS, L_OVERLAY_FADES = 45, 60
 L_MODELS, L_LEAFBRUSHES, L_BRUSHES, L_BRUSHSIDES = 14, 17, 18, 19
 L_AREAPORTALS, L_GAME, L_CLIPPORTALVERTS, L_CUBEMAPS, L_TEXSTRDATA, L_TEXSTRTABLE = 21, 35, 41, 42, 43, 44
 
@@ -205,6 +207,37 @@ class Bsp:
                 out[key] = verts[first:first + count]
         return out
 
+    def face_windings(self) -> list[tuple[int, list[tuple], int, int]]:
+        """(plane, corners, texinfo, dispinfo) per face."""
+        verts = self.records(L_VERTEXES, "3f")
+        edges = self.records(L_EDGES, "2H")
+        surf = [t[0] for t in self.records(L_SURFEDGES, "i")]
+        out = []
+        for f in self.records(L_FACES, "HBBihhhh4Bif2i2iiHHI"):
+            plane, firstedge, numedges, texinfo, dispinfo = f[0], f[3], f[4], f[5], f[6]
+            w = []
+            for e in surf[firstedge:firstedge + numedges]:
+                w.append(verts[edges[e][0]] if e >= 0 else verts[edges[-e][1]])
+            out.append((plane, w, texinfo, dispinfo))
+        return out
+
+    def dispinfos(self) -> list[dict]:
+        out = []
+        for r in self.records(L_DISPINFO, "3f3iIfiHH2i88x10I"):
+            out.append({"start": r[0:3], "vert_start": r[3], "tri_start": r[4], "power": r[5], "min_tess": r[6],
+                        "map_face": r[9], "allowed": r[13:23]})
+        return out
+
+    def overlays(self) -> list[dict]:
+        fades = self.records(L_OVERLAY_FADES, "2f")
+        out = []
+        for i, r in enumerate(self.records(L_OVERLAYS, "ihH64i4f12f3f3f")):
+            count = r[2] & 0x3FFF
+            out.append({"id": r[0], "texinfo": r[1], "render_order": r[2] >> 14, "faces": r[3:3 + count],
+                        "u": r[67:69], "v": r[69:71], "uv": [r[71 + 3 * k:74 + 3 * k] for k in range(4)],
+                        "origin": r[83:86], "normal": r[86:89], "fade": fades[i] if i < len(fades) else (0.0, 0.0)})
+        return out
+
     def cubemaps(self):
         return [(r[0:3], r[3]) for r in self.records(L_CUBEMAPS, "4i")]
 
@@ -234,6 +267,7 @@ def _axis(vec4) -> tuple[str, float]:
 
 
 SPREAD = 256.0         # units between a side's three plane points
+DISP_DEPTH = 8.0       # a rebuilt displacement brush's thickness behind its face
 
 
 def plane_points(n, d, w):
@@ -265,6 +299,7 @@ class Decompiler:
         self.brushes = self.bsp.brushes()
         self.sides = self.bsp.brushsides()
         self._id = 0
+        self.disp_side_ids: dict[int, str] = {}  # dispinfo -> its rebuilt brush's displacement side id
         self.side_polys: dict[int, list] = {}      # plane -> [(side block, polygon)] (world brushes: for disps, overlays)
         self.notes: list[str] = []
         self.skipped_brushes = 0
@@ -310,28 +345,166 @@ class Decompiler:
                 mat = tool
             side.kv("material", mat)
             self.side_polys.setdefault(s[0], []).append((side, w))
-            if 0 <= s[1] < len(self.texinfos):
-                (tu, tv), (lu, _lv), _flags, _td = self.texinfos[s[1]]
-                # (moved: the shift follows the texture across the offset)
-                tu = (*tu[:3], tu[3] - sum(tu[k] * offset[k] for k in range(3)))
-                tv = (*tv[:3], tv[3] - sum(tv[k] * offset[k] for k in range(3)))
-                ua, _ = _axis(tu)
-                va, _ = _axis(tv)
-                lm = math.sqrt(sum(c * c for c in lu[:3]))
-                lmscale = round(1.0 / lm) if lm > 1e-9 else DEFAULT_LIGHTMAP_SCALE
-            else:
-                ua, va, lmscale = "[1 0 0 0] 0.25", "[0 -1 0 0] 0.25", DEFAULT_LIGHTMAP_SCALE
-            side.kv("uaxis", ua)
-            side.kv("vaxis", va)
-            side.kv("rotation", 0)
-            side.kv("lightmapscale", lmscale)
-            side.kv("smoothing_groups", 0)
+            self.texture_keys(side, s[1], offset)
             made += 1
         if made < 4:
             self.skipped_brushes += 1
             return None
         ed = out.add(Block("editor"))
         ed.kv("color", "0 180 255").kv("visgroupshown", 1).kv("visgroupautoshown", 1)
+        return out
+
+    def add_displacements(self) -> None:
+        """Each displacement face's surface onto the world brush side it came from (the same plane, the same four
+        corners: vbsp copies the side's)."""
+        infos = self.bsp.dispinfos()
+        if not infos:
+            return
+        verts = self.bsp.records(L_DISPVERTS, "5f")
+        tris = [t[0] for t in self.bsp.records(L_DISPTRIS, "H")]
+        faces = self.bsp.face_windings()
+        lost = 0
+        for info in infos:
+            if info["map_face"] >= len(faces) or len(faces[info["map_face"]][1]) != 4:
+                lost += 1
+                continue
+            plane, w, ti, dnum = faces[info["map_face"]]
+            self.world.add(self.disp_solid(plane, w, ti, self.dispinfo_block(info, verts, tris, self.planes[plane][0])))
+            self.disp_side_ids[dnum] = self.last_disp_side
+        if lost:
+            self.notes.append(f"{lost} displacements had no face to rebuild them from and were left out")
+
+    def side_for(self, plane: int, w: list[tuple]):
+        n = self.planes[plane]
+        best, err = None, 1.0
+        for cand_plane, polys in self.side_polys.items():
+            n2 = self.planes[cand_plane]
+            if abs(n2[1] - n[1]) > 0.01 or any(abs(n2[0][k] - n[0][k]) > 1e-4 for k in range(3)):
+                continue
+            for side, poly in polys:
+                if len(poly) != len(w):
+                    continue
+                e = max(min(max(abs(p[k] - q[k]) for k in range(3)) for q in poly) for p in w)
+                if e < err:
+                    best, err = side, e
+        return best
+
+    def dispinfo_block(self, info: dict, verts, tris, normal) -> Block:
+        p = info["power"]
+        n = (1 << p) + 1
+        d = Block("dispinfo")
+        d.kv("power", p)
+        d.kv("startposition", f"[{_vec(info['start'])}]")
+        mt = info["min_tess"]
+        d.kv("flags", mt & 0x7FFFFFFF if mt & 0x80000000 else 0)
+        d.kv("elevation", 0).kv("subdiv", 0)
+        blocks = {name: Block(name) for name in ("normals", "distances", "offsets", "offset_normals", "alphas")}
+        nrm = _vec(normal)
+        for i in range(n):
+            nrow, drow, arow = [], [], []
+            for j in range(n):
+                x, y, z, dist, alpha = verts[info["vert_start"] + i * n + j]
+                ln = math.sqrt(x * x + y * y + z * z)
+                if ln > 1e-9:
+                    nrow.append(f"{x / ln:.6g} {y / ln:.6g} {z / ln:.6g}")
+                    drow.append(f"{ln * dist:.6g}")
+                else:
+                    nrow.append(nrm)
+                    drow.append("0")
+                arow.append(f"{alpha:.6g}")
+            blocks["normals"].kv(f"row{i}", " ".join(nrow))
+            blocks["distances"].kv(f"row{i}", " ".join(drow))
+            blocks["offsets"].kv(f"row{i}", " ".join(["0 0 0"] * n))
+            blocks["offset_normals"].kv(f"row{i}", " ".join([nrm] * n))
+            blocks["alphas"].kv(f"row{i}", " ".join(arow))
+        for b in blocks.values():
+            d.add(b)
+        tags = Block("triangle_tags")
+        per = 2 * (n - 1)
+        for i in range(n - 1):
+            row = []
+            for j in range(per):
+                t = tris[info["tri_start"] + i * per + j] if info["tri_start"] + i * per + j < len(tris) else 0
+                row.append(str((1 if t & 2 else 0) | (8 if t & 4 else 0)))     # (the map's bits -> Hammer's)
+            tags.kv(f"row{i}", " ".join(row))
+        d.add(tags)
+        allowed = Block("allowed_verts")
+        allowed.kv("10", " ".join(str(a - (1 << 32) if a & 0x80000000 else a) for a in info["allowed"]))
+        d.add(allowed)
+        return d
+
+    def side_index(self):
+        """Brush sides by plane (rounded), for finding the side a face of the map is on."""
+        idx = {}
+        for plane, polys in self.side_polys.items():
+            n, d = self.planes[plane]
+            key = (round(n[0], 3), round(n[1], 3), round(n[2], 3), round(d))
+            idx.setdefault(key, []).extend(polys)
+        return idx
+
+    @staticmethod
+    def _inside(p, poly, n, eps=0.5) -> bool:
+        for i in range(len(poly)):
+            a, b = poly[i], poly[(i + 1) % len(poly)]
+            e = [b[k] - a[k] for k in range(3)]
+            q = [p[k] - a[k] for k in range(3)]
+            c = (e[1] * q[2] - e[2] * q[1], e[2] * q[0] - e[0] * q[2], e[0] * q[1] - e[1] * q[0])
+            if sum(c[k] * n[k] for k in range(3)) < -eps * math.sqrt(sum(x * x for x in e)):
+                return False
+        return True
+
+    def face_side_id(self, face, idx) -> str | None:
+        plane, w, _ti, disp = face
+        if disp >= 0:
+            return self.disp_side_ids.get(disp)
+        n, d = self.planes[plane]
+        c = [sum(p[k] for p in w) / len(w) for k in range(3)]
+        for key in {(round(n[0], 3), round(n[1], 3), round(n[2], 3), round(d) + o) for o in (0, -1, 1)}:
+            for side, poly in idx.get(key, ()):
+                if self._inside(c, poly, n):
+                    return side.get("id")
+        return None
+
+    def overlay_entities(self, accessors: dict[int, str]) -> list[Block]:
+        """info_overlay from the map's overlays (vbsp removes the entities): their faces become the sides they
+        were on, the fades come back from their squares, a name from its info_overlay_accessor."""
+        overlays = self.bsp.overlays()
+        if not overlays:
+            return []
+        faces = self.bsp.face_windings()
+        idx = self.side_index()
+        out, lost = [], 0
+        for o in overlays:
+            ids = []
+            for f in o["faces"]:
+                if 0 <= f < len(faces):
+                    sid = self.face_side_id(faces[f], idx)
+                    if sid is not None and sid not in ids:
+                        ids.append(sid)
+            if not ids:
+                lost += 1
+                continue
+            n = o["normal"]
+            bu = tuple(o["uv"][k][2] for k in range(3))
+            bv = (n[1] * bu[2] - n[2] * bu[1], n[2] * bu[0] - n[0] * bu[2], n[0] * bu[1] - n[1] * bu[0])
+            ln = math.sqrt(sum(c * c for c in bv)) or 1.0
+            bv = tuple(c / ln * (-1 if o["uv"][3][2] == 1 else 1) for c in bv)
+            kv = [("classname", "info_overlay"), ("material", self.material(o["texinfo"]).lower()),
+                  ("sides", " ".join(str(i) for i in ids)), ("RenderOrder", str(o["render_order"])),
+                  ("StartU", f"{o['u'][0]:.6g}"), ("EndU", f"{o['u'][1]:.6g}"),
+                  ("StartV", f"{o['v'][0]:.6g}"), ("EndV", f"{o['v'][1]:.6g}"),
+                  ("BasisOrigin", _vec(o["origin"])), ("BasisNormal", _vec(n)),
+                  ("BasisU", _vec(bu)), ("BasisV", _vec(bv)), ("origin", _vec(o["origin"]))]
+            for k in range(4):
+                kv.append((f"uv{k}", f"{o['uv'][k][0]:.6g} {o['uv'][k][1]:.6g} 0"))
+            fmin, fmax = o["fade"]
+            kv += [("fademindist", f"{math.sqrt(fmin):.6g}" if fmin > 0 else "-1"),
+                   ("fademaxdist", f"{math.sqrt(fmax):.6g}" if fmax > 0 else "0")]
+            if o["id"] in accessors:
+                kv.append(("targetname", accessors[o["id"]]))
+            out.append(self.entity_block(kv))
+        if lost:
+            self.notes.append(f"{lost} overlays had no brush face to go on and were left out")
         return out
 
     def all_trigger(self, b: int) -> bool:
@@ -365,6 +538,58 @@ class Decompiler:
                 if bb and b not in out.values() and all(bb[0][i] - 1 <= c[i] <= bb[1][i] + 1 for i in range(3)):
                     out[k] = b
                     break
+        return out
+
+    def texture_keys(self, side: Block, texinfo: int, offset=(0.0, 0.0, 0.0)) -> None:
+        if 0 <= texinfo < len(self.texinfos):
+            (tu, tv), (lu, _lv), _flags, _td = self.texinfos[texinfo]
+            # (moved: the shift follows the texture across the offset)
+            tu = (*tu[:3], tu[3] - sum(tu[k] * offset[k] for k in range(3)))
+            tv = (*tv[:3], tv[3] - sum(tv[k] * offset[k] for k in range(3)))
+            ua, _ = _axis(tu)
+            va, _ = _axis(tv)
+            lm = math.sqrt(sum(c * c for c in lu[:3]))
+            lmscale = round(1.0 / lm) if lm > 1e-9 else DEFAULT_LIGHTMAP_SCALE
+        else:
+            ua, va, lmscale = "[1 0 0 0] 0.25", "[0 -1 0 0] 0.25", DEFAULT_LIGHTMAP_SCALE
+        side.kv("uaxis", ua)
+        side.kv("vaxis", va)
+        side.kv("rotation", 0)
+        side.kv("lightmapscale", lmscale)
+        side.kv("smoothing_groups", 0)
+
+    def disp_solid(self, plane: int, w: list[tuple], texinfo: int, dispinfo: Block) -> Block:
+        """A displacement's brush (vbsp doesn't keep it): its face, carrying the displacement, and a nodraw back
+        DISP_DEPTH behind it."""
+        n, d = self.planes[plane]
+        if sum(a * b for a, b in zip(_newell(w), n)) < 0:
+            w = list(reversed(w))
+        back = [tuple(p[k] - n[k] * DISP_DEPTH for k in range(3)) for p in w]
+        out = Block("solid")
+        out.kv("id", self.new_id())
+        faces = [((n, d), w, texinfo, dispinfo)]
+        nb = tuple(-c for c in n)
+        faces.append(((nb, -(d - DISP_DEPTH)), list(reversed(back)), -1, None))
+        m = len(w)
+        for i in range(m):
+            j = (i + 1) % m
+            quad = [w[j], w[i], back[i], back[j]]          # (counter-clockwise seen from outside)
+            qn = _newell(quad)
+            ln = math.sqrt(sum(c * c for c in qn)) or 1.0
+            qn = tuple(c / ln for c in qn)
+            faces.append(((qn, sum(qn[k] * w[i][k] for k in range(3))), quad, -1, None))
+        for (fn, fd), poly, ti, disp in faces:
+            p1, p2, p3 = plane_points(fn, fd, poly)
+            side = out.add(Block("side"))
+            side.kv("id", self.new_id())
+            side.kv("plane", f"({_vec(p1)}) ({_vec(p2)}) ({_vec(p3)})")
+            side.kv("material", self.material(ti) if ti >= 0 else "TOOLS/TOOLSNODRAW")
+            self.texture_keys(side, ti)
+            if disp is not None:
+                side.add(disp)
+                self.last_disp_side = side.get("id")
+        ed = out.add(Block("editor"))
+        ed.kv("color", "0 180 255").kv("visgroupshown", 1).kv("visgroupautoshown", 1)
         return out
 
     def portal_solid(self, outline: list[tuple]) -> Block | None:
@@ -428,7 +653,7 @@ class Decompiler:
         viscluster = [i for i in unclaimed if self.all_trigger(i)]
         world_brushes = list(range(0, first_model)) + [i for i in unclaimed if i not in viscluster]
         portal_brushes = [b for b in world_brushes if self.brushes[b][2] & CONTENTS_AREAPORTAL]
-        world = Block("world")
+        world = self.world = Block("world")
         world.kv("id", self.new_id())
         entities: list[Block] = []
         detail: list[Block] = []
@@ -452,16 +677,25 @@ class Decompiler:
                 detail.append(s)
             else:
                 world.add(s)
+        self.add_displacements()
         if detail:
             entities.append(self.entity_block([("classname", "func_detail")], detail))
         for b in viscluster:
             sb = self.solid(b)
             if sb is not None:
                 entities.append(self.entity_block([("classname", "func_viscluster")], [sb]))
+        accessors = {}
+        for e in ents:
+            d = dict(e)
+            if d.get("classname") == "info_overlay_accessor":
+                try:
+                    accessors[int(d.get("OverlayID", "-1"))] = d.get("targetname", "")
+                except ValueError:
+                    pass
         for e in ents:
             d = dict(e)
             cls = d.get("classname", "")
-            if cls == "worldspawn":
+            if cls in ("worldspawn", "info_overlay_accessor"):
                 continue
             solids = None
             model = d.get("model", "")
@@ -502,6 +736,7 @@ class Decompiler:
             if "disableX360" in p:
                 kv.append(("disableX360", str(p["disableX360"])))
             entities.append(self.entity_block(kv))
+        entities += self.overlay_entities(accessors)
         for origin, size in self.bsp.cubemaps():
             entities.append(self.entity_block([("classname", "env_cubemap"), ("origin", _vec(origin)),
                                                ("cubemapsize", str(size))]))
