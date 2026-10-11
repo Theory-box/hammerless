@@ -176,4 +176,26 @@ EXAMPLES_3 = [
                 N("third", "HL_NodeCamera", 1, 0)],
          links=[("spawn.happened", "third.run"), ("spawn.userid", "third.player")],
          steps=[("Every player who spawns: third person", ["spawn", "third"])]),
+    dict(title="Random Zombie Sizes", level="Zombies & Director",
+         about="Every common infected gets a random size between Min and Max on the Size node: 0.5 is half "
+               "size, 2 is twice as big (set both the same for all giants or all tiny ones). Every half second "
+               "For Each looks at the commons, and the ones still at normal size (1) are new: they're scaled "
+               "(Set Model Scale), and their hitboxes are made to follow the new size (the collision 'surround "
+               "type' set to hitboxes, else a giant can only be shot at normal height). No cheats. Tested in "
+               "the game: shots hit the whole body of a giant and of a tiny one.",
+         nodes=[N("timer", "HL_NodeTimer", 0, 0, seconds=0.5),
+                N("each", "HL_NodeForEach", 1, 0, what="COMMONS"),
+                fn("now", "entity:GetModelScale", 1, 2),
+                N("new", "HL_NodeCompare", 2, 2, op="EQUAL", sockets={"b": 1.0}),
+                N("if_new", "HL_NodeIf", 2, 0),
+                N("size", "HL_NodeRandomValue", 3, 2, label="Size (Min / Max)", each_time=True,
+                  sockets={"min": 0.5, "max": 2.0}),
+                fn("scale", "entity:SetModelScale", 3, 0, {"p1": 0.0}),
+                fn("hitboxes", "NetProps.SetPropInt", 4, 0, {"p1": "m_Collision.m_nSurroundType", "p2": 2})],
+         links=[("timer.tick", "each.run"), ("each.each", "if_new.in"), ("each.item", "now.target"),
+                ("now.result", "new.a"), ("new.result", "if_new.condition"),
+                ("if_new.true", "scale.run"), ("each.item", "scale.target"), ("size.value", "scale.p0"),
+                ("scale.then", "hitboxes.run"), ("each.item", "hitboxes.p0")],
+         steps=[("Every half second, each common still at normal size", ["timer", "each", "now", "new", "if_new"]),
+                ("A random size, and hitboxes that follow it", ["size", "scale", "hitboxes"])]),
 ]
