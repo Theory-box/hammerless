@@ -118,14 +118,17 @@ static void acc_end(double *box) { g_acc = 0; memcpy(box, g_acc_box, sizeof g_ac
 
 /* a collision world and a per-thread scratch buffer, so traces can run on several threads */
 typedef struct { Side *sides; Brush *brushes; int nb; double cell; int cx0, cy0, w, h; int *cs, *cc, *ci; } World;
-typedef struct { int *ids; int cap; int *mark; int markcap; int markgen; float *samples; int samplecap; int last_n; } Scratch;
+#define RAY_CACHE_SLOTS 1024        /* (= hlvis.c MAX_SLOTS) */
+typedef struct { double p[3]; int valid, inside, last_block; } RayCache;   /* per world slot: see vis_line_clear */
+typedef struct { int *ids; int cap; int *mark; int markcap; int markgen; float *samples; int samplecap; int last_n;
+                 RayCache *rc; } Scratch;
 
 /* The brushes a trace can touch, in ascending id order: those in the grid cells the swept box can
  * reach whose bounds overlap 'box' (the swept box plus 1 unit). Short spans take the whole cell
  * rectangle; long ones only the rectangles of short pieces along the path (a brush outside them
  * can't be hit, so the brushes tested, and their order after the sort, are the same). */
-static int gather(const World *W, Scratch *S, double p1x, double p1y, double p2x, double p2y, double ex, double ey,
-                  const double *box) {
+static int gather_any(const World *W, Scratch *S, double p1x, double p1y, double p2x, double p2y, double ex, double ey,
+                      const double *box, int sorted) {
     /* a box with an infinite / NaN / absurd coordinate (or an empty world) touches no brush; turned
      * into cell numbers it would overflow int and the loops below would run for ever */
     for (int k = 0; k < 6; k++) if (!(fabs(box[k]) < 1e7)) return 0;
@@ -185,7 +188,7 @@ static int gather(const World *W, Scratch *S, double p1x, double p1y, double p2x
                 if (!GATHER_OVERLAPS(&W->brushes[id])) continue;
                 if (n >= S->cap) {
                     int *q = xrealloc(S->ids, sizeof(int) * (n * 2 + 64));
-                    if (!q) { qsort(S->ids, n, sizeof(int), cmp_int); return n; }
+                    if (!q) { if (sorted) qsort(S->ids, n, sizeof(int), cmp_int); return n; }
                     S->ids = q; S->cap = n * 2 + 64;
                 }
                 S->ids[n++] = id;
@@ -193,12 +196,19 @@ static int gather(const World *W, Scratch *S, double p1x, double p1y, double p2x
         }
     }
 #undef GATHER_OVERLAPS
-    qsort(S->ids, n, sizeof(int), cmp_int);
+    if (sorted) qsort(S->ids, n, sizeof(int), cmp_int);
     return n;
 }
+static int gather(const World *W, Scratch *S, double p1x, double p1y, double p2x, double p2y, double ex, double ey,
+                  const double *box) {
+    return gather_any(W, S, p1x, p1y, p2x, p2y, ex, ey, box, 1);
+}
 
-static Tr trace_w(const World *W, Scratch *S, double *acc, const double *start, const double *end,
-                  const double *mins, const double *maxs) {
+/* unordered: the caller only reads fraction, end point and startsolid (the nav visibility). Without a brush the
+ * start box can touch, every brush only lowers the fraction (no start-solid resets), so the result is the same in
+ * any order and the sort is skipped; with one, the brushes go in ascending order as always. */
+static Tr trace_w_any(const World *W, Scratch *S, double *acc, const double *start, const double *end,
+                      const double *mins, const double *maxs, int unordered) {
     double ex = (maxs[0] - mins[0]) * 0.5, ey = (maxs[1] - mins[1]) * 0.5, ez = (maxs[2] - mins[2]) * 0.5;
     double ox = (maxs[0] + mins[0]) * 0.5, oy = (maxs[1] + mins[1]) * 0.5, oz = (maxs[2] + mins[2]) * 0.5;
     double p1x = start[0] + ox, p1y = start[1] + oy, p1z = start[2] + oz;
@@ -212,7 +222,17 @@ static Tr trace_w(const World *W, Scratch *S, double *acc, const double *start, 
         if (x1 > acc[3]) acc[3] = x1; if (y1 > acc[4]) acc[4] = y1; if (z1 > acc[5]) acc[5] = z1;
     }
     double box[6] = {x0, y0, z0, x1, y1, z1};
-    int n = gather(W, S, p1x, p1y, p2x, p2y, ex, ey, box);
+    int n = gather_any(W, S, p1x, p1y, p2x, p2y, ex, ey, box, !unordered);
+    if (unordered) {
+        for (int k = 0; k < n; k++) {
+            const double *b = W->brushes[S->ids[k]].b;
+            if (p1x >= b[0] - ex - 1 && p1x <= b[3] + ex + 1 && p1y >= b[1] - ey - 1 && p1y <= b[4] + ey + 1
+                    && p1z >= b[2] - ez - 1 && p1z <= b[5] + ez + 1) {
+                qsort(S->ids, n, sizeof(int), cmp_int);
+                break;
+            }
+        }
+    }
     S->last_n = n;
     for (int k = 0; k < n; k++) {
         clip(W->sides, &W->brushes[S->ids[k]], p1x, p1y, p1z, p2x, p2y, p2z, ex, ey, ez, is_point, &tr);
@@ -226,6 +246,11 @@ static Tr trace_w(const World *W, Scratch *S, double *acc, const double *start, 
     return tr;
 }
 
+static Tr trace_w(const World *W, Scratch *S, double *acc, const double *start, const double *end,
+                  const double *mins, const double *maxs) {
+    return trace_w_any(W, S, acc, start, end, mins, maxs, 0);
+}
+
 /* Is a line clear? (trace_w(...).fraction >= 1 for a zero-size trace, answered sooner.) Within one
  * world a hit can only be undone by a brush the line starts inside (the leave-solid rule resets the
  * fraction to 1), so when no candidate brush holds the start point the first hit is the answer.
@@ -235,7 +260,7 @@ static int line_clear_w(const World *W, Scratch *S, const double *start, const d
     double x0 = (p1x < p2x ? p1x : p2x) - 1, y0 = (p1y < p2y ? p1y : p2y) - 1, z0 = (p1z < p2z ? p1z : p2z) - 1;
     double x1 = (p1x > p2x ? p1x : p2x) + 1, y1 = (p1y > p2y ? p1y : p2y) + 1, z1 = (p1z > p2z ? p1z : p2z) + 1;
     double box[6] = {x0, y0, z0, x1, y1, z1};
-    int n = gather(W, S, p1x, p1y, p2x, p2y, 0.0, 0.0, box);
+    int n = gather_any(W, S, p1x, p1y, p2x, p2y, 0.0, 0.0, box, 0);    /* (order doesn't matter here) */
     /* does any candidate hold the start point? (clip's startout: some non-bevel plane has d1 > 0) */
     for (int k = 0; k < n; k++) {
         const Brush *b = &W->brushes[S->ids[k]];

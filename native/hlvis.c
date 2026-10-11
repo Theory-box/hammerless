@@ -63,7 +63,7 @@ static Tr vis_trace(Scratch *S, const float *a, const float *b, const float *mn,
     double A[3] = {a[0], a[1], a[2]}, B[3] = {b[0], b[1], b[2]}, MN[3] = {mn[0], mn[1], mn[2]}, MX[3] = {mx[0], mx[1], mx[2]};
     int is_ray = mn[0] == 0 && mn[1] == 0 && mn[2] == 0 && mx[0] == 0 && mx[1] == 0 && mx[2] == 0;
     if (g_stats) { if (is_ray) InterlockedIncrement64(&g_st_rays); else InterlockedIncrement64(&g_st_hulls); }
-    Tr best = trace_w(&SL[0].w, S, NULL, A, B, MN, MX);
+    Tr best = trace_w_any(&SL[0].w, S, NULL, A, B, MN, MX, 1);
     if (g_stats) InterlockedAdd64(&g_st_cands, S->last_n);
     double lo[3], hi[3];                 /* the swept box, with trace_w's 1-unit candidate margin */
     for (int i = 0; i < 3; i++) {
@@ -75,7 +75,7 @@ static Tr vis_trace(Scratch *S, const float *a, const float *b, const float *mn,
         if (s->lo[0] > hi[0] || s->hi[0] < lo[0] || s->lo[1] > hi[1] || s->hi[1] < lo[1] || s->lo[2] > hi[2] || s->hi[2] < lo[2])
             continue;                    /* trace_w would find no candidate brush: no hit */
         if (g_stats) InterlockedIncrement64(&g_st_slots);
-        Tr t = trace_w(&s->w, S, NULL, A, B, MN, MX);
+        Tr t = trace_w_any(&s->w, S, NULL, A, B, MN, MX, 1);
         if (s->physics && t.startsolid) { t.fraction = 0.0; t.ex = A[0]; t.ey = A[1]; t.ez = A[2]; }
         if (t.fraction < best.fraction) best = t;
     }
@@ -211,11 +211,61 @@ static void vnormalize(float *v) {                                     /* Vector
     v[0] *= ir; v[1] *= ir; v[2] *= ir;
 }
 static const float ZERO3[3] = {0, 0, 0};
+
+/* line_clear_w for slot k, sooner: rays come in runs from one start point (an eye), and a blocked ray is usually
+ * blocked by the brush that blocked the one before (59% on c2m1). When the start is inside no brush of the slot
+ * (looked up once per start point), the first hit is the answer (line_clear_w), so that brush is tried first. */
+static int start_inside(const World *W, Scratch *S, const double *p) {
+    double box[6] = {p[0] - 1, p[1] - 1, p[2] - 1, p[0] + 1, p[1] + 1, p[2] + 1};
+    int n = gather_any(W, S, p[0], p[1], p[0], p[1], 0.0, 0.0, box, 0);
+    for (int k = 0; k < n; k++) {
+        const Brush *b = &W->brushes[S->ids[k]];
+        if (p[0] < b->b[0] || p[0] > b->b[3] || p[1] < b->b[1] || p[1] > b->b[4] || p[2] < b->b[2] || p[2] > b->b[5]) continue;
+        int out = 0;
+        for (int j = 0; j < b->count && !out; j++) {
+            const Side *sd = &W->sides[b->first + j];
+            if (sd->bevel) continue;
+            double d1 = p[0] * sd->nx; d1 = d1 + p[1] * sd->ny; d1 = d1 + p[2] * sd->nz; d1 = d1 - sd->dist;
+            if (d1 > 0) out = 1;
+        }
+        if (!out) return 1;
+    }
+    return 0;
+}
+static int vis_line_clear(Scratch *S, int slot, const double *A, const double *B, int *inside_out) {
+    const World *W = &SL[slot].w;
+    if (!S->rc) {
+        S->rc = calloc(RAY_CACHE_SLOTS, sizeof(RayCache));
+        if (!S->rc) return line_clear_w(W, S, A, B, inside_out);
+    }
+    RayCache *c = &S->rc[slot];
+    if (!c->valid || c->p[0] != A[0] || c->p[1] != A[1] || c->p[2] != A[2]) {
+        c->p[0] = A[0]; c->p[1] = A[1]; c->p[2] = A[2]; c->valid = 1;
+        c->inside = start_inside(W, S, A);
+    }
+    if (c->inside) return line_clear_w(W, S, A, B, inside_out);
+    if (inside_out) *inside_out = 0;
+    if (c->last_block >= 1 && c->last_block - 1 < W->nb) {
+        Tr tr; memset(&tr, 0, sizeof tr); tr.fraction = 1.0;
+        clip(W->sides, &W->brushes[c->last_block - 1], A[0], A[1], A[2], B[0], B[1], B[2], 0, 0, 0, 1, &tr);
+        if (tr.fraction < 1.0) return 0;
+    }
+    double x0 = (A[0] < B[0] ? A[0] : B[0]) - 1, y0 = (A[1] < B[1] ? A[1] : B[1]) - 1, z0 = (A[2] < B[2] ? A[2] : B[2]) - 1;
+    double x1 = (A[0] > B[0] ? A[0] : B[0]) + 1, y1 = (A[1] > B[1] ? A[1] : B[1]) + 1, z1 = (A[2] > B[2] ? A[2] : B[2]) + 1;
+    double box[6] = {x0, y0, z0, x1, y1, z1};
+    int n = gather_any(W, S, A[0], A[1], B[0], B[1], 0.0, 0.0, box, 0);
+    for (int k = 0; k < n; k++) {
+        Tr tr; memset(&tr, 0, sizeof tr); tr.fraction = 1.0;
+        clip(W->sides, &W->brushes[S->ids[k]], A[0], A[1], A[2], B[0], B[1], B[2], 0, 0, 0, 1, &tr);
+        if (tr.fraction < 1.0) { c->last_block = S->ids[k] + 1; return 0; }
+    }
+    return 1;
+}
 /* vis_trace(...).fraction >= 1 for a line, answered sooner: the world first (blocked there means
  * blocked), then each entity the line can reach; anything unusual falls back to the full trace. */
 static int ray_clear(Scratch *S, const float *a, const float *b) {
     double A[3] = {a[0], a[1], a[2]}, B[3] = {b[0], b[1], b[2]};
-    int r = line_clear_w(&SL[0].w, S, A, B, NULL);
+    int r = vis_line_clear(S, 0, A, B, NULL);
     if (r < 0) return vis_trace(S, a, b, ZERO3, ZERO3).fraction >= 1.0;
     if (r == 0) return 0;
     double lo[3], hi[3];
@@ -225,7 +275,7 @@ static int ray_clear(Scratch *S, const float *a, const float *b) {
         if (!s->used || !s->rays) continue;
         if (s->lo[0] > hi[0] || s->hi[0] < lo[0] || s->lo[1] > hi[1] || s->hi[1] < lo[1] || s->lo[2] > hi[2] || s->hi[2] < lo[2]) continue;
         int inside = 0;
-        int e = line_clear_w(&s->w, S, A, B, &inside);
+        int e = vis_line_clear(S, k, A, B, &inside);
         if (e == 0) return 0;
         if (e < 0) {
             if (s->physics) return 0;                    /* starts inside a physics entity: stuck */
@@ -353,7 +403,7 @@ static DWORD WINAPI vis_worker(LPVOID arg) {
         if (i >= NVA) break;
         vis_area(&S, pvs, i);
     }
-    free(pvs); free(S.ids); free(S.mark); free(S.samples);
+    free(pvs); free(S.ids); free(S.mark); free(S.samples); free(S.rc);
     return 0;
 }
 EXPORT void hl_vis_threads(int n) { g_vis_threads = n; }
