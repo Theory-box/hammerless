@@ -606,6 +606,15 @@ class TestSmartBuild(unittest.TestCase):
         base = 'world { "id" "1" } entity { "classname" "light_spot" "target" "door" "origin" "0 0 0" } ' + door
         self.assertEqual(plan(base % (0, 0, 0), base % (8, 8, 8))[0], "full")
 
+    def test_origin_entities_never_unfill_a_room(self):
+        """Logic entities parked at 0 0 0 (vbsp doesn't flood from there) aren't new places vbsp would reach: adding
+        one on a map whose origin is solid is no reason for a full compile."""
+        from hammerless.core.buildplan import new_entity_points
+        old = 'world { "id" "1" }'
+        new = old + ' entity { "classname" "logic_relay" "origin" "0 0 0" }'
+        self.assertEqual(new_entity_points(old, new), [])
+        self.assertEqual(new_entity_points(old, new.replace('"0 0 0"', '"8 0 0"')), [(8.0, 0.0, 1.0)])
+
     def test_entity_in_filled_space_only(self):
         """Only a point outside every brush counts as a room vbsp filled (a light flush in a ceiling doesn't)."""
         from hammerless.core.buildplan import filled_points

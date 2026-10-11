@@ -1220,6 +1220,11 @@ class CompileJob:
                     self.summary.errors = [failure_reason(self.log)]
                 self.summary.errors = name_brushes(self.summary.errors, self.vmf)
                 self.summary.warnings = name_brushes(self.summary.warnings, self.vmf)
+                try:                     # (kept on disk: what the last build did and why, e.g. a full compile)
+                    with open(self.base + ".lastbuild.log", "w", encoding="utf-8", errors="replace") as f:
+                        f.write("\n".join(self.log) + "\n")
+                except OSError:
+                    pass
             else:
                 self.log.append(item)
                 new.append(item)

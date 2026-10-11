@@ -1493,6 +1493,11 @@ class HL_OT_build(bpy.types.Operator):
                 cc.set_nav_inputs(cc.Tools(self._root), self._owner[1], None)
                 self.report({"WARNING"}, f"Couldn't update the nav mesh for the new map ({ex}): the next build makes it")
         write_log([timing], append=True)       # (once: the waits above return before this)
+        try:
+            with open(self._job.base + ".lastbuild.log", "a", encoding="utf-8") as f:
+                f.write(timing + "\n")
+        except OSError:
+            pass
         tl = self._timeline()
         if not self.play:                      # (Build & Play writes it once the game has loaded)
             write_log(tl.chart(), append=True)

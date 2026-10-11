@@ -151,6 +151,8 @@ def new_entity_points(old_text: str, new_text: str) -> list[tuple[float, float, 
                     x, y, z = (float(c) for c in b.get("origin").split()[:3])
                 except ValueError:
                     continue
+                if x == y == z == 0.0:
+                    continue          # (vbsp doesn't flood from the origin: Hammerless's logic entities sit there)
                 out.add((x, y, z + 1.0))
         return out
     return sorted(origins(new_text) - origins(old_text))
