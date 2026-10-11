@@ -780,7 +780,7 @@ def draw_buttons(layout, context):
         row.operator("hammerless.nav_analyze", text="Build Nav Mesh", icon="VIEWZOOM")
     else:
         row.operator("hammerless.nav_predict", text="Build Nav Mesh (no analysis)", icon="VIEWZOOM")
-    row.operator("hammerless.nav_load", text="Show Game's Nav", icon="MOD_MESHDEFORM")
+    # (Show Game's Nav: hidden for now, the operator stays: hammerless.nav_load)
     on_disk = _nav_on_disk(context)
     if rep is not None or on_disk:
         row.operator("hammerless.nav_clear", text="", icon="TRASH")
@@ -790,7 +790,7 @@ def draw_panel(layout, context):
     s = context.scene.hammerless
     rep = _state["report"]
     if rep is None:
-        layout.label(text="Build Nav Mesh or Show Game's Nav (above) to see it here")
+        layout.label(text="Build Nav Mesh (above) to see it here")
         return
     box = layout.box()
     col = box.column(align=True)
