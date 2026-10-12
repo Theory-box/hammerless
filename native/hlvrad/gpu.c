@@ -398,11 +398,11 @@ static int StartGPU(void) {
         Msg("Warning: the graphics card didn't start for ray tracing: lighting on the CPU\n");
         return 0;
     }
-    prog_gather = Program(spv_gather, sizeof(spv_gather), 8, 36);
+    prog_gather = Program(spv_gather, sizeof(spv_gather), 8, 44);
     prog_ambient = Program(spv_ambient, sizeof(spv_ambient), 19, 36);
     prog_propind = Program(spv_propind, sizeof(spv_propind), 19, 16);
     prog_vis = Program(spv_vis, sizeof(spv_vis), 4, 4);
-    prog_gi = Program(spv_gi, sizeof(spv_gi), 7, 16);
+    prog_gi = Program(spv_gi, sizeof(spv_gi), 10, 16);
     if (!prog_gather.ok || !prog_ambient.ok || !prog_propind.ok || !prog_vis.ok || !prog_gi.ok) {
         Msg("Warning: the graphics card's driver didn't take hlvrad's GPU programs: lighting on the CPU\n");
         return 0;
@@ -466,6 +466,10 @@ typedef struct { float origin[4], intensity[4], normal[4], a[4], b[4], c[4]; int
 int GPU_NumSlots(void) { return nslots; }
 int GPU_SlotStyle(int slot) { return slotstyle[slot]; }
 int GPU_StyleSlot(int style) { return style >= 0 && style < 256 ? styleslot[style] : -1; }
+/* -layers: while the faces' direct light is gathered, each layer's light also comes back apart (its first normal's
+ * colour per point: 12 floats a group and slot, after the slots' 64 each) */
+int g_gpuLayers;
+int GPU_GroupFloats(void) { return 64 * nslots + 12 * nslots * (g_gpuLayers ? g_numLayers : 0); }
 
 /* the lights (in vrad's order; each light style gets a slot, worked through one at a time), what they see, the sky's
  * directions and picture */
@@ -478,20 +482,36 @@ void GPU_Lights(void) {
     gpulight_t *L = xalloc(sizeof(gpulight_t) * (nlights + 1));
     uint32_t *pvs = xalloc(4 * (size_t)rowwords * (nlights + 1));
     int i = 0;
+    /* each light's slot; then the lights by slot (in vrad's order within one: a slot's sum adds them up as before),
+     * so gather.comp can do every slot in one go */
+    int *slotof = xalloc(sizeof(int) * (nlights + 1));
     for (directlight_t *dl = activelights; dl; dl = dl->next, i++) {
         int style = dl->light.style & 255;
         if (styleslot[style] < 0) styleslot[style] = nslots, slotstyle[nslots++] = style;
-        gpulight_t *g = &L[i];
+        slotof[i] = styleslot[style];
+    }
+    /* (with layers, by layer within a slot too: gather.comp sums a layer's lights while they last) */
+    int nkeys = 256 * (g_gpuLayers ? g_numLayers + 1 : 1);
+    int *start = xalloc(sizeof(int) * (nkeys + 1));
+    i = 0;
+    for (directlight_t *dl = activelights; dl; dl = dl->next, i++)
+        start[slotof[i] * (nkeys / 256) + (g_gpuLayers ? dl->layer : 0) + 1]++;
+    for (int k = 0; k < nkeys; k++) start[k + 1] += start[k];
+    i = 0;
+    for (directlight_t *dl = activelights; dl; dl = dl->next, i++) {
+        int slot = slotof[i], at = start[slot * (nkeys / 256) + (g_gpuLayers ? dl->layer : 0)]++;
+        gpulight_t *g = &L[at];
         memcpy(g->origin, dl->light.origin, 12), memcpy(g->intensity, dl->light.intensity, 12), memcpy(g->normal, dl->light.normal, 12);
         g->a[0] = dl->light.stopdot, g->a[1] = dl->light.stopdot2, g->a[2] = dl->light.exponent, g->a[3] = dl->light.constant_attn;
         g->b[0] = dl->light.linear_attn, g->b[1] = dl->light.quadratic_attn;
         g->b[2] = dl->m_flStartFadeDistance, g->b[3] = dl->m_flEndFadeDistance;
         g->c[0] = dl->m_flCapDist, g->c[1] = dl->has_sun_extent ? dl->sun_extent : g_SunAngularExtent;
-        g->m[0] = dl->light.type, g->m[1] = styleslot[style], g->m[2] = i * rowwords;
+        g->m[0] = dl->light.type, g->m[1] = slot, g->m[2] = at * rowwords, g->m[3] = g_gpuLayers ? dl->layer : 0;
         if (getenv("HLGPUTYPES") && !(atoi(getenv("HLGPUTYPES")) & (1 << dl->light.type))) g->m[1] = -1;   /* (debugging: these types only) */
-        if (dl->pvs) memcpy(pvs + (size_t)i * rowwords, dl->pvs, VisRowBytes());
-        else memset(pvs + (size_t)i * rowwords, 0xff, 4 * (size_t)rowwords);
+        if (dl->pvs) memcpy(pvs + (size_t)at * rowwords, dl->pvs, VisRowBytes());
+        else memset(pvs + (size_t)at * rowwords, 0xff, 4 * (size_t)rowwords);
     }
+    free(slotof), free(start);
     lightbuf = Upload(L, sizeof(gpulight_t) * (nlights ? nlights : 1));
     pvsbuf = Upload(pvs, 4 * (size_t)rowwords * (nlights ? nlights : 1));
     free(L), free(pvs);
@@ -523,19 +543,21 @@ static gbuf_t in_buf, out_buf;
 void GPU_Gather(const gpugroup_t *groups, int n, int slot, float *out) {
     int w = 0, h = 0;
     SkyMapData(&w, &h);
-    struct { int ngroups, slot, nlights, fast, nskyFull, skymapW, skymapH, haveSkyMap; float sunExtent; } pc;
+    struct { int ngroups, slot, nlights, fast, nskyFull, skymapW, skymapH, haveSkyMap; float sunExtent; int nslots, nlayers; } pc;
     pc.slot = slot, pc.nlights = nlights, pc.fast = g_bFast, pc.nskyFull = (int)(g_flSkySampleScale * 162.0f);
+    pc.nslots = nslots, pc.nlayers = slot < 0 && g_gpuLayers ? g_numLayers : 0;
+    size_t per = slot < 0 ? (size_t)GPU_GroupFloats() : 64;     /* (out floats a group: slot -1, every slot's and layer's) */
     pc.skymapW = w, pc.skymapH = h, pc.haveSkyMap = HaveSkyMap(), pc.sunExtent = g_SunAngularExtent;
     int chunk = JobSize(4.0 * (pc.nskyFull + 30 + nlights), RAY_BUDGET, GATHER_CHUNK);
     for (int at = 0; at < n; at += chunk) {
         int k = n - at < chunk ? n - at : chunk;
         Ensure(&in_buf, sizeof(gpugroup_t) * (size_t)k);
-        Ensure(&out_buf, 64 * 4 * (size_t)k);
+        Ensure(&out_buf, per * 4 * (size_t)k);
         memcpy(in_buf.map, groups + at, sizeof(gpugroup_t) * (size_t)k);
         pc.ngroups = k;
         gbuf_t *bufs[8] = {NULL, &in_buf, &lightbuf, &pvsbuf, &skydirs, &skymapbuf, &propids, &out_buf};
         Run(&prog_gather, &shadow_tlas, bufs, &pc, sizeof(pc), 4 * (uint32_t)k);
-        memcpy(out + 64 * (size_t)at, out_buf.map, 64 * 4 * (size_t)k);
+        memcpy(out + per * (size_t)at, out_buf.map, per * 4 * (size_t)k);
     }
 }
 
@@ -604,19 +626,38 @@ void GPU_GIScene(const float *verts, const gpustri_t *tris, int ntris) {
     gi_tris = Upload(tris, sizeof(gpustri_t) * (ntris ? ntris : 1));
 }
 
-/* each point's bounced light (gi.comp), rays a point: per point 16 floats (4 normals' colours) */
-void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *out) {
-    struct { int ngroups, nrays, seed, pad; } pc = {0, rays, seed, 0};
+/* -layers: the light layers' grids (per luxel, per layer: rgb) and where each face's grid starts (-1: none) */
+static gbuf_t gi_layers, gi_layerofs, gi_layerout;
+static int gi_nlayers;
+void GPU_GILayers(const float *grids, size_t nluxels, const int *ofs, int nfaces, int nlayers) {
+    FreeBuffer(&gi_layers), FreeBuffer(&gi_layerofs);
+    gi_nlayers = nlayers;
+    gi_layers = Upload(grids, 12 * (nluxels ? nluxels : 1) * (nlayers ? nlayers : 1));
+    gi_layerofs = Upload(ofs, 4 * (size_t)(nfaces ? nfaces : 1));
+}
+
+/* each point's bounced light (gi.comp), rays a point: per point 16 floats (4 normals' colours); with layers
+ * (GPU_GILayers) also per point and layer 3 floats in layerout */
+void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *out, float *layerout) {
+    struct { int ngroups, nrays, seed, nlayers; } pc = {0, rays, seed, layerout ? gi_nlayers : 0};
+    if (!gi_layers.buf) {                     /* (bindings need buffers, used or not) */
+        int none = -1;
+        gi_layers = Upload(NULL, 16), gi_layerofs = Upload(&none, 4);
+    }
     int chunk = JobSize(4.0 * rays, RAY_BUDGET, GATHER_CHUNK);
     for (int at = 0; at < n; at += chunk) {
         int k = n - at < chunk ? n - at : chunk;
         Ensure(&in_buf, sizeof(gpugroup_t) * (size_t)k);
         Ensure(&out_buf, 64 * 4 * (size_t)k);
+        Ensure(&gi_layerout, 4 * 4 * 3 * (size_t)k * (pc.nlayers ? pc.nlayers : 1));
         memcpy(in_buf.map, groups + at, sizeof(gpugroup_t) * (size_t)k);
         pc.ngroups = k;
-        gbuf_t *bufs[7] = {NULL, &in_buf, &gi_tris, &walkbufs[4], &lightdata, &out_buf, &walkbufs[0]};
+        gbuf_t *bufs[10] = {NULL, &in_buf, &gi_tris, &walkbufs[4], &lightdata, &out_buf, &walkbufs[0], &gi_layers,
+                            &gi_layerofs, &gi_layerout};
         Run(&prog_gi, &gi_tlas, bufs, &pc, sizeof(pc), 4 * (uint32_t)k);
         memcpy(out + 64 * (size_t)at, out_buf.map, 64 * 4 * (size_t)k);
+        if (pc.nlayers)
+            memcpy(layerout + 12 * (size_t)pc.nlayers * at, gi_layerout.map, 48 * (size_t)pc.nlayers * k);
     }
 }
 

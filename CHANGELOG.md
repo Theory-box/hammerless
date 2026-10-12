@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Flickering and switchable lights** (Selected Object > Light, on point and spot lights): **Pattern** makes the baked light flicker, waver, pulse or strobe in the game (the game's 12 patterns, or your own *Custom* brightness steps); **Switchable** lets logic turn it on and off (TurnOn, TurnOff, Toggle, SetPattern on an Entity Events node, which now accepts Blender lights); **Starts Off** keeps it dark until turned on. Each such light is baked into a layer of its own by Hammerless's compilers (no fallback to Valve's). Tested in game: on, off, back on, a pattern, a flicker, starting off; characters in the room dim with it.
+- **Live Light Mixing** (Lighting panel): bake once, then change any light's colour or brightness (or the sun's and the sky's) and the Baked Lighting view follows at once, no rebake. Each light is baked into a layer of its own alongside the normal bake (the Hammerless light compiler, on the GPU: about 0.3 s more a light, instead of a bake per light); the view shows the bake with each layer scaled by how its light changed. Light adds up, bounces included, so it's what baking again gives: measured, median 0.4% off a real rebake (the rest is the bake's own noise). The normal bake is unchanged, byte for byte.
 - **New example: Power Goes Out**: a button makes the lights stutter, then die as a horde comes; 30 seconds later the power returns.
 
 ## 0.14.1 (test release, 2026-10-12)

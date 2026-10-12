@@ -441,6 +441,26 @@ def seal_brushes(ir: MapIR, extra_points=()):
     return [g.box_brush(a, b, sky, "auto_seal") for a, b in boxes]
 
 
+LAYER_LIGHTS = ("light", "light_spot", "light_environment", "light_directional")
+
+
+def tag_light_layers(entities) -> int:
+    """Live Light Mixing: each light entity gets a layer of its own (hlvrad -layers ... keys): "_hllayer" n, and the
+    object it came from, "_hlobject" (the sun added from the Lighting settings: "*sun"); a light_environment's sky
+    light gets the next one ("_hllayersky"). Returns how many layers."""
+    n = 0
+    for e in entities:
+        if e.classname not in LAYER_LIGHTS:
+            continue
+        n += 1
+        kv = {**e.keyvalues, "_hllayer": str(n), "_hlobject": e.source or "*sun"}
+        if e.classname == "light_environment":
+            n += 1
+            kv["_hllayersky"] = str(n)
+        e.keyvalues = kv
+    return n
+
+
 def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
     """The map as VMF text. base: an imported map (core/vmfimport): (document, world block, entity blocks,
     writer): it is written back as it was, with what ir adds (the scene's own objects) after it; the map
@@ -575,6 +595,8 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
         entities.append(Entity("light_environment", (0, 0, 0), (s.sun_pitch, s.sun_yaw, 0), kv))
         report.info.append("No sun in the scene. Added one from the Lighting settings." if s.auto_light_environment
                            else "No sun in the scene: added the sky light only (Add Sun if Missing is off).")
+    if s.light_mixing:
+        tag_light_layers(entities)
     if s.fog_enabled and "env_fog_controller" not in classes:
         entities.append(Entity("env_fog_controller", HELPER_SPOT, (0, 0, 0), {
             "targetname": "hammerless_fog", "fogenable": "1", "spawnflags": "1",

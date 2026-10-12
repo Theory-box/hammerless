@@ -53,6 +53,7 @@ static void FacelightsWork(int face, int thread) { (void)thread; BuildFacelights
  * lights again with it. The written map is then the one lighting after vis would give. */
 static const char *g_visFrom;
 static const char *g_onlyLights;      /* (-onlylights: one layer of the lighting, see lights.c) */
+static const char *g_layerLights, *g_layersOut;    /* (-layers <out> <spec>: every layer in one bake, see direct.c) */
 static int g_tookVis, g_visThreadsAfter = -1;     /* (-visthreads n: threads while vis runs; then -threads' own) */
 static void TakeVis(void) {
     if (g_tookVis) return;
@@ -92,6 +93,7 @@ static void TakeVis(void) {
     }
     CreateDirectLights();
     if (g_onlyLights) KeepOnlyLights(g_onlyLights);
+    if (g_layerLights) AssignLayers(g_layerLights);
     if (g_bGPU) GPU_Lights();
     /* (vis is done: the rest of the build waits on this, so every core, at normal priority) */
     if (g_visThreadsAfter >= 0) g_numthreads = g_visThreadsAfter;
@@ -149,6 +151,9 @@ int main(int argc, char **argv) {
             Error("-textureshadows isn't supported yet");
         } else if (!_stricmp(a, "-StaticPropLighting")) {
             g_bStaticPropLighting = 1;
+        } else if (!_stricmp(a, "-layers") && i + 2 < argc) {
+            g_layersOut = argv[++i];
+            g_layerLights = argv[++i];
         } else if (!_stricmp(a, "-onlylights") && i + 1 < argc) {
             g_onlyLights = argv[++i];
         } else if (!_stricmp(a, "-visfrom") && i + 1 < argc) {
@@ -226,6 +231,14 @@ int main(int argc, char **argv) {
     }
     CreateDirectLights();
     if (g_onlyLights) KeepOnlyLights(g_onlyLights);
+    if (g_layerLights) {
+        if (!g_bGPU) Error("-layers needs -gpu");
+        g_numLayers = AssignLayers(g_layerLights);
+        if (g_numLayers > 256) Error("-layers: 256 at most");
+        remove(g_layersOut);            /* (a last bake's layers would be stale) */
+        g_gpuLayers = 1;
+        if (g_numbounce > 0 && !g_giPasses) Msg("Warning: -layers without -gi: the layers have no bounced light\n");
+    }
     Stage("direct lights");
     if (getenv("SKYDBG")) {      /* (debugging: a point's cluster and whether each light's PVS has it) */
         vec3_t p;
@@ -264,6 +277,11 @@ int main(int argc, char **argv) {
     AllocFacelights();
     if (g_bGPU) BuildFacelightsGPU();
     else RunThreadsOn(numfaces, FacelightsWork);
+    if (g_numLayers) {                  /* (the layers' light kept; the rest (props...) gathers without them) */
+        CollectLayers();
+        g_gpuLayers = 0;
+        GPU_Lights();
+    }
     Stage("direct lighting (faces)");
     PrecompLightmapOffsets();
     if (g_giPasses && !g_bGPU) {
@@ -291,6 +309,10 @@ int main(int argc, char **argv) {
     if (g_giPasses) {
         BuildIndirectGPU();
         Stage("gi (bounced light)");
+    }
+    if (g_numLayers) {
+        WriteLayers(g_layersOut);
+        Stage("layers");
     }
     if (g_visFrom) {
         TakeVis();

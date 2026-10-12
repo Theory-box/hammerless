@@ -17,7 +17,7 @@ from ..core.lightmap import read_lightmaps
 
 _state = {"path": None, "mtime": None, "data": None, "batch": None, "texture": None, "scale": None,
           "error": None, "loaded_at": None, "checked": 0.0, "edited": False, "props": None, "pbatch": None,
-          "tbatches": None, "content": None, "game_dir": None}
+          "tbatches": None, "content": None, "game_dir": None, "mix": None}
 _status = {"key": None, "time": 0.0, "value": ("NONE", "")}
 _handlers = []
 _SHADER = None
@@ -109,11 +109,19 @@ def load(context, path: str | None = None) -> str | None:
     try:
         with open(path, "rb") as f:
             raw = f.read()
-        data = read_lightmaps(raw)
+        from . import lightmix
+        mixing = os.path.exists(lightmix.layers_path(path))
+        data = read_lightmaps(raw, None if mixing else 0)      # (mixing: every light on, as the layers have them)
     except Exception as ex:          # (a map being written, or cut short: never an error out of the draw callback)
         return f"Couldn't read the compiled map: {ex}"
     if data.faces == 0:
         return "The last build has no baked lighting (Lighting Quality was Off): choose Fast or higher and Build"
+    mix = None
+    if mixing:
+        try:
+            mix = lightmix.load(path, data)
+        except Exception:                # (the layers are extra: the bake shows without them)
+            mix = None
     props = content = game_dir = None
     try:                             # (the props' models come from the game: without it, the faces alone)
         from ..core.proplight import read_prop_lighting
@@ -127,22 +135,43 @@ def load(context, path: str | None = None) -> str | None:
         props = None
     _state.update(path=path, mtime=os.path.getmtime(path), data=data, batch=None, texture=None, scale=None,
                   error=None, loaded_at=time.time(), edited=False, props=props, pbatch=None, tbatches=None,
-                  content=content, game_dir=game_dir)
+                  content=content, game_dir=game_dir, mix=mix)
     _redraw()
     return None
 
 
 def clear() -> None:
     _state.update(path=None, mtime=None, data=None, batch=None, texture=None, scale=None, error=None,
-                  loaded_at=None, props=None, pbatch=None, tbatches=None)
+                  loaded_at=None, props=None, pbatch=None, tbatches=None, mix=None)
     _redraw()
+
+
+def _upload():
+    """The lightmaps to the GPU (Live Light Mixing: as mixed now)."""
+    data, mix = _state["data"], _state["mix"]
+    atlas = mix.mixed if mix is not None else data.atlas
+    h, w = atlas.shape[:2]
+    buf = gpu.types.Buffer("FLOAT", w * h * 4, np.maximum(atlas, 0.0).ravel())
+    _state["texture"] = gpu.types.GPUTexture((w, h), format="RGBA16F", data=buf)
+
+
+def remix(context) -> bool:
+    """Live Light Mixing: the shown lighting follows the lights' colour and brightness now. True if it changed."""
+    mix = _state["mix"]
+    if mix is None:
+        return False
+    from . import lightmix
+    if not mix.set_weights(lightmix.current_weights(context, mix)):
+        return False
+    if _state["batch"] is not None:
+        _upload()
+    _redraw()
+    return True
 
 
 def _build(scale: float):
     data = _state["data"]
-    h, w = data.atlas.shape[:2]
-    buf = gpu.types.Buffer("FLOAT", w * h * 4, data.atlas.ravel())
-    _state["texture"] = gpu.types.GPUTexture((w, h), format="RGBA16F", data=buf)
+    _upload()
     pos = data.positions / scale
     _state["batch"] = batch_for_shader(_shader(), "TRIS", {"pos": pos.astype(np.float32), "uv": data.uvs})
     props = _state["props"]
@@ -377,6 +406,12 @@ def draw_panel(layout, context):
         _note(box, ["You've changed the scene since this", "bake: bake again to update the lighting"],
               icon="ERROR")
         _bake_button(box, "Bake Again")
+    mix = _state["mix"]
+    if mix is not None:
+        _note(layout, [f"Live Light Mixing: {len(mix.layers)} light layers", "Change a light's colour or brightness:",
+                       "the lighting follows (Build bakes it for real)"], icon="LIGHT")
+    elif s.light_mixing:
+        _note(layout, ["Live Light Mixing: build to bake the layers"], icon="LIGHT")
     if _state["error"]:
         _note(layout, [_state["error"]], icon="ERROR")
 
@@ -394,11 +429,23 @@ _WATCHED = (bpy.types.Mesh, bpy.types.Light, bpy.types.Material, bpy.types.World
 
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph):
-    """Remember that the scene changed after the shown build (walls, lights, materials)."""
-    if _state["data"] is None or _state["edited"]:
+    """Remember that the scene changed after the shown build (walls, lights, materials). Live Light Mixing: a light's
+    colour or brightness (or the sun's settings) isn't a change: the view mixes it in."""
+    if _state["data"] is None:
+        return
+    mixing = _state["mix"] is not None
+    if mixing:
+        try:
+            remix(bpy.context)
+        except Exception:
+            pass
+    if _state["edited"]:
         return
     for u in depsgraph.updates:
         i = u.id
+        if mixing and (isinstance(i, (bpy.types.Light, bpy.types.Scene)) or (
+                isinstance(i, bpy.types.Object) and i.type == "LIGHT" and not u.is_updated_transform)):
+            continue
         if isinstance(i, _WATCHED) or (isinstance(i, bpy.types.Object) and i.type in ("MESH", "LIGHT")
                                        and (u.is_updated_geometry or u.is_updated_transform)):
             _state["edited"] = True

@@ -682,6 +682,10 @@ class CompileJob:
                         # (the last build's lighting where nothing is baked now: copied when the build starts, see
                         # _keep_last_light)
                         sky += ["-keeplight", self.base + ".keep.bsp"]
+                if not opts.light_exact:
+                    # (Live Light Mixing: the lights the build tagged get layers of their own, lightlayers.py; none
+                    # tagged, none written)
+                    sky += ["-layers", self.base + ".hllayers", "keys"]
                 self.steps.append(("vrad", [HLVRAD] + vrad + opts.hlvrad_args() + game + sky
                                    + ["-modeldir", self.base + ".hlvrad_models", self.base]))
                 self._valve_vrad = valve

@@ -143,6 +143,7 @@ typedef struct directlight_s {
     int has_sun_extent;               /* (else the light_environment's: g_SunAngularExtent) */
     int directional;                  /* a light_directional */
     int entity;                       /* the entity it came from (-1: a light-emitting surface) */
+    int layer;                        /* -layers: its layer (1...; 0: in none)*/
     struct directlight_s *next;
 } directlight_t;
 
@@ -252,6 +253,8 @@ void GPU_Lights(void);
 int GPU_NumSlots(void);
 int GPU_SlotStyle(int slot);
 int GPU_StyleSlot(int style);
+int GPU_GroupFloats(void);
+extern int g_gpuLayers;
 void GPU_Gather(const gpugroup_t *groups, int n, int slot, float *out);       /* out: 16 floats per point */
 void GPU_WalkScene(const gpuwalk_t *w);
 void GPU_Lightmaps(void);
@@ -260,7 +263,8 @@ void GPU_PropIndirect(const float *points, int n, float *out);
 void GPU_PatchEnds(const float *ends, int n);
 typedef struct { int face, kind; float lux[6]; } gpustri_t;     /* (gi.comp's STri: 0 face, 1 disp, 2 sky) */
 void GPU_GIScene(const float *verts, const gpustri_t *tris, int ntris);
-void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *out);   /* out: 16 floats a point */
+void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *out, float *layerout);   /* out: 16 floats a point */
+void GPU_GILayers(const float *grids, size_t nluxels, const int *ofs, int nfaces, int nlayers);
 extern int g_giPasses, g_giRays;                                  /* (-gi n, -girays n) */
 void BuildIndirectGPU(void);
 void GpuGISurfaces(void);
@@ -361,6 +365,11 @@ void AssignLightStyles(void);
 void PrecompLightmapOffsets(void);
 void CreateDirectLights(void);
 void KeepOnlyLights(const char *spec);
+int AssignLayers(const char *spec);
+void LayerInfo(int layer, char *out, size_t size);
+extern int g_numLayers;
+void CollectLayers(void);
+void WriteLayers(const char *path);
 int LightForString(const char *s, vec3_t intensity);
 void LoadTexLights(const char *gamedir, const char *bsppath, const char *designer);
 void LightForTexture(const char *name, vec3_t result);

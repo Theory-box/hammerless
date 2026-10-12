@@ -578,6 +578,11 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
         bm = on.column()
         bm.enabled = ours and not s.light_exact and not s.light_fast
         bm.prop(s, "light_bounce_method", text="Bounce")
+        mx = on.column()
+        mx.enabled = ours and not s.light_exact
+        mx.prop(s, "light_mixing")
+        if s.light_mixing and ours and not s.light_exact and s.light_bounce_method != "GI":
+            _hint(on, "Live Light Mixing bounces light on the GPU")
         layout.separator()
         area = s.bake_area
         view = area == "VIEW"

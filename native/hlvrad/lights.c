@@ -498,6 +498,64 @@ void KeepOnlyLights(const char *spec) {
     free(copy), free(ents);
 }
 
+/* -layers <file> <spec>: which lights go in which layer (see direct.c): layers separated by ";", each a list as
+ * -onlylights's (entity numbers, "sky", "surface"); a light in none stays in the rest. spec "keys": the light
+ * entities say (Hammerless writes them): "_hllayer" n puts its light in layer n (a light_environment's sun), and
+ * a light_environment's "_hllayersky" n its sky light. Returns how many layers */
+static int layerEntity[257], layerSky[257];      /* (per layer, from 1: its first light's entity (-1 none), sky light?) */
+
+/* what a layer was baked with, for Blender to compare a light's settings now against: its entity's light keys, as
+ * "key=value" lines ("kind=sky" for a sky light; nothing for a layer of other lights) */
+void LayerInfo(int layer, char *out, size_t size) {
+    out[0] = 0;
+    if (layer < 1 || layer > 256 || layerEntity[layer] < 0) return;
+    const entity_t *e = &entities[layerEntity[layer]];
+    size_t n = (size_t)snprintf(out, size, "kind=%s\nclassname=%s\n", layerSky[layer] ? "sky" : "light", ValueForKey(e, "classname"));
+    static const char *keys[] = {"_hlobject", "_light", "_lightHDR", "_lightscaleHDR", "_ambient", "_ambientHDR", "_AmbientScaleHDR"};
+    for (int k = 0; k < (int)(sizeof(keys) / sizeof(keys[0])) && n < size; k++) {
+        const char *v = ValueForKeyOrNull(e, keys[k]);
+        if (v) n += (size_t)snprintf(out + n, size - n, "%s=%s\n", keys[k], v);
+    }
+}
+
+int AssignLayers(const char *spec) {
+    for (directlight_t *dl = activelights; dl; dl = dl->next) dl->layer = 0;
+    for (int i = 0; i <= 256; i++) layerEntity[i] = -1, layerSky[i] = 0;
+    if (!_stricmp(spec, "keys")) {
+        int most = 0;
+        for (directlight_t *dl = activelights; dl; dl = dl->next) {
+            if (dl->entity < 0) continue;
+            int sky = dl->light.type == emit_skyambient;
+            const char *v = ValueForKeyOrNull(&entities[dl->entity], sky ? "_hllayersky" : "_hllayer");
+            dl->layer = v ? atoi(v) : 0;
+            if (dl->layer < 0 || dl->layer > 256) dl->layer = 0;
+            if (dl->layer && layerEntity[dl->layer] < 0) layerEntity[dl->layer] = dl->entity, layerSky[dl->layer] = sky;
+            if (dl->layer > most) most = dl->layer;
+        }
+        return most;
+    }
+    char *copy = _strdup(spec);
+    int layer = 0;
+    char *next = copy;
+    while (next) {
+        char *part = next, *semi = strchr(next, ';');
+        if (semi) *semi = 0, next = semi + 1;
+        else next = NULL;
+        layer++;
+        for (char *tok = strtok(part, ","); tok; tok = strtok(NULL, ",")) {
+            for (directlight_t *dl = activelights; dl; dl = dl->next) {
+                if (dl->layer) continue;
+                int match = !_stricmp(tok, "sky") ? dl->light.type == emit_skyambient
+                          : !_stricmp(tok, "surface") ? dl->entity < 0
+                          : dl->light.type != emit_skyambient && dl->entity >= 0 && dl->entity == atoi(tok);
+                if (match) dl->layer = layer;
+            }
+        }
+    }
+    free(copy);
+    return layer;
+}
+
 /* lump 54 (HDR) / 15: the active lights, intensities in 0..1 */
 void ExportDirectLightsToWorldLights(void) {
     int n = 0;

@@ -63,7 +63,8 @@ def _light_options(s) -> dict:
     if s.light_tool == "HAMMERLESS":
         return {"light_exact": s.light_exact, "ss_points": s.light_ss_points, "ss_passes": s.light_ss_passes,
                 "ss_threshold": s.light_ss_threshold, "fix_quirks": s.light_fix_quirks,
-                "gi": s.light_bounce_method == "GI", "gi_rays": s.light_gi_rays}
+                "gi": s.light_bounce_method == "GI" or (s.light_mixing and not s.light_exact),   # (layers: GPU bounce)
+                "gi_rays": s.light_gi_rays}
     if s.light_tool != "CYCLES":
         return {}
     return {"cycles_samples": s.cycles_samples, "cycles_denoise": s.cycles_denoise,

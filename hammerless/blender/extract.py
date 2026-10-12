@@ -982,6 +982,7 @@ def scene_settings_to_ir(s) -> MapSettings:
     return MapSettings(
         name=s.map_name, skyname=s.skyname, auto_seal=s.auto_seal, auto_detail=s.auto_detail,
         auto_light_environment=s.auto_sun,
+        light_mixing=s.light_mixing and s.light_tool == "HAMMERLESS" and not s.light_exact,
         sun_color=_rgb(s.sun_color), sun_brightness=s.sun_brightness,
         sun_pitch=s.sun_pitch, sun_yaw=s.sun_yaw,
         ambient_color=_rgb(s.ambient_color), ambient_brightness=s.ambient_brightness,

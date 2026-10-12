@@ -666,6 +666,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("CYCLES", "Cycles",
          "vrad lays out the lighting, then Blender's Cycles bakes the lightmaps with the same lights (its GPU "
          "if it has one). Prop lighting and switchable lights stay vrad's")])
+    light_mixing: BoolProperty(name="Live Light Mixing", default=False,
+                               description="Bake every light's light into a layer of its own too (about a third of a "
+                                           "second more a light). Then Baked Lighting follows your lights' colour and "
+                                           "brightness live, without baking again. Needs the Hammerless light "
+                                           "compiler on the graphics card")
     light_exact: BoolProperty(name="Exact Lighting (match vrad)", default=False, update=_q("on_light_tool"),
                               description="Off: the Hammerless light compiler uses the graphics card, much faster "
                                           "and it looks the same (the CPU when there's no suitable card). On: it "

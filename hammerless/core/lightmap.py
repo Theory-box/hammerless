@@ -37,6 +37,7 @@ class Lightmaps:
     tex_uvs: np.ndarray = None  # (n*3, 2) float32 texture coordinates (0..1 across the texture, v down as stored)
     tri_material: np.ndarray = None   # (n,) int32: each triangle's material (an index into materials)
     materials: list = None      # material paths, as the map names them (lower case)
+    face_at: dict = None        # face number -> (x, y, w, h): where its lightmap is in the atlas (light layers)
 
 
 def _lumps(data: bytes):
@@ -90,9 +91,10 @@ def _pack(sizes: list[tuple[int, int]]) -> tuple[list[tuple[int, int]], int, int
     return at, width, y + shelf
 
 
-def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
+def read_lightmaps(data: bytes, style: int | None = 0) -> Lightmaps:
     """The lit faces of a compiled map, triangulated, with their lightmaps packed into an atlas.
-    style: which light style to show (0 = the map's static lighting)."""
+    style: which light style to show (0 = the map's static lighting; None: all of them added up, every switchable
+    light on)."""
     lump = _lumps(data)
     lighting, faces, hdr = lump(53), lump(58), True
     if not lighting:
@@ -117,6 +119,7 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
                 model_of[f] = origins[m]
 
     blocks = []        # per face: (corner positions, corner luxel coords, triangles, (w, h), samples)
+    face_nums = []
     luxels = 0
     for k in range(len(faces) // FACE_SIZE):
         b = FACE_SIZE * k
@@ -125,7 +128,7 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
         light_ofs = struct.unpack_from("<i", faces, b + 20)[0]
         mins = struct.unpack_from("<2i", faces, b + 28)
         size = struct.unpack_from("<2i", faces, b + 36)
-        if light_ofs < 0 or num_edges < 3 or ti < 0 or style not in styles:
+        if light_ofs < 0 or num_edges < 3 or ti < 0 or (style not in styles if style is not None else styles[0] == 255):
             continue
         flags = struct.unpack_from("<i", texinfo, TEXINFO_SIZE * ti + 64)[0]
         if flags & (SURF_SKY | SURF_SKY2D | SURF_NOLIGHT):
@@ -147,9 +150,9 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
         mat = material_of.get(td, -1)
         w, h = size[0] + 1, size[1] + 1
         per_style = w * h * (4 if flags & SURF_BUMPLIGHT else 1)      # bumped: flat + 3 directions
-        start = light_ofs + 4 * per_style * styles.index(style)
-        raw = lighting[start:start + 4 * w * h]                         # the flat lightmap comes first
-        if len(raw) < 4 * w * h:
+        pages = [styles.index(style)] if style is not None else [k for k in range(4) if styles[k] != 255]
+        raws = [lighting[light_ofs + 4 * per_style * k:light_ofs + 4 * per_style * k + 4 * w * h] for k in pages]
+        if any(len(raw) < 4 * w * h for raw in raws):                  # (the flat lightmap comes first)
             continue
         se = surfedges[first_edge:first_edge + num_edges]
         idx = np.where(se >= 0, edges[np.abs(se), 0], edges[np.abs(se), 1])
@@ -167,7 +170,8 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
         tex = (flat @ tvecs[:, :3].T + tvecs[:, 3]) / np.array([max(tw, 1), max(th, 1)], dtype=np.float64)
         if offset is not None:
             pos = pos + np.array(offset)
-        blocks.append((pos, lux, tris, (w, h), decode_luxels(raw).reshape(h, w, 3), tex, mat))
+        blocks.append((pos, lux, tris, (w, h), sum(decode_luxels(raw) for raw in raws).reshape(h, w, 3), tex, mat))
+        face_nums.append(k)
         luxels += w * h
 
     at, width, height = _pack([blk[3] for blk in blocks])
@@ -188,7 +192,8 @@ def read_lightmaps(data: bytes, style: int = 0) -> Lightmaps:
         uvs=np.concatenate(uvs).astype(np.float32) if uvs else np.zeros((0, 2), np.float32),
         atlas=atlas, faces=len(blocks), luxels=luxels, hdr=hdr,
         tex_uvs=np.concatenate(tex_uvs).astype(np.float32) if tex_uvs else np.zeros((0, 2), np.float32),
-        tri_material=np.concatenate(tri_mats) if tri_mats else np.zeros(0, np.int32), materials=materials)
+        tri_material=np.concatenate(tri_mats) if tri_mats else np.zeros(0, np.int32), materials=materials,
+        face_at={f: (x, y, blk[3][0], blk[3][1]) for f, blk, (x, y) in zip(face_nums, blocks, at)})
 
 
 def disp_luxels(npoints: int, w: int, h: int) -> np.ndarray:

@@ -91,6 +91,7 @@ class MapSettings:
     seal_thickness: float = 16.0
     auto_director: bool = True
     auto_light_environment: bool = True
+    light_mixing: bool = False        # Live Light Mixing: each light baked into a layer of its own too (lightlayers.py)
 
     # sun / sky light (used when the scene has no Blender sun)
     sun_color: tuple[int, int, int] = (255, 245, 225)
