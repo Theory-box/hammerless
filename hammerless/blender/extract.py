@@ -597,6 +597,13 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
     try:
         flip = (sca.x * sca.y * sca.z) < 0       # a mirrored copy: keep the faces facing out
         size = Vector((sca.x * scale, sca.y * scale, sca.z * scale))
+        game_rel = None
+        if arm is not None and arm.get("hl_game_model"):
+            # (a game skeleton is in the armature's space: the mesh is taken there, wherever its object is)
+            game_rel = arm.matrix_world.inverted() @ obj.matrix_world
+            game_nrm = game_rel.to_3x3().inverted().transposed()
+            size = Vector((scale, scale, scale))
+            flip = game_rel.to_3x3().determinant() < 0
         mesh.calc_loop_triangles()
         uv = mesh.uv_layers.active.data if mesh.uv_layers.active else None
         normals = mesh.corner_normals if hasattr(mesh, "corner_normals") else None
@@ -616,9 +623,12 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
             verts = []
             for li, vi in zip(tri.loops, tri.vertices):
                 co = mesh.vertices[vi].co
-                p = (co.x * size.x, co.y * size.y, co.z * size.z)
                 n = normals[li].vector if normals is not None else mesh.loops[li].normal
-                n = Vector((n.x / (sca.x or 1), n.y / (sca.y or 1), n.z / (sca.z or 1))).normalized()
+                if game_rel is not None:
+                    co, n = game_rel @ co, (game_nrm @ n).normalized()
+                else:
+                    n = Vector((n.x / (sca.x or 1), n.y / (sca.y or 1), n.z / (sca.z or 1))).normalized()
+                p = (co.x * size.x, co.y * size.y, co.z * size.z)
                 t = uv[li].uv if uv is not None else (0.0, 0.0)
                 verts.append((p, (n.x, n.y, n.z), (t[0], t[1])))
             if flip:
@@ -630,7 +640,8 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
         if collide == "HULLS":
             bm = bmesh.new()
             bm.from_mesh(mesh)
-            bm.transform(Matrix.Diagonal((size.x, size.y, size.z, 1.0)))
+            bm.transform(Matrix.Diagonal((size.x, size.y, size.z, 1.0)) @ (game_rel if game_rel is not None
+                                                                              else Matrix.Identity(4)))
             for part in _loose_parts(bm):
                 pts = [tuple(v.co) for f in part for v in f.verts]
                 hull = bmesh.new()

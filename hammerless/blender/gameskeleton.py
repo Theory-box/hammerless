@@ -64,7 +64,6 @@ def build_armature(context, gm, content, name: str, collection):
     arm.location = context.scene.cursor.location
     arm["hl_game_model"] = gm.path
     view_layer = context.view_layer
-    prev = view_layer.objects.active
     if context.mode != "OBJECT":
         bpy.ops.object.mode_set(mode="OBJECT")
     for o in context.selected_objects:
@@ -85,7 +84,7 @@ def build_armature(context, gm, content, name: str, collection):
     bpy.ops.object.mode_set(mode="OBJECT")
     data.display_type = "STICK"
     arm.show_in_front = True
-    view_layer.objects.active = prev if prev is not None else arm
+    view_layer.objects.active = arm
     return arm
 
 
@@ -102,14 +101,9 @@ def game_skeleton(obj, arm, mesh, tri_vis, size, report, content):
                              "can't be read (set the Left 4 Dead 2 folder)")
         return None, None
     upm = bpy.context.scene.hammerless.units_per_meter
-    if abs(size.x - upm) > 1e-3 * upm or abs(size.y - upm) > 1e-3 * upm or abs(size.z - upm) > 1e-3 * upm:
-        report.warnings.append(f"Custom Model '{obj.name}' is scaled: a model on a game skeleton keeps the game's "
-                               "size (apply the scale)")
-    rel = arm.matrix_world.inverted() @ obj.matrix_world
-    if rel.translation.length > 1e-4 or any(abs(rel[i][j] - (1.0 if i == j else 0.0)) > 1e-4
-                                            for i in range(3) for j in range(3)):
-        report.warnings.append(f"Custom Model '{obj.name}' isn't at its armature's origin: on a game skeleton the "
-                               "mesh is built where it is relative to the armature")
+    if any(abs(c - 1.0) > 1e-3 for c in arm.matrix_world.to_scale()):
+        report.warnings.append(f"Custom Model '{obj.name}': its game skeleton '{arm.name}' is scaled, but a model on a "
+                               "game skeleton keeps the game's size (scale it back to 1)")
     standing, _source = standing_rest(content, gm)        # (the pose the armature was made in: the model's rest)
     bones = []
     for b, (pos, quat) in zip(gm.bones, standing):
@@ -147,7 +141,11 @@ def game_skeleton(obj, arm, mesh, tri_vis, size, report, content):
             iks.append((ch.name, ch.links[-1][0], tuple(knee)))
     includes = [p[len("models/"):] if p.lower().startswith("models/") else p for p in gm.includes]
     names = all_sequence_names(content, gm)
-    default = next((n for n in names if n.lower() == "idle"), "") or next((n for n in names if "idle" in n.lower()), "")
+    default = (next((n for n in names if n.lower() == "idle"), "")
+               or next((n for n in names if n.lower().startswith(("idle_standing", "idle_neutral", "idle_calm"))), "")
+               or next((n for n in names if n.lower().startswith("idle") and "upper" not in n.lower()
+                        and "layer" not in n.lower()), "")
+               or next((n for n in names if "idle" in n.lower()), ""))
     sk = skeletal.Skeleton(bones, weights, [], atts, valve_space=True, includes=includes,
                            hitboxes=[(h.bone, h.group, tuple(h.mins), tuple(h.maxs)) for h in gm.hitboxes],
                            keep=[i for i in range(len(bones)) if i not in used], ikchains=iks, default_animation=default)
@@ -189,7 +187,10 @@ def game_animation_pose(content, gm, name: str):
             continue
         frames = []
         for f in range(max(seq.frames, 1)):
-            pose = retarget(src, gm, src.frame(seq, f))
+            try:
+                pose = retarget(src, gm, src.frame(seq, f))
+            except ValueError:
+                return None, 30.0, False
             pose = [((p[1], -p[0], p[2]), _qmul(_UNTURN, q)) if gm.bones[k].parent < 0 else (p, q)
                     for k, (p, q) in enumerate(pose)]
             frames.append(gm.bone_world(pose))
@@ -224,8 +225,6 @@ def load_game_animation(context, arm, name: str):
     slots = list(getattr(act, "slots", []))
     if slots and hasattr(ad, "action_slot"):
         ad.action_slot = slots[0]
-    for pb in arm.pose.bones:
-        pb.rotation_mode = "QUATERNION"
     for f, world in enumerate(frames, 1):
         pose = {}
         for b in bones:
@@ -242,32 +241,42 @@ def load_game_animation(context, arm, name: str):
             else:
                 basis = b.matrix_local.inverted() @ pose[b.name]
             loc, rot, _s = basis.decompose()
-            pb.location, pb.rotation_quaternion = loc, rot
+            pb.location = loc
             pb.keyframe_insert("location", frame=f)
-            pb.keyframe_insert("rotation_quaternion", frame=f)
+            if pb.rotation_mode == "QUATERNION":         # (keyed in the bone's own rotation mode)
+                pb.rotation_quaternion = rot
+                pb.keyframe_insert("rotation_quaternion", frame=f)
+            elif pb.rotation_mode == "AXIS_ANGLE":
+                axis, angle = rot.to_axis_angle()
+                pb.rotation_axis_angle = (angle, *axis)
+                pb.keyframe_insert("rotation_axis_angle", frame=f)
+            else:
+                pb.rotation_euler = rot.to_euler(pb.rotation_mode, pb.rotation_euler)
+                pb.keyframe_insert("rotation_euler", frame=f)
     act.use_frame_range = True
     act.frame_start, act.frame_end = 1, max(len(frames), 2)
     act.use_cyclic = loop
     scene = context.scene
-    scene.frame_start, scene.frame_end = 1, len(frames)
-    scene.render.fps = int(round(fps))
+    scene.frame_start, scene.frame_end = 1, len(frames)      # (to play it; the scene's fps is left as it is)
     return act, ""
 
 
 def _sequence_items(self, context):
     """The game animations of the active armature's character (for the search list)."""
     arm = context.active_object
-    key = arm.get("hl_game_model", "") if arm is not None else ""
+    from .ops import game_root as _root
+    key = (_root(context), arm.get("hl_game_model", "")) if arm is not None else ("", "")
     cache = _sequence_items.cache
-    if cache.get("key") != key:
+    if cache.get("key") != key or not cache.get("ok"):
         from ..core.gamemodel import all_sequence_names, load_game_model
         from .ops import game_content, game_root
         names = []
-        content = game_content(game_root(context)) if key else None
-        gm = load_game_model(content, key) if content is not None else None
+        content = game_content(game_root(context)) if key[1] else None
+        gm = load_game_model(content, key[1]) if content is not None else None
         if gm is not None:
             names = [n for n in all_sequence_names(content, gm) if not n.startswith("@")]
-        cache["key"], cache["items"] = key, [(n, n, "") for n in names] or [("", "(none)", "")]
+        cache["key"], cache["ok"] = key, bool(names)
+        cache["items"] = [(n, n, "") for n in names] or [("", "(none)", "")]
     return cache["items"]
 
 

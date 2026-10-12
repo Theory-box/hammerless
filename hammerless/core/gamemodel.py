@@ -453,9 +453,30 @@ def standing_rest(content, model: GameModel) -> tuple[Pose, str]:
                 continue
             pose = [((p[1], -p[0], p[2]), _qmul(_UNTURN, q)) if model.bones[k].parent < 0 else (p, q)
                     for k, (p, q) in enumerate(pose)]
+            pose = _face_like(model, pose, bind)
             if _head_height(model, pose) > 30.0:
                 return pose, seq.name
     return bind, ""
+
+
+def _yaw(q: Quat) -> float:
+    """Which way a rotation turns the X axis, seen from above (radians)."""
+    x, y, _z = _qrot(q, (1.0, 0.0, 0.0))
+    return math.atan2(y, x)
+
+
+def _face_like(model: GameModel, pose: Pose, bind: Pose) -> Pose:
+    """pose with each root turned about Z to face the way the bind pose does (an idle's first frame can stand
+    turned: the Tank's by 63 degrees)."""
+    out = list(pose)
+    for k, b in enumerate(model.bones):
+        if b.parent >= 0:
+            continue
+        d = _yaw(bind[k][1]) - _yaw(pose[k][1])
+        turn: Quat = (0.0, 0.0, math.sin(d / 2), math.cos(d / 2))
+        p, q = pose[k]
+        out[k] = (_qrot(turn, p), _qmul(turn, q))
+    return out
 
 
 def _head_height(model: GameModel, local: Pose) -> float:
