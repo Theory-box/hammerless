@@ -108,10 +108,10 @@ def _base(source: str) -> str:
 
 
 BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
-                 "CAMERA")
+                 "CAMERA", "FIRE_INPUT")
 CLIENT_COMMAND = "hl_clientcommand"     # the map's point_clientcommand: a console command run on one player
 BLOCK_VALUES = ("GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
-                "CHECK", "SCRIPT_VALUE")
+                "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE")
 VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
 
 
@@ -1064,6 +1064,15 @@ class _Compiler:
                     f'        DoEntFire("{CLIENT_COMMAND}", "Command", cmd, 0.0, p, p);\n'
                     f"    }}\n@@then@@")
             self.script_action(nid, fn, body, ["then"], take)
+        elif k == "FIRE_INPUT":
+            # (an input sent to an entity handle, e.g. one just spawned: the way an Object node's inputs are, by name,
+            # needs a name only it has)
+            ent = self.typed_in(n, "entity", vs.THING)
+            args = ", ".join((self.typed_in(n, "input", vs.TEXT), self.typed_in(n, "value", vs.TEXT),
+                              f"({self.typed_in(n, 'delay', vs.NUM)}).tofloat()", self.typed_in(n, "activator", vs.THING)))
+            body = (f"    local hl_e = {ent};\n"
+                    f'    if (hl_e != null && hl_e.IsValid()) DoEntFire("!self", {args}, hl_e);\n@@then@@')
+            self.script_action(nid, fn, body, ["then"], take)
         elif k == "SCRIPT_CODE":
             args = "".join(f"    local {x} = {self.typed_in(n, x, vs.ANY)};\n" for x in "abcd")
             code = "\n".join("    " + line for line in (s.get("code") or "").splitlines())
@@ -1146,6 +1155,24 @@ class _Compiler:
             op = s.get("op", "IS_SET")
             return {"IS_SET": f"HL_IsSet({a})", "NOT_SET": f"!HL_IsSet({a})", "EQUAL": f"(({a}) == ({b}))",
                     "NOT_EQUAL": f"(({a}) != ({b}))"}.get(op, f"HL_IsSet({a})")
+        if k == "TEXT_CHECK":
+            a, b = self.typed_in(n, "a", vs.TEXT), self.typed_in(n, "b", vs.TEXT)
+            test = {"CONTAINS": "t.find(f) != null", "STARTS": "t.find(f) == 0",
+                    "ENDS": "t.len() >= f.len() && t.slice(t.len() - f.len()) == f",
+                    "EQUAL": "t == f"}.get(s.get("op", "CONTAINS"), "t.find(f) != null")
+            return (f"(function(t, f) {{ if (t == null || f == null) return false; t = t.tostring(); f = f.tostring(); "
+                    f"return {test}; }})({a}, {b})")
+        if k == "SPLIT_TEXT":
+            t, sep = self.typed_in(n, "text", vs.TEXT), self.typed_in(n, "separator", vs.TEXT)
+            parts = (f"(function(t, s) {{ local out = []; if (t == null) return out; t = t.tostring(); s = (s == null || "
+                     f's == "") ? "," : s.tostring(); local i = 0; while (true) {{ local j = t.find(s, i); '
+                     f"out.append(strip(j == null ? t.slice(i) : t.slice(i, j))); if (j == null) break; "
+                     f"i = j + s.len(); }} return out; }})({t}, {sep})")
+            return f"{parts}.len().tofloat()" if sock == "count" else parts
+        if k == "PICK":
+            kind = s.get("kind", vs.NUM)
+            c = self.typed_in(n, "condition", vs.BOOL)
+            return f"(({c}) ? ({self.typed_in(n, 'a', kind)}) : ({self.typed_in(n, 'b', kind)}))"
         if k == "SCRIPT_VALUE":
             args = ", ".join(self.typed_in(n, x, vs.ANY) for x in "abcd")
             expr = (s.get("expr") or "null").strip().rstrip(";")

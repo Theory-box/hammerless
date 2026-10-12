@@ -136,6 +136,15 @@ def literal(kind: str, value) -> str:
     if kind == VEC:
         x, y, z = (tuple(value) + (0.0, 0.0, 0.0))[:3] if value else (0.0, 0.0, 0.0)
         return f"Vector({x:g}, {y:g}, {z:g})"
+    if kind == ANY and value is not None:      # (e.g. typed on a node group's input, which feeds an 'any' socket)
+        if isinstance(value, bool):
+            return literal(BOOL, value)
+        if isinstance(value, (int, float)):
+            return literal(NUM, value)
+        if isinstance(value, str):
+            return literal(TEXT, value) if value else "null"
+        if isinstance(value, (tuple, list)) and len(value) == 3:
+            return literal(VEC, value)
     return "null"
 
 

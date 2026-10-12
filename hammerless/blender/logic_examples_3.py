@@ -5,32 +5,6 @@ from .logic_examples import N, ev, fn, text
 
 PICKUP_MODEL = "models/w_models/weapons/w_eq_pipebomb.mdl"
 
-# blow up the next few infected of the queue (a wave outward from where the nuke was taken, a few per
-# tick so the game isn't asked for every explosion in one frame); a = who took it
-NUKE_WAVE = """local n = 0;
-while (::HL_NukeQueue.len() > 0 && n < 5) {
-    local z = ::HL_NukeQueue.remove(0);
-    if (!z.IsValid() || z.GetHealth() <= 0) continue;
-    local boom = SpawnEntityFromTable("env_explosion", { targetname = "hl_nuke_boom", origin = z.GetOrigin() + Vector(0, 0, 32), iMagnitude = 0, spawnflags = (n == 0 ? 1 : 65) });
-    z.TakeDamage(10000, 64, a);
-    n++;
-}
-EntFire("hl_nuke_boom", "Explode", "", 0.0, null);
-EntFire("hl_nuke_boom", "Kill", "", 1.0, null);
-result = ::HL_NukeQueue.len();"""
-
-# every common infected alive within b units of a (a position), nearest first
-NUKE_QUEUE = """local list = [], e = null;
-while (e = Entities.FindByClassname(e, "infected")) {
-    if (e.GetHealth() <= 0) continue;
-    local d = (e.GetOrigin() - a).Length();
-    if (d <= b) list.append([d, e]);
-}
-list.sort(function(x, y) { return x[0] > y[0] ? 1 : (x[0] < y[0] ? -1 : 0); });
-::HL_NukeQueue <- [];
-foreach (p in list) ::HL_NukeQueue.append(p[1]);
-result = ::HL_NukeQueue.len();"""
-
 # ---------------------------------------------------------------- node groups (plain nodes inside; Tab goes in)
 
 def _var(nid, name, col, row, get=True, kind="num", op="SET", label="", sockets=None):
@@ -124,41 +98,102 @@ FLASHLIGHT_BATTERY = dict(
            ("Out: the charge", ["charge"])])
 
 
-MUZZLE_FLASH = """local p = a;      // (the event's Userid wire gives the player)
-local w = p != null ? p.GetActiveWeapon() : null;
-if (w != null && w.LookupAttachment("muzzle_flash") > 0) {
-    // a point light for everything (Brightness), and an extra one for zombies and survivors (Model Brightness)
-    foreach (part in [["light", b, 0], ["models", d, 1]]) {      // (spawnflags 1: not the world)
-        local name = "hl_muzzle_" + part[0] + "_" + p.GetEntityIndex();
-        local l = Entities.FindByName(null, name);
-        if (l == null && part[1] > 0) {      // made once
-            l = SpawnEntityFromTable("light_dynamic", {targetname = name, origin = w.GetOrigin(),
-                _light = "255 190 110 255", brightness = part[1].tostring(), distance = c.tostring(),
-                spotlight_radius = "0", _inner_cone = "0", _cone = "0", spawnflags = part[2]});
-            DoEntFire("!self", "TurnOff", "", 0.0, null, l);
-            l.ValidateScriptScope();
-        }
-        if (l != null) {
-            local s = l.GetScriptScope();
-            if (!("gun" in s) || s.gun != w) {      // a new gun in hand: on its muzzle
-                s.gun <- w;
-                DoEntFire("!self", "SetParent", "!activator", 0.0, w, l);
-                DoEntFire("!self", "SetParentAttachment", "muzzle_flash", 0.0, w, l);
-            }
-            DoEntFire("!self", "TurnOn", "", 0.0, null, l);
-            DoEntFire("!self", "TurnOff", "", 0.03, null, l);      // (one server tick: full-auto flickers)
-        }
-    }
-}"""
+EXPLOSION = dict(
+    about="An explosion at Position: an env_explosion is made there, told to Explode, and removed a second later. It "
+          "does no damage of its own (spawnflags 1); With Sound off adds 'no sound' (64), for many at once.",
+    inputs=[("run", "Run", "event"), ("position", "Position", "vec"), ("sound", "With Sound", "bool")],
+    outputs=[("then", "Then", "event"), ("entity", "Explosion", "thing")],
+    nodes=[N("flags", "HL_NodePickValue", 0, 3, label="Spawn flags", sockets={"a": 1.0, "b": 65.0}),
+           N("kv", "HL_NodeMakeTable", 1, 3, fields="origin: vec, iMagnitude: int, spawnflags: int",
+             sockets={"f_iMagnitude": 0.0}),
+           fn("spawn", "SpawnEntityFromTable", 1, 0, {"p0": "env_explosion"}),
+           N("boom", "HL_NodeFireInput", 2, 0, sockets={"input": "Explode"}),
+           N("gone", "HL_NodeFireInput", 3, 0, label="Remove it", sockets={"input": "Kill", "delay": 1.0})],
+    links=[("in.run", "spawn.run"), ("in.position", "kv.f_origin"), ("in.sound", "flags.condition"),
+           ("flags.value", "kv.f_spawnflags"), ("kv.table", "spawn.p1"), ("spawn.then", "boom.run"),
+           ("spawn.result", "boom.entity"), ("boom.then", "gone.run"), ("spawn.result", "gone.entity"),
+           ("gone.then", "out.then"), ("spawn.result", "out.entity")])
+
+EXPLODE_COMMON = dict(
+    about="Blows a common infected up: an Explosion (the group) at its middle, and damage enough to kill it, counted "
+          "for Attacker.",
+    inputs=[("run", "Run", "event"), ("common", "Common", "thing"), ("attacker", "Attacker", "thing"),
+            ("sound", "With Sound", "bool")],
+    outputs=[("then", "Then", "event")],
+    nodes=[fn("at", "entity:GetOrigin", 0, 2),
+           N("up", "HL_NodeVectorMath", 1, 2, label="Its middle", op="ADD", sockets={"b": (0.0, 0.0, 32.0)}),
+           N("explosion", "HL_NodeGroup", 1, 0, group="Explosion"),
+           fn("kill", "entity:TakeDamage", 2, 0, {"p0": 10000.0, "p1": 64.0})],
+    links=[("in.run", "explosion.run"), ("in.common", "at.target"), ("at.result", "up.a"),
+           ("up.vector", "explosion.position"), ("in.sound", "explosion.sound"), ("explosion.then", "kill.run"),
+           ("in.common", "kill.target"), ("in.attacker", "kill.p2"), ("kill.then", "out.then")])
+
+
+MUZZLE_LIGHT = dict(
+    about="Flashes a light on a player's gun muzzle for one server tick (0.03 s). The light is one per player (named "
+          "Light Name_<player number>), made at their first shot (only when Brightness is above 0), and put on the "
+          "muzzle of the gun in their hands at every shot (SetParent to the gun, then its 'muzzle_flash' attachment). "
+          "Spawn Flags 0 lights everything, 1 only models (zombies and survivors), 2 only the world.",
+    inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("name", "Light Name", "text"),
+            ("brightness", "Brightness", "num"), ("reach", "Reach", "num"), ("flags", "Spawn Flags", "num")],
+    outputs=[("then", "Then", "event")],
+    nodes=[fn("gun", "player:GetActiveWeapon", 0, 4),
+           N("has_gun", "HL_NodeCheck", 1, 4, label="A gun?", op="IS_SET"),
+           N("if_gun", "HL_NodeIf", 1, 0),
+           fn("att", "entity:LookupAttachment", 1, 5, {"p0": "muzzle_flash"}),
+           N("has_att", "HL_NodeCompare", 2, 5, label="With a muzzle?", op="GREATER", sockets={"b": 0.0}),
+           N("if_att", "HL_NodeIf", 2, 0),
+           fn("idx", "entity:GetEntityIndex", 0, 6),
+           N("lname", "HL_NodeFormatText", 1, 6, label="This player's light", template="{a}_{b}"),
+           fn("found", "Entities.FindByName", 2, 6),
+           N("missing", "HL_NodeCheck", 3, 6, label="Not made yet?", op="NOT_SET"),
+           N("wanted", "HL_NodeCompare", 3, 7, label="Brightness above 0?", op="GREATER", sockets={"b": 0.0}),
+           N("make", "HL_NodeBoolMath", 4, 6, label="Make it?", op="AND"),
+           N("if_new", "HL_NodeIf", 3, 0),
+           fn("at", "entity:GetOrigin", 3, 4),
+           N("kv", "HL_NodeMakeTable", 4, 4, label="The light's settings",
+             fields="targetname: text, origin: vec, _light: text, brightness: num, distance: num, "
+                    "spotlight_radius: num, _inner_cone: num, _cone: num, spawnflags: int",
+             sockets={"f__light": "255 190 110 255", "f_spotlight_radius": 0.0, "f__inner_cone": 0.0,
+                      "f__cone": 0.0}),
+           fn("spawn", "SpawnEntityFromTable", 4, 0, {"p0": "light_dynamic"}),
+           N("exists", "HL_NodeCheck", 4, 7, label="Made?", op="IS_SET"),
+           N("if_exists", "HL_NodeIf", 4, 1),
+           fn("parent", "EntFire", 5, 0, {"p1": "SetParent", "p2": "!activator"}),
+           fn("attach", "EntFire", 6, 0, {"p1": "SetParentAttachment", "p2": "muzzle_flash"}),
+           fn("on", "EntFire", 7, 0, {"p1": "TurnOn"}),
+           fn("off", "EntFire", 8, 0, {"p1": "TurnOff", "p3": 0.03})],
+    links=[("in.run", "if_gun.in"), ("in.player", "gun.target"), ("gun.result", "has_gun.a"),
+           ("has_gun.result", "if_gun.condition"),
+           ("if_gun.true", "if_att.in"), ("gun.result", "att.target"), ("att.result", "has_att.a"),
+           ("has_att.result", "if_att.condition"),
+           ("in.player", "idx.target"), ("in.name", "lname.a"), ("idx.result", "lname.b"), ("lname.result", "found.p1"),
+           ("found.result", "missing.a"), ("in.brightness", "wanted.a"), ("missing.result", "make.a"),
+           ("wanted.result", "make.b"),
+           ("if_att.true", "if_new.in"), ("make.result", "if_new.condition"),
+           ("lname.result", "kv.f_targetname"), ("gun.result", "at.target"), ("at.result", "kv.f_origin"),
+           ("in.brightness", "kv.f_brightness"), ("in.reach", "kv.f_distance"), ("in.flags", "kv.f_spawnflags"),
+           ("if_new.true", "spawn.run"), ("kv.table", "spawn.p1"), ("spawn.then", "parent.run"),
+           ("if_new.false", "if_exists.in"), ("found.result", "exists.a"), ("exists.result", "if_exists.condition"),
+           ("if_exists.true", "parent.run"),
+           ("lname.result", "parent.p0"), ("gun.result", "parent.p4"), ("parent.then", "attach.run"),
+           ("lname.result", "attach.p0"), ("gun.result", "attach.p4"), ("attach.then", "on.run"),
+           ("lname.result", "on.p0"), ("on.then", "off.run"), ("lname.result", "off.p0"), ("off.then", "out.then")],
+    steps=[("A gun with a muzzle in their hands?", ["gun", "has_gun", "if_gun", "att", "has_att", "if_att"]),
+           ("Their light: made at the first shot", ["idx", "lname", "found", "missing", "wanted", "make", "if_new",
+                                                    "at", "kv", "spawn", "exists", "if_exists"]),
+           ("On the muzzle, on for one tick", ["parent", "attach", "on", "off"])])
 
 EXAMPLES_3 = [
     dict(title="Power-Up: Nuke", level="Power-Ups",
+         groups={"Explosion": EXPLOSION, "Explode Common": EXPLODE_COMMON},
          about="Like the power-ups in Call of Duty's zombies: each common infected killed has a "
                "chance (the Value node, 0.03 = 3%) to drop a glowing pickup where it fell, one at a "
                "time. A survivor who walks over it sets off a nuke: a flash, a shake, and every "
-               "common infected within the Radius (a Value node, in units) explodes, nearest first, "
-               "five every tenth of a second so the game isn't asked for every explosion at once. The "
-               "kills count for whoever took it. After a nuke, a Delay keeps new ones from dropping "
+               "common infected within the Radius (a Value node, in units) explodes, nearest first: a ring "
+               "grows from where it was taken by Wave Speed units every tenth of a second, and the commons "
+               "inside it blow up ('Explode Common', a node group: Tab goes in; it uses the 'Explosion' group), "
+               "only one with sound per tick. The kills count for whoever took it. After a nuke, a Delay keeps new ones from dropping "
                "for 30 seconds (the 'cooling' variable). (The "
                "game's 'infected_death' event doesn't say which infected died, so the drop uses "
                "'infected_hurt': a hit at least as big as its health left is a kill.)",
@@ -166,7 +201,7 @@ EXAMPLES_3 = [
                 fn("precache", "PrecacheModel", 1, 0, {"p0": PICKUP_MODEL}),
                 # drop
                 ev("hurt", "infected_hurt", 0, 2),
-                fn("hp", "entity:GetHealth", 2, 6),
+                fn("hp_hurt", "entity:GetHealth", 2, 6),
                 N("lethal", "HL_NodeCompare", 3, 6, op="GREATER_EQUAL"),
                 N("all_ok", "HL_NodeBoolMath", 3, 5, op="AND"),
                 N("chance", "HL_NodeValue", 0, 4, label="Drop chance", sockets={"value": 0.03}),
@@ -193,7 +228,7 @@ EXAMPLES_3 = [
                 N("is_down", "HL_NodeCheck", 2, 9, op="IS_SET"),
                 fn("nuke_at", "entity:GetOrigin", 2, 10),
                 fn("me_at", "entity:GetOrigin", 2, 8),
-                N("dist", "HL_NodeVectorMath", 3, 8, op="DISTANCE"),
+                N("dist_take", "HL_NodeVectorMath", 3, 8, op="DISTANCE"),
                 N("close", "HL_NodeCompare", 4, 8, op="LESS", sockets={"b": 64.0}),
                 N("take_ok", "HL_NodeBoolMath", 4, 9, op="AND"),
                 N("if_take", "HL_NodeIf", 5, 7),
@@ -201,26 +236,46 @@ EXAMPLES_3 = [
                 fn("remove", "entity:Kill", 7, 7),
                 N("gone", "HL_NodeSetVariable", 8, 7, var_name="nuke", value_kind="thing"),
                 # the nuke
-                N("queue", "HL_NodeScriptCode", 0, 12, label="Every common, nearest first", code=NUKE_QUEUE),
+                N("center", "HL_NodeSetVariable", 0, 12, label="Where it was taken", var_name="nuke_center",
+                  value_kind="vec"),
+                N("ring0", "HL_NodeSetVariable", 0, 13, label="Ring starts at 0", var_name="nuke_ring",
+                  sockets={"value": 0.0}),
                 N("wave_timer", "HL_NodeTimer", 1, 12, seconds=0.1, running=False),
-                N("radius", "HL_NodeValue", 0, 13, label="Radius", sockets={"value": 1000.0}),
-                N("cool_on", "HL_NodeSetVariable", 0, 17, var_name="cooling", value_kind="bool", sockets={"value": True}),
-                N("cool_wait", "HL_NodeDelay", 1, 17, label="Cooldown", seconds=30.0),
-                N("cool_off", "HL_NodeSetVariable", 2, 17, var_name="cooling", value_kind="bool", sockets={"value": False}),
+                N("radius", "HL_NodeValue", 6, 15, label="Radius", sockets={"value": 1000.0}),
+                N("cool_on", "HL_NodeSetVariable", 0, 20, var_name="cooling", value_kind="bool", sockets={"value": True}),
+                N("cool_wait", "HL_NodeDelay", 1, 20, label="Cooldown", seconds=30.0),
+                N("cool_off", "HL_NodeSetVariable", 2, 20, var_name="cooling", value_kind="bool", sockets={"value": False}),
                 N("shout", "HL_NodeMessage", 1, 13, text="NUKE!", seconds=2.0),
                 N("boom", "HL_NodeSound", 2, 13, sound="explode_3", everywhere=True),
                 fn("shake", "ScreenShake", 3, 13, {"p1": 16.0, "p2": 40.0, "p3": 1.5, "p4": 5000.0}),
-                N("flash_each", "HL_NodeForEach", 2, 15, what="SURVIVORS"),
-                fn("flash", "ScreenFade", 3, 15, {"p1": 255.0, "p2": 255.0, "p3": 255.0, "p4": 200.0,
+                N("flash_each", "HL_NodeForEach", 2, 14, what="SURVIVORS"),
+                fn("flash", "ScreenFade", 3, 14, {"p1": 255.0, "p2": 255.0, "p3": 255.0, "p4": 200.0,
                                                    "p5": 0.8, "p6": 0.1, "p7": 1.0}),
                 # the wave
-                N("taker", "HL_NodeGetVariable", 4, 12, var_name="nuke_by", value_kind="thing"),
-                N("wave", "HL_NodeScriptCode", 5, 12, label="Blow up the next five", code=NUKE_WAVE),
-                N("empty", "HL_NodeCompare", 5, 13, op="LESS_EQUAL", sockets={"b": 0.0}),
-                N("if_empty", "HL_NodeIf", 6, 12)],
+                N("speed", "HL_NodeValue", 2, 17, label="Wave Speed", sockets={"value": 100.0}),
+                N("grow", "HL_NodeSetVariable", 2, 16, label="The ring grows", var_name="nuke_ring", op="ADD"),
+                N("loud", "HL_NodeSetVariable", 3, 16, label="The next one with sound", var_name="nuke_sound",
+                  value_kind="bool", sockets={"value": True}),
+                N("commons", "HL_NodeForEach", 4, 16, what="COMMONS"),
+                fn("hp", "entity:GetHealth", 4, 18),
+                N("alive", "HL_NodeCompare", 5, 18, label="Alive?", op="GREATER", sockets={"b": 0.0}),
+                fn("z_at", "entity:GetOrigin", 4, 19),
+                N("center_get", "HL_NodeGetVariable", 4, 20, var_name="nuke_center", value_kind="vec"),
+                N("dist", "HL_NodeVectorMath", 5, 19, op="DISTANCE"),
+                N("ring", "HL_NodeGetVariable", 5, 20, var_name="nuke_ring"),
+                N("inside", "HL_NodeCompare", 6, 19, label="Inside the ring?", op="LESS_EQUAL"),
+                N("hit", "HL_NodeBoolMath", 6, 18, op="AND"),
+                N("if_hit", "HL_NodeIf", 5, 16),
+                N("taker", "HL_NodeGetVariable", 5, 17, var_name="nuke_by", value_kind="thing"),
+                N("sound", "HL_NodeGetVariable", 6, 17, var_name="nuke_sound", value_kind="bool"),
+                N("blast", "HL_NodeGroup", 6, 16, group="Explode Common"),
+                N("quiet", "HL_NodeSetVariable", 7, 16, label="The rest without", var_name="nuke_sound",
+                  value_kind="bool", sockets={"value": False}),
+                N("past", "HL_NodeCompare", 7, 15, label="Past the Radius?", op="GREATER_EQUAL"),
+                N("if_done", "HL_NodeIf", 7, 14)],
          links=[("start.start", "precache.run"),
-                ("hurt.happened", "if_drop.in"), ("hurt.entityid", "hp.target"), ("hurt.amount", "lethal.a"),
-                ("hp.result", "lethal.b"), ("drop_ok.result", "all_ok.a"), ("lethal.result", "all_ok.b"), ("roll.value", "lucky.a"), ("chance.value", "lucky.b"),
+                ("hurt.happened", "if_drop.in"), ("hurt.entityid", "hp_hurt.target"), ("hurt.amount", "lethal.a"),
+                ("hp_hurt.result", "lethal.b"), ("drop_ok.result", "all_ok.a"), ("lethal.result", "all_ok.b"), ("roll.value", "lucky.a"), ("chance.value", "lucky.b"),
                 ("down.result", "none_down.a"), ("lucky.result", "drop_ok.a"), ("none_down.result", "drop_ok.b"),
                 ("all_ok.result", "ready.a"), ("cooling.result", "not_cool.a"), ("not_cool.result", "ready.b"),
                 ("ready.result", "if_drop.condition"), ("hurt.entityid", "fell.target"),
@@ -228,29 +283,40 @@ EXAMPLES_3 = [
                 ("if_drop.true", "spawn.run"), ("spawn.then", "keep.run"), ("spawn.result", "keep.value"),
                 ("keep.then", "glow.run"),
                 ("timer.tick", "each.run"), ("each.each", "if_take.in"), ("nuke.result", "is_down.a"),
-                ("nuke.result", "nuke_at.target"), ("each.item", "me_at.target"), ("me_at.result", "dist.a"),
-                ("nuke_at.result", "dist.b"), ("dist.value", "close.a"), ("is_down.result", "take_ok.a"),
+                ("nuke.result", "nuke_at.target"), ("each.item", "me_at.target"), ("me_at.result", "dist_take.a"),
+                ("nuke_at.result", "dist_take.b"), ("dist_take.value", "close.a"), ("is_down.result", "take_ok.a"),
                 ("close.result", "take_ok.b"), ("take_ok.result", "if_take.condition"),
                 ("if_take.true", "by.run"), ("each.item", "by.value"), ("by.then", "remove.run"),
                 ("nuke.result", "remove.target"), ("remove.then", "gone.run"),
-                ("gone.then", "queue.run"), ("me_at.result", "queue.a"), ("radius.value", "queue.b"),
-                ("gone.then", "cool_on.run"), ("cool_on.then", "cool_wait.in"), ("cool_wait.out", "cool_off.run"), ("queue.then", "wave_timer.start"),
+                ("gone.then", "center.run"), ("me_at.result", "center.value"), ("center.then", "ring0.run"),
+                ("ring0.then", "wave_timer.start"),
+                ("gone.then", "cool_on.run"), ("cool_on.then", "cool_wait.in"), ("cool_wait.out", "cool_off.run"),
                 ("gone.then", "shout.show"), ("gone.then", "boom.play"), ("gone.then", "shake.run"),
                 ("me_at.result", "shake.p0"), ("gone.then", "flash_each.run"), ("flash_each.each", "flash.run"),
                 ("flash_each.item", "flash.p0"),
-                ("wave_timer.tick", "wave.run"), ("taker.result", "wave.a"), ("wave.then", "if_empty.in"),
-                ("wave.result", "empty.a"), ("empty.result", "if_empty.condition"), ("if_empty.true", "wave_timer.stop")],
+                ("wave_timer.tick", "grow.run"), ("speed.value", "grow.value"), ("grow.then", "loud.run"),
+                ("loud.then", "commons.run"),
+                ("commons.each", "if_hit.in"), ("commons.item", "hp.target"), ("hp.result", "alive.a"),
+                ("commons.item", "z_at.target"), ("z_at.result", "dist.a"), ("center_get.result", "dist.b"),
+                ("dist.value", "inside.a"), ("ring.result", "inside.b"), ("alive.result", "hit.a"),
+                ("inside.result", "hit.b"), ("hit.result", "if_hit.condition"),
+                ("if_hit.true", "blast.run"), ("commons.item", "blast.common"), ("taker.result", "blast.attacker"),
+                ("sound.result", "blast.sound"), ("blast.then", "quiet.run"),
+                ("commons.done", "if_done.in"), ("ring.result", "past.a"), ("radius.value", "past.b"),
+                ("past.result", "if_done.condition"), ("if_done.true", "wave_timer.stop")],
          steps=[("Load the pickup's model", ["start", "precache"]),
                 ("A kill may drop it (one at a time)",
-                 ["hurt", "hp", "lethal", "all_ok", "chance", "roll", "lucky", "down", "none_down", "drop_ok",
+                 ["hurt", "hp_hurt", "lethal", "all_ok", "chance", "roll", "lucky", "down", "none_down", "drop_ok",
                   "if_drop", "cooling", "not_cool", "ready", "fell", "lift",
                   "what", "spawn", "keep", "glow"]),
-                ("A survivor walks over it", ["timer", "each", "nuke", "is_down", "nuke_at", "me_at", "dist", "close",
-                                              "take_ok", "if_take", "by", "remove", "gone"]),
-                ("NUKE: line them up, flash and shake",
-                 ["queue", "radius", "wave_timer", "shout", "boom", "shake", "flash_each", "flash"]),
-                ("Five explode every tenth of a second; none left: stop (the red wire is a loop back to the "
-                 "Timer, which is fine for events)", ["taker", "wave", "empty", "if_empty"]),
+                ("A survivor walks over it", ["timer", "each", "nuke", "is_down", "nuke_at", "me_at", "dist_take",
+                                              "close", "take_ok", "if_take", "by", "remove", "gone"]),
+                ("NUKE: the wave starts where it was taken; flash and shake",
+                 ["center", "ring0", "wave_timer", "shout", "boom", "shake", "flash_each", "flash"]),
+                ("Every tenth of a second the ring grows, and the commons inside it blow up (one with sound)",
+                 ["speed", "grow", "loud", "commons", "hp", "alive", "z_at", "center_get", "dist", "ring", "inside",
+                  "hit", "if_hit", "taker", "sound", "blast", "quiet"]),
+                ("Past the Radius: stop", ["radius", "past", "if_done"]),
                 ("No new drops for 30 seconds", ["cool_on", "cool_wait", "cool_off"])]),
     dict(title="Slow Motion Headshots", level="Scripting",
          objects={"slowmo": ("ENTITY:func_timescale", (0.0, 0.0, 0.5),
@@ -319,19 +385,27 @@ EXAMPLES_3 = [
          steps=[("Every half second, each common still at normal size", ["timer", "each", "now", "new", "if_new"]),
                 ("A random size, and hitboxes that follow it", ["size", "scale", "hitboxes"])]),
     dict(title="Third Person Muzzle Flash", level="Scripting",
-         about="In third person the game's muzzle flashes light only models, not the walls and floor. This gives "
-               "every player a point light on their gun's muzzle (Brightness), plus an extra light for zombies "
-               "and survivors only (Model Brightness: models need more light to look lit; 0 for none), made at their "
-               "first shot and moved to each new gun, and flashes them on each shot for one server tick (0.03 s), so full-auto fire flickers. Brightness and Reach (units) set how strong and how far. "
-               "Use it with the third person examples. No cheats; tested in the game (lights per shooter, parented to the gun).",
+         about="In third person the game's muzzle flashes light only models, not the walls and floor. On every shot "
+               "('weapon_fire': its Userid is the shooter) the 'Muzzle Light' group (a node group: Tab goes in) flashes "
+               "a point light on the shooter's gun muzzle for one server tick (0.03 s), so full-auto fire flickers. "
+               "It's used twice: a light for everything (Brightness), and an extra one for zombies and survivors "
+               "only (Model Brightness: models need more light to look lit; 0 for none). Reach (units) is how far "
+               "they light. Use it with the third person examples. No cheats.",
+         groups={"Muzzle Light": MUZZLE_LIGHT},
          nodes=[ev("fire", "weapon_fire", 0, 0),
                 N("bright", "HL_NodeValue", 0, 2, label="Brightness", sockets={"value": 0.3}),
                 N("reach", "HL_NodeValue", 0, 3, label="Reach", sockets={"value": 700.0}),
                 N("model_bright", "HL_NodeValue", 0, 4, label="Model Brightness", sockets={"value": 2.0}),
-                N("flash", "HL_NodeScriptCode", 1, 0, label="Flash the shooter's muzzle light", code=MUZZLE_FLASH)],
-         links=[("fire.happened", "flash.run"), ("fire.userid", "flash.a"), ("bright.value", "flash.b"),
-                ("reach.value", "flash.c"), ("model_bright.value", "flash.d")],
-         steps=[("Every shot: the shooter's own muzzle light, on for a moment", ["fire", "bright", "reach", "model_bright", "flash"])]),
+                N("world", "HL_NodeGroup", 1, 0, label="Light for everything", group="Muzzle Light",
+                  sockets={"name": "hl_muzzle_light", "flags": 0.0}),
+                N("models", "HL_NodeGroup", 2, 0, label="Extra light for models", group="Muzzle Light",
+                  sockets={"name": "hl_muzzle_models", "flags": 1.0})],
+         links=[("fire.happened", "world.run"), ("fire.userid", "world.player"), ("bright.value", "world.brightness"),
+                ("reach.value", "world.reach"),
+                ("fire.happened", "models.run"), ("fire.userid", "models.player"),
+                ("model_bright.value", "models.brightness"), ("reach.value", "models.reach")],
+         steps=[("Every shot: the shooter's muzzle lights, on for a moment",
+                 ["fire", "bright", "reach", "model_bright", "world", "models"])]),
     dict(title="Flashlight Battery", level="Scripting",
          about="Flashlights run on batteries, like Half-Life: on, a survivor's battery drains (a full one lasts "
                "'Lasts' seconds); off, it recharges just as slowly. Empty, the flashlight is switched off and stays "

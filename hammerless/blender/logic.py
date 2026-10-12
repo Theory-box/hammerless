@@ -1657,6 +1657,76 @@ class HL_NodeCheck(_Block, bpy.types.Node):
         return {"op": self.op}
 
 
+class HL_NodeTextCheck(_Block, bpy.types.Node):
+    """True/false about text: does it contain, start with, end with or equal another text (an empty or missing text
+    is false)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeTextCheck", "Text Check", "SORTALPHA"
+    kind = "TEXT_CHECK"
+    op: EnumProperty(name="Check", default="CONTAINS", items=[
+        ("CONTAINS", "Contains", "B is somewhere in A"), ("STARTS", "Starts With", "A starts with B"),
+        ("ENDS", "Ends With", "A ends with B"), ("EQUAL", "Equals", "A and B are the same text")])
+
+    def make_sockets(self):
+        self.data_in("text", "a", "Text")
+        self.data_in("text", "b", "Look For")
+        self.bool_out("result", "Result")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "op", text="")
+
+    def settings(self):
+        return {"op": self.op}
+
+
+class HL_NodeSplitText(_Block, bpy.types.Node):
+    """Cuts text into a list at each Separator (spaces around each piece trimmed): 'a, b, c' gives a list of 3 (Get
+    Field reads one by number, 0 = the first; For Each goes through them)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeSplitText", "Split Text", "ALIGN_JUSTIFY"
+    kind = "SPLIT_TEXT"
+
+    def make_sockets(self):
+        self.data_in("text", "text", "Text")
+        sep = self.data_in("text", "separator", "Separator")
+        sep.value = ","
+        self.data_out("any", "list", "List")
+        self.data_out("num", "count", "Count")
+
+
+class HL_NodeFireInput(_Block, bpy.types.Node):
+    """Sends an input (Kill, TurnOn, Explode, SetParent...) to an entity wired in, e.g. one a Spawn Entity just made,
+    after Delay seconds"""
+    bl_idname, bl_label, bl_icon = "HL_NodeFireInput", "Fire Input", "FORWARD"
+    kind = "FIRE_INPUT"
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("thing", "entity", "Entity")
+        self.data_in("text", "input", "Input")
+        self.data_in("text", "value", "Value")
+        self.data_in("num", "delay", "Delay")
+        self.data_in("thing", "activator", "Activator")
+        self.ev_out("then", "Then")
+
+
+class HL_NodePickValue(_Block, bpy.types.Node):
+    """One of two values: If True when the condition is true, else If False"""
+    bl_idname, bl_label, bl_icon = "HL_NodePickValue", "Pick Value", "ARROW_LEFTRIGHT"
+    kind = "PICK"
+    value_kind: EnumProperty(name="Value", items=VALUE_KIND_ITEMS, default="num", update=_ensure)
+
+    def make_sockets(self):
+        self.bool_in("condition", "Condition")
+        self.data_in(self.value_kind, "a", "If True")
+        self.data_in(self.value_kind, "b", "If False")
+        self.data_out(self.value_kind, "value", "Value")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "value_kind", text="")
+
+    def settings(self):
+        return {"kind": self.value_kind}
+
+
 def _code_text(node) -> str:
     return node.text.as_string() if node.text is not None else node.code
 
@@ -1705,7 +1775,7 @@ class HL_NodeScriptValue(_Block, bpy.types.Node):
 
 BLOCK_CLASSES = (HL_NodeForEach, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeMakeTable, HL_NodeGetField,
                  HL_NodeFormatText, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, HL_NodeCheck,
-                 HL_NodeScriptCode, HL_NodeScriptValue)
+                 HL_NodePickValue, HL_NodeTextCheck, HL_NodeSplitText, HL_NodeFireInput, HL_NodeScriptCode, HL_NodeScriptValue)
 
 
 # ---------------------------------------------------------------- Director settings, HUD, overrides
@@ -1990,12 +2060,12 @@ MENU_LAYOUT = [
     ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
               HL_NodeCounter, HL_NodeRandom, None, HL_NodeForEach]),
     ("Values", [HL_NodeValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath, HL_NodeRandomValue, HL_NodeProgress,
-                HL_NodeInfectedCount, None, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeFormatText,
-                HL_NodeCheck, None, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, None,
+                HL_NodeInfectedCount, None, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeFormatText, HL_NodeTextCheck, HL_NodeSplitText,
+                HL_NodeCheck, HL_NodePickValue, None, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, None,
                 HL_NodeMakeTable, HL_NodeGetField]),
     ("Scene", [HL_NodeObjectInfo, HL_NodeObject, HL_NodeCollision]),
     ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
-                 HL_NodeTeleport, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
+                 HL_NodeTeleport, HL_NodeFireInput, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
     ("Director", [HL_NodeDirector, HL_NodeDirectorSettings, HL_NodeDirectorOption, HL_NodeDirectorMood]),
     ("HUD & Messages", [HL_NodeMessage, HL_NodeObjective, None, HL_NodeHudText, HL_NodeHudHide]),
     ("Overrides", [HL_NodeOverride, HL_NodeOverrideAnswer]),
