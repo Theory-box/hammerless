@@ -2,7 +2,7 @@
 logic node is used somewhere, so building them in the game tests the nodes too."""
 from __future__ import annotations
 
-from .logic_examples import N, ev, fn, text
+from .logic_examples import IS_A_SPECIAL, IS_A_SURVIVOR, N, ev, fn, text
 
 EXAMPLES_2 = [
     # ------------------------------------------------------------------ map parts
@@ -230,25 +230,32 @@ EXAMPLES_2 = [
 
     dict(title="Special Kill Feed", level="Scripting",
          about="'player_death' gives who died (userid) and who killed them (attacker). When a "
-               "survivor kills a special infected, Get Field looks up its name in a list (a Script "
-               "Value makes the list; item 0 is unused, 1 = Smoker ... 8 = Tank) by its zombie "
-               "type, Format Text makes the line and a Script node prints it to everyone.",
+               "survivor kills a special infected (the 'Is a Survivor' and 'Is a Special' groups: Tab goes in), "
+               "Split Text makes a list of the specials' names, Get Field picks the one for its zombie type "
+               "(1 = Smoker ... 8 = Tank, so type - 1: the list starts at 0), Format Text makes the line and the "
+               "game's Client Print shows it to everyone (Player empty: everyone; Where 3: the chat area).",
+         groups={"Is a Survivor": IS_A_SURVIVOR, "Is a Special": IS_A_SPECIAL},
          nodes=[ev("death", "player_death", 0, 0),
-                N("special", "HL_NodeScriptValue", 0, 2, label="A survivor killed a special",
-                  expr="a != null && b != null && a.IsPlayer() && b.IsPlayer() && !a.IsSurvivor() && b.IsSurvivor()"),
+                N("killer", "HL_NodeGroup", 0, 2, label="Killer a survivor?", group="Is a Survivor"),
+                N("victim", "HL_NodeGroup", 0, 3, label="Victim a special?", group="Is a Special"),
+                N("special", "HL_NodeBoolMath", 1, 2, op="AND"),
                 N("if", "HL_NodeIf", 1, 0),
                 fn("type", "player:GetZombieType", 2, 3),
-                N("names", "HL_NodeScriptValue", 2, 4, label="Names by zombie type",
-                  expr='["", "Smoker", "Boomer", "Hunter", "Spitter", "Jockey", "Charger", "Witch", "Tank"]'),
+                N("index", "HL_NodeMath", 2, 4, label="Type - 1", op="SUBTRACT", sockets={"b": 1.0}),
+                N("number", "HL_NodeFormatText", 3, 4, label="As text", template="{a}"),
+                N("names", "HL_NodeSplitText", 2, 5, label="Names by zombie type",
+                  sockets={"text": "Smoker, Boomer, Hunter, Spitter, Jockey, Charger, Witch, Tank"}),
                 N("name", "HL_NodeGetField", 3, 3),
                 N("line", "HL_NodeFormatText", 4, 2, template="{a} killed a {b}"),
-                N("say", "HL_NodeScriptCode", 5, 0, label="Print to everyone", code="ClientPrint(null, 3, a);")],
-         links=[("death.happened", "if.in"), ("death.userid", "special.a"), ("death.attacker", "special.b"),
-                ("special.result", "if.condition"), ("death.userid", "type.target"), ("names.result", "name.table"),
-                ("type.result", "name.key"), ("death.attacker", "line.a"), ("name.value", "line.b"),
-                ("if.true", "say.run"), ("line.result", "say.a")],
-         steps=[("A survivor killed a special?", ["death", "special", "if"]),
-                ("Its name, the line, print it", ["type", "names", "name", "line", "say"])]),
+                fn("say", "ClientPrint", 5, 0, {"p1": 3.0})],
+         links=[("death.happened", "if.in"), ("death.attacker", "killer.entity"), ("death.userid", "victim.entity"),
+                ("killer.result", "special.a"), ("victim.result", "special.b"), ("special.result", "if.condition"),
+                ("death.userid", "type.target"), ("type.result", "index.a"), ("index.value", "number.a"),
+                ("names.list", "name.table"), ("number.result", "name.key"),
+                ("death.attacker", "line.a"), ("name.value", "line.b"),
+                ("if.true", "say.run"), ("line.result", "say.p2")],
+         steps=[("A survivor killed a special?", ["death", "killer", "victim", "special", "if"]),
+                ("Its name, the line, print it", ["type", "index", "number", "names", "name", "line", "say"])]),
 
     dict(title="Clear the Commons", level="Scripting",
          objects={"button": ("BUTTON", (0.0, 0.0, 1.0))},
@@ -283,10 +290,10 @@ EXAMPLES_2 = [
     # ------------------------------------------------------------------ overrides
     dict(title="!tank Chat Command", level="Overrides",
          about="Override Intercept Chat sees every chat line before it's shown (the text includes "
-               "the speaker's name). A line with !tank spawns a Tank, and For Each Player gives "
-               "every survivor adrenaline to face it.",
+               "the speaker's name). A line with !tank in it (Text Check) spawns a Tank, and For Each Player "
+               "gives every survivor adrenaline to face it.",
          nodes=[N("chat", "HL_NodeOverride", 0, 0, hook="InterceptChat"),
-                N("is_cmd", "HL_NodeScriptValue", 1, 1, label="Has !tank", expr='a.find("!tank") != null'),
+                N("is_cmd", "HL_NodeTextCheck", 1, 1, label="Has !tank", op="CONTAINS", sockets={"b": "!tank"}),
                 N("if", "HL_NodeIf", 2, 0),
                 N("tank", "HL_NodeSpawn", 3, 0, what="tank"),
                 N("each", "HL_NodeForEach", 3, 1, what="PLAYERS"),
@@ -303,49 +310,71 @@ EXAMPLES_2 = [
     dict(title="Everyone Is a Charger", level="Overrides",
          about="Override Convert Zombie Class is asked what each special infected about to spawn "
                "should be (1 Smoker, 2 Boomer, 3 Hunter, 4 Spitter, 5 Jockey, 6 Charger): every "
-               "special the Director sends becomes a Charger (Spawn Zombie nodes and script spawns "
-               "aren't asked: they spawn what they say). Should Play Boss Music gets a fixed answer typed on the "
-               "Override itself: Allow off, so no Tank or Witch music.",
+               "special the Director sends (types 1 to 6) becomes a Charger, anything else stays what it is "
+               "(Pick Value). Spawn Zombie nodes and script spawns aren't asked: they spawn what they say. Should "
+               "Play Boss Music gets a fixed answer typed on the Override itself: Allow off, so no Tank or Witch "
+               "music.",
          nodes=[N("ask", "HL_NodeOverride", 0, 0, hook="ConvertZombieClass"),
-                N("charger", "HL_NodeScriptValue", 1, 1, label="Specials become Chargers",
-                  expr="(a >= 1 && a <= 6) ? 6 : a"),
-                N("answer", "HL_NodeOverrideAnswer", 2, 0, hook="ConvertZombieClass"),
+                N("from1", "HL_NodeCompare", 1, 1, label="1 or more?", op="GREATER_EQUAL", sockets={"b": 1.0}),
+                N("to6", "HL_NodeCompare", 1, 2, label="6 or less?", op="LESS_EQUAL", sockets={"b": 6.0}),
+                N("special", "HL_NodeBoolMath", 2, 1, label="A special?", op="AND"),
+                N("charger", "HL_NodePickValue", 3, 1, label="Specials become Chargers", sockets={"a": 6.0}),
+                N("answer", "HL_NodeOverrideAnswer", 4, 0, hook="ConvertZombieClass"),
                 N("music", "HL_NodeOverride", 0, 3, hook="ShouldPlayBossMusic", sockets={"answer": False})],
-         links=[("ask.asked", "answer.run"), ("ask.zombie_type", "charger.a"), ("charger.result", "answer.answer")],
-         steps=[("Every special: a Charger", ["ask", "charger", "answer"]), ("No boss music", ["music"])]),
+         links=[("ask.asked", "answer.run"), ("ask.zombie_type", "from1.a"), ("ask.zombie_type", "to6.a"),
+                ("from1.result", "special.a"), ("to6.result", "special.b"), ("special.result", "charger.condition"),
+                ("ask.zombie_type", "charger.b"), ("charger.value", "answer.answer")],
+         steps=[("Every special: a Charger", ["ask", "from1", "to6", "special", "charger", "answer"]),
+                ("No boss music", ["music"])]),
 
     dict(title="Shotgun Start, No Snipers", level="Overrides",
          about="Get Default Item is asked for the survivors' starting items one by one (0, 1, ...) "
-               "until it gets no answer: a pistol and a pump shotgun. Allow Weapon Spawn is asked "
-               "about every weapon spawn in the map: sniper rifles are removed.",
+               "until it gets no answer: a pistol and a pump shotgun (two Pick Values: slot 0 the pistol, else "
+               "slot 1 the shotgun, else nothing). Allow Weapon Spawn is asked about every weapon spawn in the "
+               "map: sniper rifles are removed (Text Check: the class has 'sniper' in it, or is the hunting "
+               "rifle).",
          nodes=[N("items", "HL_NodeOverride", 0, 0, hook="GetDefaultItem"),
-                N("pick", "HL_NodeScriptValue", 1, 1, label="Pistol, then shotgun",
-                  expr='a == 0 ? "weapon_pistol" : (a == 1 ? "weapon_pumpshotgun" : "")'),
-                N("answer", "HL_NodeOverrideAnswer", 2, 0, hook="GetDefaultItem"),
-                N("spawns", "HL_NodeOverride", 0, 3, hook="AllowWeaponSpawn"),
-                N("no_sniper", "HL_NodeScriptValue", 1, 4, label="Not a sniper rifle",
-                  expr='a.find("sniper") == null && a != "weapon_hunting_rifle"'),
-                N("allow", "HL_NodeOverrideAnswer", 2, 3, hook="AllowWeaponSpawn")],
-         links=[("items.asked", "answer.run"), ("items.slot", "pick.a"), ("pick.result", "answer.answer"),
-                ("spawns.asked", "allow.run"), ("spawns.classname", "no_sniper.a"), ("no_sniper.result", "allow.answer")],
-         steps=[("Starting items", ["items", "pick", "answer"]), ("No sniper spawns", ["spawns", "no_sniper", "allow"])]),
+                N("slot0", "HL_NodeCompare", 1, 1, label="Slot 0?", op="EQUAL", sockets={"b": 0.0}),
+                N("slot1", "HL_NodeCompare", 1, 2, label="Slot 1?", op="EQUAL", sockets={"b": 1.0}),
+                N("shotgun", "HL_NodePickValue", 2, 2, value_kind="text", sockets={"a": "weapon_pumpshotgun", "b": ""}),
+                N("pick", "HL_NodePickValue", 3, 1, label="Pistol, then shotgun", value_kind="text",
+                  sockets={"a": "weapon_pistol"}),
+                N("answer", "HL_NodeOverrideAnswer", 4, 0, hook="GetDefaultItem"),
+                N("spawns", "HL_NodeOverride", 0, 4, hook="AllowWeaponSpawn"),
+                N("sniper", "HL_NodeTextCheck", 1, 5, label="A sniper rifle?", op="CONTAINS", sockets={"b": "sniper"}),
+                N("hunting", "HL_NodeTextCheck", 1, 6, label="The hunting rifle?", op="EQUAL",
+                  sockets={"b": "weapon_hunting_rifle"}),
+                N("either", "HL_NodeBoolMath", 2, 5, op="OR"),
+                N("no_sniper", "HL_NodeBoolMath", 3, 5, label="Not a sniper rifle", op="NOT"),
+                N("allow", "HL_NodeOverrideAnswer", 4, 4, hook="AllowWeaponSpawn")],
+         links=[("items.asked", "answer.run"), ("items.slot", "slot0.a"), ("items.slot", "slot1.a"),
+                ("slot1.result", "shotgun.condition"), ("slot0.result", "pick.condition"), ("shotgun.value", "pick.b"),
+                ("pick.value", "answer.answer"),
+                ("spawns.asked", "allow.run"), ("spawns.classname", "sniper.a"), ("spawns.classname", "hunting.a"),
+                ("sniper.result", "either.a"), ("hunting.result", "either.b"), ("either.result", "no_sniper.a"),
+                ("no_sniper.result", "allow.answer")],
+         steps=[("Starting items", ["items", "slot0", "slot1", "shotgun", "pick", "answer"]),
+                ("No sniper spawns", ["spawns", "sniper", "hunting", "either", "no_sniper", "allow"])]),
 
     dict(title="Carry the Crates", level="Overrides",
          objects={"crate": ("ENTITY:prop_physics", (0.0, 0.0, 0.3), {"model": "models/props_junk/wood_crate001a.mdl"})},
          about="Survivors normally can't pick up physics objects. Can Pickup Object is asked when one "
-               "tries (Use on it): answering yes lets them carry wooden crates. Should Avoid Item is "
-               "asked by the survivor bots about items: they leave propane tanks alone. For these "
-               "two questions the game's own answer is no, and any yes wins.",
+               "tries (Use on it): answering yes lets them carry wooden crates (Text Check: its model has "
+               "'wood_crate' in it). Should Avoid Item is asked by the survivor bots about items: they leave "
+               "propane tanks alone. For these two questions the game's own answer is no, and any yes wins.",
          nodes=[N("pickup", "HL_NodeOverride", 0, 0, hook="CanPickupObject"),
-                N("is_crate", "HL_NodeScriptValue", 1, 1, label="A wooden crate",
-                  expr='a != null && a.GetModelName().find("wood_crate") != null'),
-                N("allow", "HL_NodeOverrideAnswer", 2, 0, hook="CanPickupObject"),
+                fn("model", "entity:GetModelName", 1, 1),
+                N("is_crate", "HL_NodeTextCheck", 2, 1, label="A wooden crate", op="CONTAINS",
+                  sockets={"b": "wood_crate"}),
+                N("allow", "HL_NodeOverrideAnswer", 3, 0, hook="CanPickupObject"),
                 N("bots", "HL_NodeOverride", 0, 3, hook="ShouldAvoidItem"),
-                N("is_propane", "HL_NodeScriptValue", 1, 4, label="A propane tank", expr='a == "weapon_propanetank"'),
+                N("is_propane", "HL_NodeTextCheck", 1, 4, label="A propane tank", op="EQUAL",
+                  sockets={"b": "weapon_propanetank"}),
                 N("avoid", "HL_NodeOverrideAnswer", 2, 3, hook="ShouldAvoidItem")],
-         links=[("pickup.asked", "allow.run"), ("pickup.object", "is_crate.a"), ("is_crate.result", "allow.answer"),
+         links=[("pickup.asked", "allow.run"), ("pickup.object", "model.target"), ("model.result", "is_crate.a"),
+                ("is_crate.result", "allow.answer"),
                 ("bots.asked", "avoid.run"), ("bots.classname", "is_propane.a"), ("is_propane.result", "avoid.answer")],
-         steps=[("Crates can be carried", ["pickup", "is_crate", "allow"]),
+         steps=[("Crates can be carried", ["pickup", "model", "is_crate", "allow"]),
                 ("Bots leave propane alone", ["bots", "is_propane", "avoid"])]),
 
     dict(title="Console Command: boost", level="Overrides",

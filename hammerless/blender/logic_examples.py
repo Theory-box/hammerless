@@ -37,6 +37,26 @@ def text(nid, value, col, row):
     return N(nid, "HL_NodeFormatText", col, row, f'Text: "{value}"', None, template=value)
 
 
+# small node groups several examples use (plain nodes inside; the same group is used again, not copied)
+IS_A_SURVIVOR = dict(
+    about="True when the entity is a player on the survivors' team (bots too). Is Player comes first: the other "
+          "check only runs on players (And stops at the first false).",
+    inputs=[("entity", "Entity", "thing")], outputs=[("result", "Survivor", "bool")],
+    nodes=[fn("player", "entity:IsPlayer", 0, 0), fn("survivor", "player:IsSurvivor", 0, 1),
+           N("both", "HL_NodeBoolMath", 1, 0, op="AND")],
+    links=[("in.entity", "player.target"), ("in.entity", "survivor.target"), ("player.result", "both.a"),
+           ("survivor.result", "both.b"), ("both.result", "out.result")])
+
+IS_A_SPECIAL = dict(
+    about="True when the entity is a player on the infected team (a special infected or a Tank, bots too).",
+    inputs=[("entity", "Entity", "thing")], outputs=[("result", "Special", "bool")],
+    nodes=[fn("player", "entity:IsPlayer", 0, 0), fn("survivor", "player:IsSurvivor", 0, 1),
+           N("not", "HL_NodeBoolMath", 1, 1, op="NOT"),
+           N("both", "HL_NodeBoolMath", 2, 0, op="AND")],
+    links=[("in.entity", "player.target"), ("in.entity", "survivor.target"), ("survivor.result", "not.a"),
+           ("player.result", "both.a"), ("not.result", "both.b"), ("both.result", "out.result")])
+
+
 EXAMPLES = [
     # ------------------------------------------------------------------ simple
     dict(title="Hello Message", level="Simple",
@@ -251,41 +271,57 @@ EXAMPLES = [
     dict(title="No Friendly Fire", level="Overrides",
          about="Overrides answer the game's questions. Before any damage, the game asks 'allow "
                "this?'. Asked runs the nodes wired to it, and the Answer node at the end sends the "
-               "answer back. A Script Value works out 'a survivor is hurting another survivor' as a "
-               "line of the game's script language (Squirrel), and Not turns that into Allow. "
+               "answer back. Friendly fire is a survivor hurting another survivor: the 'Is a Survivor' "
+               "group (a node group: Tab goes in) checks each, Compare Values checks they're not the same "
+               "one (falling hurts yourself), and Not turns 'friendly fire' into Allow. "
                "(Overrides need Hammerless's own game mode: Build & Play starts it.)",
+         groups={"Is a Survivor": IS_A_SURVIVOR},
          nodes=[N("ask", "HL_NodeOverride", 0, 0, hook="AllowTakeDamage"),
-                N("friendly", "HL_NodeScriptValue", 1, 0, label="Survivor hurts survivor",
-                  expr="a != null && b != null && a != b && a.IsPlayer() && b.IsPlayer() "
-                       "&& a.IsSurvivor() && b.IsSurvivor()"),
-                N("not", "HL_NodeBoolMath", 2, 1, op="NOT"),
-                N("answer", "HL_NodeOverrideAnswer", 3, 0, hook="AllowTakeDamage")],
-         links=[("ask.asked", "answer.run"), ("ask.attacker", "friendly.a"), ("ask.victim", "friendly.b"),
-                ("friendly.result", "not.a"), ("not.result", "answer.answer")],
-         steps=[("Allow the damage unless it's friendly fire", ["ask", "friendly", "not", "answer"])]),
+                N("by_survivor", "HL_NodeGroup", 1, 1, label="Attacker a survivor?", group="Is a Survivor"),
+                N("to_survivor", "HL_NodeGroup", 1, 2, label="Victim a survivor?", group="Is a Survivor"),
+                N("other", "HL_NodeCheck", 1, 3, label="Someone else?", op="NOT_EQUAL"),
+                N("both", "HL_NodeBoolMath", 2, 1, op="AND"),
+                N("friendly", "HL_NodeBoolMath", 3, 1, label="Friendly fire", op="AND"),
+                N("not", "HL_NodeBoolMath", 4, 1, op="NOT"),
+                N("answer", "HL_NodeOverrideAnswer", 5, 0, hook="AllowTakeDamage")],
+         links=[("ask.asked", "answer.run"), ("ask.attacker", "by_survivor.entity"),
+                ("ask.victim", "to_survivor.entity"), ("ask.attacker", "other.a"), ("ask.victim", "other.b"),
+                ("by_survivor.result", "both.a"), ("to_survivor.result", "both.b"), ("both.result", "friendly.a"),
+                ("other.result", "friendly.b"), ("friendly.result", "not.a"), ("not.result", "answer.answer")],
+         steps=[("Allow the damage unless it's friendly fire",
+                 ["ask", "by_survivor", "to_survivor", "other", "both", "friendly", "not", "answer"])]),
 
     dict(title="Tanks Hit Twice as Hard", level="Overrides",
          about="The same damage question can also change how much damage is done: the Answer's "
-               "New Damage. A Script Value gives double the damage when the attacker is a Tank "
-               "(zombie type 8), and the damage as it was otherwise.",
+               "New Damage. Pick Value gives double the damage when the attacker is a Tank (a player of "
+               "zombie type 8), and the damage as it was otherwise.",
          nodes=[N("ask", "HL_NodeOverride", 0, 0, hook="AllowTakeDamage"),
-                N("double", "HL_NodeScriptValue", 1, 0, label="Double for Tanks",
-                  expr="(a != null && a.IsPlayer() && a.GetZombieType() == 8) ? b * 2 : b"),
-                N("answer", "HL_NodeOverrideAnswer", 2, 0, hook="AllowTakeDamage")],
-         links=[("ask.asked", "answer.run"), ("ask.attacker", "double.a"), ("ask.damage", "double.b"),
-                ("double.result", "answer.damage")],
-         steps=[("Change the damage", ["ask", "double", "answer"])]),
+                fn("player", "entity:IsPlayer", 1, 1),
+                fn("type", "player:GetZombieType", 1, 2),
+                N("eight", "HL_NodeCompare", 2, 2, label="Type 8?", op="EQUAL", sockets={"b": 8.0}),
+                N("tank", "HL_NodeBoolMath", 3, 1, label="A Tank?", op="AND"),
+                N("twice", "HL_NodeMath", 2, 3, op="MULTIPLY", sockets={"b": 2.0}),
+                N("pick", "HL_NodePickValue", 4, 1, label="Double for Tanks"),
+                N("answer", "HL_NodeOverrideAnswer", 5, 0, hook="AllowTakeDamage")],
+         links=[("ask.asked", "answer.run"), ("ask.attacker", "player.target"), ("ask.attacker", "type.target"),
+                ("type.result", "eight.a"), ("player.result", "tank.a"), ("eight.result", "tank.b"),
+                ("ask.damage", "twice.a"), ("tank.result", "pick.condition"), ("twice.value", "pick.a"),
+                ("ask.damage", "pick.b"), ("pick.value", "answer.damage")],
+         steps=[("Change the damage", ["ask", "player", "type", "eight", "tank", "twice", "pick", "answer"])]),
 
     dict(title="Pistols Become Magnums", level="Overrides",
          about="When the map loads, the game asks about every weapon spawn: 'turn this into "
                "something else?'. The answer is the new weapon spawn's class, or nothing to keep it. "
-               "Here every pistol spawn becomes a Magnum.",
+               "Here every pistol spawn becomes a Magnum: Text Check finds the pistols, Pick Value gives the "
+               "Magnum for them and nothing for the rest.",
          nodes=[N("ask", "HL_NodeOverride", 0, 0, hook="ConvertWeaponSpawn"),
-                N("magnum", "HL_NodeScriptValue", 1, 0, label="Pistol to Magnum",
-                  expr='a == "weapon_pistol" ? "weapon_pistol_magnum_spawn" : ""'),
-                N("answer", "HL_NodeOverrideAnswer", 2, 0, hook="ConvertWeaponSpawn")],
-         links=[("ask.asked", "answer.run"), ("ask.classname", "magnum.a"), ("magnum.result", "answer.answer")],
-         steps=[("Swap pistols", ["ask", "magnum", "answer"])]),
+                N("pistol", "HL_NodeTextCheck", 1, 1, label="A pistol?", op="EQUAL", sockets={"b": "weapon_pistol"}),
+                N("magnum", "HL_NodePickValue", 2, 1, label="Pistol to Magnum", value_kind="text",
+                  sockets={"a": "weapon_pistol_magnum_spawn", "b": ""}),
+                N("answer", "HL_NodeOverrideAnswer", 3, 0, hook="ConvertWeaponSpawn")],
+         links=[("ask.asked", "answer.run"), ("ask.classname", "pistol.a"), ("pistol.result", "magnum.condition"),
+                ("magnum.value", "answer.answer")],
+         steps=[("Swap pistols", ["ask", "pistol", "magnum", "answer"])]),
 
     # ------------------------------------------------------------------ harder
     dict(title="!heal Chat Command", level="Hard",

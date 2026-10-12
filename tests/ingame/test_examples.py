@@ -307,23 +307,26 @@ def check(run: Run, n: int, b: Bench):
         assert b.value('HL_VarGet("cooling", false)'), "no cooldown after the nuke"
         return f"nuke went off, {left} commons left (outside the radius)"
     if n == 43:
-        speed = 'Convars.GetFloat("host_timescale")'
+        # a Time Scale entity (func_timescale, no cheats): the game's own clock runs slower
+        def rate(seconds):
+            t0, w0 = b.value("Time()"), time.time()
+            time.sleep(seconds)
+            return (b.value("Time()") - t0) / (time.time() - w0)
         b.run('FireGameEvent("infected_death", { headshot = false, attacker = T.host().GetPlayerUserId() });')
-        time.sleep(0.5)
-        assert b.value(speed) == 1.0, "a body shot slowed the game"
+        normal = rate(0.8)
+        assert normal > 0.8, f"a body shot slowed the game ({normal:.2f}x)"
         b.run('FireGameEvent("infected_death", { headshot = true, attacker = T.host().GetPlayerUserId() });')
-        time.sleep(0.5)
-        slow = b.value(speed)
-        assert abs(slow - 0.3) < 0.01, f"time scale {slow} after a headshot"
-        t0, w0 = b.value("Time()"), time.time()
-        time.sleep(1.0)
-        rate = (b.value("Time()") - t0) / (time.time() - w0)
-        time.sleep(2.5)
-        back, cheats = b.value(f"[{speed}, Convars.GetFloat(\"sv_cheats\")]")
-        b.console("sv_cheats 1", wait=0.3)          # (the graph turned cheats off: the run needs them)
-        assert back == 1.0 and cheats == 0, f"after it: time scale {back}, sv_cheats {cheats}"
-        assert rate < 0.5, f"the game ran at {rate:.2f}x during the slow motion"
-        return f"headshot: game at {rate:.2f}x, then back to normal with cheats off"
+        slow = rate(0.8)
+        time.sleep(4.0)
+        back = rate(0.8)
+        assert slow < 0.5, f"the game ran at {slow:.2f}x after a headshot"
+        assert back > 0.8, f"still at {back:.2f}x afterwards"
+        return f"headshot: game at {slow:.2f}x, then back to {back:.2f}x, no cheats"
+    if n == 38:
+        # the question the game asks about each special the Director spawns, asked here the same way
+        got = b.value("[" + ", ".join(f"::HL_Hook_ConvertZombieClass.call(::HL_Scope, {t})" for t in (1, 3, 6, 8)) + "]")
+        assert got == [6, 6, 6, 8], f"answers for Smoker, Hunter, Charger, Tank: {got}"
+        return "specials become Chargers, the Tank stays a Tank"
     if n in (44, 45):
         # the camera is the player's own: the game doesn't tell scripts, so these are pictures to look at
         shots = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shots")
@@ -348,8 +351,7 @@ class SkipTest(Exception):
     pass
 
 
-SKIP_WHY = {9: "headshot kills", 13: "the Director getting furious", 32: "the Director's own mob timer",
-            38: "the Director's own specials"}
+SKIP_WHY = {9: "headshot kills", 13: "the Director getting furious", 32: "the Director's own mob timer"}
 
 
 def main(argv):

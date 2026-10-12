@@ -25,13 +25,14 @@ The Add menu has one place per purpose:
 |---|---|
 | **Events** | Map Start, Volume (a trigger box), Button, Timer, Game Event. **All Game Events**: any of the game's 381 events (player hurt, item picked up, tank killed...), with its details as values (user ids already turned into players, entity ids into entities). |
 | **Flow** | When (fires when a condition becomes true), If, Sequence, Delay, Once, Gate, Branch, Counter, Random, For Each (survivors, infected, players, commons, entities by class or name, a list) |
-| **Values** | Value, Math, Compare, Boolean Math, Random Value, Path Progress (furthest / average / last survivor, 0 to 1), Infected Count; Set / Get Variable (for the map or per player, kept across maps if you like), Format Text, Compare Values; Make / Break Vector, Vector Math; Make Table, Get Field |
+| **Values** | Value, Math (with bit operations for flags), Compare, Boolean Math, Random Value, Path Progress (furthest / average / last survivor, 0 to 1), Infected Count; Set / Get Variable (for the map, per player, or per copy of a node group; kept across maps if you like; Add adds on to a number or the end of a text), Format Text, Compare Values, Pick Value (one of two values by a condition), Text Check (contains / starts with / ends with / equals), Split Text (text into a list); Make / Break Vector, Vector Math; Make Table, Get Field |
 | **Scene** | Object Info (picks a scene object to hand to other nodes), Entity Events (an object's own events, e.g. a door opening), Collision (solid for players and/or the nav) |
-| **Actions** | Move Over Time (Mover), Show / Hide Object, Horde, Crescendo, Spawn Zombie (a spot, or the game picks; *Only If Fewer Than*), Play Sound, Teleport Survivors, Camera (first person / the game's over-the-shoulder third person; Player empty: whoever set it off, or everyone). **All Game Functions**: all 419 of the game's script functions, grouped (Player, Director, Nav Mesh, Entity, Find Entities, Spawning, Sound...) or found with *Search...* |
+| **Actions** | Move Over Time (Mover), Show / Hide Object, Horde, Crescendo, Spawn Zombie (a spot, or the game picks; *Only If Fewer Than*), Play Sound, Teleport Survivors, Camera (first person / the game's over-the-shoulder third person; Player empty: whoever set it off, or everyone), Fire Input (sends an input to an entity wired in, e.g. one just spawned). **All Game Functions**: all 419 of the game's script functions, grouped (Player, Director, Nav Mesh, Entity, Find Entities, Spawning, Sound...) or found with *Search...* |
 | **Director** | Director, Director Settings, Director Setting (any of the ~140 Director settings, changed while playing), Director Mood (the Director's intensity, 0 calm to 1 furious, and warnings 60 s and 20 s before a mob) |
 | **HUD & Messages** | Show Message, Objective, HUD Text, HUD Hide |
 | **Overrides** | Override, Answer |
-| **Script** | Script and Script Value (your own Squirrel code) |
+| **Groups** | Make Group (Ctrl+G), Ungroup (Ctrl+Alt+G), Group Input / Output (inside a group), and every node group in the file |
+| **Script** | Script and Script Value (your own Squirrel code; the examples don't use them: everything they do is built from nodes) |
 | **Examples**, **Examples 2** | 41 ready-made graphs to learn from (below) |
 
 Game functions that only work something out (Get Health, Find By Name...) just give a Result; actions (Give Item, Stagger...) run when an event wire arrives and then fire *Then*. Wire colours for script values: teal **text**, purple **vector**, pink **entity / player / nav area**, dark grey **any value**.
@@ -39,6 +40,10 @@ Game functions that only work something out (Get Health, Find By Name...) just g
 Script nodes (game functions, If, For Each, Set Variable, Script...) chain straight into each other: an event's player flows into the next node, and mix with the other nodes both ways. Inside a For Each, use script nodes for each item: an entity-wiring node fires a moment later, after the loop has moved on.
 
 **Several wires into one input** all work (three buttons into one Counter). **Loops.** Blender draws a wire red when it goes back to a node earlier in the chain (a Timer whose own tick ends up stopping it). For event wires that is fine and works. A circle of value wires (a value worked out from itself) can't be, so it is left out and the build warns.
+
+### Node groups
+
+A node group is a logic graph of its own used like one node, like Blender's shader or Geometry Nodes groups. Select nodes and press **Ctrl+G**: they move into a new group and one **Group** node takes their place, with an input for each wire that came in and an output for each wire that went out. **Tab** goes into the selected group and back out; **Ctrl+Alt+G** puts its nodes back. Inside, **Group Input** gives what comes in and **Group Output** takes what goes out; the sidebar's *Group* tab adds, renames, reorders and removes them. Pick a group on any Group node (or Shift+A > Groups) to use it again: every copy is built separately, and values typed on a Group node's inputs reach the nodes inside. Set / Get Variable *For: This Group Copy* gives each copy its own variable. Several examples come with groups (Flashlight Battery, Muzzle Flash, Nuke...): Tab into them to see how they work.
 
 ### Overrides
 
@@ -69,9 +74,9 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | 11 | Kill Counter on the HUD | HUD Text that updates itself |
 | 12 | Countdown to a Horde | A stopped Timer, a countdown variable, When |
 | 13 | The Director Eases Off | Director Mood, Director Setting set / reset |
-| 14 | No Friendly Fire | Override, Script Value, Answer |
-| 15 | Tanks Hit Twice as Hard | Answer's New Damage |
-| 16 | Pistols Become Magnums | Override on weapon spawns |
+| 14 | No Friendly Fire | Override, the 'Is a Survivor' group, Compare Values, Answer |
+| 15 | Tanks Hit Twice as Hard | Answer's New Damage, Pick Value |
+| 16 | Pistols Become Magnums | Override on weapon spawns, Text Check, Pick Value |
 | 17 | !heal Chat Command | Chat event, per-player flags, game functions in a chain |
 | 18 | Wave Arena | For Each survivor, HUD, a Timer stopped by When |
 | 19 | Score Kept Across Chapters | Keep Across Maps |
@@ -94,10 +99,10 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | 31 | Door Triggers a Horde | Entity Events (a door's On Open), Once |
 | 32 | Mob Warning | Director Mood's mob warnings, Show Message until Hide, HUD Text blinking at its own position |
 | 33 | Bring Back Stragglers | For Each survivor, Vector Math, Break / Make Vector, Set Origin |
-| 34 | Special Kill Feed | Get Field (a name by number from a list), Script |
+| 34 | Special Kill Feed | Split Text and Get Field (a name by number from a list), groups, Client Print |
 | 35 | Clear the Commons | For Each common infected, Kill |
 | 36 | Gas Can Counter | For Each entity of a class, a Timer with a random time |
-| 37 | !tank Chat Command | Override Intercept Chat, For Each player |
+| 37 | !tank Chat Command | Override Intercept Chat, Text Check, For Each player |
 | 38 | Everyone Is a Charger | Override Convert Zombie Class, Should Play Boss Music (a typed answer) |
 | 39 | Shotgun Start, No Snipers | Override Get Default Item, Allow Weapon Spawn |
 | 40 | Carry the Crates | Override Can Pickup Object (survivors carry chosen props), Should Avoid Item |
@@ -107,10 +112,13 @@ The game only asks the map before doing things (Override nodes) and only shows a
 
 | | Example | Shows |
 |---|---|---|
-| 42 | Power-Up: Nuke | A kill may drop a glowing pickup (spawned with Spawn Entity From Table); walking over it blows up the common infected within a Radius in a wave, five per tenth of a second; a Delay keeps new ones from dropping for 30 s |
-| 43 | Slow Motion Headshots | A headshot on a common (infected_death) or a special (player_death) slows the game to 30% for about 2 s with Console Variable calls (host_timescale only works with cheats on, so they're on during it), then back |
+| 42 | Power-Up: Nuke | A kill may drop a glowing pickup (spawned with Spawn Entity From Table); walking over it blows up the common infected within a Radius in a growing ring (the 'Explode Common' and 'Explosion' groups, Fire Input, Pick Value); a Delay keeps new ones from dropping for 30 s |
+| 43 | Slow Motion Headshots | A headshot on a common (infected_death) or a special (player_death) slows the game to 30% for about 2 s with a Time Scale entity (func_timescale, no cheats), then back |
 | 44 | Third Person Zone | Volume On Enter / On Leave into Camera nodes with Player empty: only the player who walked in or out switches |
 | 45 | Third Person Everywhere | Game event player_spawn, its Userid wired into a Camera's Player |
+| 46 | Random Zombie Sizes | For Each common, Random Value, Set Model Scale, hitboxes that follow the size |
+| 47 | Third Person Muzzle Flash | The 'Muzzle Light' group used twice (a light for everything, an extra one for models), Ent Fire (inputs sent by name), Make Table |
+| 48 | Flashlight Battery | The 'Flashlight Battery' group (with 'Flashlight Is On' / 'Flashlight Off' inside it), per-player variables, Math bit operations, text built up in a For Each, HUD Text |
 
 `demo/hl_test_nuke.blend` (made by `tests/fixtures/nuke_test.py`) is the demo level with it, set so the first kill drops it, and 40 commons on the field.
 
