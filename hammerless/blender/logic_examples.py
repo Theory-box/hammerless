@@ -482,6 +482,82 @@ def _socket(node, ident, outputs):
     return next((s for s in (node.outputs if outputs else node.inputs) if s.identifier == ident), None)
 
 
+def _fill(tree, node_specs, link_specs, objects, groups, problems, io=None):
+    """Make the nodes and wires of an example (or of one of its groups) in tree. Returns {id: node}."""
+    nodes = dict(io or {})
+    for spec in node_specs:
+        node = tree.nodes.new(spec["type"])
+        node.name = spec["id"]
+        for k, v in spec["props"].items():
+            if spec["type"] == "HL_NodeGroup" and k == "group":
+                v = groups[v]
+            setattr(node, k, _value(v, objects))
+        if spec["label"]:
+            node.label = spec["label"]
+        for ident, v in spec["sockets"].items():
+            sock = _socket(node, ident, False)
+            if sock is None:
+                problems.append(f"'{node.name}' has no input '{ident}'")
+                continue
+            sock.value = _value(v, objects)
+        nodes[spec["id"]] = node
+    for a, b in link_specs:
+        (an, ao), (bn, bi) = a.split("."), b.split(".")
+        out, inp = _socket(nodes[an], ao, True), _socket(nodes[bn], bi, False)
+        if out is None or inp is None:
+            problems.append(f"no wire from '{an}' {ao} to '{bn}' {bi}: its node has no such socket (entity "
+                            f"events need the game's definitions: set the L4D2 folder, then connect it)")
+            continue
+        tree.links.new(out, inp)
+    return nodes
+
+
+def _group_signature(name, spec) -> str:
+    import hashlib
+    return hashlib.sha1(repr((name, spec)).encode()).hexdigest()[:16]
+
+
+def _groups(ex, objects, problems) -> dict:
+    """The example's node groups (in order: a group may use the ones before it). One already in the file from the same
+    example (unchanged) is used again rather than copied."""
+    from .logicgroups import new_group_tree, new_item, sync
+    made = {}
+    for name, spec in (ex.get("groups") or {}).items():
+        sig = _group_signature(name, spec)
+        found = next((g for g in bpy.data.node_groups if g.get("hl_example_group") == sig), None)
+        if found is not None:
+            made[name] = found
+            continue
+        tree = new_group_tree(name)
+        tree["hl_example_group"] = sig
+        for ident, label, kind in spec.get("inputs", []):
+            new_item(tree, label, kind, False, uid=ident)
+        for ident, label, kind in spec.get("outputs", []):
+            new_item(tree, label, kind, True, uid=ident)
+        gin, gout = tree.nodes.new("HL_NodeGroupInput"), tree.nodes.new("HL_NodeGroupOutput")
+        gin.name, gout.name = "in", "out"
+        sync(tree)
+        nodes = _fill(tree, spec["nodes"], spec["links"], objects, made, problems, io={"in": gin, "out": gout})
+        cols = [n["pos"][0] for n in spec["nodes"]] or [0]
+        rows = [n["pos"][1] for n in spec["nodes"]] or [0]
+        _place(gin, (min(cols) - 1) * COL, 0.0)
+        _place(gout, (max(cols) + 1) * COL, 0.0)
+        for i, (label, ids) in enumerate(spec.get("steps", []), 1):
+            frame = tree.nodes.new("NodeFrame")
+            frame.name = frame.label = f"{i}. {label}"
+            frame.label_size = 14
+            for nid in ids:
+                nodes[nid].parent = frame
+        for n in spec["nodes"]:
+            c, r = n["pos"]
+            _place(nodes[n["id"]], c * COL, r * ROW)
+        if spec.get("about"):
+            lines = textwrap.wrap(spec["about"], 90)
+            _note(tree, name, lines, (min(cols) - 1) * COL, 120.0 + 22 * len(lines) + 60, 800.0)
+        made[name] = tree
+    return made
+
+
 def _place(node, x, y):
     if hasattr(node, "location_absolute"):      # Blender 4.4+: inside a frame, location is relative
         node.location_absolute = (x, y)
@@ -548,29 +624,8 @@ def build_example(context, index: int, problems: list | None = None, into=None):
     else:
         tree = into
         x0 = _free_x(tree)
-    nodes = {}
-    for spec in ex["nodes"]:
-        node = tree.nodes.new(spec["type"])
-        node.name = spec["id"]
-        for k, v in spec["props"].items():
-            setattr(node, k, _value(v, objects))
-        if spec["label"]:
-            node.label = spec["label"]
-        for ident, v in spec["sockets"].items():
-            sock = _socket(node, ident, False)
-            if sock is None:
-                problems.append(f"'{node.name}' has no input '{ident}'")
-                continue
-            sock.value = _value(v, objects)
-        nodes[spec["id"]] = node
-    for a, b in ex["links"]:
-        (an, ao), (bn, bi) = a.split("."), b.split(".")
-        out, inp = _socket(nodes[an], ao, True), _socket(nodes[bn], bi, False)
-        if out is None or inp is None:
-            problems.append(f"no wire from '{an}' {ao} to '{bn}' {bi}: its node has no such socket (entity "
-                            f"events need the game's definitions: set the L4D2 folder, then connect it)")
-            continue
-        tree.links.new(out, inp)
+    groups = _groups(ex, objects, problems)
+    nodes = _fill(tree, ex["nodes"], ex["links"], objects, groups, problems)
     # steps: a frame around each group of nodes, numbered in the order things happen
     _new_frames.clear()
     for i, (label, ids) in enumerate(ex.get("steps", []), 1):

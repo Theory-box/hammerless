@@ -1255,6 +1255,76 @@ def test_example_objects_in_map_collection():
     assert "func_timescale" in open(path, encoding="utf-8").read(), log
 
 
+def test_logic_node_groups():
+    # a Group node is built as the nodes inside it: wires in and out of it go straight to what's inside, a value
+    # typed on it reaches the nodes inside, each copy has its own names ('This Group Copy' variables too), groups
+    # can be inside groups, and a group graph isn't built on its own
+    from hammerless.blender.logic import new_tree
+    from hammerless.blender.logicgroups import flatten, new_group_tree, new_item, sync
+    from hammerless.core.build import Report
+    reset_scene()
+    inner = new_group_tree("Add One")
+    new_item(inner, "Run", "event", False, uid="run")
+    new_item(inner, "Amount", "num", False, uid="amount")
+    new_item(inner, "Then", "event", True, uid="then")
+    gin, gout = inner.nodes.new("HL_NodeGroupInput"), inner.nodes.new("HL_NodeGroupOutput")
+    sync(inner)
+    add = inner.nodes.new("HL_NodeSetVariable")
+    add.name, add.var_name, add.scope, add.op = "add", "count", "GROUP", "ADD"
+    inner.links.new(gin.outputs["Run"], add.inputs["Run"])
+    inner.links.new(gin.outputs["Amount"], add.inputs["Value"])
+    inner.links.new(add.outputs["Then"], gout.inputs["Then"])
+    outer = new_group_tree("Twice")
+    new_item(outer, "Run", "event", False, uid="run")
+    new_item(outer, "Done", "event", True, uid="done")
+    oin, oout = outer.nodes.new("HL_NodeGroupInput"), outer.nodes.new("HL_NodeGroupOutput")
+    sync(outer)
+    a, b = outer.nodes.new("HL_NodeGroup"), outer.nodes.new("HL_NodeGroup")
+    a.name, b.name = "first", "second"
+    a.group = b.group = inner
+    a.inputs["amount"].value, b.inputs["amount"].value = 2.0, 5.0
+    outer.links.new(oin.outputs["run"], a.inputs["run"])
+    outer.links.new(a.outputs["then"], b.inputs["run"])
+    outer.links.new(b.outputs["then"], oout.inputs["done"])
+    main = new_tree(bpy.context)
+    start, g, msg = main.nodes.new("HL_NodeMapStart"), main.nodes.new("HL_NodeGroup"), main.nodes.new("HL_NodeMessage")
+    g.name, msg.name = "twice", "msg"
+    g.group = outer
+    main.links.new(start.outputs[0], g.inputs["run"])
+    main.links.new(g.outputs["done"], msg.inputs[0])
+    rep = Report()
+    flat = flatten(bpy.context, main, rep)
+    ids = sorted(n.id for n in flat.nodes)
+    assert ids == sorted(["msg", start.name, "twice/first/add", "twice/second/add"]), ids
+    wires = sorted((l.from_node, l.from_socket, l.to_node, l.to_socket) for l in flat.links)
+    assert wires == sorted([(start.name, "start", "twice/first/add", "run"),
+                            ("twice/first/add", "then", "twice/second/add", "run"),
+                            ("twice/second/add", "then", "msg", msg.inputs[0].identifier)]), wires
+    by = {n.id: n for n in flat.nodes}
+    assert by["twice/first/add"].consts["value"] == 2.0 and by["twice/second/add"].consts["value"] == 5.0
+    assert by["twice/first/add"].settings["name"] == "twice/first/count", by["twice/first/add"].settings
+    assert by["twice/first/add"].settings["scope"] == "MAP"
+    from hammerless.blender.logic import logic_trees
+    assert [t.name for t in logic_trees(bpy.context.scene)] == [main.name]
+    assert inner.use_fake_user and outer.use_fake_user
+    # a group can't go inside itself
+    from hammerless.blender.logicgroups import _ancestors_ok
+    assert not _ancestors_ok(inner, outer) and _ancestors_ok(outer, inner)
+
+
+def test_logic_example_groups_reused():
+    # an example's node groups are made once: adding the example again uses the same groups
+    from hammerless.blender.logic_examples import all_examples, build_example
+    reset_scene()
+    i = next(k for k, e in enumerate(all_examples()) if e["title"] == "Flashlight Battery")
+    problems = []
+    build_example(bpy.context, i, problems)
+    build_example(bpy.context, i, problems)
+    assert not problems, problems
+    groups = sorted(t.name for t in bpy.data.node_groups if getattr(t, "is_group", False))
+    assert groups == ["Flashlight Battery", "Flashlight Is On", "Flashlight Off"], groups
+
+
 def test_organize_scene():
     # Organize Scene: the map collection named after the map, sorted by kind; the map builds the same; then only
     # what's inside it is built; renaming the map renames it

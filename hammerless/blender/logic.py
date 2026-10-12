@@ -972,7 +972,9 @@ class HL_NodeRandomValue(_Node, bpy.types.Node):
 MATH_OPS = [("ADD", "Add", ""), ("SUBTRACT", "Subtract", ""), ("MULTIPLY", "Multiply", ""), ("DIVIDE", "Divide", ""),
             ("MINIMUM", "Minimum", ""), ("MAXIMUM", "Maximum", ""), ("POWER", "Power", ""), ("MODULO", "Modulo", ""),
             ("ABSOLUTE", "Absolute (A)", ""), ("ROUND", "Round (A)", ""), ("FLOOR", "Floor (A)", ""),
-            ("CEIL", "Ceil (A)", "")]
+            ("CEIL", "Ceil (A)", ""), ("BIT_AND", "Bits: A And B", "The bits set in both (whole numbers): flags A has of B"),
+            ("BIT_OR", "Bits: A Or B", "A with B's bits set too (whole numbers): turns flags on"),
+            ("BIT_CLEAR", "Bits: A Without B", "A with B's bits cleared (whole numbers): turns flags off")]
 
 
 class HL_NodeMath(_Node, bpy.types.Node):
@@ -1479,7 +1481,9 @@ class HL_NodeForEach(_Block, bpy.types.Node):
         return {"what": self.what}
 
 
-SCOPE_ITEMS = [("MAP", "Map", "One value for the whole map"), ("PLAYER", "Per Player", "A value for each player")]
+SCOPE_ITEMS = [("MAP", "Map", "One value for the whole map"), ("PLAYER", "Per Player", "A value for each player"),
+               ("GROUP", "This Group Copy", "Inside a node group: a value for each Group node using it (outside a "
+                                            "group: the same as Map)")]
 
 
 class HL_NodeSetVariable(_Block, bpy.types.Node):
@@ -1490,7 +1494,7 @@ class HL_NodeSetVariable(_Block, bpy.types.Node):
     scope: EnumProperty(name="For", items=SCOPE_ITEMS, default="MAP", update=_ensure)
     value_kind: EnumProperty(name="Value", items=VALUE_KIND_ITEMS, default="num", update=_ensure)
     op: EnumProperty(name="Do", default="SET", items=[("SET", "Set", "Replace the value"),
-                                                     ("ADD", "Add", "Add to the number already stored")])
+                                                     ("ADD", "Add", "Add to the number already stored (text: add on to the end)")])
     keep: BoolProperty(name="Keep Across Maps", default=False,
                        description="Remember the value in the next chapter of the campaign (map variables)")
 
@@ -2021,6 +2025,7 @@ def _add_menu(self, context):
         return
     for m in CATEGORY_MENUS:
         self.layout.menu(m.bl_idname)
+    self.layout.menu("HL_MT_logic_groups", icon="NODETREE")
     if "HL_MT_logic_examples" in dir(bpy.types):
         self.layout.separator()
         self.layout.menu("HL_MT_logic_examples", icon="HELP")
@@ -2031,8 +2036,9 @@ def _add_menu(self, context):
 # ---------------------------------------------------------------- export
 
 def logic_trees(scene=None):
-    """The L4D2 Logic graphs (of one scene: its own, plus unassigned ones when the file has one scene)."""
-    trees = [t for t in bpy.data.node_groups if t.bl_idname == TREE]
+    """The L4D2 Logic graphs (of one scene: its own, plus unassigned ones when the file has one scene). Node groups
+    aren't graphs of their own: they're built where Group nodes use them."""
+    trees = [t for t in bpy.data.node_groups if t.bl_idname == TREE and not getattr(t, "is_group", False)]
     if scene is None:
         return trees
     return [t for t in trees if t.scene_name == scene.name
@@ -2166,10 +2172,10 @@ def compile_logic(context, ir, report) -> None:
         report.warnings.append(f"Logic graph(s) without a scene are left out: {', '.join(unassigned)} "
                                "(open one in the node editor and set its Scene in the sidebar)")
     trees = logic_trees(context.scene)
+    from .logicgroups import flatten
     for tree in trees:
-        _check_nodes(context, tree, report)
-        nodes = [n.to_lnode(context) for n in tree.nodes if isinstance(n, _Node) and n.kind != "OBJECT_INFO"
-                 and not n.mute]
+        flat = flatten(context, tree, report)      # (Group nodes replaced by the nodes inside them)
+        nodes = flat.nodes
         volumes = {n.obj for n in nodes if n.kind == "VOLUME" and n.obj}
         if volumes:     # a volume's mesh becomes the trigger, not a solid wall
             ir.brushes = [b for b in ir.brushes if b.source.split(" (part ")[0] not in volumes]
@@ -2181,7 +2187,7 @@ def compile_logic(context, ir, report) -> None:
                                            "or use another object for the volume")
             ir.entities = [e for e in ir.entities if not (e.source.split(" (part ")[0] in volumes
                                                           and e.classname == "func_detail")]
-        links = _compiled_links(tree, report)
+        links = flat.links
         for p in compile_graph(nodes, links, ir, tree.name if len(trees) > 1 else "",
                                log=context.scene.hammerless.debug_log):
             report.warnings.append(f"{tree.name}: {p}")
@@ -2341,6 +2347,8 @@ def _on_load(*_args):
 def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
+    from . import logicgroups
+    logicgroups.register()
     bpy.types.NODE_MT_add.append(_add_menu)
     bpy.app.handlers.load_post.append(_on_load)
 
@@ -2349,5 +2357,7 @@ def unregister():
     if _on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_on_load)
     bpy.types.NODE_MT_add.remove(_add_menu)
+    from . import logicgroups
+    logicgroups.unregister()
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

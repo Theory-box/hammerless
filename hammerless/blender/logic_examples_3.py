@@ -31,39 +31,98 @@ list.sort(function(x, y) { return x[0] > y[0] ? 1 : (x[0] < y[0] ? -1 : 0); });
 foreach (p in list) ::HL_NukeQueue.append(p[1]);
 result = ::HL_NukeQueue.len();"""
 
-# each survivor's flashlight battery (a: seconds a full one lasts, and to recharge from empty; b: seconds an empty
-# one stays dead; c: the charge it comes back with); the flashlight is bit 4 (EF_DIMLIGHT) of m_fEffects, which a
-# script can read and clear; result = the HUD line
-FLASHLIGHT_BATTERY = """if (!("HL_Battery" in getroottable())) ::HL_Battery <- {};
-local now = Time(), parts = [], p = null;
-while (p = Entities.FindByClassname(p, "player")) {
-    if (!p.IsSurvivor() || p.IsDead()) continue;
-    local id = p.GetEntityIndex();
-    if (!(id in ::HL_Battery)) ::HL_Battery[id] <- {charge = 1.0, dead_until = 0.0, t = now};
-    local s = ::HL_Battery[id], dt = now - s.t, fx = NetProps.GetPropInt(p, "m_fEffects");
-    s.t = now;
-    local dead = now < s.dead_until;
-    if (dead) {      // empty: stays off, no recharge
-        if (fx & 4) NetProps.SetPropInt(p, "m_fEffects", fx & ~4);
-    } else if (s.dead_until > 0) {      // the wait is over: back with a little charge
-        s.dead_until = 0.0;
-        s.charge = c;
-    } else if (fx & 4) {      // on: drains
-        s.charge -= dt / a;
-        if (s.charge <= 0) {
-            s.charge = 0.0;
-            s.dead_until = now + b;
-            dead = true;
-            NetProps.SetPropInt(p, "m_fEffects", fx & ~4);
-        }
-    } else {      // off: recharges just as fast
-        s.charge += dt / a;
-        if (s.charge > 1) s.charge = 1.0;
-    }
-    parts.append(p.GetPlayerName() + " " + (dead ? "EMPTY" : (s.charge * 100).tointeger().tostring() + "%"));
-}
-result = "";
-foreach (i, part in parts) result += (i == 0 ? "Flashlights:  " : "   ") + part;"""
+# ---------------------------------------------------------------- node groups (plain nodes inside; Tab goes in)
+
+def _var(nid, name, col, row, get=True, kind="num", op="SET", label="", sockets=None):
+    return N(nid, "HL_NodeGetVariable" if get else "HL_NodeSetVariable", col, row, label=label, var_name=name,
+             scope="PLAYER", value_kind=kind, sockets=sockets, **({} if get else {"op": op}))
+
+
+# the flashlight is bit 4 (EF_DIMLIGHT) of a player's m_fEffects, which scripts can read and change (no cheats)
+FLASHLIGHT_IS_ON = dict(
+    about="Is a player's flashlight on? It's bit 4 of the player's m_fEffects (Bits: A And B keeps only that bit).",
+    inputs=[("player", "Player", "thing")], outputs=[("on", "On", "bool")],
+    nodes=[fn("fx", "NetProps.GetPropInt", 0, 0, {"p1": "m_fEffects"}),
+           N("bit", "HL_NodeMath", 1, 0, label="Flashlight bit", op="BIT_AND", sockets={"b": 4.0}),
+           N("set", "HL_NodeCompare", 2, 0, label="Set?", op="NOT_EQUAL", sockets={"b": 0.0})],
+    links=[("in.player", "fx.p0"), ("fx.result", "bit.a"), ("bit.value", "set.a"), ("set.result", "out.on")])
+
+FLASHLIGHT_OFF = dict(
+    about="Switches a player's flashlight off: bit 4 of the player's m_fEffects cleared (Bits: A Without B).",
+    inputs=[("run", "Run", "event"), ("player", "Player", "thing")], outputs=[("then", "Then", "event")],
+    nodes=[fn("fx", "NetProps.GetPropInt", 0, 1, {"p1": "m_fEffects"}),
+           N("bit", "HL_NodeMath", 1, 1, label="Without the flashlight bit", op="BIT_CLEAR", sockets={"b": 4.0}),
+           fn("set", "NetProps.SetPropInt", 2, 0, {"p1": "m_fEffects"})],
+    links=[("in.run", "set.run"), ("in.player", "fx.p0"), ("in.player", "set.p0"), ("fx.result", "bit.a"),
+           ("bit.value", "set.p2"), ("set.then", "out.then")])
+
+FLASHLIGHT_BATTERY = dict(
+    about="One survivor's battery, worked out each time Run fires (every 'Every' seconds). The player variable "
+          "'flashlight_used' is how much is used up (0 full, 1 empty), 'flashlight_dead_until' the game time an "
+          "empty one comes back. On: used goes up by Every / Lasts; at 1 the flashlight is switched off and stays "
+          "dead for Empty For seconds, then comes back at Comes Back At. Off: used goes down just as slowly.",
+    inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("every", "Every (seconds)", "num"),
+            ("lasts", "Lasts (seconds)", "num"), ("empty_for", "Empty For (seconds)", "num"),
+            ("back_at", "Comes Back At", "num")],
+    outputs=[("then", "Then", "event"), ("charge", "Charge", "num"), ("empty", "Empty", "bool")],
+    nodes=[fn("now", "Time", 0, 4),
+           _var("until", "flashlight_dead_until", 0, 5, label="Dead until"),
+           _var("used", "flashlight_used", 0, 6, label="Used up"),
+           N("dead", "HL_NodeCompare", 1, 4, label="Still dead?", op="LESS"),
+           N("if_dead", "HL_NodeIf", 1, 0),
+           N("off_dead", "HL_NodeGroup", 2, 0, label="Keep it off", group="Flashlight Off"),
+           N("waited", "HL_NodeCompare", 2, 5, label="Was dead?", op="GREATER", sockets={"b": 0.0}),
+           N("if_back", "HL_NodeIf", 2, 1),
+           _var("clear", "flashlight_dead_until", 3, 1, get=False, label="Not dead any more", sockets={"value": 0.0}),
+           N("back_used", "HL_NodeMath", 3, 5, label="1 - Comes Back At", op="SUBTRACT", sockets={"a": 1.0}),
+           _var("set_back", "flashlight_used", 4, 1, get=False, label="Back with a little charge"),
+           N("is_on", "HL_NodeGroup", 3, 6, label="Flashlight on?", group="Flashlight Is On"),
+           N("if_on", "HL_NodeIf", 3, 2),
+           N("step", "HL_NodeMath", 4, 6, label="Every / Lasts", op="DIVIDE"),
+           _var("drain", "flashlight_used", 4, 2, get=False, op="ADD", label="Drain"),
+           N("full", "HL_NodeCompare", 5, 5, label="All used up?", op="GREATER_EQUAL", sockets={"b": 1.0}),
+           N("if_full", "HL_NodeIf", 5, 2),
+           _var("cap", "flashlight_used", 6, 2, get=False, label="Empty", sockets={"value": 1.0}),
+           N("until_at", "HL_NodeMath", 6, 5, label="Now + Empty For", op="ADD"),
+           _var("set_until", "flashlight_dead_until", 7, 2, get=False, label="Dead until"),
+           N("off_empty", "HL_NodeGroup", 8, 2, label="Switch it off", group="Flashlight Off"),
+           N("less", "HL_NodeMath", 5, 6, label="Used - step", op="SUBTRACT"),
+           N("not_below", "HL_NodeMath", 6, 6, label="Not below 0", op="MAXIMUM", sockets={"b": 0.0}),
+           _var("recharge", "flashlight_used", 4, 3, get=False, label="Recharge"),
+           N("charge", "HL_NodeMath", 7, 5, label="Charge = 1 - used", op="SUBTRACT", sockets={"a": 1.0})],
+    links=[("in.run", "if_dead.in"), ("now.result", "dead.a"), ("until.result", "dead.b"),
+           ("dead.result", "if_dead.condition"),
+           ("in.player", "until.player"), ("in.player", "used.player"),
+           # dead: keep it off
+           ("if_dead.true", "off_dead.run"), ("in.player", "off_dead.player"), ("off_dead.then", "out.then"),
+           # the wait is over: back with a little charge
+           ("if_dead.false", "if_back.in"), ("until.result", "waited.a"), ("waited.result", "if_back.condition"),
+           ("if_back.true", "clear.run"), ("in.player", "clear.player"), ("clear.then", "set_back.run"),
+           ("in.back_at", "back_used.b"), ("back_used.value", "set_back.value"), ("in.player", "set_back.player"),
+           ("set_back.then", "out.then"),
+           # on: drain; all used up: dead for a while, switched off
+           ("if_back.false", "if_on.in"), ("in.player", "is_on.player"), ("is_on.on", "if_on.condition"),
+           ("in.every", "step.a"), ("in.lasts", "step.b"),
+           ("if_on.true", "drain.run"), ("in.player", "drain.player"), ("step.value", "drain.value"),
+           ("drain.then", "if_full.in"), ("used.result", "full.a"), ("full.result", "if_full.condition"),
+           ("if_full.true", "cap.run"), ("in.player", "cap.player"), ("cap.then", "set_until.run"),
+           ("now.result", "until_at.a"), ("in.empty_for", "until_at.b"), ("until_at.value", "set_until.value"),
+           ("in.player", "set_until.player"), ("set_until.then", "off_empty.run"), ("in.player", "off_empty.player"),
+           ("off_empty.then", "out.then"), ("if_full.false", "out.then"),
+           # off: recharge just as slowly
+           ("if_on.false", "recharge.run"), ("in.player", "recharge.player"), ("used.result", "less.a"),
+           ("step.value", "less.b"), ("less.value", "not_below.a"), ("not_below.value", "recharge.value"),
+           ("recharge.then", "out.then"),
+           # what the rest of the graph reads
+           ("used.result", "charge.b"), ("charge.value", "out.charge"), ("dead.result", "out.empty")],
+    steps=[("Dead (empty, waiting)? Keep it off", ["now", "until", "used", "dead", "if_dead", "off_dead"]),
+           ("The wait is over: back with a little charge", ["waited", "if_back", "clear", "back_used", "set_back"]),
+           ("On: drain", ["is_on", "if_on", "step", "drain"]),
+           ("All used up: dead for a while, switched off",
+            ["full", "if_full", "cap", "until_at", "set_until", "off_empty"]),
+           ("Off: recharge", ["less", "not_below", "recharge"]),
+           ("Out: the charge", ["charge"])])
+
 
 MUZZLE_FLASH = """local p = a;      // (the event's Userid wire gives the player)
 local w = p != null ? p.GetActiveWeapon() : null;
@@ -277,22 +336,52 @@ EXAMPLES_3 = [
          about="Flashlights run on batteries, like Half-Life: on, a survivor's battery drains (a full one lasts "
                "'Lasts' seconds); off, it recharges just as slowly. Empty, the flashlight is switched off and stays "
                "dead for 'Empty For' seconds, then comes back at 'Comes Back At' (0.05 = 5%) and recharges from there. "
-               "Ten times a second a Script node works out every survivor's battery and returns one line, "
-               "'Flashlights:  Nick 80%   Ellis EMPTY ...', which the HUD Text shows to the survivors across the top "
-               "(it reads the script's Result each moment). The flashlight is bit 4 of the player's m_fEffects, which "
-               "scripts can read and clear: no cheats. (The HUD needs Hammerless's own game mode: Build & Play starts "
-               "the map in it.)",
+               "Ten times a second, For Each survivor runs the 'Flashlight Battery' group (a node group: select it "
+               "and press Tab to see the plain nodes inside, Tab again to come back; it uses two smaller groups, "
+               "'Flashlight Is On' and 'Flashlight Off'), then adds that survivor to a line of text. The HUD shows "
+               "the line: 'Flashlights:  Nick 80%  Ellis EMPTY ...'. No cheats. (The HUD needs Hammerless's own "
+               "game mode: Build & Play starts the map in it.)",
+         groups={"Flashlight Is On": FLASHLIGHT_IS_ON, "Flashlight Off": FLASHLIGHT_OFF,
+                 "Flashlight Battery": FLASHLIGHT_BATTERY},
          nodes=[N("start", "HL_NodeMapStart", 0, 0),
-                N("timer", "HL_NodeTimer", 0, 1, seconds=0.1),
-                N("lasts", "HL_NodeValue", 0, 2, label="Lasts (seconds)", sockets={"value": 60.0}),
-                N("empty_for", "HL_NodeValue", 0, 3, label="Empty For (seconds)", sockets={"value": 10.0}),
-                N("back_at", "HL_NodeValue", 0, 4, label="Comes Back At", sockets={"value": 0.05}),
-                N("battery", "HL_NodeScriptCode", 1, 1, label="Drain, recharge, switch off when empty",
-                  code=FLASHLIGHT_BATTERY),
-                N("hud", "HL_NodeHudText", 2, 0, slot="3", team="SURVIVORS", place=True, x=0.15, y=0.02, w=0.7,
-                  h=0.04)],
-         links=[("timer.tick", "battery.run"), ("lasts.value", "battery.a"), ("empty_for.value", "battery.b"),
-                ("back_at.value", "battery.c"), ("start.start", "hud.run"), ("battery.result", "hud.text")],
-         steps=[("Ten times a second: every survivor's battery", ["timer", "lasts", "empty_for", "back_at", "battery"]),
-                ("The line on the HUD", ["start", "hud"])]),
+                N("line", "HL_NodeGetVariable", 0, 1, label="The finished line", var_name="flashlight_hud",
+                  value_kind="text"),
+                N("hud", "HL_NodeHudText", 1, 0, slot="3", team="SURVIVORS", place=True, x=0.15, y=0.02, w=0.7,
+                  h=0.04),
+                N("timer", "HL_NodeTimer", 0, 3, seconds=0.1),
+                N("begin", "HL_NodeSetVariable", 1, 3, label="Start the line", var_name="flashlight_text",
+                  value_kind="text", sockets={"value": "Flashlights: "}),
+                N("each", "HL_NodeForEach", 2, 3, what="SURVIVORS"),
+                N("lasts", "HL_NodeValue", 2, 5, label="Lasts (seconds)", sockets={"value": 60.0}),
+                N("empty_for", "HL_NodeValue", 2, 6, label="Empty For (seconds)", sockets={"value": 10.0}),
+                N("back_at", "HL_NodeValue", 2, 7, label="Comes Back At", sockets={"value": 0.05}),
+                N("battery", "HL_NodeGroup", 3, 3, group="Flashlight Battery", sockets={"every": 0.1}),
+                N("if_empty", "HL_NodeIf", 4, 3),
+                N("say_empty", "HL_NodeFormatText", 4, 5, template="   {a} EMPTY"),
+                N("percent", "HL_NodeMath", 4, 6, label="Charge x 100", op="MULTIPLY", sockets={"b": 100.0}),
+                N("whole", "HL_NodeMath", 4, 7, label="Whole number", op="ROUND"),
+                N("say_pct", "HL_NodeFormatText", 5, 6, template="   {a} {b}%"),
+                N("add_empty", "HL_NodeSetVariable", 5, 3, label="Add to the line", var_name="flashlight_text",
+                  value_kind="text", op="ADD"),
+                N("add_pct", "HL_NodeSetVariable", 5, 4, label="Add to the line", var_name="flashlight_text",
+                  value_kind="text", op="ADD"),
+                N("text", "HL_NodeGetVariable", 3, 1, label="The line so far", var_name="flashlight_text",
+                  value_kind="text"),
+                N("publish", "HL_NodeSetVariable", 4, 1, label="Show it", var_name="flashlight_hud",
+                  value_kind="text")],
+         links=[("start.start", "hud.run"), ("line.result", "hud.text"),
+                ("timer.tick", "begin.run"), ("begin.then", "each.run"),
+                ("each.each", "battery.run"), ("each.item", "battery.player"), ("lasts.value", "battery.lasts"),
+                ("empty_for.value", "battery.empty_for"), ("back_at.value", "battery.back_at"),
+                ("battery.then", "if_empty.in"), ("battery.empty", "if_empty.condition"),
+                ("if_empty.true", "add_empty.run"), ("each.item", "say_empty.a"), ("say_empty.result", "add_empty.value"),
+                ("if_empty.false", "add_pct.run"), ("battery.charge", "percent.a"), ("percent.value", "whole.a"),
+                ("each.item", "say_pct.a"), ("whole.value", "say_pct.b"), ("say_pct.result", "add_pct.value"),
+                ("each.done", "publish.run"), ("text.result", "publish.value")],
+         steps=[("The HUD shows the finished line", ["start", "line", "hud"]),
+                ("Ten times a second, every survivor's battery (Tab into the group)",
+                 ["timer", "begin", "each", "lasts", "empty_for", "back_at", "battery"]),
+                ("Add them to the line: EMPTY or the charge in %",
+                 ["if_empty", "say_empty", "percent", "whole", "say_pct", "add_empty", "add_pct"]),
+                ("All done: show it", ["text", "publish"])]),
 ]

@@ -460,7 +460,10 @@ class _Compiler:
                     "DIVIDE": f"(({b}) != 0 ? ({a}) / ({b}) : 0.0)", "MINIMUM": f"(({a}) < ({b}) ? ({a}) : ({b}))",
                     "MAXIMUM": f"(({a}) > ({b}) ? ({a}) : ({b}))", "POWER": f"pow({a}, {b})",
                     "ABSOLUTE": f"fabs({a})", "ROUND": f"floor(({a}) + 0.5)", "FLOOR": f"floor({a})",
-                    "CEIL": f"ceil({a})", "MODULO": f"(({b}) != 0 ? ({a}) % ({b}) : 0.0)"}.get(op, f"({a} + {b})")
+                    "CEIL": f"ceil({a})", "MODULO": f"(({b}) != 0 ? ({a}) % ({b}) : 0.0)",
+                    "BIT_AND": f"(({a}).tointeger() & ({b}).tointeger())",
+                    "BIT_OR": f"(({a}).tointeger() | ({b}).tointeger())",
+                    "BIT_CLEAR": f"(({a}).tointeger() & ~(({b}).tointeger()))"}.get(op, f"({a} + {b})")
         if k == "COMPARE":
             a, b = self.expr_in(n, "a", 0.0), self.expr_in(n, "b", 0.0)
             op = s.get("op", "GREATER_EQUAL")
@@ -993,9 +996,10 @@ class _Compiler:
             self.helper("HL_Vars", HELPERS["HL_Vars"])
             name = vs.literal(vs.TEXT, s.get("name") or "value")
             value = self.typed_in(n, "value", s.get("kind", vs.ANY))
-            if s.get("op") == "ADD":
-                old = (f"HL_PVarGet({self.typed_in(n, 'player', vs.THING)}, {name}, 0.0)" if s.get("scope") == "PLAYER"
-                       else f"HL_VarGet({name}, 0.0)")
+            if s.get("op") == "ADD":          # (text: adds on to the end)
+                zero = '""' if s.get("kind") == vs.TEXT else "0.0"
+                old = (f"HL_PVarGet({self.typed_in(n, 'player', vs.THING)}, {name}, {zero})" if s.get("scope") == "PLAYER"
+                       else f"HL_VarGet({name}, {zero})")
                 value = f"({old} + ({value}))"
             if s.get("scope") == "PLAYER":
                 line = f"    HL_PVarSet({self.typed_in(n, 'player', vs.THING)}, {name}, {value});\n"
