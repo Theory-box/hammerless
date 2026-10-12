@@ -832,4 +832,26 @@ EXAMPLES_3 = [
          steps=[("Press: the lights stutter", ["button", "stutter", "warn", "wait"]),
                 ("3 s later: out, and a horde", ["off", "horde", "dark", "later"]),
                 ("30 s later: the power comes back", ["back"])]),
+    dict(title="Lights Flicker While a Tank Lives", level="Lights",
+         objects={"lamp1": ("LAMP", (-2.0, 0.0, 2.5), {"light_switchable": True, "targetname": "tank_lights"}),
+                  "lamp2": ("LAMP", (2.0, 0.0, 2.5), {"light_switchable": True, "targetname": "tank_lights"})},
+         about="The lights named tank_lights (both lamps: lights with the same name switch together) flicker like a "
+               "failing fluorescent tube from the moment a Tank spawns (the game event 'tank_spawn') and go steady "
+               "again once no Tank is left: after a Tank dies ('tank_killed') Director.IsTankInPlay says whether "
+               "another is still around. SetPattern's steps: ten a second, a = dark, m = normal, z = double. Any "
+               "light can flicker on its own too, without logic: its Pattern in the Light panel.",
+         nodes=[ev("spawn", "tank_spawn", 0, 0),
+                N("flicker", "HL_NodeObject", 1, 0, label="Flicker", target="@lamp1",
+                  sockets={"SetPattern": "mmamammmmammamamaaamammma"}),
+                ev("died", "tank_killed", 0, 2),
+                N("wait", "HL_NodeDelay", 1, 2, label="(the Director's count catches up)", seconds=0.5),
+                fn("alive", "Director.IsTankInPlay", 1, 3),
+                N("none", "HL_NodeBoolMath", 2, 3, op="NOT"),
+                N("if_none", "HL_NodeIf", 2, 2),
+                N("steady", "HL_NodeObject", 3, 2, label="Steady again", target="@lamp1",
+                  sockets={"SetPattern": "m"})],
+         links=[("spawn.happened", "flicker.SetPattern"), ("died.happened", "wait.in"), ("wait.out", "if_none.in"),
+                ("alive.result", "none.a"), ("none.result", "if_none.condition"), ("if_none.true", "steady.SetPattern")],
+         steps=[("A Tank spawns: the lights flicker", ["spawn", "flicker"]),
+                ("A Tank dies and none is left: steady", ["died", "wait", "alive", "none", "if_none", "steady"])]),
 ]

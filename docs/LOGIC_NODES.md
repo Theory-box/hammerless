@@ -123,6 +123,7 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | 51 | Sleepers | Placed characters woken by a survivor close, a gunshot within hearing or a shot; a stand-up animation chosen from their pose; Replace With Common, Director.GetClosestSurvivor, RushVictim (groups: Sleeper, Wake Sleeper, Stand Up Animation, Replace With Common) |
 | 52 | Husks | Placed characters that fall like a killed common when hit (Replace With Common, Take Damage) |
 | 53 | Power Goes Out | Switchable baked lights (Light panel) driven from Entity Events: SetPattern to stutter, TurnOff with a horde, SetPattern m to bring the power back; lights sharing a name switch together |
+| 54 | Lights Flicker While a Tank Lives | Game events tank_spawn / tank_killed, SetPattern on lights sharing a name, Director.IsTankInPlay with Not and If (steady only when no Tank is left) |
 | 48 | Flashlight Battery | The 'Flashlight Battery' group (with 'Flashlight Is On' / 'Flashlight Off' inside it), per-player variables, Math bit operations, text built up in a For Each, HUD Text |
 
 `demo/hl_test_nuke.blend` (made by `tests/fixtures/nuke_test.py`) is the demo level with it, set so the first kill drops it, and 40 commons on the field.

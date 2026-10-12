@@ -331,6 +331,15 @@ def check(run: Run, n: int, b: Bench):
         run.expect(53, mk, "button.pressed -> stutter.SetPattern", "button.pressed -> wait.in",
                    "wait.out -> off.TurnOff", "wait.out -> horde.start")
         return "both lamps are named lights: stutter, then out with a horde"
+    if n == 54:
+        lights = b.value('(function() { local n = 0; for (local e = null; e = Entities.FindByName(e, "tank_lights");) '
+                         'if (e.GetClassname() == "light") n++; return n; })()')
+        assert lights == 2, f"{lights} lights named tank_lights in the map"
+        mk = m(); b.run('FireGameEvent("tank_spawn", { userid = T.host().GetPlayerUserId(), tankid = 0 });'); time.sleep(1)
+        run.expect(54, mk, "spawn.happened -> flicker.SetPattern")
+        mk = m(); b.run('FireGameEvent("tank_killed", { userid = 0, attacker = T.host().GetPlayerUserId() });'); time.sleep(1.5)
+        run.expect(54, mk, "died.happened -> wait.in", "if_none.true -> steady.SetPattern")
+        return "a Tank's spawn sets the flicker; its death with no Tank left sets them steady"
     if n == 38:
         # the question the game asks about each special the Director spawns, asked here the same way
         got = b.value("[" + ", ".join(f"::HL_Hook_ConvertZombieClass.call(::HL_Scope, {t})" for t in (1, 3, 6, 8)) + "]")
