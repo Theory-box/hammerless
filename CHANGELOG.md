@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.0 (test release, 2026-10-12)
 
 - **Import Game Mesh** (on a game skeleton): the character's own mesh (body / head variant), standing on the skeleton, weighted to its bones, with its materials, as a Custom Model to edit into your own. Its game materials are used as they are (the commons' Infected shader, with their colour gradients). Tested in game: commons wearing our rebuilt copy of the common look like the originals.
 - **Load Game Animation** (on a game skeleton): any of the character's game animations as a preview action in Blender (exact to the game); not built (the game has it).
