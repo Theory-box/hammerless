@@ -255,6 +255,28 @@ STAND_UP = dict(
            ("has.result", "seconds.condition"), ("length.result", "seconds.a"), ("seconds.value", "out.seconds")])
 
 WAKE_SLEEPER = dict(
+    about="Wakes a sleeper (once): it plays its stand-up animation, and its per-entity variable 'wake_at' is set to when "
+          "it will be up (the Sleeper group swaps it for a real common then).",
+    inputs=[("run", "Run", "event"), ("prop", "Sleeper", "thing")],
+    outputs=[("then", "Then", "event")],
+    nodes=[N("wake_at", "HL_NodeGetVariable", 0, 2, var_name="wake_at", scope="PLAYER"),
+           N("asleep", "HL_NodeCompare", 1, 2, label="Asleep?", op="LESS_EQUAL", sockets={"b": 0.0}),
+           N("if_asleep", "HL_NodeIf", 1, 0),
+           N("stand", "HL_NodeGroup", 1, 4, group="Stand Up Animation"),
+           fn("now", "Time", 2, 3),
+           N("when", "HL_NodeMath", 2, 4, op="ADD", sockets={"b": 0.0}),
+           N("min_time", "HL_NodeMath", 3, 4, label="At least a moment", op="MAXIMUM", sockets={"b": 0.1}),
+           N("set", "HL_NodeSetVariable", 2, 0, var_name="wake_at", scope="PLAYER"),
+           N("play", "HL_NodeFireInput", 3, 0, label="Stand up", sockets={"input": "SetAnimation"})],
+    links=[("in.prop", "wake_at.player"), ("wake_at.result", "asleep.a"), ("in.run", "if_asleep.in"),
+           ("asleep.result", "if_asleep.condition"), ("in.prop", "stand.prop"),
+           ("stand.seconds", "min_time.a"), ("now.result", "when.a"), ("min_time.value", "when.b"),
+           ("if_asleep.true", "set.run"), ("in.prop", "set.player"), ("when.value", "set.value"),
+           ("set.then", "play.run"), ("in.prop", "play.entity"), ("stand.anim", "play.value"),
+           ("play.then", "out.then")])
+
+
+SLEEPER = dict(
     about="One sleeper, every tick: asleep, any living survivor within Radius wakes it (Wake Sleeper); woken and up "
           "(its 'wake_at' passed), it becomes a real common (Replace With Common), marked 'rush_pending'; a moment "
           "later every marked common rushes the survivor closest to it (Rush Victim with a short range: only it).",
