@@ -1915,6 +1915,10 @@ class HL_OT_refresh_previews(bpy.types.Operator):
             model = preview_model(hs.classname, {kv.key: kv.value for kv in hs.keyvalues})
             if not model:
                 continue
+            if obj.get("hl_placed"):                  # (a placed character: posed at a frame of its animation)
+                from .placedchar import refresh_preview
+                models += bool(refresh_preview(context, obj))
+                continue
             mesh = preview_mesh(hs.classname, s.units_per_meter, model)
             if mesh is not obj.data:
                 obj.data = mesh

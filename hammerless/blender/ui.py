@@ -310,6 +310,9 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                        f"Auto ({_detail_note(context, obj)})" if hs.brush_detail == "AUTO" else None)
         if eff in ("BRUSH", "BRUSH_ENTITY"):
             col.prop(hs, "use_convex_hull")
+        if obj.get("hl_placed"):
+            from .placedchar import draw_panel as _placed_panel
+            _placed_panel(col, obj)
         if obj.type == "ARMATURE" and obj.get("hl_game_model"):
             box = col.box()
             box.label(text="Game skeleton: " + obj["hl_game_model"].split("/")[-1], icon="ARMATURE_DATA")
@@ -1070,6 +1073,8 @@ class HL_MT_add(bpy.types.Menu):
         layout.separator()
         layout.operator_menu_enum("hammerless.add_game_skeleton", "character", text="Game Skeleton",
                                   icon="ARMATURE_DATA")
+        layout.operator_menu_enum("hammerless.add_placed_character", "character", text="Placed Character",
+                                  icon="OUTLINER_OB_ARMATURE")
         layout.separator()
         layout.operator("hammerless.add_entity", text="Search Entities...", icon="VIEWZOOM")
 

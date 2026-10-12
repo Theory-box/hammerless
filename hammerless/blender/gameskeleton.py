@@ -88,6 +88,15 @@ def build_armature(context, gm, content, name: str, collection):
     return arm
 
 
+def whole_body_idle(names) -> str:
+    """The character's plain standing idle among its animation names ("" if none)."""
+    return (next((n for n in names if n.lower() == "idle"), "")
+            or next((n for n in names if n.lower().startswith(("idle_standing", "idle_neutral", "idle_calm"))), "")
+            or next((n for n in names if n.lower().startswith("idle") and "upper" not in n.lower()
+                     and "layer" not in n.lower()), "")
+            or next((n for n in names if "idle" in n.lower()), ""))
+
+
 def game_skeleton(obj, arm, mesh, tri_vis, size, report, content):
     """The skeleton of a mesh weighted to a game-skeleton armature: the game model's own bones (exact rest pose),
     hitboxes, attachments, IK chains and animation libraries; the mesh's weights by bone name; its own actions as
@@ -141,11 +150,7 @@ def game_skeleton(obj, arm, mesh, tri_vis, size, report, content):
             iks.append((ch.name, ch.links[-1][0], tuple(knee)))
     includes = [p[len("models/"):] if p.lower().startswith("models/") else p for p in gm.includes]
     names = all_sequence_names(content, gm)
-    default = (next((n for n in names if n.lower() == "idle"), "")
-               or next((n for n in names if n.lower().startswith(("idle_standing", "idle_neutral", "idle_calm"))), "")
-               or next((n for n in names if n.lower().startswith("idle") and "upper" not in n.lower()
-                        and "layer" not in n.lower()), "")
-               or next((n for n in names if "idle" in n.lower()), ""))
+    default = whole_body_idle(names)
     sk = skeletal.Skeleton(bones, weights, [], atts, valve_space=True, includes=includes,
                            hitboxes=[(h.bone, h.group, tuple(h.mins), tuple(h.maxs)) for h in gm.hitboxes],
                            keep=[i for i in range(len(bones)) if i not in used], ikchains=iks, default_animation=default)
