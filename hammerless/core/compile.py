@@ -670,6 +670,7 @@ class CompileJob:
             else:
                 self.steps.append(("vvis", valve))
         self._valve_vrad = None             # Valve's vrad, run instead if ours can't (or fails)
+        self._hlvrad_bake = self._hlvrad_remix = None   # (ours: its bake, and a Live Light Mixing remix)
         if vrad is not None:
             valve = [tools.exe("vrad")] + vrad + game + [self.base]
             if use_hlvrad(opts):
@@ -682,12 +683,15 @@ class CompileJob:
                         # (the last build's lighting where nothing is baked now: copied when the build starts, see
                         # _keep_last_light)
                         sky += ["-keeplight", self.base + ".keep.bsp"]
+                remix = [HLVRAD] + vrad + opts.hlvrad_args() + game + sky + [
+                    "-remix", self.base + ".hllayers", "-modeldir", self.base + ".hlvrad_models", self.base]
                 if not opts.light_exact:
                     # (Live Light Mixing: the lights the build tagged get layers of their own, lightlayers.py; none
                     # tagged, none written)
                     sky += ["-layers", self.base + ".hllayers", "keys"]
                 self.steps.append(("vrad", [HLVRAD] + vrad + opts.hlvrad_args() + game + sky
                                    + ["-modeldir", self.base + ".hlvrad_models", self.base]))
+                self._hlvrad_bake, self._hlvrad_remix = self.steps[-1][1], remix
                 self._valve_vrad = valve
             else:
                 self.steps.append(("vrad", valve))
@@ -1005,6 +1009,10 @@ class CompileJob:
                     self._q.put("Sky Light from the sky needs the Hammerless light compiler: Valve's vrad lights it "
                                 "with one colour")
                 code, out = self._exec(cmd)
+                if code != 0 and name == "vrad" and "-remix" in cmd and self._hlvrad_bake and not self._stopping:
+                    self._q.put(f"Live Light Mixing: the remix failed (exit code {code}): baking the lighting instead")
+                    self.plan = "lighting"
+                    code, out = self._exec(self._hlvrad_bake)
                 if code != 0 and name == "vrad" and cmd[0] == HLVRAD and self._valve_vrad and not self._stopping:
                     # ours writes the map only when it has finished, so it's untouched
                     self._fallback(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead", True)
@@ -1126,6 +1134,19 @@ class CompileJob:
         built = repr(replace(rec, vis=self._built_vis, rad=self._built_rad))
         return _with_light(built, self._built_light) if self._built_light else built
 
+    def _can_remix(self, built_rad) -> bool:
+        """A remix needs our light compiler on the GPU, the layers of the bake the map has, and no change to how
+        the lighting is baked."""
+        layers = self.base + ".hllayers"
+        if self._hlvrad_remix is None or self._opts.light_exact or self._opts.no_bake or not use_hlvrad(self._opts):
+            return False
+        if built_rad is None or built_rad != _opts_rad(repr(self._opts)):
+            return False
+        try:
+            return os.path.getmtime(layers) >= os.path.getmtime(self.base + ".bsp") - 600
+        except OSError:
+            return False
+
     def _choose_steps(self) -> list[tuple[str, list[str]]]:
         """Smart build: the least work that gives the same map as a full compile, judged against
         the VMF the current BSP was compiled from (buildplan.plan). A doubt means a full compile."""
@@ -1164,7 +1185,19 @@ class CompileJob:
             self.plan = "full"                   # no portal file kept (an older build): compile it all
             self._rest_stale = True
             return self.steps
-        lights_changed = kind == "lighting"      # lights or static props moved: the bake is out of date
+        if kind == "remix" and not self._can_remix(built_rad):
+            kind, why = "lighting", why + ", but the layers can't be used (baked again)"
+        if kind == "remix":
+            self.plan = "remix"
+            self._rest_stale = False
+            self._built_vis = built_vis
+            self._built_rad = built_rad.split("|")[0]
+            self._built_light = self._built_opts()          # (still the bake's: its options and fingerprint)
+            game = ["-game", self.tools.gamedir]
+            self._q.put(f"Smart build: {why}: keeping geometry, mixing the lighting from its layers")
+            return [("vbsp (entities only)", [self.tools.exe("vbsp"), "-onlyents"] + self._opts.vbsp_args() + game
+                     + [self.base]), ("vrad", self._hlvrad_remix)]
+        lights_changed = kind in ("lighting", "remix")   # lights or static props moved: the bake is out of date
         if add_vis and not lights_changed:
             vis_cmd = next((c for n, c in self.steps if n == "vvis"), [])
             if "-radius_override" in vis_cmd or bsp_fog_farz(self.base + ".bsp") > 0:

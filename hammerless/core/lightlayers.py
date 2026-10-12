@@ -10,10 +10,11 @@ writes, for each layer, the light it alone gives every luxel. Blender then shows
 where rest is the bake minus the layers and weight is how much brighter, per colour, the light is now than when it
 was baked: what baking again would give, without baking.
 
-File (hlvrad's WriteLayers): "HLLY", version 2, faces, layers (4 ints); per layer: what it was baked with (an int
-length, then "key=value" lines: kind=light|sky, classname, _hlobject, _light, _ambient, their HDR keys), how many faces
-it lights, then per face: its number, its luxel count and their light (3 half floats each, vrad's units: the
-lightmap's decoded value times 255), in the face's first lightmap's order.
+File (hlvrad's WriteLayers): "HLLY", version 3, faces, layers (4 ints); per layer: what it was baked with (an int
+length, then "key=value" lines: kind=light|sky, classname, style, intensity (its lights' added up, vrad's), applied
+(the weight the map's lighting has it at now: hlvrad -remix changes it), _hlobject, _light, _ambient, their HDR keys),
+how many faces it lights, then per face: its number, its luxel count, its pages (1, or 4 on a bumped face: flat first)
+and their light (3 half floats a luxel, vrad's units: the lightmap's decoded value times 255), page after page.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ MAGIC = 0x594C4C48
 @dataclass
 class Layer:
     info: dict                                       # what it was baked with (see the module's docstring)
-    faces: dict = field(default_factory=dict)        # face number -> (luxels, 3) float32, the atlas's units
+    faces: dict = field(default_factory=dict)        # face number -> (pages, luxels, 3) float32, the atlas's units
 
     @property
     def obj(self) -> str:
@@ -38,12 +39,20 @@ class Layer:
     def sky(self) -> bool:
         return self.info.get("kind") == "sky"
 
+    @property
+    def applied(self) -> np.ndarray:
+        """The weight the map's lighting has this layer at (1: as baked; a remix changes it)."""
+        try:
+            return np.array([float(x) for x in self.info.get("applied", "1 1 1").split()][:3], np.float32)
+        except ValueError:
+            return np.ones(3, np.float32)
+
 
 def read_layers(path: str) -> list[Layer]:
     with open(path, "rb") as f:
         data = f.read()
     magic, version, _faces, count = struct.unpack_from("<4i", data, 0)
-    if magic != MAGIC or version != 2:
+    if magic != MAGIC or version != 3:
         raise ValueError(f"{path}: not a light layers file this version reads")
     at, layers = 16, []
     for _ in range(count):
@@ -55,11 +64,11 @@ def read_layers(path: str) -> list[Layer]:
         (nfaces,) = struct.unpack_from("<i", data, at)
         at += 4
         for _ in range(nfaces):
-            face, luxels = struct.unpack_from("<2i", data, at)
-            at += 8
-            values = np.frombuffer(data, "<f2", 3 * luxels, at).astype(np.float32).reshape(luxels, 3)
+            face, luxels, pages = struct.unpack_from("<3i", data, at)
+            at += 12
+            values = np.frombuffer(data, "<f2", 3 * luxels * pages, at).astype(np.float32).reshape(pages, luxels, 3)
             layer.faces[face] = values / 255.0
-            at += 6 * luxels
+            at += 6 * luxels * pages
         layers.append(layer)
     return layers
 
@@ -71,7 +80,7 @@ def layer_atlas(layer: Layer, face_at: dict, shape) -> np.ndarray:
         if face not in face_at:
             continue
         x, y, w, h = face_at[face]
-        out[y:y + h, x:x + w] = values.reshape(h, w, 3)
+        out[y:y + h, x:x + w] = values[0].reshape(h, w, 3)          # (the flat page)
     return out
 
 

@@ -19,16 +19,14 @@ from ..core.lightlayers import baked_light, read_layers, weight
 
 
 class Mix:
-    def __init__(self, atlas: np.ndarray, layers: list):
+    def __init__(self, atlas: np.ndarray, layers: list, applied: np.ndarray):
         h, w = atlas.shape[:2]
         self.shape = (h, w)
         self.layers = layers                 # [(info, flat atlas indices, (n, 3) values)]
-        self.weights = np.ones((len(layers), 3), np.float32)
+        # (the map's lighting has each layer at its applied weight: as baked, or as the last remix left it)
+        self.weights = applied.astype(np.float32).copy()
         self.baked = [baked_light(info) for info, _i, _v in layers]
         self.mixed = atlas.copy()            # (H, W, 4): what's shown (rest + layers * weights)
-        self.rest = atlas[..., :3].reshape(-1, 3).copy()
-        for _info, idx, vals in layers:
-            np.subtract.at(self.rest, idx, vals)
 
     def set_weights(self, weights: np.ndarray) -> bool:
         """Show the layers at these weights; True if anything changed."""
@@ -68,6 +66,7 @@ def load(bsp: str, data) -> Mix | None:
             if at is None:
                 continue
             x, y, fw, fh = at
+            values = values[0]                   # (the view shows the flat page)
             if fw * fh != len(values):
                 return None                  # (another bake's faces: don't show nonsense)
             rows = (np.arange(fh)[:, None] + y) * w + (np.arange(fw)[None, :] + x)
@@ -75,7 +74,7 @@ def load(bsp: str, data) -> Mix | None:
             vals.append(values)
         layers.append((layer.info, np.concatenate(idx) if idx else np.zeros(0, np.int64),
                        np.concatenate(vals) if vals else np.zeros((0, 3), np.float32)))
-    mix = Mix(data.atlas, layers)
+    mix = Mix(data.atlas, layers, np.array([l.applied for l in raw], np.float32).reshape(-1, 3))
     mix.set_weights(current_weights(bpy.context, mix))
     return mix
 

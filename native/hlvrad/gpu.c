@@ -281,6 +281,54 @@ static void Run(program_t *p, const accel_t *scene, gbuf_t *const *bufs, const v
     Submit();
 }
 
+/* Run, with the outputs (bufs[outs[k]]: host buffers, sizes[k] bytes) written in GPU memory and copied back after:
+ * a shader's scattered writes straight to host memory cross the bus one by one (measured: -layers' bigger answers
+ * made the gather 4 times slower that way) */
+static gbuf_t devout[4];
+static void RunOut(program_t *p, const accel_t *scene, gbuf_t *const *bufs, const void *pc, uint32_t pcsize, uint32_t n,
+                   const int *outs, const VkDeviceSize *sizes, int nouts) {
+    gbuf_t *b2[24];
+    memcpy(b2, bufs, sizeof(gbuf_t *) * p->nbind);
+    for (int k = 0; k < nouts; k++) {
+        if (!devout[k].buf || devout[k].size < sizes[k]) {
+            FreeBuffer(&devout[k]);
+            devout[k] = NewBuffer(sizes[k] + sizes[k] / 4 + 1024, USAGE_ALL, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        }
+        b2[outs[k]] = &devout[k];
+    }
+    VkWriteDescriptorSetAccelerationStructureKHR was = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+    was.accelerationStructureCount = 1, was.pAccelerationStructures = &scene->as;
+    VkDescriptorBufferInfo bi[24];
+    VkWriteDescriptorSet w[24];
+    memset(w, 0, sizeof(w));
+    for (int i = 0; i < p->nbind; i++) {
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = p->ds, w[i].dstBinding = (uint32_t)i, w[i].descriptorCount = 1;
+        if (!i) {
+            w[i].pNext = &was;
+            w[i].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        } else {
+            bi[i].buffer = b2[i]->buf, bi[i].offset = 0, bi[i].range = VK_WHOLE_SIZE;
+            w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[i].pBufferInfo = &bi[i];
+        }
+    }
+    vkUpdateDescriptorSets(dev, (uint32_t)p->nbind, w, 0, NULL);
+    Begin();
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p->pipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p->pl, 0, 1, &p->ds, 0, NULL);
+    vkCmdPushConstants(cmd, p->pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, pcsize, pc);
+    vkCmdDispatch(cmd, (n + 63) / 64, 1, 1);
+    VkMemoryBarrier mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT, mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+    for (int k = 0; k < nouts; k++) {
+        VkBufferCopy c = {0, 0, sizes[k]};
+        vkCmdCopyBuffer(cmd, devout[k].buf, bufs[outs[k]]->buf, 1, &c);
+    }
+    Submit();
+}
+
 /* ------------------------------------------------------------------ start */
 static program_t prog_gather, prog_ambient, prog_propind, prog_vis, prog_gi;
 
@@ -466,10 +514,10 @@ typedef struct { float origin[4], intensity[4], normal[4], a[4], b[4], c[4]; int
 int GPU_NumSlots(void) { return nslots; }
 int GPU_SlotStyle(int slot) { return slotstyle[slot]; }
 int GPU_StyleSlot(int style) { return style >= 0 && style < 256 ? styleslot[style] : -1; }
-/* -layers: while the faces' direct light is gathered, each layer's light also comes back apart (its first normal's
- * colour per point: 12 floats a group and slot, after the slots' 64 each) */
+/* -layers: while the faces' direct light is gathered, each layer's light also comes back apart (its colours per point
+ * and normal: 48 floats a group and slot, after the slots' 64 each) */
 int g_gpuLayers;
-int GPU_GroupFloats(void) { return 64 * nslots + 12 * nslots * (g_gpuLayers ? g_numLayers : 0); }
+int GPU_GroupFloats(void) { return 64 * nslots + 48 * nslots * (g_gpuLayers ? g_numLayers : 0); }
 
 /* the lights (in vrad's order; each light style gets a slot, worked through one at a time), what they see, the sky's
  * directions and picture */
@@ -556,7 +604,9 @@ void GPU_Gather(const gpugroup_t *groups, int n, int slot, float *out) {
         memcpy(in_buf.map, groups + at, sizeof(gpugroup_t) * (size_t)k);
         pc.ngroups = k;
         gbuf_t *bufs[8] = {NULL, &in_buf, &lightbuf, &pvsbuf, &skydirs, &skymapbuf, &propids, &out_buf};
-        Run(&prog_gather, &shadow_tlas, bufs, &pc, sizeof(pc), 4 * (uint32_t)k);
+        int outs[1] = {7};
+        VkDeviceSize sizes[1] = {per * 4 * (VkDeviceSize)k};
+        RunOut(&prog_gather, &shadow_tlas, bufs, &pc, sizeof(pc), 4 * (uint32_t)k, outs, sizes, 1);
         memcpy(out + per * (size_t)at, out_buf.map, per * 4 * (size_t)k);
     }
 }
@@ -649,15 +699,17 @@ void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *ou
         int k = n - at < chunk ? n - at : chunk;
         Ensure(&in_buf, sizeof(gpugroup_t) * (size_t)k);
         Ensure(&out_buf, 64 * 4 * (size_t)k);
-        Ensure(&gi_layerout, 4 * 4 * 3 * (size_t)k * (pc.nlayers ? pc.nlayers : 1));
+        Ensure(&gi_layerout, 4 * 4 * 12 * (size_t)k * (pc.nlayers ? pc.nlayers : 1));
         memcpy(in_buf.map, groups + at, sizeof(gpugroup_t) * (size_t)k);
         pc.ngroups = k;
         gbuf_t *bufs[10] = {NULL, &in_buf, &gi_tris, &walkbufs[4], &lightdata, &out_buf, &walkbufs[0], &gi_layers,
                             &gi_layerofs, &gi_layerout};
-        Run(&prog_gi, &gi_tlas, bufs, &pc, sizeof(pc), 4 * (uint32_t)k);
+        int outs[2] = {5, 9};
+        VkDeviceSize sizes[2] = {64 * 4 * (VkDeviceSize)k, 4 * 4 * 12 * (VkDeviceSize)k * (pc.nlayers ? pc.nlayers : 1)};
+        RunOut(&prog_gi, &gi_tlas, bufs, &pc, sizeof(pc), 4 * (uint32_t)k, outs, sizes, pc.nlayers ? 2 : 1);
         memcpy(out + 64 * (size_t)at, out_buf.map, 64 * 4 * (size_t)k);
         if (pc.nlayers)
-            memcpy(layerout + 12 * (size_t)pc.nlayers * at, gi_layerout.map, 48 * (size_t)pc.nlayers * k);
+            memcpy(layerout + 48 * (size_t)pc.nlayers * at, gi_layerout.map, 192 * (size_t)pc.nlayers * k);
     }
 }
 

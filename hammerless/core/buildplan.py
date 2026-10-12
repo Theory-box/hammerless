@@ -5,6 +5,8 @@ the least work that gives the same map as a full compile.
   entities  only entity keyvalues / outputs / point entities changed: vbsp -onlyents rewrites the
             entity lump (and static props) and keeps geometry, visibility and lighting
   lighting  lights or static props changed too (they're baked by vrad): -onlyents, then vrad
+  remix     only the colour or brightness of lights baked into layers of their own (Live Light Mixing) changed:
+            -onlyents, then hlvrad -remix (the layers added in at their new weights, no bake)
   full      geometry changed (world or brush-entity brushes, displacements, overlays, cubemaps,
             worldspawn settings...): the usual vbsp + vvis + vrad
 
@@ -89,8 +91,24 @@ def _split(text):
     return geometry, lighting, entities      # order kept: vbsp numbers light styles and static props by it
 
 
+# a light's colour and brightness: what Live Light Mixing's layers can change without a bake
+LIGHT_VALUE_KEYS = {"_light", "_lighthdr", "_lightscalehdr", "_ambient", "_ambienthdr", "_ambientscalehdr"}
+
+
+def _sans_values(lighting) -> tuple[list, bool]:
+    """The lighting signature without lights' colour and brightness, and whether every light has a layer."""
+    out, layered = [], True
+    for canon in lighting:
+        keys = {kv[0] for kv in canon if isinstance(kv, tuple) and len(kv) == 2 and isinstance(kv[1], str)}
+        cls = next((kv[1] for kv in canon if kv[0] == "classname"), "")
+        if cls in ("light", "light_spot", "light_environment", "light_directional") and "_hllayer" not in keys:
+            layered = False
+        out.append(tuple(kv for kv in canon if not (isinstance(kv[1], str) and kv[0] in LIGHT_VALUE_KEYS)))
+    return out, layered
+
+
 def plan(old_text: str | None, new_text: str) -> tuple[str, str]:
-    """('same' | 'entities' | 'lighting' | 'full', why)."""
+    """('same' | 'entities' | 'remix' | 'lighting' | 'full', why)."""
     if not old_text:
         return "full", "no earlier compile to build on"
     try:
@@ -101,6 +119,9 @@ def plan(old_text: str | None, new_text: str) -> tuple[str, str]:
     if og != ng:
         return "full", "geometry changed"
     if ol != nl:
+        (os_, old_layered), (ns_, new_layered) = _sans_values(ol), _sans_values(nl)
+        if os_ == ns_ and old_layered and new_layered and any("_hllayer" in str(c) for c in ol):
+            return "remix", "only lights' colour or brightness changed (Live Light Mixing)"
         return "lighting", "lights or static props changed, geometry didn't"
     if oe != ne:
         return "entities", "only entities changed"

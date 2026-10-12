@@ -5,7 +5,7 @@
 // surface it meets has in the current lightmaps times that surface's reflectivity. The mean is the bounced light at the
 // point; for bump normals, the same rays weighted towards each. Out: per point 4 normals' colours (16 floats).
 // -layers (nlayers > 0): the same rays also bring back each light layer's light where they land (a grid per face of the
-// layer's samples, LayerOfs: where a face's grid starts, -1 none); out per point and layer, the first normal's colour.
+// layer's samples, LayerOfs: where a face's grid starts, -1 none); out per point and layer, 4 normals' colours.
 layout(local_size_x = 64) in;
 
 struct Group { vec4 pos[3]; vec4 nrm[12]; ivec4 cluster; int lanes, normalCount, flags, skip, slot, pad0, pad1, pad2; };
@@ -24,7 +24,7 @@ layout(set = 0, binding = 8, std430) readonly buffer LayerOfs { int layerofs[]; 
 layout(set = 0, binding = 9, std430) writeonly buffer LayerOut { float layerout[]; };
 layout(push_constant) uniform PC { int ngroups, nrays, seed, nlayers; } pc;
 
-const int MAXLAYERS = 8;
+const int MAXLAYERS = 4;
 
 const float RAY_LENGTH = 56755.84;
 
@@ -80,8 +80,9 @@ void main() {
     if (gi >= pc.ngroups) return;
     uint o = t * 16u;
     vec3 sum[4] = vec3[4](vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
-    vec3 lsum[MAXLAYERS];
-    for (int l = 0; l < MAXLAYERS; l++) lsum[l] = vec3(0.0);
+    vec3 lsum[MAXLAYERS * 4];                       // (per layer, per normal)
+    for (int l = 0; l < MAXLAYERS * 4; l++) lsum[l] = vec3(0.0);
+    vec3 lhit[MAXLAYERS];
     int nl = min(pc.nlayers, MAXLAYERS);
     if (lane < groups[gi].lanes) {
         int nc = groups[gi].normalCount;
@@ -103,10 +104,13 @@ void main() {
             vec3 d = nx * (cos(phi) * st) + ny * (sin(phi) * st) + nz * ct;
             ivec3 hit = Hit(pos + nz * 0.25, d);            // (a little off the surface: not hitting itself)
             vec3 L = hit.x >= 0 ? Radiance(hit) : vec3(0.0);
-            if (nl > 0 && hit.x >= 0 && layerofs[hit.x] >= 0) {
+            bool lgot = nl > 0 && hit.x >= 0 && layerofs[hit.x] >= 0;
+            if (lgot) {
                 int at = (layerofs[hit.x] + hit.z * faces[hit.x].a.z + hit.y) * nl * 3;
-                for (int l = 0; l < nl; l++)
-                    lsum[l] += vec3(layerv[at + 3 * l], layerv[at + 3 * l + 1], layerv[at + 3 * l + 2]) * faces[hit.x].refl.xyz;
+                for (int l = 0; l < nl; l++) {
+                    lhit[l] = vec3(layerv[at + 3 * l], layerv[at + 3 * l + 1], layerv[at + 3 * l + 2]) * faces[hit.x].refl.xyz;
+                    lsum[4 * l] += lhit[l];
+                }
             }
             sum[0] += L;
             wsum[0] += 1.0;
@@ -114,14 +118,18 @@ void main() {
                 float w = max(dot(n[k], d), 0.0) / max(ct, 0.05);
                 sum[k] += L * w;
                 wsum[k] += w;
+                if (lgot)
+                    for (int l = 0; l < nl; l++) lsum[4 * l + k] += lhit[l] * w;
             }
         }
         for (int k = 0; k < nc; k++) sum[k] = wsum[k] > 0.0 ? sum[k] / wsum[k] : vec3(0.0);
-        for (int l = 0; l < nl; l++) lsum[l] = wsum[0] > 0.0 ? lsum[l] / wsum[0] : vec3(0.0);
+        for (int l = 0; l < nl; l++)
+            for (int k = 0; k < 4; k++) lsum[4 * l + k] = k < nc && wsum[k] > 0.0 ? lsum[4 * l + k] / wsum[k] : vec3(0.0);
     }
-    for (int l = 0; l < nl; l++) {
-        uint lo = t * uint(nl * 3) + uint(3 * l);
-        layerout[lo] = lsum[l].x, layerout[lo + 1u] = lsum[l].y, layerout[lo + 2u] = lsum[l].z;
-    }
+    for (int l = 0; l < nl; l++)
+        for (int k = 0; k < 4; k++) {
+            uint lo = t * uint(nl * 12) + uint(12 * l + 3 * k);
+            layerout[lo] = lsum[4 * l + k].x, layerout[lo + 1u] = lsum[4 * l + k].y, layerout[lo + 2u] = lsum[4 * l + k].z;
+        }
     for (int k = 0; k < 4; k++) outv[o + 3 * k] = sum[k].x, outv[o + 3 * k + 1] = sum[k].y, outv[o + 3 * k + 2] = sum[k].z;
 }

@@ -367,6 +367,7 @@ void CreateDirectLights(void);
 void KeepOnlyLights(const char *spec);
 int AssignLayers(const char *spec);
 void LayerInfo(int layer, char *out, size_t size);
+int LayerStyle(int layer);
 extern int g_numLayers;
 void CollectLayers(void);
 void WriteLayers(const char *path);

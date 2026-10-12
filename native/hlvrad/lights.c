@@ -502,7 +502,10 @@ void KeepOnlyLights(const char *spec) {
  * -onlylights's (entity numbers, "sky", "surface"); a light in none stays in the rest. spec "keys": the light
  * entities say (Hammerless writes them): "_hllayer" n puts its light in layer n (a light_environment's sun), and
  * a light_environment's "_hllayersky" n its sky light. Returns how many layers */
-static int layerEntity[257], layerSky[257];      /* (per layer, from 1: its first light's entity (-1 none), sky light?) */
+static int layerEntity[257], layerSky[257], layerStyle[257];   /* (per layer, from 1: its first light's entity (-1
+                                                                  * none), sky light?, style) */
+static vec3_t layerIntensity[257];                 /* (its lights' intensities added up, as baked) */
+int LayerStyle(int layer) { return layer >= 1 && layer <= 256 ? layerStyle[layer] : 0; }
 
 /* what a layer was baked with, for Blender to compare a light's settings now against: its entity's light keys, as
  * "key=value" lines ("kind=sky" for a sky light; nothing for a layer of other lights) */
@@ -510,7 +513,9 @@ void LayerInfo(int layer, char *out, size_t size) {
     out[0] = 0;
     if (layer < 1 || layer > 256 || layerEntity[layer] < 0) return;
     const entity_t *e = &entities[layerEntity[layer]];
-    size_t n = (size_t)snprintf(out, size, "kind=%s\nclassname=%s\n", layerSky[layer] ? "sky" : "light", ValueForKey(e, "classname"));
+    size_t n = (size_t)snprintf(out, size, "kind=%s\nclassname=%s\nstyle=%d\nintensity=%.9g %.9g %.9g\napplied=1 1 1\n",
+                                layerSky[layer] ? "sky" : "light", ValueForKey(e, "classname"), layerStyle[layer],
+                                layerIntensity[layer][0], layerIntensity[layer][1], layerIntensity[layer][2]);
     static const char *keys[] = {"_hlobject", "_light", "_lightHDR", "_lightscaleHDR", "_ambient", "_ambientHDR", "_AmbientScaleHDR"};
     for (int k = 0; k < (int)(sizeof(keys) / sizeof(keys[0])) && n < size; k++) {
         const char *v = ValueForKeyOrNull(e, keys[k]);
@@ -520,7 +525,7 @@ void LayerInfo(int layer, char *out, size_t size) {
 
 int AssignLayers(const char *spec) {
     for (directlight_t *dl = activelights; dl; dl = dl->next) dl->layer = 0;
-    for (int i = 0; i <= 256; i++) layerEntity[i] = -1, layerSky[i] = 0;
+    for (int i = 0; i <= 256; i++) layerEntity[i] = -1, layerSky[i] = 0, layerStyle[i] = 0, VectorClear(layerIntensity[i]);
     if (!_stricmp(spec, "keys")) {
         int most = 0;
         for (directlight_t *dl = activelights; dl; dl = dl->next) {
@@ -529,7 +534,9 @@ int AssignLayers(const char *spec) {
             const char *v = ValueForKeyOrNull(&entities[dl->entity], sky ? "_hllayersky" : "_hllayer");
             dl->layer = v ? atoi(v) : 0;
             if (dl->layer < 0 || dl->layer > 256) dl->layer = 0;
-            if (dl->layer && layerEntity[dl->layer] < 0) layerEntity[dl->layer] = dl->entity, layerSky[dl->layer] = sky;
+            if (dl->layer && layerEntity[dl->layer] < 0)
+                layerEntity[dl->layer] = dl->entity, layerSky[dl->layer] = sky, layerStyle[dl->layer] = dl->light.style;
+            if (dl->layer) VectorAdd(layerIntensity[dl->layer], dl->light.intensity, layerIntensity[dl->layer]);
             if (dl->layer > most) most = dl->layer;
         }
         return most;

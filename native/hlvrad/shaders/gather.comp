@@ -5,8 +5,8 @@
 // A group is 4 points (a face's sample group, a supersample row, or one prop vertex); this dispatch adds up the
 // lights of one style slot. Out: per point, 4 normals' colours (12 floats), then whether any light added to it.
 // slot -1: every slot in one go (the lights come sorted by slot): out per group and slot, 64 floats each; then with
-// layers (-layers: a light's m.w, sorted by it within a slot) per slot and layer 12 floats, its first normal's colour
-// per point.
+// layers (-layers: a light's m.w, sorted by it within a slot) per slot and layer 48 floats, its 4 normals' colours per
+// point.
 layout(local_size_x = 64) in;
 
 struct Group {
@@ -234,13 +234,13 @@ void SlotOut(int slot, vec3 sum[4], bool nonzero) {
     WriteSlot(o + uint(slot) * 64u, sum, nonzero);
     nextSlot = slot + 1;
 }
-void PartOut(int part, vec3 v) {
+void PartOut(int part, vec3 v[4]) {
     for (; nextPart < part; nextPart++) {
-        uint z = lo + 12u * uint(nextPart);
-        outv[z] = 0.0, outv[z + 1u] = 0.0, outv[z + 2u] = 0.0;
+        uint z = lo + 48u * uint(nextPart);
+        for (uint k = 0u; k < 12u; k++) outv[z + k] = 0.0;
     }
-    uint at = lo + 12u * uint(part);
-    outv[at] = v.x, outv[at + 1u] = v.y, outv[at + 2u] = v.z;
+    uint at = lo + 48u * uint(part);
+    for (int k = 0; k < 4; k++) outv[at + 3u * uint(k)] = v[k].x, outv[at + 3u * uint(k) + 1u] = v[k].y, outv[at + 3u * uint(k) + 2u] = v[k].z;
     nextPart = part + 1;
 }
 
@@ -252,14 +252,14 @@ void main() {
     bool all = pc.slot < 0;
     // (one slot: per point 16 floats; all: per group and slot 64, the point's 16 of them, then the layers' parts: 12
     // per slot and layer, the point's 3 of them)
-    uint stride = uint(pc.nslots * 64 + pc.nslots * pc.nlayers * 12);
+    uint stride = uint(pc.nslots * 64 + pc.nslots * pc.nlayers * 48);
     o = all ? uint(gi) * stride + uint(lane) * 16u : t * 16u;
-    lo = uint(gi) * stride + uint(pc.nslots * 64) + uint(lane) * 3u;
+    lo = uint(gi) * stride + uint(pc.nslots * 64) + uint(lane) * 12u;
     vec3 sum[4] = zero;
     bool nonzero = false;
     int cur = all ? -1 : pc.slot;
     int curlayer = 0;               // (the layer whose lights are being added up in lsum)
-    vec3 lsum = vec3(0.0);
+    vec3 lsum[4] = zero;
     if (lane < g.lanes && (g.slot < 0 || all || g.slot == pc.slot)) {
         int nc = g.normalCount;
         vec3 pos = vec3(g.pos[0][lane], g.pos[1][lane], g.pos[2][lane]);
@@ -272,7 +272,7 @@ void main() {
                 if (g.slot >= 0 && L.m.y != g.slot) continue;
                 if (L.m.y != cur || L.m.w != curlayer) {        // (a layer's lights done: theirs out)
                     if (curlayer > 0 && pc.nlayers > 0) PartOut(cur * pc.nlayers + curlayer - 1, lsum);
-                    curlayer = L.m.w, lsum = vec3(0.0);
+                    curlayer = L.m.w, lsum = zero;
                 }
                 if (L.m.y != cur) {             // (the next slot's lights: the last one's sum out)
                     if (cur >= 0) SlotOut(cur, sum, nonzero);
@@ -302,7 +302,7 @@ void main() {
                 float fx = d * falloff;
                 if (fx != 0.0) nonzero = true;
                 sum[k] += fx * (tinted ? tint[k] : L.intensity.xyz);
-                if (k == 0 && curlayer > 0) lsum += fx * (tinted ? tint[0] : L.intensity.xyz);
+                if (curlayer > 0) lsum[k] += fx * (tinted ? tint[k] : L.intensity.xyz);
             }
         }
     }
@@ -314,7 +314,7 @@ void main() {
     if (cur >= 0) SlotOut(cur, sum, nonzero);
     for (; nextSlot < pc.nslots; nextSlot++) WriteSlot(o + uint(nextSlot) * 64u, zero, false);
     for (; nextPart < pc.nslots * pc.nlayers; nextPart++) {
-        uint z = lo + 12u * uint(nextPart);
-        outv[z] = 0.0, outv[z + 1u] = 0.0, outv[z + 2u] = 0.0;
+        uint z = lo + 48u * uint(nextPart);
+        for (uint k = 0u; k < 12u; k++) outv[z + k] = 0.0;
     }
 }

@@ -44,7 +44,7 @@ typedef struct {
     vec3_t *luxelNormals;                                /* (displacements) */
     float worldAreaPerLuxel;
     vec3_t *light[MAXLIGHTMAPS][NUM_BUMP_VECTS + 1];     /* per style, per normal, per sample */
-    vec3_t **layerlight;         /* -layers: per layer and style (light[]'s index), its first normal's light per sample */
+    vec3_t **layerlight;         /* -layers: per layer, style (light[]'s index) and normal, its light per sample */
 } facelight_t;
 
 /* -layers: the lights of each layer (a light in one gets dl->layer), the light each gives every luxel written apart
@@ -740,17 +740,23 @@ float GatherSampleLightAtPoint(const directlight_t *dl, const vec3_t pos, const 
 }
 
 /* ------------------------------------------------------------------ a face's direct light */
-/* -layers: a layer's light on this face from the lights of one of its styles, per sample (made the first time) */
-static vec3_t *LayerLight(facelight_t *fl, int layer, int style) {
-    if (!fl->layerlight) fl->layerlight = xalloc(sizeof(vec3_t *) * (g_numLayers * MAXLIGHTMAPS + 1));
-    vec3_t **v = &fl->layerlight[layer * MAXLIGHTMAPS + style];
+/* -layers: a layer's light on this face from the lights of one of its styles, for one normal, per sample (made the
+ * first time) */
+#define NB (NUM_BUMP_VECTS + 1)
+static vec3_t **LayerSlot(facelight_t *fl, int layer, int style, int b) {
+    if (!fl->layerlight) fl->layerlight = xalloc(sizeof(vec3_t *) * (g_numLayers * MAXLIGHTMAPS * NB + 1));
+    return &fl->layerlight[(layer * MAXLIGHTMAPS + style) * NB + b];
+}
+static vec3_t *LayerLight(facelight_t *fl, int layer, int style, int b) {
+    vec3_t **v = LayerSlot(fl, layer, style, b);
     if (!*v) *v = xalloc(sizeof(vec3_t) * (fl->numsamples + 1));
     return *v;
 }
 
-/* -layers: where a layer's part from one slot's lights is in a GPU answer (after the slots' 64 floats each) */
+/* -layers: where a layer's part from one slot's lights is in a GPU answer (after the slots' 64 floats each): per point
+ * 4 normals' colours (48 floats) */
 static const float *LayerPart(const float *r, int slot, int layer) {
-    return r + 64 * GPU_NumSlots() + 12 * (slot * g_numLayers + layer);
+    return r + 64 * GPU_NumSlots() + 48 * (slot * g_numLayers + layer);
 }
 
 static int FindOrAllocateLightstyleSamples(dface_t *f, facelight_t *fl, int style, int normalCount) {
@@ -819,11 +825,13 @@ float g_ssThreshold = 0.0625f;
 
 /* -layers: ResampleLightAt4Points's layer slots' light per point (first normal), and a supersampled point's sums */
 #define MAXLAYERS 256
-static __thread float g_ssLayerRes[MAXLAYERS][LANES][3], g_ssLayerAcc[MAXLAYERS][3];
+static __thread float g_ssLayerRes[MAXLAYERS][LANES][NUM_BUMP_VECTS + 1][3], g_ssLayerAcc[MAXLAYERS][NUM_BUMP_VECTS + 1][3];
 static void AddSlotRes(int lane) {
-    float (*acc)[3] = g_ssLayerAcc, (*res)[LANES][3] = g_ssLayerRes;     /* (thread-locals: found once, not per use) */
+    float (*acc)[NUM_BUMP_VECTS + 1][3] = g_ssLayerAcc;                  /* (thread-locals: found once, not per use) */
+    float (*res)[LANES][NUM_BUMP_VECTS + 1][3] = g_ssLayerRes;
     for (int layer = 0; layer < g_numLayers; layer++)
-        for (int k = 0; k < 3; k++) acc[layer][k] += res[layer][lane][k];
+        for (int b = 0; b < NUM_BUMP_VECTS + 1; b++)
+            for (int k = 0; k < 3; k++) acc[layer][b][k] += res[layer][lane][b][k];
 }
 
 static void ResampleLightAt4Points(const points4_t *p, const int cluster[LANES], const dface_t *f, int style, int flags,
@@ -837,7 +845,7 @@ static void ResampleLightAt4Points(const points4_t *p, const int cluster[LANES],
         for (int i = 0; i < LANES; i++)
             for (int b = 0; b < p->normalCount; b++)
                 for (int k = 0; k < 3; k++) result[i][b][k] = r[16 * i + 3 * b + k];
-        float (*lres)[LANES][3] = g_ssLayerRes;
+        float (*lres)[LANES][NUM_BUMP_VECTS + 1][3] = g_ssLayerRes;
         for (int layer = 0; layer < g_numLayers; layer++)      /* (-layers: their parts, for the supersampled sums) */
             memcpy(lres[layer], LayerPart(a, slot, layer), sizeof(lres[layer]));
         /* what vrad leaves in the stale slot: the last light's first-normal values, whose signs (all PointsInWinding
@@ -929,7 +937,7 @@ static int SupersampleGrid(const lightinfo_t *l, int facenum, facelight_t *fl, i
     float origin[2];
     WorldToLuxelSpace(l, sample->pos, origin);
     int n = flags & NON_AMBIENT_ONLY ? g_ssPoints : (g_ssPoints / 2 > 1 ? g_ssPoints / 2 : 1), total = n * n, count = 0;
-    if (g_numLayers) memset(g_ssLayerAcc, 0, sizeof(float) * 3 * g_numLayers);
+    if (g_numLayers) memset(g_ssLayerAcc, 0, sizeof(float) * 3 * NB * g_numLayers);
     float cscale = 1.0f / (float)n, csshift = -((float)(n - 1) * cscale) / 2.0f;
     for (int b = 0; b < normalCount; b++) VectorClear(light[b]);
     float nin[LANES][3], nout[LANES][3], pos[LANES][3], pt[3][LANES];
@@ -947,7 +955,7 @@ static int SupersampleGrid(const lightinfo_t *l, int facenum, facelight_t *fl, i
         int cluster[LANES];
         SetupPoints4(l, facenum, normalCount, 0, flatBump, (const float(*)[3])pos, (const float(*)[3])nin, &p, cluster, nout);
         vec3_t result[LANES][NUM_BUMP_VECTS + 1];
-        if (g_numLayers) memset(g_ssLayerRes, 0, sizeof(float) * 3 * LANES * g_numLayers);
+        if (g_numLayers) memset(g_ssLayerRes, 0, sizeof(float) * 3 * NB * LANES * g_numLayers);
         ResampleLightAt4Points(&p, cluster, f, style, flags, result);
         for (int i = 0; i < lanes; i++) {
             if ((invalid >> i) & 1) continue;
@@ -962,7 +970,7 @@ static int SupersampleGrid(const lightinfo_t *l, int facenum, facelight_t *fl, i
 static int SupersampleLightAtPoint(const lightinfo_t *l, int facenum, facelight_t *fl, int si, int style, int normalCount,
                                    const vec3_t *flatBump, vec3_t *light, int flags) {
     if (g_ssPoints != 4) return SupersampleGrid(l, facenum, fl, si, style, normalCount, flatBump, light, flags);
-    if (g_numLayers) memset(g_ssLayerAcc, 0, sizeof(float) * 3 * g_numLayers);
+    if (g_numLayers) memset(g_ssLayerAcc, 0, sizeof(float) * 3 * NB * g_numLayers);
     const sample_t *sample = &fl->sample[si];
     const dface_t *f = &g_pFaces[facenum];
     float origin[2];
@@ -993,7 +1001,7 @@ static int SupersampleLightAtPoint(const lightinfo_t *l, int facenum, facelight_
         int cluster[LANES];
         SetupPoints4(l, facenum, normalCount, 0, flatBump, (const float(*)[3])pos, (const float(*)[3])nin, &p, cluster, nout);
         vec3_t result[LANES][NUM_BUMP_VECTS + 1];
-        if (g_numLayers) memset(g_ssLayerRes, 0, sizeof(float) * 3 * LANES * g_numLayers);
+        if (g_numLayers) memset(g_ssLayerRes, 0, sizeof(float) * 3 * NB * LANES * g_numLayers);
         ResampleLightAt4Points(&p, cluster, f, style, flags, result);
         for (int i = 0; i < LANES; i++) {
             if ((invalid >> i) & 1) continue;
@@ -1019,7 +1027,7 @@ static void BuildSupersampleFaceLights(const lightinfo_t *l, int facenum, faceli
     unsigned char *done = xalloc(size + 1);
     float *gradient = xalloc(sizeof(float) * (fl->numsamples + 1)), *intensity = xalloc(sizeof(float) * (normalCount * size + 1));
     vec3_t **ls = fl->light[style];
-    float (*ambacc)[3] = g_numLayers ? xalloc(sizeof(float) * 3 * (g_numLayers + 1)) : NULL;
+    float (*ambacc)[NUM_BUMP_VECTS + 1][3] = g_numLayers ? xalloc(sizeof(float) * 3 * NB * (g_numLayers + 1)) : NULL;
     for (int i = 0; i < fl->numsamples; i++)
         SampleIntensity(ls, i, normalCount, (int)fl->sample[i].s + (int)fl->sample[i].t * w, size, intensity);
     for (int pass = 1, another = 1; another && pass <= g_ssPasses; pass++) {
@@ -1056,7 +1064,7 @@ static void BuildSupersampleFaceLights(const lightinfo_t *l, int facenum, faceli
             another = 1;
             vec3_t amb[NUM_BUMP_VECTS + 1], dir[NUM_BUMP_VECTS + 1];
             int na = SupersampleLightAtPoint(l, facenum, fl, i, style, normalCount, flatBump, amb, AMBIENT_ONLY);
-            if (g_numLayers) memcpy(ambacc, g_ssLayerAcc, sizeof(float) * 3 * g_numLayers);
+            if (g_numLayers) memcpy(ambacc, g_ssLayerAcc, sizeof(float) * 3 * NB * g_numLayers);
             int nd = SupersampleLightAtPoint(l, facenum, fl, i, style, normalCount, flatBump, dir, NON_AMBIENT_ONLY);
             if (gpucur && gpucur->incomplete) continue;      /* (-gpu: answers to come) */
             if (na > 0 && nd > 0) {
@@ -1066,14 +1074,15 @@ static void BuildSupersampleFaceLights(const lightinfo_t *l, int facenum, faceli
                         ls[n][i][k] = 0.0f + dir[n][k] * sd;
                         ls[n][i][k] = ls[n][i][k] + amb[n][k] * sa;
                     }
-                float (*dacc)[3] = g_ssLayerAcc;
-                for (int layer = 0; layer < g_numLayers; layer++) {      /* (its layers' parts, the same way) */
-                    float v[3];
-                    for (int k = 0; k < 3; k++) v[k] = dacc[layer][k] * sd + ambacc[layer][k] * sa;
-                    if (!(fl->layerlight && fl->layerlight[layer * MAXLIGHTMAPS + style]) && !v[0] && !v[1] && !v[2]) continue;
-                    vec3_t *ll = LayerLight(fl, layer, style);
-                    for (int k = 0; k < 3; k++) ll[i][k] = v[k];
-                }
+                float (*dacc)[NUM_BUMP_VECTS + 1][3] = g_ssLayerAcc;
+                for (int layer = 0; layer < g_numLayers; layer++)        /* (its layers' parts, the same way) */
+                    for (int n = 0; n < normalCount; n++) {
+                        float v[3];
+                        for (int k = 0; k < 3; k++) v[k] = dacc[layer][n][k] * sd + ambacc[layer][n][k] * sa;
+                        if (!*LayerSlot(fl, layer, style, n) && !v[0] && !v[1] && !v[2]) continue;
+                        vec3_t *ll = LayerLight(fl, layer, style, n);
+                        for (int k = 0; k < 3; k++) ll[i][k] = v[k];
+                    }
                 SampleIntensity(ls, i, normalCount, (int)fl->sample[i].s + (int)fl->sample[i].t * w, size, intensity);
             }
         }
@@ -1089,7 +1098,7 @@ static void FreeFacelight(facelight_t *fl) {
     for (int k = 0; k < MAXLIGHTMAPS; k++)
         for (int n = 0; n < NUM_BUMP_VECTS + 1; n++) free(fl->light[k][n]);
     if (fl->layerlight) {
-        for (int k = 0; k < g_numLayers * MAXLIGHTMAPS; k++) free(fl->layerlight[k]);
+        for (int k = 0; k < g_numLayers * MAXLIGHTMAPS * (NUM_BUMP_VECTS + 1); k++) free(fl->layerlight[k]);
         free(fl->layerlight);
     }
     memset(fl, 0, sizeof(*fl));
@@ -1167,12 +1176,15 @@ void BuildFacelights(int facenum) {
                         for (int k = 0; k < 3; k++) fl->light[style][b][group + i][k] += rs[16 * i + 3 * b + k];
                 for (int layer = 0; layer < g_numLayers; layer++) {    /* (-layers: theirs apart too) */
                     const float *lp = LayerPart(r, slot, layer);
-                    int any = 0;
-                    for (int i = 0; i < 3 * count; i++) any |= lp[i] != 0;
-                    if (!any) continue;
-                    vec3_t *ll = LayerLight(fl, layer, style);
-                    for (int i = 0; i < count; i++)
-                        for (int k = 0; k < 3; k++) ll[group + i][k] += lp[3 * i + k];
+                    for (int b = 0; b < normalCount; b++) {
+                        int any = 0;
+                        for (int i = 0; i < count; i++)
+                            for (int k = 0; k < 3; k++) any |= lp[12 * i + 3 * b + k] != 0;
+                        if (!any) continue;
+                        vec3_t *ll = LayerLight(fl, layer, style, b);
+                        for (int i = 0; i < count; i++)
+                            for (int k = 0; k < 3; k++) ll[group + i][k] += lp[12 * i + 3 * b + k];
+                    }
                 }
             }
             continue;
@@ -1243,6 +1255,11 @@ typedef struct {
     float *weight;
 } radial_t;
 
+/* -layers: while set, every face's radial carries its 4 channels (as a bumped face's pages): four layers' flat pages
+ * at once, with the same weights the bake's luxels get */
+static int g_radialAll;
+#define RADIAL_BUMP(face) (g_radialAll || (texinfo[g_pFaces[face].texinfo].flags & SURF_BUMPLIGHT))
+
 static radial_t *AllocateRadial(int facenum) {
     radial_t *rad = xalloc(sizeof(radial_t));
     InitLightinfo(&rad->l, facenum);
@@ -1302,7 +1319,7 @@ static void AddDirectToRadial(radial_t *rad, const vec3_t pnt, const float *cmin
 static radial_t *BuildLuxelRadial(int facenum, int style) {
     facelight_t *fl = &facelight[facenum];
     radial_t *rad = AllocateRadial(facenum);
-    int bump = texinfo[g_pFaces[facenum].texinfo].flags & SURF_BUMPLIGHT ? 1 : 0;
+    int bump = RADIAL_BUMP(facenum) ? 1 : 0;
     vec3_t light[NUM_BUMP_VECTS + 1];
     for (int k = 0; k < fl->numsamples; k++) {
         for (int b = 0; b < (bump ? NUM_BUMP_VECTS + 1 : 1); b++) VectorCopy(fl->light[style][b][k], light[b]);
@@ -1313,7 +1330,7 @@ static radial_t *BuildLuxelRadial(int facenum, int style) {
     for (int j = 0; j < nn; j++) {
         int nf = neighbours[j];
         facelight_t *nfl = &facelight[nf];
-        int nbump = texinfo[g_pFaces[nf].texinfo].flags & SURF_BUMPLIGHT ? 1 : 0;
+        int nbump = RADIAL_BUMP(nf) ? 1 : 0;
         int nstyle = 0;
         if (g_pFaces[nf].styles[nstyle] != g_pFaces[facenum].styles[style]) {
             for (nstyle = 1; nstyle < MAXLIGHTMAPS; nstyle++)
@@ -1411,7 +1428,7 @@ static radial_t *BuildDispLuxelRadial(int facenum, int style) {
     facelight_t *fl = &facelight[facenum];
     radial_t *rad = AllocateRadial(facenum);
     const dispsurf_t *d = &dispsurfs[g_pFaces[facenum].dispinfo];
-    int bump = texinfo[g_pFaces[facenum].texinfo].flags & SURF_BUMPLIGHT ? 1 : 0;
+    int bump = RADIAL_BUMP(facenum) ? 1 : 0;
     float radius = (float)sqrt(d->sample_radius2), r2 = radius * radius;
     int lightstyle = g_pFaces[facenum].styles[style];
     for (int j = 0; j < rad->w * rad->h; j++) {
@@ -1438,7 +1455,7 @@ static radial_t *BuildDispLuxelRadial(int facenum, int style) {
                             }
                         if (nstyle == -1) continue;
                         facelight_t *nfl = &facelight[nf];
-                        int nbump = texinfo[g_pFaces[nf].texinfo].flags & SURF_BUMPLIGHT ? 1 : 0;
+                        int nbump = RADIAL_BUMP(nf) ? 1 : 0;
                         const sample_t *sp = &nfl->sample[ns];
                         float angle = DotProduct(sp->normal, ln);
                         if (angle < 0.15f) continue;
@@ -1847,9 +1864,10 @@ int g_giPasses, g_giRays = 256;
 static void FinalWork(int face, int thread) { (void)thread; FinalLightFace(face); }
 
 /* ------------------------------------------------------------------ -layers */
-/* per face, per layer: its light per sample (first normal), then per luxel; NULL where it gives none */
+/* per face, per layer and normal ([layer * NB + normal]): its light per sample, then per luxel; NULL where it gives
+ * none */
 static vec3_t ***layersamples, ***layerluxels;
-#define GI_LAYER_BATCH 8                /* (gi.comp's MAXLAYERS: layers gathered together) */
+#define GI_LAYER_BATCH 4                /* (gi.comp's MAXLAYERS: layers gathered together) */
 
 /* after the faces' direct light: each layer's parts (per style) summed per face */
 void CollectLayers(void) {
@@ -1857,18 +1875,19 @@ void CollectLayers(void) {
     layerluxels = xalloc(sizeof(vec3_t **) * (numfaces + 1));
     for (int facenum = 0; facenum < numfaces; facenum++) {
         facelight_t *fl = &facelight[facenum];
-        layersamples[facenum] = xalloc(sizeof(vec3_t *) * (g_numLayers + 1));
-        layerluxels[facenum] = xalloc(sizeof(vec3_t *) * (g_numLayers + 1));
+        layersamples[facenum] = xalloc(sizeof(vec3_t *) * (g_numLayers * NB + 1));
+        layerluxels[facenum] = xalloc(sizeof(vec3_t *) * (g_numLayers * NB + 1));
         if (!fl->layerlight) continue;
         for (int layer = 0; layer < g_numLayers; layer++)
-            for (int k = 0; k < MAXLIGHTMAPS; k++) {
-                vec3_t *v = fl->layerlight[layer * MAXLIGHTMAPS + k];
-                if (!v) continue;
-                vec3_t **dst = &layersamples[facenum][layer];
-                if (!*dst) *dst = xalloc(sizeof(vec3_t) * (fl->numsamples + 1));
-                for (int i = 0; i < fl->numsamples; i++) VectorAdd((*dst)[i], v[i], (*dst)[i]);
-                free(v);
-            }
+            for (int k = 0; k < MAXLIGHTMAPS; k++)
+                for (int b = 0; b < NB; b++) {
+                    vec3_t *v = fl->layerlight[(layer * MAXLIGHTMAPS + k) * NB + b];
+                    if (!v) continue;
+                    vec3_t **dst = &layersamples[facenum][layer * NB + b];
+                    if (!*dst) *dst = xalloc(sizeof(vec3_t) * (fl->numsamples + 1));
+                    for (int i = 0; i < fl->numsamples; i++) VectorAdd((*dst)[i], v[i], (*dst)[i]);
+                    free(v);
+                }
         free(fl->layerlight);
         fl->layerlight = NULL;
     }
@@ -1882,16 +1901,18 @@ static void LayerLuxelWork(int facenum, int thread) {
     dface_t *f = &g_pFaces[facenum];
     facelight_t *fl = &facelight[facenum];
     if ((texinfo[f->texinfo].flags & TEX_SPECIAL) || f->lightofs < 0 || f->styles[0] != 0 || !fl->numsamples) return;
-    int isdisp = f->dispinfo != -1;
+    int isdisp = f->dispinfo != -1, bumpCount = texinfo[f->texinfo].flags & SURF_BUMPLIGHT ? NB : 1;
     radial_t *rad = isdisp ? BuildDispLuxelRadial(facenum, 0) : BuildLuxelRadial(facenum, 0);
-    vec3_t *out = xalloc(sizeof(vec3_t) * (fl->numluxels + 1));
+    vec3_t *out = xalloc(sizeof(vec3_t) * NB * (fl->numluxels + 1));       /* (page by page) */
     int nonzero = 0;
     for (int j = 0; j < fl->numluxels; j++) {
         vec3_t lb[NUM_BUMP_VECTS + 1];
-        int ok = isdisp ? DispSampleRadial(rad, j, lb, 1) : SampleRadial(rad, fl->luxel[j], lb, 1);
+        int ok = isdisp ? DispSampleRadial(rad, j, lb, bumpCount) : SampleRadial(rad, fl->luxel[j], lb, bumpCount);
         if (!ok) continue;
-        VectorCopy(lb[0], out[j]);
-        nonzero |= out[j][0] != 0 || out[j][1] != 0 || out[j][2] != 0;
+        for (int b = 0; b < bumpCount; b++) {
+            VectorCopy(lb[b], out[b * fl->numluxels + j]);
+            nonzero |= lb[b][0] != 0 || lb[b][1] != 0 || lb[b][2] != 0;
+        }
     }
     FreeRadial(rad);
     if (nonzero) layerluxels[facenum][resolving] = out;
@@ -1907,13 +1928,75 @@ static void ResolveLayer(int layer) {
     for (int facenum = 0; facenum < numfaces; facenum++) {
         facelight_t *fl = &facelight[facenum];
         memcpy(saved[facenum], fl->light[0], sizeof(saved[facenum]));
-        vec3_t *mine = layersamples[facenum][layer] ? layersamples[facenum][layer] : zero;
-        for (int b = 0; b < NUM_BUMP_VECTS + 1; b++) fl->light[0][b] = saved[facenum][0] ? mine : NULL;
+        for (int b = 0; b < NB; b++) {
+            vec3_t *mine = layersamples[facenum][layer * NB + b] ? layersamples[facenum][layer * NB + b] : zero;
+            fl->light[0][b] = saved[facenum][b] ? mine : NULL;
+        }
     }
     resolving = layer;
     RunThreadsOn(numfaces, LayerLuxelWork);
     for (int facenum = 0; facenum < numfaces; facenum++) memcpy(facelight[facenum].light[0], saved[facenum], sizeof(saved[facenum]));
     free(saved), free(zero);
+}
+
+/* up to 4 layers' flat pages as luxels (each face's radial carrying them as its 4 channels: as the bake's luxels are
+ * made, neighbours included): chanout[face * 4 + channel], NULL where it has none. The GI's rays pick layers' light up
+ * from these, as they pick the bake's up from its lightmaps */
+static vec3_t **chanout;
+static void ChannelLuxelWork(int facenum, int thread) {
+    (void)thread;
+    dface_t *f = &g_pFaces[facenum];
+    facelight_t *fl = &facelight[facenum];
+    if ((texinfo[f->texinfo].flags & TEX_SPECIAL) || f->lightofs < 0 || f->styles[0] != 0 || !fl->numsamples) return;
+    int isdisp = f->dispinfo != -1;
+    radial_t *rad = isdisp ? BuildDispLuxelRadial(facenum, 0) : BuildLuxelRadial(facenum, 0);
+    vec3_t *out = xalloc(sizeof(vec3_t) * NB * (fl->numluxels + 1));
+    int nonzero[NB] = {0};
+    for (int j = 0; j < fl->numluxels; j++) {
+        vec3_t lb[NUM_BUMP_VECTS + 1];
+        int ok = isdisp ? DispSampleRadial(rad, j, lb, NB) : SampleRadial(rad, fl->luxel[j], lb, NB);
+        if (!ok) continue;
+        for (int c = 0; c < NB; c++) {
+            VectorCopy(lb[c], out[c * fl->numluxels + j]);
+            nonzero[c] |= lb[c][0] != 0 || lb[c][1] != 0 || lb[c][2] != 0;
+        }
+    }
+    FreeRadial(rad);
+    for (int c = 0; c < NB; c++)
+        if (nonzero[c]) {
+            chanout[facenum * NB + c] = xalloc(sizeof(vec3_t) * (fl->numluxels + 1));
+            memcpy(chanout[facenum * NB + c], out + c * fl->numluxels, sizeof(vec3_t) * fl->numluxels);
+        }
+    free(out);
+}
+
+/* layers[c] (c < count <= 4; -1 none): their flat pages' luxels into chanout (made anew; free with FreeChannels) */
+static void ResolveChannels(const int *layers, int count) {
+    chanout = xalloc(sizeof(vec3_t *) * ((size_t)numfaces * NB + 1));
+    vec3_t *(*saved)[NUM_BUMP_VECTS + 1] = xalloc(sizeof(*saved) * (numfaces + 1));
+    int most = 1;
+    for (int facenum = 0; facenum < numfaces; facenum++)
+        if (facelight[facenum].numsamples > most) most = facelight[facenum].numsamples;
+    vec3_t *zero = xalloc(sizeof(vec3_t) * (most + 1));
+    for (int facenum = 0; facenum < numfaces; facenum++) {
+        facelight_t *fl = &facelight[facenum];
+        memcpy(saved[facenum], fl->light[0], sizeof(saved[facenum]));
+        for (int c = 0; c < NB; c++) {
+            vec3_t *mine = c < count && layers[c] >= 0 ? layersamples[facenum][layers[c] * NB] : NULL;
+            fl->light[0][c] = saved[facenum][0] ? (mine ? mine : zero) : NULL;
+        }
+    }
+    g_radialAll = 1;
+    RunThreadsOn(numfaces, ChannelLuxelWork);
+    g_radialAll = 0;
+    for (int facenum = 0; facenum < numfaces; facenum++) memcpy(facelight[facenum].light[0], saved[facenum], sizeof(saved[facenum]));
+    free(saved), free(zero);
+}
+
+static void FreeChannels(void) {
+    for (size_t i = 0; i < (size_t)numfaces * NB; i++) free(chanout[i]);
+    free(chanout);
+    chanout = NULL;
 }
 
 /* a float as a half float (IEEE binary16, rounded to nearest; too big: the largest) */
@@ -1935,9 +2018,10 @@ static unsigned short FloatToHalf(float f) {
     return (unsigned short)h;
 }
 
-/* <path>: "HLLY", version 2, faces, layers (4 ints); per layer: what it was baked with (LayerInfo's text: its length,
- * then the text), how many faces it lights, then per face: its number, its luxel count and their light (3 half
- * floats each, vrad's units, the first lightmap's order) */
+/* <path>: "HLLY", version 3, faces, layers (4 ints); per layer: what it was baked with (LayerInfo's text: its length,
+ * then the text), how many faces it lights, then per face: its number, its luxel count, its pages (1, or 4 on a
+ * bumped face: as its lightmaps, the flat one first) and their light (3 half floats a luxel, vrad's units, the
+ * lightmap's order), page after page */
 void WriteLayers(const char *path) {
     double t0 = Seconds();
     for (int layer = 0; layer < g_numLayers; layer++) ResolveLayer(layer);
@@ -1946,7 +2030,7 @@ void WriteLayers(const char *path) {
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);       /* (written whole, then renamed: never read half done) */
     FILE *fp = fopen(tmp, "wb");
     if (!fp) Error("Can't write %s", tmp);
-    int head[4] = {0x594c4c48, 2, numfaces, g_numLayers};       /* ("HLLY") */
+    int head[4] = {0x594c4c48, 3, numfaces, g_numLayers};       /* ("HLLY") */
     fwrite(head, 4, 4, fp);
     unsigned short *half = NULL;
     int halfcap = 0;
@@ -1960,11 +2044,12 @@ void WriteLayers(const char *path) {
         for (int facenum = 0; facenum < numfaces; facenum++) {
             vec3_t *v = layerluxels[facenum][layer];
             if (!v) continue;
-            int count = facelight[facenum].numluxels, h[2] = {facenum, count};
-            if (3 * count > halfcap) halfcap = 3 * count, half = realloc(half, sizeof(unsigned short) * halfcap);
-            for (int i = 0; i < 3 * count; i++) half[i] = FloatToHalf(((const float *)v)[i]);
-            fwrite(h, 4, 2, fp);
-            fwrite(half, 2, 3 * (size_t)count, fp);
+            int pages = texinfo[g_pFaces[facenum].texinfo].flags & SURF_BUMPLIGHT ? NB : 1;
+            int count = facelight[facenum].numluxels, h[3] = {facenum, count, pages};
+            if (3 * count * pages > halfcap) halfcap = 3 * count * pages, half = realloc(half, sizeof(unsigned short) * halfcap);
+            for (int i = 0; i < 3 * count * pages; i++) half[i] = FloatToHalf(((const float *)v)[i]);
+            fwrite(h, 4, 3, fp);
+            fwrite(half, 2, 3 * (size_t)count * pages, fp);
         }
     }
     free(half);
@@ -2044,8 +2129,8 @@ void BuildIndirectGPU(void) {
         gridofs = xalloc(sizeof(int) * (numfaces + 1));
         for (int facenum = 0; facenum < numfaces; facenum++) {
             facelight_t *fl = &facelight[facenum];
-            ldirect[facenum] = xalloc(sizeof(vec3_t *) * (g_numLayers + 1));
-            for (int l = 0; l < g_numLayers; l++)
+            ldirect[facenum] = xalloc(sizeof(vec3_t *) * (g_numLayers * NB + 1));
+            for (int l = 0; l < g_numLayers * NB; l++)
                 if (layersamples[facenum][l]) {
                     ldirect[facenum][l] = xalloc(sizeof(vec3_t) * (fl->numsamples + 1));
                     memcpy(ldirect[facenum][l], layersamples[facenum][l], sizeof(vec3_t) * fl->numsamples);
@@ -2058,7 +2143,7 @@ void BuildIndirectGPU(void) {
         }
         int most = g_numLayers < GI_LAYER_BATCH ? g_numLayers : GI_LAYER_BATCH;
         grids = xalloc(sizeof(float) * 3 * most * (gridluxels + 1));
-        lout = xalloc(sizeof(float) * 12 * most * (size_t)(n + 1));
+        lout = xalloc(sizeof(float) * 48 * most * (size_t)(n + 1));
         junk = xalloc(sizeof(float) * 64 * (size_t)(n + 1));
     }
     double last = 0;
@@ -2068,37 +2153,70 @@ void BuildIndirectGPU(void) {
         for (int first = 0; first < g_numLayers; first += GI_LAYER_BATCH) {     /* (-layers: theirs, batch by batch) */
             int nl = g_numLayers - first < GI_LAYER_BATCH ? g_numLayers - first : GI_LAYER_BATCH;
             memset(grids, 0, sizeof(float) * 3 * nl * gridluxels);
+            int chan[NB];                    /* (the batch's layers that bounce: a switchable light's doesn't) */
+            for (int l = 0; l < NB; l++) chan[l] = l < nl && LayerStyle(first + l + 1) == 0 ? first + l : -1;
+            double tr0 = Seconds();
+            ResolveChannels(chan, nl);
+            double tr1 = Seconds();
             for (int facenum = 0; facenum < numfaces; facenum++) {
                 if (gridofs[facenum] < 0) continue;
                 const facelight_t *fl = &facelight[facenum];
-                int w = g_pFaces[facenum].m_LightmapTextureSizeInLuxels[0] + 1;
                 for (int l = 0; l < nl; l++) {
-                    const vec3_t *v = layersamples[facenum][first + l];
+                    const vec3_t *v = chanout[facenum * NB + l];        /* (rays pick up the flat page's luxels) */
                     if (!v) continue;
-                    for (int i = 0; i < fl->numsamples; i++) {
-                        size_t at = ((size_t)gridofs[facenum] + (size_t)fl->sample[i].t * w + (size_t)fl->sample[i].s) * nl + l;
-                        memcpy(grids + 3 * at, v[i], 12);
-                    }
+                    for (int j = 0; j < fl->numluxels; j++) memcpy(grids + 3 * (((size_t)gridofs[facenum] + j) * nl + l), v[j], 12);
                 }
             }
+            FreeChannels();
+            double tr2 = Seconds();
+            if (getenv("HLLAYERDBG") && !first)        /* (debugging: layer 0 = the bake's own lightmaps) */
+                for (int facenum = 0; facenum < numfaces; facenum++) {
+                    const dface_t *f = &g_pFaces[facenum];
+                    if (gridofs[facenum] < 0 || f->lightofs < 0 || f->styles[0] != 0) continue;
+                    int luxels = (f->m_LightmapTextureSizeInLuxels[0] + 1) * (f->m_LightmapTextureSizeInLuxels[1] + 1);
+                    for (int j = 0; j < luxels; j++) {
+                        const unsigned char *c = dlightdata + f->lightofs + 4 * j;
+                        for (int k = 0; k < 3; k++) grids[3 * (((size_t)gridofs[facenum] + j) * nl) + k] = ldexpf((float)c[k], (signed char)c[3]);
+                    }
+                }
             GPU_GILayers(grids, gridluxels, gridofs, numfaces, nl);
+            double tr3 = Seconds();
             GPU_GIGather(groups, n, g_giRays, pass + 1, first ? junk : out, lout);
+            double tr4 = Seconds();
+            if (getenv("HLLAYERDBG") && !first) {
+                double sm = 0, sl = 0, worst = 0;
+                int wf = -1;
+                for (int g = 0; g < n; g++)
+                    for (int i = 0; i < groups[g].lanes; i++) {
+                        double m = 0, l = 0;
+                        for (int c = 0; c < 3; c++) m += out[64 * (size_t)g + 16 * i + c], l += lout[12 * ((size_t)(4 * g + i) * nl) + c];
+                        sm += m, sl += l;
+                        if (m > 1 && fabs(l - m) / m > worst) worst = fabs(l - m) / m, wf = where[g][0];
+                    }
+                Msg("LAYERDBG pass %d: main %.1f layer0 %.1f, worst point %.3f (face %d)\n", pass + 1, sm, sl, worst, wf);
+            }
             for (int g = 0; g < n; g++) {
                 int facenum = where[g][0], at = where[g][1];
                 facelight_t *fl = &facelight[facenum];
                 for (int l = 0; l < nl; l++) {
-                    vec3_t **dst = &layersamples[facenum][first + l];
-                    const vec3_t *d = ldirect[facenum][first + l];
-                    for (int i = 0; i < groups[g].lanes; i++) {
-                        const float *b = lout + 3 * ((size_t)(4 * g + i) * nl + l);
-                        if (!*dst) {
-                            if (b[0] == 0 && b[1] == 0 && b[2] == 0) continue;
-                            *dst = xalloc(sizeof(vec3_t) * (fl->numsamples + 1));
+                    if (LayerStyle(first + l + 1) != 0) continue;
+                    for (int nb = 0; nb < groups[g].normalCount; nb++) {
+                        vec3_t **dst = &layersamples[facenum][(first + l) * NB + nb];
+                        const vec3_t *d = ldirect[facenum][(first + l) * NB + nb];
+                        for (int i = 0; i < groups[g].lanes; i++) {
+                            const float *b = lout + 12 * ((size_t)(4 * g + i) * nl + l) + 3 * nb;
+                            if (!*dst) {
+                                if (b[0] == 0 && b[1] == 0 && b[2] == 0) continue;
+                                *dst = xalloc(sizeof(vec3_t) * (fl->numsamples + 1));
+                            }
+                            for (int c = 0; c < 3; c++) (*dst)[at + i][c] = (d ? d[at + i][c] : 0.0f) + b[c];
                         }
-                        for (int c = 0; c < 3; c++) (*dst)[at + i][c] = (d ? d[at + i][c] : 0.0f) + b[c];
                     }
                 }
             }
+            if (getenv("HLGPUDBG"))
+                Msg("  layers %d-%d: radial %.3f, grids %.3f, upload %.3f, gather %.3f, add %.3f s\n", first + 1, first + nl,
+                    tr1 - tr0, tr2 - tr1, tr3 - tr2, tr4 - tr3, Seconds() - tr4);
         }
         if (!g_numLayers) GPU_GIGather(groups, n, g_giRays, pass + 1, out, NULL);
         for (int g = 0; g < n; g++)
@@ -2123,7 +2241,7 @@ void BuildIndirectGPU(void) {
         for (int b = 0; b < NUM_BUMP_VECTS + 1; b++) free(direct[facenum][b]);
     if (ldirect) {
         for (int facenum = 0; facenum < numfaces; facenum++) {
-            for (int l = 0; l < g_numLayers; l++) free(ldirect[facenum][l]);
+            for (int l = 0; l < g_numLayers * NB; l++) free(ldirect[facenum][l]);
             free(ldirect[facenum]);
         }
         free(ldirect), free(gridofs), free(grids), free(lout), free(junk);

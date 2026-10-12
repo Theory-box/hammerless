@@ -54,6 +54,8 @@ static void FacelightsWork(int face, int thread) { (void)thread; BuildFacelights
 static const char *g_visFrom;
 static const char *g_onlyLights;      /* (-onlylights: one layer of the lighting, see lights.c) */
 static const char *g_layerLights, *g_layersOut;    /* (-layers <out> <spec>: every layer in one bake, see direct.c) */
+static const char *g_remix;            /* (-remix <layers>: the faces' lighting from the last bake's layers, remix.c) */
+void Remix(const char *path);
 static int g_tookVis, g_visThreadsAfter = -1;     /* (-visthreads n: threads while vis runs; then -threads' own) */
 static void TakeVis(void) {
     if (g_tookVis) return;
@@ -154,6 +156,8 @@ int main(int argc, char **argv) {
         } else if (!_stricmp(a, "-layers") && i + 2 < argc) {
             g_layersOut = argv[++i];
             g_layerLights = argv[++i];
+        } else if (!_stricmp(a, "-remix") && i + 1 < argc) {
+            g_remix = argv[++i];
         } else if (!_stricmp(a, "-onlylights") && i + 1 < argc) {
             g_onlyLights = argv[++i];
         } else if (!_stricmp(a, "-visfrom") && i + 1 < argc) {
@@ -171,6 +175,7 @@ int main(int argc, char **argv) {
         } else map = a;
     }
     if (!map) Error("usage: hlvrad [options] -game <gamedir> <map>");
+    if (g_remix) g_layerLights = NULL, g_visFrom = NULL;   /* (a remix keeps the layers and the map's vis) */
     if (g_visFrom && g_visThreadsAfter >= 0) {      /* (few threads while vis runs: it has the rest of the CPU) */
         int during = g_visThreadsAfter;
         g_visThreadsAfter = g_numthreads;
@@ -231,6 +236,7 @@ int main(int argc, char **argv) {
     }
     CreateDirectLights();
     if (g_onlyLights) KeepOnlyLights(g_onlyLights);
+    if (g_remix) AssignLayers("keys");          /* (which lights each layer has: their intensities now) */
     if (g_layerLights) {
         if (!g_bGPU) Error("-layers needs -gpu");
         g_numLayers = AssignLayers(g_layerLights);
@@ -273,6 +279,15 @@ int main(int argc, char **argv) {
         }
         fclose(of), fclose(rf);
         return 0;
+    }
+    if (g_remix) {                      /* (the faces keep their lighting, with the layers' changes) */
+        if (!lumps[LUMP_LIGHTING_HDR].len) Error("-remix: the map has no lighting");
+        lightdatasize = lumps[LUMP_LIGHTING_HDR].len;
+        dlightdata = xalloc(lightdatasize + 1);
+        memcpy(dlightdata, lumps[LUMP_LIGHTING_HDR].data, lightdatasize);
+        Remix(g_remix);
+        Stage("remix");
+        goto rest;
     }
     AllocFacelights();
     if (g_bGPU) BuildFacelightsGPU();
@@ -318,6 +333,7 @@ int main(int argc, char **argv) {
         TakeVis();
         Stage("waiting for vis");
     }
+rest:
     ExportDirectLightsToWorldLights();
     ComputeDetailPropLighting();
     Stage("detail props");
