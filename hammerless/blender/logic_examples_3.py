@@ -267,13 +267,17 @@ WAKE_SLEEPER = dict(
            N("when", "HL_NodeMath", 2, 4, op="ADD", sockets={"b": 0.0}),
            N("min_time", "HL_NodeMath", 3, 4, label="At least a moment", op="MAXIMUM", sockets={"b": 0.1}),
            N("set", "HL_NodeSetVariable", 2, 0, var_name="wake_at", scope="PLAYER"),
-           N("play", "HL_NodeFireInput", 3, 0, label="Stand up", sockets={"input": "SetAnimation"})],
+           N("blank", "HL_NodeFormatText", 3, 3, template=""),
+           N("has", "HL_NodeCheck", 4, 3, label="One for its pose?", op="NOT_EQUAL"),
+           N("if_has", "HL_NodeIf", 3, 0),
+           N("play", "HL_NodeFireInput", 4, 0, label="Stand up", sockets={"input": "SetAnimation"})],
     links=[("in.prop", "wake_at.player"), ("wake_at.result", "asleep.a"), ("in.run", "if_asleep.in"),
            ("asleep.result", "if_asleep.condition"), ("in.prop", "stand.prop"),
            ("stand.seconds", "min_time.a"), ("now.result", "when.a"), ("min_time.value", "when.b"),
            ("if_asleep.true", "set.run"), ("in.prop", "set.player"), ("when.value", "set.value"),
-           ("set.then", "play.run"), ("in.prop", "play.entity"), ("stand.anim", "play.value"),
-           ("play.then", "out.then")])
+           ("set.then", "if_has.in"), ("stand.anim", "has.a"), ("blank.result", "has.b"),
+           ("has.result", "if_has.condition"), ("if_has.true", "play.run"), ("if_has.false", "out.then"),
+           ("in.prop", "play.entity"), ("stand.anim", "play.value"), ("play.then", "out.then")])
 
 
 SLEEPER = dict(
@@ -313,7 +317,11 @@ SLEEPER = dict(
            fn("closest", "Director.GetClosestSurvivor", 9, 3),
            N("someone", "HL_NodeCheck", 10, 3, label="A survivor?", op="IS_SET"),
            N("if_someone", "HL_NodeIf", 10, 0),
-           fn("rush", "RushVictim", 11, 0, {"p1": 150.0})],
+           fn("their_at", "entity:GetOrigin", 10, 4),
+           N("how_far", "HL_NodeVectorMath", 11, 4, label="Its distance to them", op="DISTANCE"),
+           N("reach", "HL_NodeMath", 12, 4, label="+ a little (only it: rush range is from the survivor)", op="ADD",
+             sockets={"b": 40.0}),
+           fn("rush", "RushVictim", 11, 0)],
     links=[("in.prop", "wake_at.player"), ("wake_at.result", "woken.a"), ("in.run", "if_woken.in"),
            ("woken.result", "if_woken.condition"),
            # asleep: any living survivor close wakes it
@@ -332,7 +340,9 @@ SLEEPER = dict(
            ("pending.result", "if_pending.condition"), ("if_pending.true", "done.run"),
            ("commons.item", "done.player"), ("done.then", "if_someone.in"), ("commons.item", "its_at.target"),
            ("its_at.result", "closest.p0"), ("closest.result", "someone.a"), ("someone.result", "if_someone.condition"),
-           ("if_someone.true", "rush.run"), ("closest.result", "rush.p0"), ("commons.done", "out.then")])
+           ("if_someone.true", "rush.run"), ("closest.result", "rush.p0"), ("closest.result", "their_at.target"),
+           ("its_at.result", "how_far.a"), ("their_at.result", "how_far.b"), ("how_far.value", "reach.a"),
+           ("reach.value", "rush.p1"), ("commons.done", "out.then")])
 
 
 MUZZLE_LIGHT = dict(

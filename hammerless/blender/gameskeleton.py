@@ -182,6 +182,25 @@ def game_pose(arm, sk, rest, upm):
     return out
 
 
+def game_animation_frame(content, gm, name: str, frame: int):
+    """One frame (clamped) of one of the character's animations, as game_animation_pose gives them, and how many
+    frames it has; (None, 0) if it isn't one."""
+    from ..core.gamemodel import _UNTURN, _qmul, animation_sources, retarget
+    for src in animation_sources(content, gm):
+        seq = next((s for s in src.sequences if s.name.lower() == name.lower()), None)
+        if seq is None:
+            continue
+        f = min(max(frame, 0), max(seq.frames, 1) - 1)
+        try:
+            pose = retarget(src, gm, src.frame(seq, f))
+        except ValueError:
+            return None, 0
+        pose = [((p[1], -p[0], p[2]), _qmul(_UNTURN, q)) if gm.bones[k].parent < 0 else (p, q)
+                for k, (p, q) in enumerate(pose)]
+        return gm.bone_world(pose), max(seq.frames, 1)
+    return None, 0
+
+
 def game_animation_pose(content, gm, name: str):
     """Every frame of one of the character's game animations (its own or an included library's) as model-space bone
     poses facing -Y like the armature (the animations' +90 deg turn taken off), and the animation's fps."""

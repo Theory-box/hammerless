@@ -147,7 +147,8 @@ def read_game_mesh(mdl: bytes, vvd: bytes, vtx: bytes, lod: int = 0, body: int =
                             if a != b_ and b_ != c and a != c:
                                 tris.append((a, b_, c))
                     else:
-                        tris = [(idx[k], idx[k + 1], idx[k + 2]) for k in range(0, len(idx) - 2, 3)]
+                        tris = [(idx[k], idx[k + 1], idx[k + 2]) for k in range(0, len(idx) - 2, 3)
+                                if idx[k] != idx[k + 1] and idx[k + 1] != idx[k + 2] and idx[k] != idx[k + 2]]
                     for a, b_, c in tris:
                         # clockwise in the file -> counter-clockwise here
                         out.triangles.append((ours(a), ours(c), ours(b_)))

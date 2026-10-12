@@ -1087,7 +1087,7 @@ class _Compiler:
             if hook is None or not (hook[3] or hook[0] == "AllowTakeDamage"):
                 self.problems.append(f"Logic node '{nid}': pick an override that takes an answer")
                 return
-            line = '    if (!("HL_Ans" in getroottable())) ::HL_Ans <- {};\n'      # (reached outside a question)
+            line = '    if (!("HL_Ans" in getroottable()) || ::HL_Ans == null) ::HL_Ans <- {};\n'   # (outside a question)
             line += f"    ::HL_Ans.answer <- {self.typed_in(n, 'answer', hook[3])};\n" if hook[3] else ""
             if hook[0] == "AllowTakeDamage" and (nid, "damage") in self.data_links:
                 line += f"    ::HL_Ans.damage <- {self.typed_in(n, 'damage', vs.NUM)};\n"
@@ -1398,8 +1398,12 @@ class _Compiler:
                 body += f"    if ({cond}) {fire}\n" if cond else f"    {fire}\n"
             if ir.logic_script_events.get(game_event):
                 info = vs.event(game_event)
+                # (an event can fire inside an Override's chain, e.g. a death from damage dealt there: the details
+                # that chain reads are put back when this handler ends)
+                body += '    local hl_ctx_was = ("HL_Ctx" in getroottable()) ? ::HL_Ctx : null;\n'
                 body += (vs.context_code(info) if info else "    ::HL_Ctx <- clone params;") + "\n"
                 body += "\n".join(ir.logic_script_events[game_event]) + "\n"
+                body += "    if (hl_ctx_was != null) ::HL_Ctx <- hl_ctx_was;\n"
             parts.append(f"function OnGameEvent_{game_event}(params) {{\n{body}}}\n")
         if events:
             # only the copy the map's logic entity runs (it has "self") listens: the mode script loads an
@@ -1463,7 +1467,8 @@ def hook_function(hook: str, rows: list) -> str:
         if answer is not None:
             body += (f"    answer = answer {join} ({answer});\n" if answer_kind == "bool"
                      else f"    {{ local a = {answer}; if (a != null && a != \"\") answer = a; }}\n")
-    body += "    ::HL_Ctx <- hl_ctx_was; ::HL_Ans <- hl_ans_was;\n"
+    body += ("    ::HL_Ctx <- hl_ctx_was != null ? hl_ctx_was : {}; "
+             "::HL_Ans <- hl_ans_was != null ? hl_ans_was : {};\n")
     if answer_kind == "num":
         body += "    return answer.tointeger();\n"
     elif answer_kind == "text":

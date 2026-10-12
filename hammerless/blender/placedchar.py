@@ -28,7 +28,7 @@ def posed_mesh(context, model_path: str, body: int, animation: str, frame: int):
     shows a model at angle 0, in metres, textured; cached per (model, body, animation, frame). None if unreadable."""
     from ..core.gamemesh import load_game_mesh
     from ..core.gamemodel import load_game_model, standing_rest
-    from .gameskeleton import _material_path, game_animation_pose
+    from .gameskeleton import _material_path, game_animation_frame
     from .ops import cache_name, game_root
     from .preview import _model_material
     import os
@@ -44,11 +44,10 @@ def posed_mesh(context, model_path: str, body: int, animation: str, frame: int):
     data = load_game_mesh(content, model_path, body=body) if gm is not None else None
     if data is None:
         return None
-    frames, _fps, _loop = game_animation_pose(content, gm, animation)
-    if not frames:
+    world, _count = game_animation_frame(content, gm, animation, frame)
+    if world is None:
         rest, _src = standing_rest(content, gm)
-        frames = [gm.bone_world(rest)]
-    world = frames[min(max(frame, 0), len(frames) - 1)]
+        world = gm.bone_world(rest)
     turn = Matrix.Rotation(1.5707963267948966, 4, "Z")        # (-Y, as the armatures face, to +X: angle 0 in game)
     bind = [Matrix.LocRotScale(Vector(p), Quaternion((q[3], q[0], q[1], q[2])), None) for p, q in gm.bone_world()]
     pose = [turn @ Matrix.LocRotScale(Vector(p), Quaternion((q[3], q[0], q[1], q[2])), None) for p, q in world]
@@ -70,6 +69,9 @@ def posed_mesh(context, model_path: str, body: int, animation: str, frame: int):
     slot_of = {}
     for mi in sorted(set(data.material_index)):
         slot_of[mi] = len(mesh.materials)
+        if mi >= len(data.materials):            # (a skin pointing past the texture list: no texture)
+            mesh.materials.append(None)
+            continue
         path = _material_path(content, data.materials[mi], data.cdmaterials)
         mesh.materials.append(_model_material(path, content, game_dir))
     mesh.polygons.foreach_set("material_index", [slot_of[m] for m in data.material_index[:len(mesh.polygons)]])
@@ -95,8 +97,8 @@ def placed_model_changed(context, obj, model: str) -> None:
     content = _content(context)
     gm = load_game_model(content, model) if content is not None else None
     names = all_sequence_names(content, gm) if gm is not None else []
-    if _kv(obj, "DefaultAnim") not in names:
-        _set_kv(obj, "DefaultAnim", whole_body_idle(names) or "Idle")
+    if names and _kv(obj, "DefaultAnim").lower() not in {n.lower() for n in names}:
+        _set_kv(obj, "DefaultAnim", whole_body_idle(names) or names[0])
     obj["hl_pose_frame"] = 0
     if not refresh_preview(context, obj):
         from .ops import preview_mesh
@@ -166,6 +168,14 @@ def _animation_items(self, context):
 _animation_items.cache = {}
 
 
+def _character_items():
+    from .gameskeleton import CHARACTERS
+    return [(k, label, path) for k, label, path in CHARACTERS]
+
+
+_CHARACTER_ITEMS = _character_items()      # (a fixed list: a list made in a callback can vanish, leaving none)
+
+
 class HL_OT_add_placed_character(bpy.types.Operator):
     bl_idname = "hammerless.add_placed_character"
     bl_label = "Add Placed Character"
@@ -173,7 +183,7 @@ class HL_OT_add_placed_character(bpy.types.Operator):
                       "leaning, banging on a door...): storytelling infected, sleepers and husks start from one")
     bl_options = {"REGISTER", "UNDO"}
 
-    character: EnumProperty(name="Character", items=lambda self, context: _character_items())
+    character: EnumProperty(name="Character", items=_CHARACTER_ITEMS)
 
     def execute(self, context):
         from .mapcollection import map_collection
@@ -183,14 +193,11 @@ class HL_OT_add_placed_character(bpy.types.Operator):
             o.select_set(False)
         obj.select_set(True)
         context.view_layer.objects.active = obj
-        if obj.data is None or not obj.data.get("hl_model"):
+        if not context.scene.hammerless.model_previews:
+            self.report({"INFO"}, "Placed (model previews are off: Settings turns them on)")
+        elif obj.data is None or not obj.data.get("hl_model"):
             self.report({"WARNING"}, "Placed, but its preview needs the game's files (set the Left 4 Dead 2 folder)")
         return {"FINISHED"}
-
-
-def _character_items():
-    from .gameskeleton import CHARACTERS
-    return [(k, label, path) for k, label, path in CHARACTERS]
 
 
 class HL_OT_placed_animation(bpy.types.Operator):
@@ -232,7 +239,8 @@ class HL_OT_placed_refresh(bpy.types.Operator):
 
     def execute(self, context):
         if not refresh_preview(context, context.active_object):
-            self.report({"WARNING"}, "The preview needs the game's files (set the Left 4 Dead 2 folder)")
+            self.report({"WARNING"}, "Model previews are off (Settings)" if not context.scene.hammerless.model_previews
+                        else "The preview needs the game's files (set the Left 4 Dead 2 folder)")
         return {"FINISHED"}
 
 

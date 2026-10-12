@@ -340,7 +340,10 @@ def _draw_animated(col, obj, arm):
     bones = _deform_bones(arm)
     box.label(text=f"Animated by '{arm.name}': {len(bones)} bones", icon="ARMATURE_DATA")
     actions = _armature_actions(arm)
-    if not actions:
+    game = arm.get("hl_game_model", "")
+    if game:
+        box.label(text="Borrows all the animations of " + game.split("/")[-1], icon="LINKED")
+    if not actions and not game:
         box.label(text="No animations yet: add actions to the armature (its action, or NLA tracks)", icon="INFO")
     for act in actions[:12]:
         name = str(act.get("hl_name") or act.name)
@@ -350,7 +353,8 @@ def _draw_animated(col, obj, arm):
         box.label(text=f"{name}: {frames} frames" + (", loops" if loops else ""), icon="ACTION")
     if len(actions) > 12:
         box.label(text=f"... and {len(actions) - 12} more")
-    box.label(text="A Dynamic prop playing 'idle' (or its first animation); name it to use it from logic", icon="INFO")
+    box.label(text="A Dynamic prop playing " + ("its idle" if game else "'idle' (or its first animation)")
+              + "; name it to use it from logic", icon="INFO")
     col.prop(obj.hammerless, "model_collision")
 
 

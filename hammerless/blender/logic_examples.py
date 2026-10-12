@@ -517,6 +517,12 @@ def _objects(context, number, example):
             obj = make_placed_character(context, character, where, coll, name=name, animation=anim,
                                         body=int(kvs.get("body", 0) or 0))
             for k, v in kvs.items():
+                if k == "targetname":                 # (added twice: sleeper_1_2... For Each sleeper* finds both)
+                    taken = {kv.value for o in bpy.data.objects if o is not obj for kv in o.hammerless.keyvalues
+                             if kv.key == "targetname"}
+                    stem, n = v, 2
+                    while v in taken:
+                        v, n = f"{stem}_{n}", n + 1
                 _set_kv(obj, k, v)
         elif shape == "SPOT":
             obj = bpy.data.objects.new(name, None)
