@@ -1455,6 +1455,16 @@ def test_game_skeleton_example():
     assert len(sk.bones) == 33 and len(sk.hitboxes) == 23 and sk.default_animation == "Idle"
     prop = next(e for e in ir.entities if e.classname == "prop_dynamic")
     assert prop.keyvalues.get("DefaultAnim") == "Idle" and abs(prop.angles[1] + 90) < 0.01, (prop.keyvalues, prop.angles)
+    # a game animation loaded to look at moves the bones as the game would, and isn't built (the game has it)
+    from hammerless.blender.gameskeleton import load_game_animation
+    act, why = load_game_animation(bpy.context, arm, "Walk_Neutral_01")
+    assert act is not None, why
+    bpy.context.scene.frame_set(10)
+    head = arm.pose.bones["ValveBiped.Bip01_Head1"].matrix.translation.z * s.units_per_meter
+    assert 50 < head < 70, head
+    ir, text, rep = ops.build_map_text(bpy.context, real)
+    sk = next(sp for sp in ir.models.values() if sp.skeleton is not None).skeleton
+    assert sk.animations == [], [a.name for a in sk.animations]
 
 
 def test_organize_scene():

@@ -795,11 +795,14 @@ def _armature_actions(arm):
             for strip in track.strips:
                 if strip.action is not None and strip.action not in own:
                     own.append(strip.action)
+    own = [a for a in own if not a.get("hl_preview")]      # (a game animation loaded to look at: the game has it)
     if own:
         return own
     names = {b.name for b in arm.data.bones}
     out = []
     for act in bpy.data.actions:
+        if act.get("hl_preview"):
+            continue
         for fc in _action_curves(act):
             m = re.match(r'pose\.bones\["(.+?)"\]', fc.data_path)
             if m and m.group(1) in names:

@@ -179,6 +179,131 @@ def game_pose(arm, sk, rest, upm):
     return out
 
 
+def game_animation_pose(content, gm, name: str):
+    """Every frame of one of the character's game animations (its own or an included library's) as model-space bone
+    poses facing -Y like the armature (the animations' +90 deg turn taken off), and the animation's fps."""
+    from ..core.gamemodel import _UNTURN, _qmul, animation_sources, retarget
+    for src in animation_sources(content, gm):
+        seq = next((s for s in src.sequences if s.name.lower() == name.lower()), None)
+        if seq is None:
+            continue
+        frames = []
+        for f in range(max(seq.frames, 1)):
+            pose = retarget(src, gm, src.frame(seq, f))
+            pose = [((p[1], -p[0], p[2]), _qmul(_UNTURN, q)) if gm.bones[k].parent < 0 else (p, q)
+                    for k, (p, q) in enumerate(pose)]
+            frames.append(gm.bone_world(pose))
+        return frames, seq.fps or 30.0, seq.loop
+    return None, 30.0, False
+
+
+def load_game_animation(context, arm, name: str):
+    """A preview action on a game-skeleton armature: the game's animation `name`, keyed on every bone (location and
+    rotation). Marked `hl_preview`: it's the game's own, so it isn't built as one of the model's animations."""
+    from ..core.gamemodel import load_game_model, standing_rest
+    from .ops import game_content, game_root
+    content = game_content(game_root(context))
+    gm = load_game_model(content, arm.get("hl_game_model", "")) if content is not None else None
+    if gm is None:
+        return None, "The armature's game model can't be read (set the Left 4 Dead 2 folder)"
+    frames, fps, loop = game_animation_pose(content, gm, name)
+    if frames is None:
+        return None, f"'{name}' isn't one of this character's animations"
+    upm = context.scene.hammerless.units_per_meter
+    standing, _src = standing_rest(content, gm)
+    game_rest = game_matrices(gm, upm, standing)
+    index = {b.name: i for i, b in enumerate(gm.bones)}
+    bones = [b for b in arm.data.bones if b.name in index]
+    fix = {b.name: b.matrix_local.inverted() @ game_rest[index[b.name]] for b in bones}   # Blender bone -> game bone
+    act = bpy.data.actions.new(f"{name} (game)")
+    act["hl_preview"] = True
+    act["hl_name"] = name
+    act.use_fake_user = True
+    ad = arm.animation_data or arm.animation_data_create()
+    ad.action = act
+    slots = list(getattr(act, "slots", []))
+    if slots and hasattr(ad, "action_slot"):
+        ad.action_slot = slots[0]
+    for pb in arm.pose.bones:
+        pb.rotation_mode = "QUATERNION"
+    for f, world in enumerate(frames, 1):
+        pose = {}
+        for b in bones:
+            pos, q = world[index[b.name]]
+            x, y, z, w = q
+            g = Quaternion((w, x, y, z)).to_matrix().to_4x4()
+            g.translation = Vector(pos) / upm
+            pose[b.name] = g @ fix[b.name].inverted()               # (the Blender bone's pose, armature space)
+        for b in bones:
+            pb = arm.pose.bones[b.name]
+            if b.parent is not None and b.parent.name in pose:
+                rest_local = b.parent.matrix_local.inverted() @ b.matrix_local
+                basis = rest_local.inverted() @ (pose[b.parent.name].inverted() @ pose[b.name])
+            else:
+                basis = b.matrix_local.inverted() @ pose[b.name]
+            loc, rot, _s = basis.decompose()
+            pb.location, pb.rotation_quaternion = loc, rot
+            pb.keyframe_insert("location", frame=f)
+            pb.keyframe_insert("rotation_quaternion", frame=f)
+    act.use_frame_range = True
+    act.frame_start, act.frame_end = 1, max(len(frames), 2)
+    act.use_cyclic = loop
+    scene = context.scene
+    scene.frame_start, scene.frame_end = 1, len(frames)
+    scene.render.fps = int(round(fps))
+    return act, ""
+
+
+def _sequence_items(self, context):
+    """The game animations of the active armature's character (for the search list)."""
+    arm = context.active_object
+    key = arm.get("hl_game_model", "") if arm is not None else ""
+    cache = _sequence_items.cache
+    if cache.get("key") != key:
+        from ..core.gamemodel import all_sequence_names, load_game_model
+        from .ops import game_content, game_root
+        names = []
+        content = game_content(game_root(context)) if key else None
+        gm = load_game_model(content, key) if content is not None else None
+        if gm is not None:
+            names = [n for n in all_sequence_names(content, gm) if not n.startswith("@")]
+        cache["key"], cache["items"] = key, [(n, n, "") for n in names] or [("", "(none)", "")]
+    return cache["items"]
+
+
+_sequence_items.cache = {}
+
+
+class HL_OT_load_game_animation(bpy.types.Operator):
+    bl_idname = "hammerless.load_game_animation"
+    bl_label = "Load Game Animation"
+    bl_description = ("Preview one of the game's animations of this character on the selected game skeleton (an action "
+                      "you can play in Blender; it isn't built: the model borrows all of them from the game)")
+    bl_options = {"REGISTER", "UNDO"}
+    bl_property = "sequence"
+
+    sequence: EnumProperty(name="Animation", items=_sequence_items)
+
+    @classmethod
+    def poll(cls, context):
+        a = context.active_object
+        return a is not None and a.type == "ARMATURE" and bool(a.get("hl_game_model"))
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        if not self.sequence:
+            return {"CANCELLED"}
+        act, why = load_game_animation(context, context.active_object, self.sequence)
+        if act is None:
+            self.report({"ERROR"}, why)
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Loaded '{self.sequence}' as the action '{act.name}' (play it with Space)")
+        return {"FINISHED"}
+
+
 class HL_OT_add_game_skeleton(bpy.types.Operator):
     bl_idname = "hammerless.add_game_skeleton"
     bl_label = "Add Game Skeleton"
@@ -203,7 +328,27 @@ class HL_OT_add_game_skeleton(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (HL_OT_add_game_skeleton,)
+class HL_OT_add_mannequin(bpy.types.Operator):
+    bl_idname = "hammerless.add_mannequin"
+    bl_label = "Add Mannequin"
+    bl_description = ("A stand-in mesh on the selected game skeleton (a box per bone, weighted to it), a Custom Model: "
+                      "try the game's animations before a real mesh is made")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        a = context.active_object
+        return a is not None and a.type == "ARMATURE" and bool(a.get("hl_game_model"))
+
+    def execute(self, context):
+        arm = context.active_object
+        coll = arm.users_collection[0] if arm.users_collection else context.scene.collection
+        obj = make_mannequin(context, arm, arm.name.replace(" Skeleton", "") + " Mannequin", coll)
+        self.report({"INFO"}, f"Added '{obj.name}' ({len(obj.vertex_groups)} bones weighted)")
+        return {"FINISHED"}
+
+
+CLASSES = (HL_OT_add_game_skeleton, HL_OT_load_game_animation, HL_OT_add_mannequin)
 
 
 def register():
