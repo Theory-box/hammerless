@@ -3577,3 +3577,42 @@ class TestGameMeshes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLightMixingPlan(unittest.TestCase):
+    """Smart builds with Live Light Mixing: only a remix when lights' colour or brightness alone changed."""
+
+    @staticmethod
+    def _vmf(light, extra=""):
+        return ('world\n{\n"classname" "worldspawn"\n}\nentity\n{\n"classname" "light"\n"origin" "0 0 0"\n'
+                '"_light" "%s"\n%s}\n' % (light, extra))
+
+    TAG = '"_hllayer" "1"\n"_hlobject" "lamp"\n'
+
+    def plan(self, a, b):
+        from hammerless.core.buildplan import plan
+        return plan(a, b)[0]
+
+    def test_value_change_remixes(self):
+        self.assertEqual(self.plan(self._vmf("255 255 255 200", self.TAG), self._vmf("255 128 0 400", self.TAG)), "remix")
+
+    def test_untagged_lights_bake(self):
+        self.assertEqual(self.plan(self._vmf("255 255 255 200"), self._vmf("255 0 0 400")), "lighting")
+
+    def test_style_change_bakes(self):
+        self.assertEqual(self.plan(self._vmf("255 255 255 200", self.TAG),
+                                   self._vmf("255 255 255 200", self.TAG + '"style" "10"\n')), "lighting")
+
+    def test_dark_channel_lit_bakes(self):
+        # (a layer has no light where it was baked dark: nothing to scale up)
+        self.assertEqual(self.plan(self._vmf("255 0 0 200", self.TAG), self._vmf("255 255 255 200", self.TAG)), "lighting")
+        self.assertEqual(self.plan(self._vmf("255 255 255 0", self.TAG), self._vmf("255 255 255 60", self.TAG)), "lighting")
+
+    def test_renamed_light_bakes(self):
+        self.assertEqual(self.plan(self._vmf("255 255 255 200", self.TAG),
+                                   self._vmf("255 255 255 200", '"_hllayer" "1"\n"_hlobject" "lamp 2"\n')), "lighting")
+
+    def test_scale_keys_bake(self):
+        # (an HDR scale isn't mixed in the view: bake)
+        self.assertEqual(self.plan(self._vmf("255 255 255 200", self.TAG),
+                                   self._vmf("255 255 255 200", self.TAG + '"_lightscaleHDR" "2"\n')), "lighting")

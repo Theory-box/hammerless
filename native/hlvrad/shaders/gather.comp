@@ -280,6 +280,7 @@ void main() {
                 }
             } else if (L.m.y != pc.slot) continue;
             int type = L.m.x;
+            if (type < 0) continue;                  // (debugging, HLGPUTYPES: a light left out)
             if ((g.flags & AMBIENT_ONLY) != 0 && type != emit_skyambient) continue;
             if ((g.flags & NON_AMBIENT_ONLY) != 0 && type == emit_skyambient) continue;
             if (cluster >= 0 && (pvs[L.m.z + (cluster >> 5)] & (1u << (cluster & 31))) == 0u) continue;

@@ -92,7 +92,21 @@ def _split(text):
 
 
 # a light's colour and brightness: what Live Light Mixing's layers can change without a bake
-LIGHT_VALUE_KEYS = {"_light", "_lighthdr", "_lightscalehdr", "_ambient", "_ambienthdr", "_ambientscalehdr"}
+LIGHT_VALUE_KEYS = {"_light", "_lighthdr", "_ambient", "_ambienthdr"}
+
+
+def _brightened_from_dark(old, new) -> bool:
+    """A light's colour channel that was baked at 0 lights now: its layer has nothing to scale up (it needs a bake)."""
+    from .lightbake import _key_light
+    for o, n in zip(old, new):
+        ko = {kv[0]: kv[1] for kv in o if isinstance(kv, tuple) and len(kv) == 2 and isinstance(kv[1], str)}
+        kn = {kv[0]: kv[1] for kv in n if isinstance(kv, tuple) and len(kv) == 2 and isinstance(kv[1], str)}
+        for key in ("_light", "_ambient"):
+            a = _key_light({key: ko.get(key, ""), key + "HDR": ko.get(key + "hdr", "")}, key, True)
+            b = _key_light({key: kn.get(key, ""), key + "HDR": kn.get(key + "hdr", "")}, key, True)
+            if b is not None and (a is None or any(x <= 0 < y for x, y in zip(a, b))):
+                return True
+    return False
 
 
 def _sans_values(lighting) -> tuple[list, bool]:
@@ -121,6 +135,8 @@ def plan(old_text: str | None, new_text: str) -> tuple[str, str]:
     if ol != nl:
         (os_, old_layered), (ns_, new_layered) = _sans_values(ol), _sans_values(nl)
         if os_ == ns_ and old_layered and new_layered and any("_hllayer" in str(c) for c in ol):
+            if _brightened_from_dark(ol, nl):
+                return "lighting", "a light was baked without some colour it has now (its layer can't add it)"
             return "remix", "only lights' colour or brightness changed (Live Light Mixing)"
         return "lighting", "lights or static props changed, geometry didn't"
     if oe != ne:

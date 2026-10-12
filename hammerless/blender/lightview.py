@@ -122,6 +122,8 @@ def load(context, path: str | None = None) -> str | None:
             mix = lightmix.load(path, data)
         except Exception:                # (the layers are extra: the bake shows without them)
             mix = None
+        if mix is None:                  # (not this bake's: the map's own lighting, as without layers)
+            data = read_lightmaps(raw, 0)
     props = content = game_dir = None
     try:                             # (the props' models come from the game: without it, the faces alone)
         from ..core.proplight import read_prop_lighting
@@ -161,7 +163,10 @@ def remix(context) -> bool:
     if mix is None:
         return False
     from . import lightmix
-    if not mix.set_weights(lightmix.current_weights(context, mix)):
+    changed = mix.set_weights(lightmix.current_weights(context, mix))
+    if mix.lost:
+        _state["edited"] = True          # (a light it can't follow: bake again)
+    if not changed:
         return False
     if _state["batch"] is not None:
         _upload()
@@ -434,8 +439,9 @@ def _on_depsgraph(scene, depsgraph):
     if _state["data"] is None:
         return
     mixing = _state["mix"] is not None
-    if mixing:
-        try:
+    if mixing and any(isinstance(u.id, (bpy.types.Light, bpy.types.Scene)) or (
+            isinstance(u.id, bpy.types.Object) and u.id.type == "LIGHT") for u in depsgraph.updates):
+        try:                             # (only when a light or the scene's settings changed: not every edit)
             remix(bpy.context)
         except Exception:
             pass

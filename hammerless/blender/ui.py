@@ -451,7 +451,10 @@ class HL_PT_obj_light(_Panel, bpy.types.Panel):
             col.prop(hs, "light_custom", text="Steps")
         col.prop(hs, "light_switchable")
         col.prop(hs, "light_start_off")
-        if hs.light_switchable or hs.light_pattern == "CUSTOM" or hs.light_start_off:
+        from .extract import light_in_logic
+        if light_in_logic(obj) and not hs.light_switchable:
+            col.label(text="Switchable: logic uses it", icon="NODETREE")
+        if hs.light_switchable or hs.light_pattern == "CUSTOM" or hs.light_start_off or light_in_logic(obj):
             col.label(text="Logic name: " + light_name(obj), icon="LINKED")
         elif hs.light_pattern != "0":
             col.label(text="Flickers on its own; Switchable to control it", icon="INFO")

@@ -1,10 +1,11 @@
 /* -remix <map>.hllayers: Live Light Mixing's result kept without baking again. The map was baked with -layers (each
- * light's own light kept apart, direct.c's WriteLayers); since then only lights' colour and brightness changed (the
- * build checks: buildplan.py). Light adds up, bounces too, so the lighting now is the lighting baked plus, for each
- * layer, (its weight now - the weight the map has it at) times the layer, its weight being its lights' intensity now
- * over baked, per colour. That goes into every lightmap page of the layer's style (bump pages too); the rest of
- * the lighting (the lights for models, leaf ambient, props' and detail props' light) is made from the result as a
- * bake makes it. The layers file then says the weights the map has. */
+ * light's own light kept apart, direct.c's WriteLayers, and the bake's own lightmaps in <map>.hllayers.base); since
+ * then only lights' colour and brightness changed (the build checks: buildplan.py). Light adds up, bounces too, so
+ * the lighting now is the bake's plus, for each layer, (its weight now - 1) times the layer, its weight being its
+ * lights' intensity now over baked, per colour. That goes into every lightmap page of the layer's style (bump pages
+ * too), always from the bake's own lightmaps (a remix of a remix doesn't round twice); the rest of the lighting (the
+ * lights for models, leaf ambient, props' and detail props' light) is made from the result as a bake makes it.
+ * The layers file then says the weights the map has ("applied"), once the map is written (RemixCommit). */
 #include <float.h>
 #include "hlvrad.h"
 
@@ -15,11 +16,12 @@ void VectorToColorRGBExp32(const vec3_t v, unsigned char *c);
 
 typedef struct {
     char *info;                 /* its "key=value" lines */
-    int infolen;
     size_t data, end;           /* where its faces are in the file */
     int style;
     vec3_t baked, applied;
 } rlayer_t;
+
+static char g_commitTmp[1100], g_commitPath[1100];
 
 static const char *InfoValue(const char *info, const char *key) {
     size_t n = strlen(key);
@@ -67,36 +69,71 @@ static void FaceAverage(dface_t *f, int k, int luxels, int bumpCount) {
     VectorToColorRGBExp32(median, dlightdata + f->lightofs - 4 * (k + 1));
 }
 
-void Remix(const char *path) {
+static unsigned char *ReadAll(const char *path, size_t *size) {
     FILE *fp = fopen(path, "rb");
-    if (!fp) Error("-remix: can't read %s", path);
+    if (!fp) return NULL;
     fseek(fp, 0, SEEK_END);
-    size_t size = (size_t)ftell(fp);
+    long n = ftell(fp);
     fseek(fp, 0, SEEK_SET);
-    unsigned char *file = xalloc(size + 1);
-    if (fread(file, 1, size, fp) != size) Error("-remix: can't read %s", path);
+    unsigned char *data = n >= 0 ? xalloc((size_t)n + 1) : NULL;
+    if (!data || fread(data, 1, (size_t)n, fp) != (size_t)n) {
+        free(data), fclose(fp);
+        return NULL;
+    }
     fclose(fp);
+    *size = (size_t)n;
+    return data;
+}
+
+/* (a corrupt or cut-short file: an error, never a read past its end) */
+#define NEED(n) do { if ((size_t)(n) > size || at > size - (size_t)(n)) Error("-remix: %s is cut short or damaged", path); } while (0)
+
+void Remix(const char *path) {
+    size_t size = 0;
+    unsigned char *file = ReadAll(path, &size);
+    if (!file) Error("-remix: can't read %s", path);
+    size_t at = 0;
+    NEED(16);
     int head[4];
     memcpy(head, file, 16);
+    at = 16;
     if (head[0] != 0x594c4c48 || head[1] != 3) Error("-remix: %s isn't a light layers file (version 3)", path);
     if (head[2] != numfaces) Error("-remix: %s is another bake's (%d faces, the map has %d)", path, head[2], numfaces);
     int nlayers = head[3];
+    if (nlayers < 0 || nlayers > 256) Error("-remix: %s is damaged", path);
+    /* the bake's own lightmaps: every remix starts from them */
+    char base[1100];
+    snprintf(base, sizeof(base), "%s.base", path);
+    size_t bsize = 0;
+    unsigned char *baked = ReadAll(base, &bsize);
+    if (!baked || bsize != (size_t)lightdatasize) Error("-remix: %s is missing or another bake's", base);
+    memcpy(dlightdata, baked, lightdatasize);
+    free(baked);
     rlayer_t *L = xalloc(sizeof(rlayer_t) * (nlayers + 1));
-    size_t at = 16;
     for (int l = 0; l < nlayers; l++) {         /* (what each was baked with, where its faces are) */
-        int len;
+        int len, n;
+        NEED(4);
         memcpy(&len, file + at, 4);
-        L[l].info = xalloc(len + 1), L[l].infolen = len;
-        memcpy(L[l].info, file + at + 4, len);
-        at += 4 + len;
+        at += 4;
+        if (len < 0) Error("-remix: %s is damaged", path);
+        NEED(len);
+        L[l].info = xalloc((size_t)len + 1);
+        memcpy(L[l].info, file + at, len);
+        at += len;
         L[l].data = at;
-        int n;
+        NEED(4);
         memcpy(&n, file + at, 4);
         at += 4;
+        if (n < 0 || n > numfaces) Error("-remix: %s is damaged", path);
         for (int i = 0; i < n; i++) {
             int h[3];
+            NEED(12);
             memcpy(h, file + at, 12);
-            at += 12 + 6 * (size_t)h[1] * h[2];
+            at += 12;
+            if (h[0] < 0 || h[0] >= numfaces || h[1] < 0 || (h[2] != 1 && h[2] != NUM_BUMP_VECTS + 1))
+                Error("-remix: %s is damaged", path);
+            NEED(6 * (size_t)h[1] * h[2]);
+            at += 6 * (size_t)h[1] * h[2];
         }
         L[l].end = at;
         const char *st = InfoValue(L[l].info, "style");
@@ -115,12 +152,14 @@ void Remix(const char *path) {
         vec3_t w, delta;
         int any = 0;
         for (int i = 0; i < 3; i++) {
-            w[i] = L[l].baked[i] > 0 ? now[l][i] / L[l].baked[i] : L[l].applied[i];
-            delta[i] = w[i] - L[l].applied[i];
+            if (L[l].baked[i] <= 0 && now[l][i] > 0)
+                Error("-remix: layer %d was baked without this colour (dark): it needs a bake", l + 1);
+            w[i] = L[l].baked[i] > 0 ? now[l][i] / L[l].baked[i] : 1.0f;
+            delta[i] = w[i] - 1.0f;                     /* (from the bake's own lightmaps) */
             any |= fabsf(delta[i]) > 1e-6f;
         }
-        Msg("layer %d (%s): weight %.3f %.3f %.3f\n", l + 1, InfoValue(L[l].info, "_hlobject") ? InfoValue(L[l].info, "_hlobject") : "?",
-            w[0], w[1], w[2]);
+        const char *who = InfoValue(L[l].info, "_hlobject");
+        Msg("layer %d (%.*s): weight %.3f %.3f %.3f\n", l + 1, who ? (int)strcspn(who, "\n") : 1, who ? who : "?", w[0], w[1], w[2]);
         VectorCopy(w, L[l].applied);
         if (!any) continue;
         changed++;
@@ -133,7 +172,6 @@ void Remix(const char *path) {
             memcpy(h, file + p, 12);
             const unsigned short *v = (const unsigned short *)(file + p + 12);
             p += 12 + 6 * (size_t)h[1] * h[2];
-            if (h[0] < 0 || h[0] >= numfaces) Error("-remix: bad face %d in %s", h[0], path);
             dface_t *f = &g_pFaces[h[0]];
             int luxels = (f->m_LightmapTextureSizeInLuxels[0] + 1) * (f->m_LightmapTextureSizeInLuxels[1] + 1);
             int bumpCount = texinfo[f->texinfo].flags & SURF_BUMPLIGHT ? NUM_BUMP_VECTS + 1 : 1;
@@ -141,6 +179,8 @@ void Remix(const char *path) {
             int k;
             for (k = 0; k < MAXLIGHTMAPS && f->styles[k] != L[l].style; k++) {}
             if (k == MAXLIGHTMAPS || f->lightofs < 0) continue;       /* (the bake had no room for its style here) */
+            if ((size_t)f->lightofs + ((size_t)k + 1) * bumpCount * luxels * 4 > (size_t)lightdatasize)
+                Error("-remix: face %d's lightmap is outside the map's lighting", h[0]);
             for (int b = 0; b < bumpCount; b++) {
                 unsigned char *lm = dlightdata + f->lightofs + ((size_t)k * bumpCount + b) * luxels * 4;
                 for (int j = 0; j < luxels; j++) {
@@ -164,31 +204,40 @@ void Remix(const char *path) {
                 FaceAverage(f, k, luxels, texinfo[f->texinfo].flags & SURF_BUMPLIGHT ? NUM_BUMP_VECTS + 1 : 1);
             }
     Msg("%d of %d light layers changed\n", changed, nlayers);
-    /* the layers file with the weights the map has now (written whole, then renamed) */
-    char tmp[1100];
-    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-    FILE *out = fopen(tmp, "wb");
-    if (!out) Error("Can't write %s", tmp);
+    /* the layers file with the weights the map will have: written now, put in place once the map is (RemixCommit) */
+    snprintf(g_commitTmp, sizeof(g_commitTmp), "%s.tmp", path);
+    snprintf(g_commitPath, sizeof(g_commitPath), "%s", path);
+    FILE *out = fopen(g_commitTmp, "wb");
+    if (!out) Error("Can't write %s", g_commitTmp);
     fwrite(file, 1, 16, out);
     for (int l = 0; l < nlayers; l++) {
-        char info[4400];
-        int n = 0;
+        size_t cap = strlen(L[l].info) + 128, n = 0;
+        char *info = xalloc(cap);
         for (const char *p = L[l].info; *p;) {             /* (its lines, "applied" as now) */
             const char *e = strchr(p, '\n');
             size_t len = e ? (size_t)(e - p) : strlen(p);
             if (!strncmp(p, "applied=", 8))
-                n += snprintf(info + n, sizeof(info) - n, "applied=%.9g %.9g %.9g\n", L[l].applied[0], L[l].applied[1], L[l].applied[2]);
+                n += (size_t)snprintf(info + n, cap - n, "applied=%.9g %.9g %.9g\n", L[l].applied[0], L[l].applied[1], L[l].applied[2]);
             else
-                n += snprintf(info + n, sizeof(info) - n, "%.*s\n", (int)len, p);
-            if (n >= (int)sizeof(info)) Error("-remix: layer text too long");
+                n += (size_t)snprintf(info + n, cap - n, "%.*s\n", (int)len, p);
             p += len + (e ? 1 : 0);
         }
-        fwrite(&n, 4, 1, out), fwrite(info, 1, n, out);
+        int ilen = (int)n;
+        fwrite(&ilen, 4, 1, out), fwrite(info, 1, n, out);
         fwrite(file + L[l].data, 1, L[l].end - L[l].data, out);
-        free(L[l].info);
+        free(info), free(L[l].info);
     }
-    fclose(out);
-    remove(path);
-    if (rename(tmp, path)) Error("Can't write %s", path);
+    int bad = ferror(out);
+    if (fclose(out) || bad) {
+        remove(g_commitTmp);
+        Error("Can't write %s", g_commitTmp);
+    }
     free(file), free(L), free(now), free(touched);
+}
+
+/* the map's written: its layers file says the weights it has now */
+void RemixCommit(void) {
+    if (!g_commitTmp[0]) return;
+    remove(g_commitPath);
+    if (rename(g_commitTmp, g_commitPath)) Error("Can't write %s", g_commitPath);
 }

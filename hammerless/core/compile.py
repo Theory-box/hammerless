@@ -961,6 +961,7 @@ class CompileJob:
                     cmd = [HLVRAD]                   # (ours ran: a failure falls back to Valve's vrad below)
                     if code != 0 and self._valve_vrad and not self._stopping:
                         self._fallback(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead", True)
+                        self._drop_layers()
                         code, out = self._exec(self._valve_vrad)
                     self.timings.append(("vrad (alongside vis)", time.time() - self._light_t0))
                     self.events.append(("light (alongside vis)", self._light_t0,
@@ -1008,6 +1009,8 @@ class CompileJob:
                 if name == "vrad" and cmd[0] != HLVRAD and self._opts.sky_key:
                     self._q.put("Sky Light from the sky needs the Hammerless light compiler: Valve's vrad lights it "
                                 "with one colour")
+                if name == "vrad" and "-layers" not in cmd and "-remix" not in cmd:
+                    self._drop_layers()          # (this bake has none: the last one's would be stale)
                 code, out = self._exec(cmd)
                 if code != 0 and name == "vrad" and "-remix" in cmd and self._hlvrad_bake and not self._stopping:
                     self._q.put(f"Live Light Mixing: the remix failed (exit code {code}): baking the lighting instead")
@@ -1016,6 +1019,7 @@ class CompileJob:
                 if code != 0 and name == "vrad" and cmd[0] == HLVRAD and self._valve_vrad and not self._stopping:
                     # ours writes the map only when it has finished, so it's untouched
                     self._fallback(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead", True)
+                    self._drop_layers()
                     code, out = self._exec(self._valve_vrad)
                 if code != 0 and name == "vbsp" and cmd[0] == HLVBSP and self._valve_vbsp and not self._stopping:
                     self._fallback(f"!! Hammerless map compiler failed (exit code {code}): running Valve's vbsp instead", True)
@@ -1134,6 +1138,15 @@ class CompileJob:
         built = repr(replace(rec, vis=self._built_vis, rad=self._built_rad))
         return _with_light(built, self._built_light) if self._built_light else built
 
+    def _drop_layers(self) -> None:
+        """Live Light Mixing's layers (and the bake's lightmaps beside them) go: the lighting about to be baked
+        isn't theirs."""
+        for p in (self.base + ".hllayers", self.base + ".hllayers.base"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
     def _can_remix(self, built_rad) -> bool:
         """A remix needs our light compiler on the GPU, the layers of the bake the map has, and no change to how
         the lighting is baked."""
@@ -1142,16 +1155,13 @@ class CompileJob:
             return False
         if built_rad is None or built_rad != _opts_rad(repr(self._opts)):
             return False
-        try:
-            return os.path.getmtime(layers) >= os.path.getmtime(self.base + ".bsp") - 600
-        except OSError:
-            return False
+        return os.path.exists(layers) and os.path.exists(layers + ".base")
 
     def _choose_steps(self) -> list[tuple[str, list[str]]]:
         """Smart build: the least work that gives the same map as a full compile, judged against
         the VMF the current BSP was compiled from (buildplan.plan). A doubt means a full compile."""
         from .buildplan import plan
-        old, built_vis, built_rad = None, None, None
+        old, built_vis, built_rad, built = None, None, None, None
         try:
             built = self._built_opts()
             built_vis, built_rad = _opts_vis(built), _opts_rad(built)
@@ -1187,6 +1197,8 @@ class CompileJob:
             return self.steps
         if kind == "remix" and not self._can_remix(built_rad):
             kind, why = "lighting", why + ", but the layers can't be used (baked again)"
+        if kind == "remix" and add_vis:            # (the visibility goes up too: bake after it, as a full build would)
+            kind, why = "lighting", why + ", and the visibility is upgraded (baked again)"
         if kind == "remix":
             self.plan = "remix"
             self._rest_stale = False
@@ -1203,6 +1215,10 @@ class CompileJob:
             if "-radius_override" in vis_cmd or bsp_fog_farz(self.base + ".bsp") > 0:
                 lights_changed = True            # (radial vis changes which leaves see the sky: relight after it)
         self._rest_stale = lights_changed or _light_sans_area(built_rad) != _light_sans_area(_opts_rad(repr(self._opts)))
+        if self.light_as is not None and built is not None and (
+                (_field(built, "no_bake") or "''") != repr(self.light_as[0])
+                or (_field(built, "keep_light") or "False") != repr(self.light_as[1])):
+            self._rest_stale = True      # (the last bake was itself partial: the rest of the map isn't a whole bake)
         want = self._opts.rad != "SKIP"
         add_rad = want and (lights_changed or built_rad != _opts_rad(repr(self._opts)))
         self._built_vis = self._opts.vis if add_vis else built_vis

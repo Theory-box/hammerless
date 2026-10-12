@@ -412,7 +412,7 @@ typedef struct {
 } gpuface_t;
 static gpuface_t *gpufaces;
 static __thread gpuface_t *gpucur;
-static const float gpuzero[64 * 256];
+static float *gpuzero;            /* (an unanswered question's zeros: GPU_GroupFloats() of them, see BuildFacelightsGPU) */
 
 /* the GPU's answer for a group of points (64 floats per slot: per point 4 normals' colours and "lit"): an answer
  * from an earlier round, or (recorded) zeros */
@@ -2053,7 +2053,25 @@ void WriteLayers(const char *path) {
         }
     }
     free(half);
-    fclose(fp);
+    int bad = ferror(fp);
+    if (fclose(fp) || bad) {
+        remove(tmp);
+        Error("Can't write %s", tmp);
+    }
+    /* the bake's own lightmaps (every remix starts from them: none rounds on another's result) */
+    char base[1100], btmp[1110];
+    snprintf(base, sizeof(base), "%s.base", path);
+    snprintf(btmp, sizeof(btmp), "%s.tmp", base);
+    FILE *bf = fopen(btmp, "wb");
+    if (!bf) Error("Can't write %s", btmp);
+    bad = fwrite(dlightdata, 1, lightdatasize, bf) != (size_t)lightdatasize;
+    bad |= ferror(bf);
+    if (fclose(bf) || bad) {
+        remove(btmp), remove(tmp);
+        Error("Can't write %s", btmp);
+    }
+    remove(base);
+    if (rename(btmp, base)) Error("Can't write %s", base);
     remove(path);
     if (rename(tmp, path)) Error("Can't write %s", path);
     Msg("%d light layers written to %s\n", g_numLayers, path);
@@ -2256,6 +2274,8 @@ static void RoundWork(int i, int thread) { (void)thread; BuildFacelights(roundfa
 void BuildFacelightsGPU(void) {
     gpufaces = xalloc(sizeof(gpuface_t) * (numfaces + 1));
     roundfaces = xalloc(sizeof(int) * (numfaces + 1));
+    free(gpuzero);
+    gpuzero = xalloc(sizeof(float) * ((size_t)GPU_GroupFloats() + 64));
     int nround = numfaces, R = GPU_GroupFloats();
     for (int i = 0; i < numfaces; i++) roundfaces[i] = i;
     for (int round = 1; nround; round++) {

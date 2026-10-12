@@ -555,7 +555,7 @@ void GPU_Lights(void) {
         g->b[2] = dl->m_flStartFadeDistance, g->b[3] = dl->m_flEndFadeDistance;
         g->c[0] = dl->m_flCapDist, g->c[1] = dl->has_sun_extent ? dl->sun_extent : g_SunAngularExtent;
         g->m[0] = dl->light.type, g->m[1] = slot, g->m[2] = at * rowwords, g->m[3] = g_gpuLayers ? dl->layer : 0;
-        if (getenv("HLGPUTYPES") && !(atoi(getenv("HLGPUTYPES")) & (1 << dl->light.type))) g->m[1] = -1;   /* (debugging: these types only) */
+        if (getenv("HLGPUTYPES") && !(atoi(getenv("HLGPUTYPES")) & (1 << dl->light.type))) g->m[0] = -1;   /* (debugging: these types only) */
         if (dl->pvs) memcpy(pvs + (size_t)at * rowwords, dl->pvs, VisRowBytes());
         else memset(pvs + (size_t)at * rowwords, 0xff, 4 * (size_t)rowwords);
     }

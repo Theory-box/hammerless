@@ -26,6 +26,7 @@ class Mix:
         # (the map's lighting has each layer at its applied weight: as baked, or as the last remix left it)
         self.weights = applied.astype(np.float32).copy()
         self.baked = [baked_light(info) for info, _i, _v in layers]
+        self.lost: list[str] = []            # (lights the view can't follow: renamed / deleted, or a colour added)
         self.mixed = atlas.copy()            # (H, W, 4): what's shown (rest + layers * weights)
 
     def set_weights(self, weights: np.ndarray) -> bool:
@@ -94,7 +95,7 @@ def _light_now(context, info: dict) -> np.ndarray | None:
         return _key_light({key: text}, key, True)
     obj = bpy.data.objects.get(name)
     if obj is None:
-        return np.zeros(3)                   # (deleted since: dark)
+        raise LookupError(name)              # (renamed or deleted since: the view can't tell what it is now)
     if obj.type == "LIGHT":
         from .extract import light_entity
         kv = light_entity(obj, context.scene.hammerless.units_per_meter).keyvalues
@@ -110,10 +111,21 @@ def _rgb(color) -> tuple:
 
 
 def current_weights(context, mix: Mix) -> np.ndarray:
-    out = np.ones((len(mix.layers), 3), np.float32)
+    """The layers' weights for the scene now. A layer whose light can't be found (renamed, deleted) keeps its weight
+    and sets mix.lost (the view then says a bake is needed); a colour the light was baked without can't be added
+    (mix.lost too)."""
+    out = mix.weights.copy()
+    mix.lost = []
     for k, (info, _i, _v) in enumerate(mix.layers):
         try:
-            out[k] = weight(mix.baked[k], _light_now(context, info))
+            now = _light_now(context, info)
+        except LookupError:
+            mix.lost.append(info.get("_hlobject", "?"))
+            continue
         except Exception:
-            pass
+            continue
+        baked = mix.baked[k]
+        if now is not None and baked is not None and any(b <= 0 < n for b, n in zip(baked, now)):
+            mix.lost.append(info.get("_hlobject", "?"))
+        out[k] = weight(baked, now)
     return out

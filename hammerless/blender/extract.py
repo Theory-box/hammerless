@@ -942,15 +942,27 @@ def light_style_keyvalues(obj, kv: dict[str, str]) -> dict[str, str]:
     hs = obj.hammerless
     out = {}
     custom = hs.light_pattern == "CUSTOM"
+    switchable = hs.light_switchable or light_in_logic(obj)
     if hs.light_pattern not in ("0", "CUSTOM") and "style" not in kv:
         out["style"] = hs.light_pattern
     if custom and "pattern" not in kv:
         out["pattern"] = "".join(c for c in hs.light_custom.lower() if "a" <= c <= "z") or "m"
-    if (hs.light_switchable or custom or hs.light_start_off) and not kv.get("targetname"):
+    if (switchable or custom or hs.light_start_off) and not kv.get("targetname"):
         out["targetname"] = light_name(obj)
     if hs.light_start_off and "spawnflags" not in kv:
         out["spawnflags"] = "1"                   # (initially dark)
     return out
+
+
+def light_in_logic(obj) -> bool:
+    """A light an Entity Events node uses: switchable (logic turns it on and off by the name its panel shows)."""
+    for tree in bpy.data.node_groups:
+        if tree.bl_idname != "HL_LogicTree":
+            continue
+        for n in tree.nodes:
+            if n.bl_idname == "HL_NodeObject" and getattr(n, "target", None) is obj:
+                return True
+    return False
 
 
 def light_name(obj) -> str:

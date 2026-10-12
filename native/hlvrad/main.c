@@ -56,6 +56,7 @@ static const char *g_onlyLights;      /* (-onlylights: one layer of the lighting
 static const char *g_layerLights, *g_layersOut;    /* (-layers <out> <spec>: every layer in one bake, see direct.c) */
 static const char *g_remix;            /* (-remix <layers>: the faces' lighting from the last bake's layers, remix.c) */
 void Remix(const char *path);
+void RemixCommit(void);
 static int g_tookVis, g_visThreadsAfter = -1;     /* (-visthreads n: threads while vis runs; then -threads' own) */
 static void TakeVis(void) {
     if (g_tookVis) return;
@@ -242,6 +243,11 @@ int main(int argc, char **argv) {
         g_numLayers = AssignLayers(g_layerLights);
         if (g_numLayers > 256) Error("-layers: 256 at most");
         remove(g_layersOut);            /* (a last bake's layers would be stale) */
+        {
+            char base[1100];
+            snprintf(base, sizeof(base), "%s.base", g_layersOut);
+            remove(base);
+        }
         g_gpuLayers = 1;
         if (g_numbounce > 0 && !g_giPasses) Msg("Warning: -layers without -gi: the layers have no bounced light\n");
     }
@@ -262,6 +268,7 @@ int main(int argc, char **argv) {
     RT_SetupAccelerationStructure();
     Stage("ray tracer");
     if (g_bGPU && !GPU_Init()) g_bGPU = 0;
+    if (g_numLayers && !g_bGPU) Error("-layers needs the GPU (it couldn't start)");
     if (g_bGPU) {
         GPU_ShadowScene();
         GPU_Lights();
@@ -343,6 +350,7 @@ rest:
     Stage("static prop lighting");
     SetLump(LUMP_LIGHTING_HDR, dlightdata, lightdatasize, 1);
     WriteBSPFile(path);
+    if (g_remix) RemixCommit();         /* (the layers file: the weights the map has now) */
     Stage("write");
     Msg("done\n");
     return 0;

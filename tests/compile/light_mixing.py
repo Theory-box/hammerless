@@ -113,7 +113,7 @@ def lightmaps(path):
         for si, st in enumerate(styles):
             if st == 255:
                 break
-            out[(k, st)] = rgbe(light[ofs + 4 * w * h * pages * si:ofs + 4 * w * h * pages * (si + 1)])
+            out[(k, st)] = rgbe(light[ofs + 4 * w * h * pages * si:ofs + 4 * w * h * pages * (si + 1)]).reshape(pages, w * h, 3)
     return out
 
 
@@ -144,8 +144,14 @@ from hammerless.blender import lightmix  # noqa: E402
 data = read_lightmaps(open(bsp, "rb").read(), None)
 mix = lightmix.load(bsp, data)
 check("layers load for the view", mix is not None, "")
-unchanged = np.abs(mix.mixed - data.atlas)[..., :3].max()
-check("mixed as baked = the bake", unchanged < 0.02, f"largest difference {unchanged:.4f}")
+# every light is in a layer: with all of them at 0 the map is (nearly) dark; back at 1 it's the bake again
+applied = mix.weights.copy()
+mix.set_weights(np.zeros_like(applied))
+left = np.clip(mix.mixed[..., :3], 0, None).sum() / max(data.atlas[..., :3].sum(), 1e-9)
+check("the layers hold all the light (all at 0: dark)", left < 0.02, f"{left * 100:.2f}% left")
+mix.set_weights(applied)
+back = np.abs(mix.mixed - data.atlas)[..., :3].max()
+check("and back at their weights: the bake", back < 1e-3, f"largest difference {back:.5f}")
 
 # change things: lamp A redder and brighter, lamp B off, the switchable lamp C dimmer and blue, the sun dimmer
 a.data.color, a.data.energy = (1.0, 0.3, 0.2), 150
@@ -187,21 +193,16 @@ only = [k for k in set(mine_lm) ^ set(real_lm) if (mine_lm.get(k, real_lm.get(k)
 check("the same faces and styles lit", not only, f"{len(keys)} face styles; only in one: {only[:5]}")
 
 
-def cat(d):
-    return np.concatenate([d[k] for k in keys])
+def cat(d, pick=lambda k, v: v):
+    parts = [pick(k, d[k]).reshape(-1, 3) for k in keys]
+    return np.concatenate([p for p in parts if len(p)] or [np.zeros((0, 3))])
 
 
 compare("remixed lightmaps = baking it (every page, every style)", cat(mine_lm), cat(real_lm), 2.0)
-for label, pick in (("flat pages", lambda k, v: v[:1]), ("bump pages", lambda k, v: v[1:]),
-                    ("switchable style", lambda k, v: v if k[1] != 0 else v[:0])):
-    m = [pick(k, mine_lm[k].reshape(-1, mine_lm[k].shape[0] // max(1, len(mine_lm[k]) // len(mine_lm[k])), 3)) for k in keys]
-    del m
-
-
-def pages(d, k):
-    v = d[k]
-    lux = None
-    return v
+for label, pick in (("flat pages", lambda k, v: v[:1] if k[1] == 0 else v[:0]),
+                    ("bump pages", lambda k, v: v[1:]),
+                    ("the switchable lamp's style", lambda k, v: v if k[1] != 0 else v[:0])):
+    compare(f"  ... {label}", cat(mine_lm, pick), cat(real_lm, pick), 2.0)
 
 
 def leaf_ambient(path):
