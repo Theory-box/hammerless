@@ -1465,6 +1465,16 @@ def test_game_skeleton_example():
     ir, text, rep = ops.build_map_text(bpy.context, real)
     sk = next(sp for sp in ir.models.values() if sp.skeleton is not None).skeleton
     assert sk.animations == [], [a.name for a in sk.animations]
+    # the game's own mesh on it: standing like the skeleton (skinned from the stored rest pose), weighted to its
+    # bones, with the game's materials; its materials are used as they are (a patch including the original)
+    from hammerless.blender.gameskeleton import import_game_mesh
+    mesh_obj, why = import_game_mesh(bpy.context, arm)
+    assert mesh_obj is not None, why
+    assert len(mesh_obj.data.vertices) == 2404, len(mesh_obj.data.vertices)
+    zs = [v.co.z * s.units_per_meter for v in mesh_obj.data.vertices]
+    assert min(zs) > -5 and 60 < max(zs) < 80, (min(zs), max(zs))           # (standing on the floor)
+    assert "ValveBiped.Bip01_Head1" in mesh_obj.vertex_groups
+    assert any(m.hammerless.source_material.startswith("models/infected/common/") for m in mesh_obj.data.materials)
 
 
 def test_organize_scene():

@@ -140,7 +140,10 @@ def write_model_materials(game_dir: str, materials_dir: str, materials: dict[str
     os.makedirs(folder, exist_ok=True)
     for name, (tex, translucent, alphatest) in materials.items():
         path = os.path.join(folder, name + ".vmt")
-        text = model_material_vmt(tex, translucent, alphatest)
+        if tex.startswith("include:"):         # (one of the game's model materials, used as it is)
+            text = f'"patch"\n{{\n\t"include" "materials/{tex[8:]}.vmt"\n}}\n'
+        else:
+            text = model_material_vmt(tex, translucent, alphatest)
         old = None
         if os.path.exists(path):
             with open(path, encoding="utf-8", errors="replace") as f:

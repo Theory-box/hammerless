@@ -504,6 +504,13 @@ def _model_texture(mat, path: str, content) -> str:
             return path                       # a converted image texture: the VTF is at the same path
         path = base                           # a game material with a surface patch: show the original
     if content is not None:
+        data = content.read(f"materials/{path.lower()}.vmt")
+        shader = (data or b"").decode("latin-1", "replace").lstrip().split(None, 1)[0].strip('"').lower() if data else ""
+        if shader and (path.lower().startswith("models/")
+                       or shader not in ("lightmappedgeneric", "worldvertextransition", "patch", "unlitgeneric")):
+            # a model material of the game's own (VertexLitGeneric, the commons' Infected shader with its colour
+            # gradient...): the model uses it as it is, through a material that includes it
+            return "include:" + path
         from ..core.gamematerials import base_texture
         tex = base_texture(content, path)     # (patch materials followed to the one they include)
         if tex:

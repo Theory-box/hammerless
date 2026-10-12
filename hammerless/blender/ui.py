@@ -314,6 +314,7 @@ class HL_PT_object(_Panel, bpy.types.Panel):
             box = col.box()
             box.label(text="Game skeleton: " + obj["hl_game_model"].split("/")[-1], icon="ARMATURE_DATA")
             box.operator("hammerless.load_game_animation", icon="ACTION")
+            box.operator("hammerless.import_game_mesh", icon="IMPORT")
             box.operator("hammerless.add_mannequin", icon="OUTLINER_OB_MESH")
         arm = obj.find_armature() if eff == "MODEL" and obj.type == "MESH" else None
         if arm is not None:                  # an animated model: always a Dynamic prop

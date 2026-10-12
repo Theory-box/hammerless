@@ -328,6 +328,110 @@ class HL_OT_add_game_skeleton(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _material_path(content, name: str, cdmaterials) -> str:
+    """A game mesh's material as a path under materials/ (its name under each of the model's material folders)."""
+    name = name.replace("\\", "/")
+    for cd in cdmaterials:
+        cand = (cd.strip("/") + "/" + name) if cd.strip("/") else name
+        if content.has_material(cand):
+            return cand.lower()
+    return name.lower()
+
+
+def import_game_mesh(context, arm, body: int = 0):
+    """The game character's own mesh (the body variant `body`) on its game-skeleton armature: skinned from the game's
+    stored rest pose into the armature's standing one, weighted to its bones, with the game's materials. A Custom
+    Model to edit, or to learn from."""
+    import bmesh
+    from ..core.gamemesh import load_game_mesh
+    from ..core.gamemodel import _qrot, load_game_model, standing_rest
+    from .ops import game_content, game_root
+    content = game_content(game_root(context))
+    path = arm.get("hl_game_model", "")
+    gm = load_game_model(content, path) if content is not None else None
+    mesh_data = load_game_mesh(content, path, body=body) if gm is not None else None
+    if mesh_data is None:
+        return None, "The armature's game model can't be read (set the Left 4 Dead 2 folder)"
+    upm = context.scene.hammerless.units_per_meter
+    standing, _src = standing_rest(content, gm)
+    bind = [Matrix.LocRotScale(Vector(p), Quaternion((q[3], q[0], q[1], q[2])), None) for p, q in gm.bone_world()]
+    stand = [Matrix.LocRotScale(Vector(p), Quaternion((q[3], q[0], q[1], q[2])), None)
+             for p, q in gm.bone_world(standing)]
+    skin = [st @ bi.inverted() for st, bi in zip(stand, bind)]   # stored rest -> standing, per bone (game units)
+    positions, normals = [], []
+    for co, n, links in zip(mesh_data.positions, mesh_data.normals, mesh_data.weights):
+        v, nn = Vector((0.0, 0.0, 0.0)), Vector((0.0, 0.0, 0.0))
+        for b, w in links:
+            v += w * (skin[b] @ Vector(co))
+            nn += w * (skin[b].to_3x3() @ Vector(n))
+        positions.append(v / upm)
+        normals.append(nn.normalized())
+    name = arm.name.replace(" Skeleton", "") + " Mesh"
+    me = bpy.data.meshes.new(name)
+    bm = bmesh.new()
+    verts = [bm.verts.new(p) for p in positions]
+    uv_layer = bm.loops.layers.uv.new()
+    mat_slots: dict[int, int] = {}
+    for tri, mi in zip(mesh_data.triangles, mesh_data.material_index):
+        try:
+            f = bm.faces.new([verts[k] for k in tri])
+        except ValueError:                   # (a triangle twice: skipped)
+            continue
+        if mi not in mat_slots:
+            mat_slots[mi] = len(mat_slots)
+        f.material_index = mat_slots[mi]
+        f.smooth = True
+        for loop, k in zip(f.loops, tri):
+            u, v = mesh_data.uvs[k]
+            loop[uv_layer].uv = (u, 1.0 - v)
+    bm.to_mesh(me)
+    bm.free()
+    for mi in sorted(mat_slots, key=lambda m: mat_slots[m]):
+        mpath = _material_path(content, mesh_data.materials[mi], mesh_data.cdmaterials)
+        label = mpath.split("/")[-1]
+        mat = bpy.data.materials.get(label) or bpy.data.materials.new(label)
+        mat.hammerless.source_material = mpath
+        me.materials.append(mat)
+    obj = bpy.data.objects.new(name, me)
+    (arm.users_collection[0] if arm.users_collection else context.scene.collection).objects.link(obj)
+    obj.parent = arm
+    groups = {}                              # (only bones something is weighted to get a group)
+    for vi, links in enumerate(mesh_data.weights):
+        for b, w in links:
+            if b not in groups:
+                groups[b] = obj.vertex_groups.new(name=gm.bones[b].name)
+            groups[b].add([vi], w, "ADD")
+    obj.modifiers.new("Armature", "ARMATURE").object = arm
+    obj.hammerless.role = "MODEL"
+    obj.hammerless.model_kind = "DYNAMIC"
+    obj.hammerless.model_collision = "NONE"
+    return obj, ""
+
+
+class HL_OT_import_game_mesh(bpy.types.Operator):
+    bl_idname = "hammerless.import_game_mesh"
+    bl_label = "Import Game Mesh"
+    bl_description = ("The game character's own mesh on the selected game skeleton (standing, weighted, with the game's "
+                      "materials): a Custom Model to edit into your own")
+    bl_options = {"REGISTER", "UNDO"}
+
+    body: bpy.props.IntProperty(name="Body Variant", default=0, min=0,
+                                description="Which of the character's body / head variants (0: the first of each)")
+
+    @classmethod
+    def poll(cls, context):
+        a = context.active_object
+        return a is not None and a.type == "ARMATURE" and bool(a.get("hl_game_model"))
+
+    def execute(self, context):
+        obj, why = import_game_mesh(context, context.active_object, self.body)
+        if obj is None:
+            self.report({"ERROR"}, why)
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Imported '{obj.name}': {len(obj.data.vertices)} vertices")
+        return {"FINISHED"}
+
+
 class HL_OT_add_mannequin(bpy.types.Operator):
     bl_idname = "hammerless.add_mannequin"
     bl_label = "Add Mannequin"
@@ -348,7 +452,7 @@ class HL_OT_add_mannequin(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (HL_OT_add_game_skeleton, HL_OT_load_game_animation, HL_OT_add_mannequin)
+CLASSES = (HL_OT_add_game_skeleton, HL_OT_load_game_animation, HL_OT_add_mannequin, HL_OT_import_game_mesh)
 
 
 def register():
