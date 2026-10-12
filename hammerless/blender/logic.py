@@ -135,8 +135,17 @@ def _event_inputs_take_many(*_args):
 
 
 class _Node:
+    """A logic node's header always says what kind of node it is: its type, then a note (an example's, or the
+    user's) or what it's set to (its object, event, function...): "Text Check: A pod?", "Script Call: Get Model
+    Name". Blender's own Label (Node panel) still overrides it for whoever sets one."""
     kind = ""
     category = "Flow"
+    note: StringProperty(name="Note", description="What this node is for, after its type in its header")
+    auto_title: StringProperty(options={"HIDDEN"})       # (what it's set to, kept up to date by the node itself)
+
+    def draw_label(self):
+        extra = self.note or self.auto_title
+        return f"{self.bl_label}: {extra}" if extra else self.bl_label
 
     @classmethod
     def poll(cls, ntree):
@@ -304,7 +313,7 @@ def _keeps_links(rebuild):
 
 
 def _label_from_target(self, context):
-    self.label = self.target.name if self.target else ""
+    self.auto_title = self.target.name if self.target else ""
 
 
 # ---------------------------------------------------------------- Events
@@ -323,12 +332,12 @@ class HL_NodeGameEvent(_Node, bpy.types.Node):
     bl_idname, bl_label, bl_icon = "HL_NodeGameEvent", "Game Event", "LIGHT_SUN"
     kind, category = "GAME_EVENT", "Events"
     event: EnumProperty(name="Event", items=[(k, v[0], v[0]) for k, v in GAME_EVENTS.items()],
-                        update=lambda self, c: setattr(self, "label", GAME_EVENTS[self.event][0]))
+                        update=lambda self, c: setattr(self, "auto_title", GAME_EVENTS[self.event][0]))
     once: BoolProperty(name="Only Once", description="Fires the first time only")
 
     def make_sockets(self):
         self.ev_out("happened", "On Event")
-        self.label = GAME_EVENTS[self.event][0]
+        self.auto_title = GAME_EVENTS[self.event][0]
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "event", text="")
@@ -1221,9 +1230,9 @@ def _rebuild_script_call(self, context=None):
     self.outputs.clear()
     f = vs.function(self.fn)
     if f is None:
-        self.label = ""
+        self.auto_title = ""
         return
-    self.label = vs.label(f)
+    self.auto_title = vs.label(f)
     if not vs.is_pure(f):
         self.ev_in("run", "Run")
         self.ev_out("then", "Then")
@@ -1272,9 +1281,9 @@ def _rebuild_script_event(self, context=None):
     self.outputs.clear()
     e = vs.event(self.event)
     if e is None:
-        self.label = ""
+        self.auto_title = ""
         return
-    self.label = f"On {vs.event_label(e)}"
+    self.auto_title = vs.event_label(e)
     self.ev_out("happened", "Happened")
     for fld in e["fields"]:
         _data_socket(self.outputs, vs.field_kind(fld), fld["name"], fld["name"].replace("_", " ").title())
@@ -1814,7 +1823,7 @@ def _rebuild_option(self, context=None):
         if opt[2] is not None and hasattr(s, "value"):
             s.value = opt[2] if kind != "num" else float(opt[2])
     self.ev_out("then", "Then")
-    self.label = f"{'Reset' if self.op == 'RESET' else 'Set'} {self.key}" if opt else ""
+    self.auto_title = f"{'Reset' if self.op == 'RESET' else 'Set'} {self.key}" if opt else ""
 
 
 class HL_NodeDirectorOption(_Block, bpy.types.Node):
@@ -1959,7 +1968,7 @@ def _rebuild_override(self, context=None):
             s.value = self.hook not in NO_BY_DEFAULT
     if self.hook == "AllowTakeDamage":
         _data_socket(self.inputs, "num", "damage", "New Damage")
-    self.label = f"Override: {self.hook}"
+    self.auto_title = self.hook
 
 
 class HL_NodeOverride(_Block, bpy.types.Node):
@@ -2004,7 +2013,7 @@ def _rebuild_answer(self, context=None):
     if self.hook == "AllowTakeDamage":
         _data_socket(self.inputs, "num", "damage", "New Damage")
     self.ev_out("then", "Then")
-    self.label = f"Answer: {self.hook}"
+    self.auto_title = self.hook
 
 
 class HL_NodeOverrideAnswer(_Block, bpy.types.Node):
@@ -2165,8 +2174,8 @@ def _compiled_links(tree, report):
                     continue
                 if out.bl_idname != inp.bl_idname and not (out.bl_idname in DATA_SOCKETS and inp.bl_idname in DATA_SOCKETS
                                                             and "HL_AnySocket" in (out.bl_idname, inp.bl_idname)):
-                    report.warnings.append(f"{tree.name}: the wire from '{src.label or src.name}' to "
-                                           f"'{node.label or node.name}' joins a {out.bl_label} with a "
+                    report.warnings.append(f"{tree.name}: the wire from '{node_title(src)}' to "
+                                           f"'{node_title(node)}' joins a {out.bl_label} with a "
                                            f"{inp.bl_label}, so it does nothing")
                     continue
                 if out.bl_idname not in ("HL_EventSocket",) + DATA_SOCKETS:
@@ -2203,7 +2212,7 @@ def _without_value_loops(tree, links, report):
     for l in links:
         if l.data and l.from_node in feeds and reaches(l.to_node, l.from_node):
             a, b = tree.nodes.get(l.from_node), tree.nodes.get(l.to_node)
-            report.warnings.append(f"{tree.name}: the value wire from '{a.label or a.name}' to '{b.label or b.name}' "
+            report.warnings.append(f"{tree.name}: the value wire from '{node_title(a)}' to '{node_title(b)}' "
                                    f"is part of a circle of value wires (a value worked out from itself), so it "
                                    f"does nothing")
             continue
@@ -2222,12 +2231,12 @@ def _check_nodes(context, tree, report) -> None:
                                                     if s.bl_idname == "HL_ObjectSocket"]
         for obj in objs:
             if isinstance(obj, bpy.types.Object) and obj.name not in scene_objects:
-                report.warnings.append(f"{tree.name}: node '{node.label or node.name}' points at '{obj.name}', "
+                report.warnings.append(f"{tree.name}: node '{node_title(node)}' points at '{obj.name}', "
                                        f"which isn't in this scene (deleted?): pick another object")
         target = getattr(node, "target", None)
         cls = getattr(node, "classname", "")
         if target is not None and cls and target.hammerless.classname and target.hammerless.classname != cls:
-            report.warnings.append(f"{tree.name}: node '{node.label or node.name}' shows the events of a {cls}, "
+            report.warnings.append(f"{tree.name}: node '{node_title(node)}' shows the events of a {cls}, "
                                    f"but '{target.name}' is now a {target.hammerless.classname}: pick it again")
         if node.bl_idname in ("HL_NodeDirector", "HL_NodeObject") and not node.inputs and not node.outputs:
             refresh_entity_node(node)
@@ -2286,6 +2295,47 @@ class HL_OT_logic_new(bpy.types.Operator):
         tree = new_tree(context)
         _show_tree(context, tree)
         return {"FINISHED"}
+
+
+def node_title(node) -> str:
+    """A node as its header shows it."""
+    if node.label:
+        return node.label
+    try:
+        return node.draw_label()
+    except Exception:
+        return node.name
+
+
+def migrate_labels(tree) -> None:
+    """Logic made before headers showed node types kept its title in Blender's Label (which hides the type): moved
+    after the type (a title the node worked out itself becomes that again, an example's or the user's a note)."""
+    for n in tree.nodes:
+        if not hasattr(n, "note") or not n.label:
+            continue
+        old = n.label
+        n.label = ""
+        for prefix in ("On ", "Override: ", "Answer: "):
+            if old.startswith(prefix) and n.bl_idname in ("HL_NodeScriptEvent", "HL_NodeOverride", "HL_NodeOverrideAnswer"):
+                old = old[len(prefix):]
+        if not n.auto_title and n.bl_idname in AUTO_TITLED:
+            n.auto_title = old
+        elif old != n.auto_title:
+            n.note = old
+
+
+AUTO_TITLED = {"HL_NodeObject", "HL_NodeObjectInfo", "HL_NodeGameEvent", "HL_NodeScriptCall", "HL_NodeScriptEvent",
+               "HL_NodeDirectorOption", "HL_NodeOverride", "HL_NodeOverrideAnswer"}
+
+
+@bpy.app.handlers.persistent
+def _migrate_on_load(*_args):
+    for tree in bpy.data.node_groups:
+        if tree.bl_idname == TREE:
+            try:
+                migrate_labels(tree)
+            except Exception:
+                pass
 
 
 def new_tree(context):
@@ -2432,11 +2482,14 @@ def register():
     logicgroups.register()
     bpy.types.NODE_MT_add.append(_add_menu)
     bpy.app.handlers.load_post.append(_on_load)
+    bpy.app.handlers.load_post.append(_migrate_on_load)
 
 
 def unregister():
     if _on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_on_load)
+    if _migrate_on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_migrate_on_load)
     bpy.types.NODE_MT_add.remove(_add_menu)
     from . import logicgroups
     logicgroups.unregister()

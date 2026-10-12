@@ -567,7 +567,7 @@ def _fill(tree, node_specs, link_specs, objects, groups, problems, io=None):
                 v = groups[v]
             setattr(node, k, _value(v, objects))
         if spec["label"]:
-            node.label = spec["label"]
+            node.note = spec["label"]             # (after its type in its header: "Text Check: A pod?")
         for ident, v in spec["sockets"].items():
             sock = _socket(node, ident, False)
             if sock is None:

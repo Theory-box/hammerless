@@ -18,6 +18,11 @@ from bpy.props import BoolProperty, EnumProperty, IntProperty, PointerProperty, 
 
 from ..core.logic import LLink
 
+
+def node_title(node) -> str:
+    from .logic import node_title as title
+    return title(node)
+
 ITEM_KINDS = [("event", "Event", "An event wire (orange)"), ("num", "Number", ""), ("bool", "True/False", ""),
               ("text", "Text", ""), ("vec", "Vector", ""), ("thing", "Entity / Player", ""),
               ("any", "Anything", "Any value")]
@@ -134,7 +139,7 @@ def _make_node_classes():
                 _add_socket(self, it, True)
 
         def draw_label(self):
-            return self.label or (self.group.name if self.group else "Group")
+            return f"Group: {self.note or (self.group.name if self.group else '(none)')}"
 
         def draw_buttons(self, context, layout):
             row = layout.row(align=True)
@@ -219,7 +224,7 @@ def flatten(context, tree, report, prefix: str = "", stack: tuple = (), checked:
     for n in nodes.values():
         if n.kind == "GROUP":
             if n.group is None:
-                report.warnings.append(f"{tree.name}: Group node '{n.label or n.name}' has no group picked")
+                report.warnings.append(f"{tree.name}: Group node '{node_title(n)}' has no group picked")
                 continue
             sub[n.name] = f = flatten(context, n.group, report, prefix + n.name + "/", stack + (tree.name,), checked)
             flat.nodes += f.nodes
@@ -388,7 +393,7 @@ class HL_OT_logic_group_make(_InLogic, bpy.types.Operator):
         crossing_out = [l for l in parent.links if l.from_node.name in names and l.to_node.name not in names]
         for l in crossing_in + crossing_out:
             if l.from_socket.bl_idname == "HL_ObjectSocket":
-                self.report({"WARNING"}, f"The object wire into '{l.to_node.label or l.to_node.name}' would cross "
+                self.report({"WARNING"}, f"The object wire into '{node_title(l.to_node)}' would cross "
                                          "into the group: select its Object Info node too")
                 return {"CANCELLED"}
         group = new_group_tree("Group")

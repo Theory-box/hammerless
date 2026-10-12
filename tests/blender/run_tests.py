@@ -1795,6 +1795,23 @@ def test_keyvalue_colors():
     assert k2.value == "0 255 0", k2.value
 
 
+def test_node_headers_show_type():
+    # a logic node's header starts with its type: "Text Check: A pod?", never just an example's title
+    from hammerless.blender.logic import migrate_labels, new_tree
+    reset_scene()
+    tree = new_tree(bpy.context)
+    n = tree.nodes.new("HL_NodeTextCheck")
+    n.note = "A pod?"
+    assert n.draw_label() == "Text Check: A pod?", n.draw_label()
+    old = tree.nodes.new("HL_NodeCompare")
+    old.label = "Still waiting?"                       # (a file from before: the title in Blender's Label)
+    ev = tree.nodes.new("HL_NodeOverride")
+    ev.label = "Override: AllowTakeDamage"
+    migrate_labels(tree)
+    assert old.label == "" and old.draw_label() == "Compare: Still waiting?", old.draw_label()
+    assert ev.label == "" and ev.draw_label() == "Override: AllowTakeDamage", ev.draw_label()
+
+
 # ---------------------------------------------------------------- runner
 
 def main():
