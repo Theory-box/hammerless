@@ -3435,5 +3435,77 @@ class TestStringtableDictionary(unittest.TestCase):
             self.assertTrue(st.for_map(big, "b").startswith(b"maps/b.bsp\0"))
 
 
+@unittest.skipUnless(GAME_ROOT, "Left 4 Dead 2 not installed")
+class TestGameModels(unittest.TestCase):
+    """The game's own animated models, read from its VPKs (numbers measured on the installed game)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from hammerless.core import gamemodel
+        from hammerless.core.vpk import GameContent
+        cls.gm = gamemodel
+        cls.content = GameContent(GAME_ROOT)
+        cls.common = gamemodel.load_game_model(cls.content, "models/infected/common_male_tshirt_cargos.mdl")
+        cls.lib = gamemodel.load_game_model(cls.content, "models/infected/anim_common.mdl")
+
+    @staticmethod
+    def _bone(model, name):
+        return [b.name for b in model.bones].index(name)
+
+    def test_common_skeleton_and_includes(self):
+        m = self.common
+        self.assertEqual(len(m.bones), 33)
+        self.assertEqual(m.sequences, [])                  # (commons get every sequence from includes)
+        self.assertEqual(m.includes, ["models/infected/anim_common.mdl", "models/infected/anim_common_vomit.mdl",
+                                      "models/infected/anim_common_male_exp.mdl"])
+        self.assertEqual(len(m.hitboxes), 23)
+        self.assertEqual(len(m.attachments), 14)
+        self.assertIsNone(self.gm.load_game_model(self.content, "models/infected/no_such_model.mdl"))
+
+    def test_sequences_through_includes(self):
+        self.assertEqual(len(self.lib.bones), 29)
+        self.assertEqual(len(self.lib.sequences), 407)
+        self.assertEqual([s.path for s in self.gm.animation_sources(self.content, self.common)],
+                         ["models/infected/common_male_tshirt_cargos.mdl"] + self.common.includes)
+        names = self.gm.all_sequence_names(self.content, self.common)
+        self.assertEqual(len(names), 421)                   # (what a prop_dynamic with this model has in game)
+        self.assertEqual(len({n.lower() for n in names}), len(names))
+        s = next(s for s in self.lib.sequences if s.name == "Idle_Alert_01a")
+        self.assertEqual((s.activity, s.fps, s.frames, s.loop), ("ACT_TERROR_IDLE_ALERT", 30.0, 138, True))
+
+    def test_survivor_bind_pose(self):
+        g = self.gm.load_game_model(self.content, "models/survivors/survivor_gambler.mdl")
+        self.assertEqual(len(g.bones), 85)
+        self.assertEqual(g.includes[0], "models/survivors/anim_gambler.mdl")
+        head = g.bone_world()[self._bone(g, "ValveBiped.Bip01_Head1")][0]
+        self.assertTrue(60 < head[2] < 70, head)            # (64.6: standing, feet at z 0)
+        self.assertIn("rhand", [c.name for c in g.ikchains])
+        self.assertIn("body_yaw", [p[0] for p in self.gm.load_game_model(
+            self.content, "models/survivors/anim_gambler.mdl").poseparams])
+
+    def test_animation_on_the_common(self):
+        s = next(s for s in self.lib.sequences if s.name == "Idle_Neutral_01")
+        pose = self.gm.retarget(self.lib, self.common, self.lib.frame(s, 0))
+        self.assertEqual(len(pose), len(self.common.bones))
+        exp = self._bone(self.common, "ValveBiped.Exp_Jaw")         # (a face bone anim_common lacks: bind pose)
+        self.assertEqual(pose[exp], (self.common.bones[exp].pos, self.common.bones[exp].quat))
+        face = self._bone(self.common, "ValveBiped.Bip01_Head1")
+        # Animation space is bind space turned +90 deg about Z: the head is over the feet, a little forward (+X)
+        head = self.common.bone_world(pose)[face][0]
+        self.assertTrue(55 < head[2] < 65, head)
+        self.assertTrue(-10 < head[0] < 15 and abs(head[1]) < 10, head)
+
+    def test_decoded_quaternions_are_unit(self):
+        for path in ("models/infected/anim_common.mdl", "models/survivors/anim_gambler.mdl",
+                     "models/v_models/v_rifle.mdl"):
+            m = self.gm.load_game_model(self.content, path)
+            for s in m.sequences[::25]:
+                for f in {0, s.frames // 2, max(s.frames - 1, 0)}:
+                    pose = m.frame(s, f)
+                    self.assertEqual(len(pose), len(m.bones))
+                    for _p, q in pose:
+                        self.assertAlmostEqual(sum(c * c for c in q), 1.0, delta=1e-3, msg=(path, s.name, f))
+
+
 if __name__ == "__main__":
     unittest.main()
