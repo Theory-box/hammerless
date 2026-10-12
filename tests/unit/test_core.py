@@ -3507,5 +3507,73 @@ class TestGameModels(unittest.TestCase):
                         self.assertAlmostEqual(sum(c * c for c in q), 1.0, delta=1e-3, msg=(path, s.name, f))
 
 
+@unittest.skipUnless(GAME_ROOT, "Left 4 Dead 2 not installed")
+class TestGameMeshes(unittest.TestCase):
+    """The meshes of the game's own models (numbers measured on the installed game)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from hammerless.core import gamemesh, gamemodel
+        from hammerless.core.vpk import GameContent
+        cls.gmesh = gamemesh
+        cls.content = GameContent(GAME_ROOT)
+        cls.common_path = "models/infected/common_male_tshirt_cargos.mdl"
+        cls.common = gamemesh.load_game_mesh(cls.content, cls.common_path)
+        cls.common_bones = len(gamemodel.load_game_model(cls.content, cls.common_path).bones)
+
+    def _sane(self, m, nbones):
+        nv = len(m.positions)
+        self.assertEqual((len(m.normals), len(m.uvs), len(m.weights)), (nv, nv, nv))
+        self.assertEqual(len(m.material_index), len(m.triangles))
+        self.assertEqual(len(m.bodypart), len(m.triangles))
+        for t in m.triangles:
+            for i in t:
+                self.assertTrue(0 <= i < nv)
+        for ws in m.weights:
+            self.assertTrue(1 <= len(ws) <= 3)
+            self.assertAlmostEqual(sum(w for _b, w in ws), 1.0, delta=1e-3)
+            for b, _w in ws:
+                self.assertTrue(0 <= b < nbones)
+        for u, v in m.uvs:
+            self.assertTrue(-4 <= u <= 4 and -4 <= v <= 4, (u, v))
+        for i in m.material_index:
+            self.assertTrue(0 <= i < len(m.materials))
+        agree = 0
+        for a, b, c in m.triangles:
+            pa, pb, pc = m.positions[a], m.positions[b], m.positions[c]
+            e1 = [pb[k] - pa[k] for k in range(3)]
+            e2 = [pc[k] - pa[k] for k in range(3)]
+            n = (e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0])
+            vn = [m.normals[a][k] + m.normals[b][k] + m.normals[c][k] for k in range(3)]
+            agree += sum(n[k] * vn[k] for k in range(3)) > 0
+        return agree / len(m.triangles)
+
+    def test_common(self):
+        m = self.common
+        self.assertEqual((len(m.positions), len(m.triangles)), (2404, 3676))   # body 0 (the .vvd: 26332, all)
+        self.assertGreater(self._sane(m, self.common_bones), 0.99)             # (measured 99.95 %)
+        self.assertEqual(m.materials[0], "Models/infected/common/L4D2/cim_tshirt_cargos")
+        self.assertEqual(m.cdmaterials[0], "models/infected/common/l4d2/")
+        self.assertEqual(set(m.bodypart), {"UpperBody", "Head"})              # (LowerBody: no meshes)
+        self.assertIsNone(self.gmesh.load_game_mesh(self.content, "models/infected/no_such_model.mdl"))
+
+    def test_bodies_and_lods(self):
+        # body is the game's packed value: UpperBody has base 1 (5 shirts), Head base 5 (7 heads)
+        other = self.gmesh.load_game_mesh(self.content, self.common_path, body=5)
+        self.assertNotEqual(len(other.positions), len(self.common.positions))
+        self.assertGreater(self._sane(other, self.common_bones), 0.99)
+        far = self.gmesh.load_game_mesh(self.content, self.common_path, lod=3)
+        self.assertGreater(self._sane(far, self.common_bones), 0.99)
+
+    def test_survivor(self):
+        from hammerless.core import gamemodel
+        path = "models/survivors/survivor_gambler.mdl"
+        m = self.gmesh.load_game_mesh(self.content, path)
+        self.assertEqual((len(m.positions), len(m.triangles)), (10965, 17446))  # (the .vvd: 18969, all)
+        nbones = len(gamemodel.load_game_model(self.content, path).bones)
+        self.assertGreater(self._sane(m, nbones), 0.99)                          # (measured 99.8 %)
+        self.assertIn("gambler_body", m.materials)
+
+
 if __name__ == "__main__":
     unittest.main()

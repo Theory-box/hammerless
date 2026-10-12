@@ -9,10 +9,13 @@ hitboxes of the same model come from gamemodel.py.
   submodel (body // base_i) % nummodels_i. body 0 = the first submodel of every bodypart.
 - Winding: the .vtx stores front faces clockwise (seen from the front); triangles here are turned to
   counter-clockwise, Blender's front-face convention, so a face's normal agrees with its vertex normals
-  (measured: > 99 % of faces on the commons and survivors; the rest are slivers and folds).
+  (measured: 99.95 % of common_male_tshirt_cargos' faces, 99.8 % of survivor_gambler's; the file's own
+  order agrees on under 0.2 %).
 - UV: as stored (v runs top-down); Blender's v is 1 - v.
 - Not read: flexes (face morphs), eyeballs, skin families other than 0, tangents, LODs' material
-  replacements. The .vvd's LOD fixup table is not needed (see _vvd_vertices).
+  replacements.
+- LODs: lod picks the .vtx's triangle lists; the vertices are always the .vvd's fixup table run for root
+  LOD 0 (what the game holds by default), which every LOD's lists index. Vertices are only those used.
 """
 from __future__ import annotations
 
@@ -52,17 +55,20 @@ def _i(b: bytes, at: int) -> int:
     return struct.unpack_from("<i", b, at)[0]
 
 
-def _vvd_vertices(vvd: bytes) -> list[int]:
-    """Byte offsets of the vertices, in order: the full (LOD 0) list, which every LOD's .vtx indexes.
-
-    The fixup table only matters to a game that drops the top LODs from memory (a root LOD > 0, as
-    r_rootlod does): it then packs the smaller list and rebases the meshes. Reading the whole list, as the
-    game does at root LOD 0, every LOD is right (measured: applying the fixups for LOD 1 here broke 17 %
-    of its faces)."""
+def _vvd_vertices(vvd: bytes, root_lod: int = 0) -> list[int]:
+    """Byte offsets of the vertices in the order the meshes index them: the fixup table's runs for every
+    LOD from root_lod down (the stored order is not that order when the table exists)."""
     if vvd[:4] != b"IDSV":
         raise ValueError("not a .vvd")
-    vstart = _i(vvd, 56)
-    return [vstart + _VVD_VERT * k for k in range(_i(vvd, 16))]
+    nfix, fixat, vstart = _i(vvd, 48), _i(vvd, 52), _i(vvd, 56)
+    if not nfix:
+        return [vstart + _VVD_VERT * k for k in range(_i(vvd, 16))]
+    out = []
+    for f in range(nfix):
+        flod, src, n = struct.unpack_from("<iii", vvd, fixat + 12 * f)
+        if flod >= root_lod:
+            out += [vstart + _VVD_VERT * (src + k) for k in range(n)]
+    return out
 
 
 def read_game_mesh(mdl: bytes, vvd: bytes, vtx: bytes, lod: int = 0, body: int = 0) -> GameMesh:
