@@ -310,7 +310,10 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                        f"Auto ({_detail_note(context, obj)})" if hs.brush_detail == "AUTO" else None)
         if eff in ("BRUSH", "BRUSH_ENTITY"):
             col.prop(hs, "use_convex_hull")
-        if eff == "MODEL":
+        arm = obj.find_armature() if eff == "MODEL" and obj.type == "MESH" else None
+        if arm is not None:                  # an animated model: always a Dynamic prop
+            _draw_animated(col, obj, arm)
+        elif eff == "MODEL":
             col.prop(hs, "model_kind")
             if hs.model_kind == "PHYSICS":
                 col.prop(hs, "physics_class")
@@ -319,6 +322,27 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                 col.prop(hs, "model_collision")
             if hs.model_kind == "DYNAMIC":
                 col.label(text="Name it (Keyvalues: targetname) to use it from logic", icon="INFO")
+
+
+def _draw_animated(col, obj, arm):
+    """What an animated Custom Model becomes: its bones and animations (each action of the armature)."""
+    from .extract import _armature_actions, _deform_bones
+    box = col.box()
+    bones = _deform_bones(arm)
+    box.label(text=f"Animated by '{arm.name}': {len(bones)} bones", icon="ARMATURE_DATA")
+    actions = _armature_actions(arm)
+    if not actions:
+        box.label(text="No animations yet: add actions to the armature (its action, or NLA tracks)", icon="INFO")
+    for act in actions[:12]:
+        name = str(act.get("hl_name") or act.name)
+        start, end = (int(round(f)) for f in act.frame_range)
+        loops = bool(getattr(act, "use_cyclic", False))
+        frames = end - start + (0 if loops and end > start else 1)       # (a loop's last frame is its first: once)
+        box.label(text=f"{name}: {frames} frames" + (", loops" if loops else ""), icon="ACTION")
+    if len(actions) > 12:
+        box.label(text=f"... and {len(actions) - 12} more")
+    box.label(text="A Dynamic prop playing 'idle' (or its first animation); name it to use it from logic", icon="INFO")
+    col.prop(obj.hammerless, "model_collision")
 
 
 _ROLE_NAMES = {"BRUSH": "World Brush", "BRUSH_ENTITY": "Brush Entity", "ENTITY": "Entity", "TERRAIN": "Terrain",
