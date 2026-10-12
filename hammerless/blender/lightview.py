@@ -439,8 +439,10 @@ def _on_depsgraph(scene, depsgraph):
     if _state["data"] is None:
         return
     mixing = _state["mix"] is not None
+    mixed = _state["mix"].objects if mixing else ()
     if mixing and any(isinstance(u.id, (bpy.types.Light, bpy.types.Scene)) or (
-            isinstance(u.id, bpy.types.Object) and u.id.type == "LIGHT") for u in depsgraph.updates):
+            isinstance(u.id, bpy.types.Object) and (u.id.type == "LIGHT" or u.id.name in mixed))
+            for u in depsgraph.updates):
         try:                             # (only when a light or the scene's settings changed: not every edit)
             remix(bpy.context)
         except Exception:
@@ -450,7 +452,8 @@ def _on_depsgraph(scene, depsgraph):
     for u in depsgraph.updates:
         i = u.id
         if mixing and (isinstance(i, (bpy.types.Light, bpy.types.Scene)) or (
-                isinstance(i, bpy.types.Object) and i.type == "LIGHT" and not u.is_updated_transform)):
+                isinstance(i, bpy.types.Object) and (i.type == "LIGHT" or i.name in mixed)
+                and not u.is_updated_transform)):
             continue
         if isinstance(i, _WATCHED) or (isinstance(i, bpy.types.Object) and i.type in ("MESH", "LIGHT")
                                        and (u.is_updated_geometry or u.is_updated_transform)):

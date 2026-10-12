@@ -27,6 +27,7 @@ class Mix:
         self.weights = applied.astype(np.float32).copy()
         self.baked = [baked_light(info) for info, _i, _v in layers]
         self.lost: list[str] = []            # (lights the view can't follow: renamed / deleted, or a colour added)
+        self.objects = {info.get("_hlobject", "") for info, _i, _v in layers}     # (the objects it follows)
         self.mixed = atlas.copy()            # (H, W, 4): what's shown (rest + layers * weights)
 
     def set_weights(self, weights: np.ndarray) -> bool:

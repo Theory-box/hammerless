@@ -191,6 +191,12 @@ def _vis_display(self, context):
 def _kv_changed(self, context):
     from .presets import on_kv_value
     on_kv_value(self, context)
+    if color_key_kind(self.key) == "LIGHT":         # (a light entity's colour or brightness: Live Light Mixing follows)
+        try:
+            from .lightview import remix
+            remix(context)
+        except Exception:
+            pass
 
 
 def _param_changed(self, context):
@@ -203,9 +209,62 @@ def _target_changed(self, context):
     on_output_target(self, context)
 
 
+# keyvalues that are a colour (0-255 each, as the game writes them) and brightness, or a colour alone: drawn as a
+# colour swatch (Blender's colour wheel) and a brightness field instead of the text
+LIGHT_COLOR_KEYS = {"_light", "_ambient", "_lighthdr", "_ambienthdr"}
+PLAIN_COLOR_KEYS = {"rendercolor", "_fogcolor", "fogcolor", "fogcolor2", "color", "_color", "skycolor"}
+
+
+def color_key_kind(key: str) -> str:
+    """'LIGHT' (colour + brightness), 'COLOR' (colour alone) or '' for a keyvalue's key."""
+    k = key.strip().lower()
+    return "LIGHT" if k in LIGHT_COLOR_KEYS else "COLOR" if k in PLAIN_COLOR_KEYS else ""
+
+
+def _kv_numbers(self) -> list[float]:
+    try:
+        return [float(x) for x in self.value.split()]
+    except ValueError:
+        return []
+
+
+def _kv_color_get(self):
+    v = _kv_numbers(self)
+    if len(v) < 3:
+        return (1.0, 1.0, 1.0)
+    return tuple(max(0.0, min(1.0, c / 255.0)) for c in v[:3])
+
+
+def _kv_color_set(self, rgb):
+    v = _kv_numbers(self)
+    rest = v[3:] if len(v) >= 4 else ([200.0] if color_key_kind(self.key) == "LIGHT" else [])
+    self.value = " ".join([str(int(round(max(0.0, min(1.0, c)) * 255))) for c in rgb] + [_num_text(x) for x in rest])
+
+
+def _kv_brightness_get(self):
+    v = _kv_numbers(self)
+    return v[3] if len(v) >= 4 else 0.0
+
+
+def _kv_brightness_set(self, b):
+    v = _kv_numbers(self)
+    rgb = v[:3] if len(v) >= 3 else [255.0, 255.0, 255.0]
+    self.value = " ".join([_num_text(c) for c in rgb] + [_num_text(max(0.0, b))] + [_num_text(x) for x in v[4:]])
+
+
+def _num_text(x: float) -> str:
+    return str(int(x)) if float(x).is_integer() else f"{x:g}"
+
+
 class HL_KeyValue(bpy.types.PropertyGroup):
     key: StringProperty(name="Key")
     value: StringProperty(name="Value", update=_kv_changed)
+    color: FloatVectorProperty(name="Color", subtype="COLOR_GAMMA", size=3, min=0.0, max=1.0,
+                               get=_kv_color_get, set=_kv_color_set,
+                               description="The colour (click for the colour wheel); the game stores it as 0-255 each")
+    brightness: FloatProperty(name="Brightness", min=0.0, soft_max=2000.0, step=100, precision=0,
+                              get=_kv_brightness_get, set=_kv_brightness_set,
+                              description="How bright the light is (the fourth number of the key)")
 
 
 class HL_Output(bpy.types.PropertyGroup):

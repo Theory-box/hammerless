@@ -1777,6 +1777,24 @@ def test_light_patterns():
     assert _object_class(lamp("Sun", "SUN")) == ""
 
 
+def test_keyvalue_colors():
+    # a light entity's "_light" shown as a colour swatch and a brightness: both write the key's text
+    reset_scene()
+    o = bpy.data.objects.new("e", None)
+    bpy.context.scene.collection.objects.link(o)
+    kv = o.hammerless.keyvalues.add()
+    kv.key, kv.value = "_light", "255 240 220 30"
+    assert abs(kv.color[1] - 240 / 255) < 1e-4 and kv.brightness == 30
+    kv.color = (1.0, 0.5, 0.0)
+    assert kv.value == "255 128 0 30", kv.value
+    kv.brightness = 120
+    assert kv.value == "255 128 0 120", kv.value
+    k2 = o.hammerless.keyvalues.add()
+    k2.key, k2.value = "rendercolor", "10 20 30"
+    k2.color = (0.0, 1.0, 0.0)
+    assert k2.value == "0 255 0", k2.value
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

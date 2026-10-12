@@ -12,11 +12,19 @@ class HL_UL_keyvalues(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
         d = CATALOG.get(data.classname)
         label = next((k.label for k in d.keys if k.key == item.key), None) if d else None
+        from .props import color_key_kind
         row = layout.row(align=True)
         row.prop(item, "key", text="", emboss=False)
-        row.prop(item, "value", text="")
-        if label:
-            row.label(text=label)
+        kind = color_key_kind(item.key)
+        n = len(item.value.split())
+        if kind and n in (3, 4) and not item.value.lstrip().startswith("-"):     # ("-1 -1 -1 1": HDR unset)
+            row.prop(item, "color", text="")                 # (a swatch: click it for the colour wheel)
+            if kind == "LIGHT":
+                row.prop(item, "brightness", text="Brightness")
+        else:
+            row.prop(item, "value", text="")
+            if label:
+                row.label(text=label)
 
 
 class HL_UL_outputs(bpy.types.UIList):
