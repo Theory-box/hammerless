@@ -31,6 +31,40 @@ list.sort(function(x, y) { return x[0] > y[0] ? 1 : (x[0] < y[0] ? -1 : 0); });
 foreach (p in list) ::HL_NukeQueue.append(p[1]);
 result = ::HL_NukeQueue.len();"""
 
+# each survivor's flashlight battery (a: seconds a full one lasts, and to recharge from empty; b: seconds an empty
+# one stays dead; c: the charge it comes back with); the flashlight is bit 4 (EF_DIMLIGHT) of m_fEffects, which a
+# script can read and clear; result = the HUD line
+FLASHLIGHT_BATTERY = """if (!("HL_Battery" in getroottable())) ::HL_Battery <- {};
+local now = Time(), parts = [], p = null;
+while (p = Entities.FindByClassname(p, "player")) {
+    if (!p.IsSurvivor() || p.IsDead()) continue;
+    local id = p.GetEntityIndex();
+    if (!(id in ::HL_Battery)) ::HL_Battery[id] <- {charge = 1.0, dead_until = 0.0, t = now};
+    local s = ::HL_Battery[id], dt = now - s.t, fx = NetProps.GetPropInt(p, "m_fEffects");
+    s.t = now;
+    local dead = now < s.dead_until;
+    if (dead) {      // empty: stays off, no recharge
+        if (fx & 4) NetProps.SetPropInt(p, "m_fEffects", fx & ~4);
+    } else if (s.dead_until > 0) {      // the wait is over: back with a little charge
+        s.dead_until = 0.0;
+        s.charge = c;
+    } else if (fx & 4) {      // on: drains
+        s.charge -= dt / a;
+        if (s.charge <= 0) {
+            s.charge = 0.0;
+            s.dead_until = now + b;
+            dead = true;
+            NetProps.SetPropInt(p, "m_fEffects", fx & ~4);
+        }
+    } else {      // off: recharges just as fast
+        s.charge += dt / a;
+        if (s.charge > 1) s.charge = 1.0;
+    }
+    parts.append(p.GetPlayerName() + " " + (dead ? "EMPTY" : (s.charge * 100).tointeger().tostring() + "%"));
+}
+result = "";
+foreach (i, part in parts) result += (i == 0 ? "Flashlights:  " : "   ") + part;"""
+
 MUZZLE_FLASH = """local p = a;      // (the event's Userid wire gives the player)
 local w = p != null ? p.GetActiveWeapon() : null;
 if (w != null && w.LookupAttachment("muzzle_flash") > 0) {
@@ -239,4 +273,26 @@ EXAMPLES_3 = [
          links=[("fire.happened", "flash.run"), ("fire.userid", "flash.a"), ("bright.value", "flash.b"),
                 ("reach.value", "flash.c"), ("model_bright.value", "flash.d")],
          steps=[("Every shot: the shooter's own muzzle light, on for a moment", ["fire", "bright", "reach", "model_bright", "flash"])]),
+    dict(title="Flashlight Battery", level="Scripting",
+         about="Flashlights run on batteries, like Half-Life: on, a survivor's battery drains (a full one lasts "
+               "'Lasts' seconds); off, it recharges just as slowly. Empty, the flashlight is switched off and stays "
+               "dead for 'Empty For' seconds, then comes back at 'Comes Back At' (0.05 = 5%) and recharges from there. "
+               "Ten times a second a Script node works out every survivor's battery and returns one line, "
+               "'Flashlights:  Nick 80%   Ellis EMPTY ...', which the HUD Text shows to the survivors across the top "
+               "(it reads the script's Result each moment). The flashlight is bit 4 of the player's m_fEffects, which "
+               "scripts can read and clear: no cheats. (The HUD needs Hammerless's own game mode: Build & Play starts "
+               "the map in it.)",
+         nodes=[N("start", "HL_NodeMapStart", 0, 0),
+                N("timer", "HL_NodeTimer", 0, 1, seconds=0.1),
+                N("lasts", "HL_NodeValue", 0, 2, label="Lasts (seconds)", sockets={"value": 60.0}),
+                N("empty_for", "HL_NodeValue", 0, 3, label="Empty For (seconds)", sockets={"value": 10.0}),
+                N("back_at", "HL_NodeValue", 0, 4, label="Comes Back At", sockets={"value": 0.05}),
+                N("battery", "HL_NodeScriptCode", 1, 1, label="Drain, recharge, switch off when empty",
+                  code=FLASHLIGHT_BATTERY),
+                N("hud", "HL_NodeHudText", 2, 0, slot="3", team="SURVIVORS", place=True, x=0.15, y=0.02, w=0.7,
+                  h=0.04)],
+         links=[("timer.tick", "battery.run"), ("lasts.value", "battery.a"), ("empty_for.value", "battery.b"),
+                ("back_at.value", "battery.c"), ("start.start", "hud.run"), ("battery.result", "hud.text")],
+         steps=[("Ten times a second: every survivor's battery", ["timer", "lasts", "empty_for", "back_at", "battery"]),
+                ("The line on the HUD", ["start", "hud"])]),
 ]
