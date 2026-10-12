@@ -59,6 +59,7 @@ The full walkthrough is in **[Getting Started](docs/GETTING_STARTED.md)**.
 | [Nav Mesh & Zombie Spawns](docs/NAV_AND_ZOMBIES.md) | Nav settings, the nav views, and why an area does or doesn't get zombies |
 | [Hordes & Events](docs/HORDE_EVENTS.md) | How the AI Director spawns infected; hordes, crescendos, Tanks |
 | [Logic Nodes](docs/LOGIC_NODES.md) | The node editor for map logic, with every node |
+| [Animated Models](docs/ANIMATED_MODELS.md) | Animated Custom Models, the game's own skeletons, reskinning the infected |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common problems and what to do |
 | [Development](docs/DEVELOPMENT.md) | Building, tests, code layout, contributing |
 
