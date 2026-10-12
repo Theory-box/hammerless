@@ -967,6 +967,9 @@ def test_logic_examples_build():
             shutil.copy(os.path.join(real, "bin", f), os.path.join(FAKE_GAME, "bin", f))
     bad = []
     for i, ex in enumerate(all_examples()):
+        if _needs_game_models(ex):
+            print(f"SKIP example {i + 1} here (it reads the game's models: test_game_skeleton_example)")
+            continue
         if not has_fgd and any(n["type"] in ("HL_NodeObject", "HL_NodeDirector") for n in ex["nodes"]):
             print(f"SKIP example {i + 1} (no game entity definitions here)")
             continue
@@ -1026,6 +1029,9 @@ def test_logic_examples_into_main_graph():
     assert main_tree(bpy.context) == mine
     want_links, spans = 0, []
     for i, ex in enumerate(all_examples()):
+        if _needs_game_models(ex):
+            print(f"SKIP example {i + 1} here (it reads the game's models: test_game_skeleton_example)")
+            continue
         if not has_fgd and any(n["type"] in ("HL_NodeObject", "HL_NodeDirector") for n in ex["nodes"]):
             continue
         before = set(mine.nodes)
@@ -1408,6 +1414,47 @@ def test_animated_custom_model():
     assert rig.data.pose_position == "REST"
     assert abs(rig.pose.bones["side_px"].location.y - 0.1) < 1e-6, rig.pose.bones["side_px"].location
     assert rig.pose.bones["top"].location.length < 1e-6
+
+
+def _needs_game_models(ex) -> bool:
+    """An example whose objects are built from the game's own models (a game skeleton): the tests' fake game folder
+    has none of those."""
+    return any(str(spec[0]).startswith("MANNEQUIN:") for spec in (ex.get("objects") or {}).values())
+
+
+def test_game_skeleton_example():
+    # Reskinned Commons, with the real game's files: a game skeleton (the common's 33 bones, standing) and a
+    # mannequin weighted to it; built, the model is in the game's space with the commons' animation libraries in
+    # their order, their 23 hitboxes and every bone kept; the prop plays 'Idle', turned a quarter from the object
+    from hammerless.blender.logic_examples import all_examples, build_example
+    from hammerless.blender import ops
+    from hammerless.core.compile import find_game_root
+    real = find_game_root()
+    if not real or not os.path.exists(os.path.join(real, "left4dead2", "pak01_dir.vpk")):
+        print("SKIP (no game here)")
+        return
+    s = reset_scene()
+    s.game_root = real
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    bpy.ops.hammerless.add_entity(classname="info_survivor_position")
+    i = next(k for k, e in enumerate(all_examples()) if e["title"] == "Reskinned Commons")
+    problems = []
+    build_example(bpy.context, i, problems)
+    assert not problems, problems
+    man = bpy.data.objects["Example %02d mannequin" % (i + 1)]
+    arm = man.find_armature()
+    assert arm is not None and arm["hl_game_model"].endswith("common_male_tshirt_cargos.mdl")
+    assert len(arm.data.bones) == 33
+    head = arm.data.bones["ValveBiped.Bip01_Head1"].head_local.z * s.units_per_meter
+    assert 50 < head < 70, head                                  # (standing, not the lying stored rest pose)
+    ir, text, rep = ops.build_map_text(bpy.context, real)
+    assert text is not None, rep.errors
+    sk = next(sp for sp in ir.models.values() if sp.skeleton is not None).skeleton
+    assert sk.valve_space and sk.includes == ["infected/anim_common.mdl", "infected/anim_common_vomit.mdl",
+                                              "infected/anim_common_male_exp.mdl"], sk.includes
+    assert len(sk.bones) == 33 and len(sk.hitboxes) == 23 and sk.default_animation == "Idle"
+    prop = next(e for e in ir.entities if e.classname == "prop_dynamic")
+    assert prop.keyvalues.get("DefaultAnim") == "Idle" and abs(prop.angles[1] + 90) < 0.01, (prop.keyvalues, prop.angles)
 
 
 def test_organize_scene():

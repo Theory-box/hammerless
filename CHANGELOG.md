@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Game skeletons** (Add > Game Skeleton): an armature with the bones of one of the game's characters (common infected, survivors, Hunter, Smoker, Boomer, Tank, Witch), standing, facing -Y as in the game's files. A mesh weighted to it (vertex groups named after the bones) becomes a model that borrows that character's whole animation library, its hitboxes (head, chest, arms, legs), attachments and IK; your own actions on the armature are added as extra animations. Tested: our compiled model's bones, hitboxes, attachments and animation libraries match the game's own common exactly; in game, a real common infected wearing it walks, sits, gets shot and plays its death animation.
+- **New example: Reskinned Commons** (Examples 3): a mannequin (a stand-in mesh) on the common-infected skeleton, and logic that puts every common infected in it (For Each, Set Model). Tested in game: all ~35 commons on the map wore it within half a second and kept walking, sitting and lying down as commons do.
 - Fixes to node groups (from an audit):
   - an event passed straight through a group (input wired to output) fired twice, four times when nested;
   - Make Group (Ctrl+G) gave an input the type of the node inside, not of what's wired in, which could break the wire;

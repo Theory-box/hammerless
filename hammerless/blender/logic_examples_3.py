@@ -572,4 +572,26 @@ EXAMPLES_3 = [
                  ["timer", "each", "pod"]),
                 ("Shot: a pod bursts at once", ["ask", "model", "is_pod", "burst_at", "waiting", "both", "if_hit",
                                                 "now", "set_off"])]),
+    dict(title="Reskinned Commons", level="Animated Models",
+         objects={"mannequin": ("MANNEQUIN:COMMON_MALE", (0.0, 0.0, 0.0))},
+         about="Your own model on the common infected. The example adds the game's common-infected skeleton (Add > Game "
+               "Skeleton) and a mannequin weighted to it, a stand-in for a real mesh (replace its mesh, keep the weights to "
+               "the game's bones). Built, the mannequin borrows the commons' 400 animations and their hitboxes; it "
+               "stands in the map playing their Idle. Twice a second, For Each goes through the common infected, and every "
+               "one not wearing the mannequin's model gets it (Set Model): they walk, attack, flinch and die as "
+               "commons do, in your model. (Tested in game: a common in the mannequin walked, took a shotgun blast and "
+               "played its death animation.)",
+         nodes=[N("timer", "HL_NodeTimer", 0, 0, seconds=0.5),
+                N("each", "HL_NodeForEach", 1, 0, what="COMMONS"),
+                fn("theirs", "entity:GetModelName", 1, 2),
+                fn("ours", "entity:GetModelName", 1, 3, {"target": "@mannequin"}),
+                N("other", "HL_NodeCheck", 2, 2, label="Not ours yet?", op="NOT_EQUAL"),
+                N("if_other", "HL_NodeIf", 2, 0),
+                fn("wear", "entity:SetModel", 3, 0)],
+         links=[("timer.tick", "each.run"), ("each.each", "if_other.in"), ("each.item", "theirs.target"),
+                ("theirs.result", "other.a"), ("ours.result", "other.b"), ("other.result", "if_other.condition"),
+                ("if_other.true", "wear.run"), ("each.item", "wear.target"), ("ours.result", "wear.p0")],
+         steps=[("Twice a second, every common not in our model yet", ["timer", "each", "theirs", "ours", "other",
+                                                                      "if_other"]),
+                ("Wear the mannequin's model", ["wear"])]),
 ]

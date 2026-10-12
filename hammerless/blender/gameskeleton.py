@@ -255,6 +255,10 @@ def make_mannequin(context, arm, name: str, collection, thickness: float = 2.5):
         g = obj.vertex_groups.get(bone) or obj.vertex_groups.new(name=bone)
         g.add(verts, 1.0, "REPLACE")
     obj.modifiers.new("Armature", "ARMATURE").object = arm
+    mat = bpy.data.materials.get("Mannequin") or bpy.data.materials.new("Mannequin")
+    mat.diffuse_color = (0.45, 0.4, 0.38, 1.0)
+    mat.hammerless.source_material = "models/infected/boomer/boomer"    # (a fleshy skin from the game)
+    mesh.materials.append(mat)
     obj.hammerless.role = "MODEL"
     obj.hammerless.model_kind = "DYNAMIC"
     obj.hammerless.model_collision = "NONE"

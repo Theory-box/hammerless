@@ -500,6 +500,16 @@ def _objects(context, number, example):
         elif shape == "POD":                       # (an animated model: mesh, armature, actions)
             from .examplemodels import make_pod
             obj = make_pod(context, name, where, coll)
+        elif shape.startswith("MANNEQUIN:"):          # (a stand-in mesh on one of the game's skeletons)
+            from .gameskeleton import CHARACTERS, _load, build_armature, make_mannequin
+            path = dict((k, p) for k, _l, p in CHARACTERS)[shape.split(":", 1)[1]]
+            gm, content, why = _load(context, path)
+            if gm is None:
+                raise RuntimeError(why)
+            context.scene.cursor.location = where
+            arm = build_armature(context, gm, content, name + " Skeleton", coll)
+            context.scene.cursor.location = base
+            obj = make_mannequin(context, arm, name, coll)
         elif shape == "SPOT":
             obj = bpy.data.objects.new(name, None)
             obj.empty_display_type, obj.empty_display_size = "SINGLE_ARROW", 0.5
