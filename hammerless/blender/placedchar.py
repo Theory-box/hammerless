@@ -15,7 +15,7 @@ from mathutils import Matrix, Quaternion, Vector
 
 DEFAULT_ANIMATION = {"COMMON_MALE": "Sitting06", "COMMON_FEMALE": "Sitting06"}
 # animations that aren't a whole pose of their own (layers, gestures, aim matrices...): left out of the list
-_NOT_A_POSE = ("layer", "noise", "aim", "gesture", "delta", "@", "pose_param", "flinch_")
+_NOT_A_POSE = ("layer", "noise", "aim_", "_aim", "gesture", "delta", "@", "pose_param", "flinch_")
 
 
 def _content(context):
@@ -33,6 +33,8 @@ def posed_mesh(context, model_path: str, body: int, animation: str, frame: int):
     from .preview import _model_material
     import os
     upm = context.scene.hammerless.units_per_meter
+    if not context.scene.hammerless.model_previews:
+        return None
     name = cache_name("HL_pose_", f"{model_path}|{body}|{animation}|{frame}", upm)
     mesh = bpy.data.meshes.get(name)
     if mesh is not None:
@@ -86,6 +88,21 @@ def _set_kv(obj, key, value):
     kv.key, kv.value = key, str(value)
 
 
+def placed_model_changed(context, obj, model: str) -> None:
+    """A placed character given another model (Pick Model): its standing idle, the preview posed again."""
+    from ..core.gamemodel import all_sequence_names, load_game_model
+    from .gameskeleton import whole_body_idle
+    content = _content(context)
+    gm = load_game_model(content, model) if content is not None else None
+    names = all_sequence_names(content, gm) if gm is not None else []
+    if _kv(obj, "DefaultAnim") not in names:
+        _set_kv(obj, "DefaultAnim", whole_body_idle(names) or "Idle")
+    obj["hl_pose_frame"] = 0
+    if not refresh_preview(context, obj):
+        from .ops import preview_mesh
+        obj.data = preview_mesh("prop_dynamic", context.scene.hammerless.units_per_meter, model)
+
+
 def refresh_preview(context, obj) -> bool:
     """The object's preview posed again from its keyvalues (model, DefaultAnim, body) and its pose frame."""
     try:
@@ -114,14 +131,17 @@ def make_placed_character(context, character: str, location, collection=None, na
         content = _content(context)
         gm = load_game_model(content, path) if content is not None else None
         anim = (whole_body_idle(all_sequence_names(content, gm)) if gm is not None else "") or "Idle"
+    import re
     taken = {kv.value for o in bpy.data.objects for kv in o.hammerless.keyvalues if kv.key == "targetname"}
-    k = 1
-    while f"placed_{k}" in taken:
+    stem = re.sub(r"[^a-z0-9_]+", "_", name.lower()).strip("_") if name else "placed"
+    target, k = (stem, 1) if name else (f"{stem}_1", 1)
+    while target in taken:                       # (a free name: logic finds them by name)
         k += 1
-    obj = make_entity_object(context, "prop_dynamic", location, collection=collection, name=name or f"Placed {k}",
+        target = f"{stem}_{k}"
+    obj = make_entity_object(context, "prop_dynamic", location, collection=collection,
+                             name=name or f"Placed {target.split('_')[-1]}",
                              keyvalues={"model": path, "DefaultAnim": anim, "body": str(body), "solid": "2",
-                                        "health": "100000", "targetname": name.lower().replace(" ", "_") if name
-                                        else f"placed_{k}"})
+                                        "health": "100000", "targetname": target})
     obj["hl_placed"] = character
     obj["hl_pose_frame"] = 0
     refresh_preview(context, obj)

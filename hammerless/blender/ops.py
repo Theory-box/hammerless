@@ -1847,7 +1847,11 @@ class HL_OT_pick_model(bpy.types.Operator):
             kv = next((x for x in hs.keyvalues if x.key == "model"), None) or hs.keyvalues.add()
             kv.key, kv.value = "model", self.model
             if obj.type == "MESH" and hs.role in ("ENTITY", "AUTO"):
-                obj.data = preview_mesh(hs.classname, s.units_per_meter, self.model)
+                if obj.get("hl_placed"):          # (a placed character: its own standing idle, posed)
+                    from .placedchar import placed_model_changed
+                    placed_model_changed(context, obj, self.model)
+                else:
+                    obj.data = preview_mesh(hs.classname, s.units_per_meter, self.model)
                 style_entity_object(obj)
         self.report({"INFO"}, self.model)
         return {"FINISHED"}

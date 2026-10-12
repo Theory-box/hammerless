@@ -513,8 +513,10 @@ def _objects(context, number, example):
         elif shape.startswith("PLACED:"):            # (one of the game's characters playing an animation)
             from .placedchar import _set_kv, make_placed_character
             _tag, character, anim = shape.split(":", 2)
-            obj = make_placed_character(context, character, where, coll, name=name, animation=anim)
-            for k, v in (extra[0] if extra else {}).items():
+            kvs = extra[0] if extra else {}
+            obj = make_placed_character(context, character, where, coll, name=name, animation=anim,
+                                        body=int(kvs.get("body", 0) or 0))
+            for k, v in kvs.items():
                 _set_kv(obj, k, v)
         elif shape == "SPOT":
             obj = bpy.data.objects.new(name, None)

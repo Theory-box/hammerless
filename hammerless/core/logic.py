@@ -1444,7 +1444,11 @@ def hook_function(hook: str, rows: list) -> str:
     no = hook in NO_BY_DEFAULT          # normally no: any yes wins; otherwise any no wins
     default = {"bool": "false" if no else "true", "text": '""', "num": args[0][0] if args else "0"}.get(answer_kind, "null")
     join = "||" if no else "&&"
-    body = ctx + f"    local answer = {default};\n"
+    # (an Asked chain can cause the same question again inside it, e.g. damage dealt from a damage override: the
+    # inner call puts the details and answer table back as they were when it ends, so this call's rows keep theirs)
+    body = ('    local hl_ctx_was = ("HL_Ctx" in getroottable()) ? ::HL_Ctx : null;\n'
+            '    local hl_ans_was = ("HL_Ans" in getroottable()) ? ::HL_Ans : null;\n'
+            + ctx + f"    local answer = {default};\n")
     for code, answer, damage in rows:
         if code:        # its Asked chain; an Answer node in it leaves the answer in ::HL_Ans
             body += "    ::HL_Ans <- {};\n" + code + "\n"
@@ -1459,6 +1463,7 @@ def hook_function(hook: str, rows: list) -> str:
         if answer is not None:
             body += (f"    answer = answer {join} ({answer});\n" if answer_kind == "bool"
                      else f"    {{ local a = {answer}; if (a != null && a != \"\") answer = a; }}\n")
+    body += "    ::HL_Ctx <- hl_ctx_was; ::HL_Ans <- hl_ans_was;\n"
     if answer_kind == "num":
         body += "    return answer.tointeger();\n"
     elif answer_kind == "text":
