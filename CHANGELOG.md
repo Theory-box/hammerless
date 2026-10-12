@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.4 (test release, 2026-10-11)
 
 - **Fix: example objects on maps with a map collection** (imported maps, or after Organize Scene): Add Example put its objects (e.g. Slow Motion Headshots' Time Scale entity) outside the map collection, so they weren't built and the example did nothing. They now go into the map collection. The build warning for a logic node whose object isn't built now says it may be outside the map collection (it said 'plain mesh').
 - **New example: Flashlight Battery** (Examples 3): flashlights drain while on and recharge just as slowly while off (Lasts, 60 s); empty, the flashlight switches off and stays dead for Empty For (10 s), then comes back at 5% and recharges. One HUD line across the top shows every survivor's battery. No cheats; tested in the game (drain, switched off when empty, back at 5%, recharge).
