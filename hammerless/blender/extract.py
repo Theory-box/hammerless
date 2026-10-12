@@ -639,7 +639,11 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
                                        [tuple(v.index for v in f.verts) for f in hull.faces]))
                 hull.free()
             bm.free()
-        if arm is not None:
+        if arm is not None and flip:
+            materials.report.warnings.append(
+                f"Custom Model '{obj.name}' is mirrored (a negative scale): animated models can't be mirrored yet, so "
+                "it's built still. Apply the scale, or mirror the mesh and armature themselves")
+        elif arm is not None:
             skeleton = _skeleton(obj, arm, mesh, tri_vis, size, materials.report)
     finally:
         eval_obj.to_mesh_clear()
@@ -665,10 +669,9 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
 # ---------------------------------------------------------------- animated models (armatures)
 
 def _bone_space(obj, arm):
-    """Armature space -> the model's (the mesh object's own axes, before its scale): bones are in the same space
-    as the vertices."""
-    loc, rot, _sca = obj.matrix_world.decompose()
-    return Matrix.LocRotScale(loc, rot, None).inverted() @ arm.matrix_world
+    """Armature space -> the mesh object's local space, where its vertices are before they're scaled by `size` (the
+    object's scale times Hammer units per metre): bones get that same scaling in _local."""
+    return obj.matrix_world.inverted() @ arm.matrix_world
 
 
 def _local(m_parent, m, size) -> tuple:
@@ -735,12 +738,15 @@ def _skeleton(obj, arm, mesh, tri_vis, size, report):
     for v in mesh.vertices:
         per_vertex.append([(group_bone[g.group], g.weight) for g in v.groups if g.group in group_bone])
     weights = [tuple(per_vertex[i] for i in vis) for vis in tri_vis]
+    if not any(per_vertex):
+        report.warnings.append(f"Custom Model '{obj.name}': none of its vertices is weighted to a bone of '{arm.name}' "
+                               "(vertex groups named after the bones), so it moves as one piece with the first bone")
     # attachments: empties parented to a bone
     atts = []
     for child in arm.children:
         if child.type == "EMPTY" and child.parent_type == "BONE" and child.parent_bone in index:
             bi = index[child.parent_bone]
-            m = (arm.matrix_world @ bones[bi].matrix_local).inverted() @ child.matrix_world
+            m = _unscaled(space @ bones[bi].matrix_local).inverted() @ (obj.matrix_world.inverted() @ child.matrix_world)
             loc, rot, _s = m.decompose()
             e = rot.to_euler("XYZ")
             atts.append(skeletal.Attachment(child.name, bi, tuple(loc * size.x), (e.x, e.y, e.z)))
@@ -808,13 +814,23 @@ def _sample_actions(obj, arm, sk, size, report):
     by_name = {b.name: arm.pose.bones[b.name] for b in sk.bones}
     parents = [sk.bones[b.parent].name if b.parent >= 0 else None for b in sk.bones]
     used = set()
+    # (each action from the rest pose: a bone one action keys doesn't carry over into the next; the rig is put
+    # back as it was, and sampled in Pose Position even if it was left in Rest Position)
+    basis = {pb.name: pb.matrix_basis.copy() for pb in arm.pose.bones}
+    old_position = arm.data.pose_position
+    arm.data.pose_position = "POSE"
     try:
         for act in actions:
+            for pb in arm.pose.bones:
+                pb.matrix_basis = Matrix.Identity(4)
             ad.action = act
             slots = list(getattr(act, "slots", []))
             if slots and hasattr(ad, "action_slot"):
                 ad.action_slot = next((sl for sl in slots if getattr(sl, "target_id_type", "") == "OBJECT"), slots[0])
             start, end = (int(round(f)) for f in act.frame_range)
+            cyclic = bool(getattr(act, "use_cyclic", False))
+            if cyclic and end > start:
+                end -= 1             # (a loop's last frame is its first again: written once)
             frames = []
             for f in range(start, max(end, start) + 1):
                 scene.frame_set(f)
@@ -830,8 +846,12 @@ def _sample_actions(obj, arm, sk, size, report):
             while name.lower() in used:
                 name += "_2"
             used.add(name.lower())
-            sk.animations.append(skeletal.Animation(name, frames, fps, bool(getattr(act, "use_cyclic", False))))
+            sk.animations.append(skeletal.Animation(name, frames, fps, cyclic))
     finally:
+        arm.data.pose_position = old_position
+        for pb in arm.pose.bones:
+            if pb.name in basis:
+                pb.matrix_basis = basis[pb.name]
         ad.use_nla = old_nla
         ad.action = old_action
         if old_slot is not None and hasattr(ad, "action_slot"):
@@ -1036,6 +1056,7 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report, content
     """Copies made by collection instances (Add > Collection Instance, linked asset kits) and by
     geometry nodes: each copy exports like the object it copies, at the copy's place."""
     skipped, skipped_geo = set(), set()
+    later = []           # animated models: made after the walk (making one re-evaluates the scene)
     for inst in depsgraph.object_instances:
         if not inst.is_instance or inst.parent is None:
             continue
@@ -1071,9 +1092,18 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report, content
                 ir.entities.append(Entity(src.hammerless.classname, origin, source_angles(matrix),
                                           object_keyvalues(src), [], label, object_outputs(src)))
             elif role == "MODEL" and src.type == "MESH":
-                ir.entities.append(model_prop(src, depsgraph, scale, materials, ir, content, matrix, label))
+                if src.find_armature() is not None:
+                    later.append((src, matrix, label))
+                else:
+                    ir.entities.append(model_prop(src, depsgraph, scale, materials, ir, content, matrix, label))
             elif role in ("TERRAIN", "LIGHT"):
                 skipped.add(f"{src.name} ({role.lower()})")
+        except Exception as ex:
+            report.errors.append(f"'{label}': {ex}")
+    for src, matrix, label in later:
+        try:
+            ir.entities.append(model_prop(src, bpy.context.evaluated_depsgraph_get(), scale, materials, ir, content,
+                                          matrix, label))
         except Exception as ex:
             report.errors.append(f"'{label}': {ex}")
     if skipped:

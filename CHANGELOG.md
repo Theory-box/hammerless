@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Animated Custom Models**: a Custom Model whose mesh has an Armature modifier becomes an animated game model. Its deform bones, vertex weights (the strongest 3 per vertex) and every action of the armature (its action and the actions on its NLA tracks) become animations named after the actions; Cyclic Animation on makes one loop. Empties parented to a bone become attachment points. The prop is a prop_dynamic playing `idle` (or its first animation) on its own; logic plays others by name. Built through the game's studiomdl (our own model writer still makes the static props). Tested in game: a pod plays its idle and swell animations, its bones move.
+- **New example: Swelling Pod** (Examples 3): an animated pod made by the example (mesh, armature, 'idle' and 'swell' actions), its behaviour a node group. A survivor who comes close sets it off: it swells, grows and bursts (an explosion, damage and a green flash of spores for survivors close by); shot, it bursts at once. Duplicates work too. Tested in game: walk-up (swell, grow, burst, 20 damage, removed) and shooting (bursts on the next tick, with nobody near).
+- Per Player variables also work per entity (a prop, an infected wired into Player); a player's and an entity's values are kept apart now (before, a player's user id and an entity's number could share one).
+- Research for reusing the game's own skeletons and animations: docs/dev/research (what the game's models contain, an animation decoder, how to compile animated models).
+
 ## 0.13.5 (test release, 2026-10-11)
 
 - **Node groups for logic graphs** (like Blender's shader / Geometry Nodes groups): Ctrl+G puts the selected nodes into a group used by one Group node (wires in and out become its inputs and outputs), Tab goes in and out, Ctrl+Alt+G ungroups; Group Input / Output inside, the sidebar's Group tab edits the sockets; Shift+A > Groups adds any group again. Each copy is built on its own (values typed on a Group node reach the nodes inside; Set / Get Variable *This Group Copy* is per copy). Tested in a real Blender window (make, enter, edit sockets, leave, ungroup: the built graph stays the same).

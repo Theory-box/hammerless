@@ -332,8 +332,8 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
     from ..core import models as m
     studiomdl = os.path.join(root, "bin", "studiomdl.exe")
     own = context_scene_setting("model_compiler", "HAMMERLESS") == "HAMMERLESS"
-    animated = any(spec.skeleton is not None for spec in ir.models.values())
-    if (animated or not own) and not os.path.exists(studiomdl):
+    no_studiomdl = not os.path.exists(studiomdl)
+    if not own and no_studiomdl:
         rep.errors.append("Custom Models need studiomdl.exe from the Left 4 Dead 2 Authoring Tools (Steam > Library > "
                           "Tools): it isn't in the game's bin folder")
         return
@@ -352,6 +352,11 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
             with open(stamp) as f:
                 old = f.read()
         if old == sig:
+            continue
+        if spec.skeleton is not None and no_studiomdl:
+            rep.errors.append(f"Custom Model '{name.split('/')[-1]}' is animated: animated models need studiomdl.exe "
+                              "from the Left 4 Dead 2 Authoring Tools (Steam > Library > Tools), which isn't in the "
+                              "game's bin folder")
             continue
         if own and spec.skeleton is None:      # (animated models: studiomdl; our writer makes static props only)
             try:

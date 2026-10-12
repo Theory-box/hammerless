@@ -1356,7 +1356,7 @@ def test_animated_custom_model():
     assert len(specs) == 1, list(ir.models)
     sk = specs[0].skeleton
     assert [b.name for b in sk.bones] == ["root", "top", "side_px", "side_nx", "side_py", "side_ny"], sk.bones
-    assert [(a.name, a.loop, len(a.frames)) for a in sk.animations] == [("idle", True, 41), ("swell", False, 61)]
+    assert [(a.name, a.loop, len(a.frames)) for a in sk.animations] == [("idle", True, 40), ("swell", False, 61)]
     assert [a.name for a in sk.attachments] == ["tip"]
     assert len(sk.weights) == len(specs[0].triangles)
     # the top bone moves 0.45 m in 'swell' (first frame to last), in Hammer units (relative to its parent)
@@ -1370,6 +1370,23 @@ def test_animated_custom_model():
     from hammerless.core import models as m
     qc = m.qc_text(specs[0])
     assert "$staticprop" not in qc and '$sequence "idle"' in qc and '$sequence "swell"' in qc, qc
+    # the rig scaled 2x (the mesh with it), left in Rest Position, a bone posed by hand: bones scale like the
+    # vertices (once), the actions still animate, and the rig is left as it was
+    top_rest = sum(c * c for c in sk.bones[1].pos) ** 0.5
+    rig.scale = (2.0, 2.0, 2.0)
+    rig.data.pose_position = "REST"
+    rig.pose.bones["side_px"].location = (0.0, 0.1, 0.0)
+    bpy.context.view_layer.update()
+    ir, text, rep = ops.build_map_text(bpy.context, None)
+    sk2 = next(sp for sp in ir.models.values() if sp.skeleton is not None).skeleton
+    top2 = sum(c * c for c in sk2.bones[1].pos) ** 0.5
+    assert abs(top2 - 2 * top_rest) < 0.05, (top_rest, top2)
+    a, b = sk2.animations[1].frames[0][1][0], sk2.animations[1].frames[-1][1][0]
+    moved = sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
+    assert abs(moved - 2 * 0.45 * s.units_per_meter) < 1.0, moved
+    assert rig.data.pose_position == "REST"
+    assert abs(rig.pose.bones["side_px"].location.y - 0.1) < 1e-6, rig.pose.bones["side_px"].location
+    assert rig.pose.bones["top"].location.length < 1e-6
 
 
 def test_organize_scene():

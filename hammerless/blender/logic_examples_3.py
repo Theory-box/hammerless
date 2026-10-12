@@ -169,7 +169,9 @@ SWELLING_POD = dict(
            fn("hurt", "entity:TakeDamage", 7, 1, {"p1": 0.0}),
            fn("spores", "ScreenFade", 8, 1, {"p1": 70.0, "p2": 150.0, "p3": 40.0, "p4": 230.0, "p5": 1.5,
                                              "p6": 0.4, "p7": 1.0}),
-           N("gone", "HL_NodeFireInput", 6, 0, label="Remove the pod", sockets={"input": "Kill"})],
+           N("forget", "HL_NodeSetVariable", 6, 0, label="Forget it (entity numbers are used again)",
+             var_name="pod_burst_at", scope="PLAYER", sockets={"value": 0.0}),
+           N("gone", "HL_NodeFireInput", 7, 0, label="Remove the pod", sockets={"input": "Kill"})],
     links=[("in.run", "if_pod.in"), ("in.pod", "model.target"), ("model.result", "is_pod.a"),
            ("in.name_has", "is_pod.b"), ("is_pod.result", "if_pod.condition"),
            ("in.pod", "burst_at.player"), ("burst_at.result", "started.a"),
@@ -192,13 +194,15 @@ SWELLING_POD = dict(
            ("in.burst_radius", "close.b"), ("close.result", "if_close.condition"),
            ("if_close.true", "hurt.run"), ("each.item", "hurt.target"), ("in.damage", "hurt.p0"),
            ("in.pod", "hurt.p2"), ("hurt.then", "spores.run"), ("each.item", "spores.p0"),
-           ("each.done", "gone.run"), ("in.pod", "gone.entity"), ("gone.then", "out.then"),
+           ("each.done", "forget.run"), ("in.pod", "forget.player"), ("forget.then", "gone.run"),
+           ("in.pod", "gone.entity"), ("gone.then", "out.then"),
            ("if_due.false", "out.then")],
     steps=[("A pod? Set off yet?", ["model", "is_pod", "if_pod", "now", "burst_at", "started", "if_started"]),
            ("Waiting: a survivor near sets it off (swell, grow)",
             ["at", "near", "survivor", "if_near", "when", "set_off", "swell", "grow"]),
            ("Set off: at its time it bursts (explosion, damage and spores close by, removed)",
-            ["due", "if_due", "up", "boom", "each", "them", "dist", "close", "if_close", "hurt", "spores", "gone"])])
+            ["due", "if_due", "up", "boom", "each", "them", "dist", "close", "if_close", "hurt", "spores", "forget",
+             "gone"])])
 
 
 MUZZLE_LIGHT = dict(

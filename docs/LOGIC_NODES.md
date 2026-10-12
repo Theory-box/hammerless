@@ -118,6 +118,7 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | 45 | Third Person Everywhere | Game event player_spawn, its Userid wired into a Camera's Player |
 | 46 | Random Zombie Sizes | For Each common, Random Value, Set Model Scale, hitboxes that follow the size |
 | 47 | Third Person Muzzle Flash | The 'Muzzle Light' group used twice (a light for everything, an extra one for models), Ent Fire (inputs sent by name), Make Table |
+| 49 | Swelling Pod | An animated Custom Model (a pod made by the example: mesh, armature, 'idle' and 'swell' actions) with its behaviour in the 'Swelling Pod' group: walk close and it swells, grows and bursts (explosion, damage, spores); shot (Override Allow Take Damage), it bursts at once; per-entity variables keep each pod's state |
 | 48 | Flashlight Battery | The 'Flashlight Battery' group (with 'Flashlight Is On' / 'Flashlight Off' inside it), per-player variables, Math bit operations, text built up in a For Each, HUD Text |
 
 `demo/hl_test_nuke.blend` (made by `tests/fixtures/nuke_test.py`) is the demo level with it, set so the first kill drops it, and 40 commons on the field.
