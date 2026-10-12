@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **New example: Third Person Muzzle Flash** (Examples 3): in third person the game's muzzle flashes light only models; this gives every player one light on their gun's muzzle, flashed for one server tick per shot (full-auto flickers). Brightness and Reach are Value nodes. Tested in the game: one light per shooter, parented to the gun, no cheats.
+- **New example: Third Person Muzzle Flash** (Examples 3): in third person the game's muzzle flashes light only models; this gives every player a point light on their gun's muzzle plus an extra light for zombies and survivors only (models need more light to look lit), flashed for one server tick per shot (full-auto flickers). Brightness, Model Brightness and Reach are Value nodes. Tested in the game: lights per shooter, parented to the gun, no cheats.
 - **Sky light without a sun:** Sky Light Brightness is editable with Add Sun if Missing off; the build then adds the sky light alone (its entity's sun part at 0; brightness 0 adds nothing). Imported maps with no sun of their own get it too (before, the Sun settings did nothing on them).
 - **New example: Random Zombie Sizes** (Examples 3): every common infected gets a random size between Min and Max (0.5 = half size, 2 = twice as big), with hitboxes that follow the new size. No cheats; tested in the game (30 commons, sizes 0.54-1.98, shots hit a giant's and a tiny one's whole body).
 - **Slow Motion Headshots needs no cheats any more** (publishable, achievements stay on): it uses the game's Time Scale entity (func_timescale), which the example adds: Start blends the game to its Desired Timescale, Stop back to normal. Tested in game with cheats off: 30% speed after a headshot, normal again after the Delay.
