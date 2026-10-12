@@ -62,9 +62,12 @@ static void MergeDLightVis(directlight_t *dl, int cluster) {
     free(pvs);
 }
 
+static int g_parsingEntity = -1;      /* (the entity the lights being made come from) */
+
 static directlight_t *AllocDLight(const vec3_t origin, int add) {
     directlight_t *dl = xalloc(sizeof(directlight_t));
     dl->index = numdlights++;
+    dl->entity = g_parsingEntity;
     VectorCopy(origin, dl->light.origin);
     dl->light.cluster = ClusterFromPoint(dl->light.origin);
     dl->pvs = xalloc(VisRowBytes() + 1);
@@ -449,13 +452,50 @@ void CreateDirectLights(void) {
         const char *name = ValueForKey(e, "classname");
         if (strncmp(name, "light", 5)) continue;
         if (!strcmp(name, "light_dynamic")) continue;
+        g_parsingEntity = i;
         if (!strcmp(name, "light_spot")) ParseLightSpot(e);
         else if (!strcmp(name, "light_environment")) ParseLightEnvironment(e);
         else if (!strcmp(name, "light_directional")) ParseLightDirectional(e);
         else if (!strcmp(name, "light")) ParseLightPoint(e);
         else Msg("unsupported light entity: \"%s\"\n", name);
+        g_parsingEntity = -1;
     }
     Msg("%i direct lights\n", numdlights);
+}
+
+/* -onlylights <spec>: light with some of the lights only, all steady (style 0), for one layer of the lighting
+ * Blender mixes live (light adds up, bounces too: the layers summed are the whole bake). spec: comma separated
+ * entity numbers (their light: a light_environment's sun), "sky" (the light_environment's sky light), "surface"
+ * (light-emitting textures), "none" */
+void KeepOnlyLights(const char *spec) {
+    char *copy = _strdup(spec);
+    int want_sky = 0, want_surface = 0, n = 0, cap = 16, *ents = xalloc(sizeof(int) * cap);
+    for (char *tok = strtok(copy, ","); tok; tok = strtok(NULL, ",")) {
+        if (!_stricmp(tok, "sky")) want_sky = 1;
+        else if (!_stricmp(tok, "surface")) want_surface = 1;
+        else if (!_stricmp(tok, "none")) {}
+        else {
+            if (n == cap) ents = realloc(ents, sizeof(int) * (cap *= 2));
+            ents[n++] = atoi(tok);
+        }
+    }
+    directlight_t **link = &activelights;
+    int kept = 0;
+    while (*link) {
+        directlight_t *dl = *link;
+        int keep = 0;
+        if (dl->light.type == emit_skyambient) keep = want_sky;
+        else if (dl->entity < 0) keep = want_surface;
+        else for (int k = 0; k < n && !keep; k++) keep = ents[k] == dl->entity;
+        if (keep) {
+            dl->light.style = 0;
+            kept++;
+            link = &dl->next;
+        } else *link = dl->next;
+    }
+    if (!want_sky) gAmbient = NULL;          /* (the sky's light; the sun stays with its entity) */
+    Msg("%i of the direct lights kept (-onlylights %s)\n", kept, spec);
+    free(copy), free(ents);
 }
 
 /* lump 54 (HDR) / 15: the active lights, intensities in 0..1 */

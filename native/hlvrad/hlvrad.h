@@ -142,6 +142,7 @@ typedef struct directlight_s {
     float sun_extent;                 /* sin of its own spread angle (a light_directional's SunSpreadAngle) */
     int has_sun_extent;               /* (else the light_environment's: g_SunAngularExtent) */
     int directional;                  /* a light_directional */
+    int entity;                       /* the entity it came from (-1: a light-emitting surface) */
     struct directlight_s *next;
 } directlight_t;
 
@@ -359,6 +360,7 @@ float face_entity_minlight(int facenum);
 void AssignLightStyles(void);
 void PrecompLightmapOffsets(void);
 void CreateDirectLights(void);
+void KeepOnlyLights(const char *spec);
 int LightForString(const char *s, vec3_t intensity);
 void LoadTexLights(const char *gamedir, const char *bsppath, const char *designer);
 void LightForTexture(const char *name, vec3_t result);

@@ -52,6 +52,7 @@ static void FacelightsWork(int face, int thread) { (void)thread; BuildFacelights
  * (the build writes it when vis has finished; <map>.visfailed: give up), take the vis from <map> and make the
  * lights again with it. The written map is then the one lighting after vis would give. */
 static const char *g_visFrom;
+static const char *g_onlyLights;      /* (-onlylights: one layer of the lighting, see lights.c) */
 static int g_tookVis, g_visThreadsAfter = -1;     /* (-visthreads n: threads while vis runs; then -threads' own) */
 static void TakeVis(void) {
     if (g_tookVis) return;
@@ -90,6 +91,7 @@ static void TakeVis(void) {
         free(data);
     }
     CreateDirectLights();
+    if (g_onlyLights) KeepOnlyLights(g_onlyLights);
     if (g_bGPU) GPU_Lights();
     /* (vis is done: the rest of the build waits on this, so every core, at normal priority) */
     if (g_visThreadsAfter >= 0) g_numthreads = g_visThreadsAfter;
@@ -147,6 +149,8 @@ int main(int argc, char **argv) {
             Error("-textureshadows isn't supported yet");
         } else if (!_stricmp(a, "-StaticPropLighting")) {
             g_bStaticPropLighting = 1;
+        } else if (!_stricmp(a, "-onlylights") && i + 1 < argc) {
+            g_onlyLights = argv[++i];
         } else if (!_stricmp(a, "-visfrom") && i + 1 < argc) {
             g_visFrom = argv[++i];
         } else if (!_stricmp(a, "-visthreads") && i + 1 < argc) {
@@ -221,6 +225,7 @@ int main(int argc, char **argv) {
         BuildSkyDirections(n > 162 ? n : 162);
     }
     CreateDirectLights();
+    if (g_onlyLights) KeepOnlyLights(g_onlyLights);
     Stage("direct lights");
     if (getenv("SKYDBG")) {      /* (debugging: a point's cluster and whether each light's PVS has it) */
         vec3_t p;
