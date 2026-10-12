@@ -1062,6 +1062,9 @@ class HL_MT_add(bpy.types.Menu):
         for m in CATEGORY_MENUS:
             layout.menu(m.bl_idname)
         layout.separator()
+        layout.operator_menu_enum("hammerless.add_game_skeleton", "character", text="Game Skeleton",
+                                  icon="ARMATURE_DATA")
+        layout.separator()
         layout.operator("hammerless.add_entity", text="Search Entities...", icon="VIEWZOOM")
 
 

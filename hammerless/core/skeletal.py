@@ -54,6 +54,15 @@ class Skeleton:
     weights: list[tuple[list[tuple[int, float]], ...]]   # per triangle of the model: per vertex [(bone, weight)]
     animations: list[Animation] = field(default_factory=list)
     attachments: list[Attachment] = field(default_factory=list)
+    # a game skeleton (built from one of the game's models): written in the game's own space (characters face -Y, no
+    # counter-turn: the game's animations, borrowed with $includemodel, carry studiomdl's turn already), with the
+    # game model's hitboxes and every one of its bones kept
+    valve_space: bool = False
+    includes: list[str] = field(default_factory=list)          # e.g. "infected/anim_common.mdl" (under models/)
+    hitboxes: list[tuple[int, int, Vec3, Vec3]] = field(default_factory=list)   # (bone, hitgroup, mins, maxs)
+    keep: list[int] = field(default_factory=list)              # bones kept though no vertex is weighted to them
+    ikchains: list[tuple[str, int, Vec3]] = field(default_factory=list)   # (name, end bone, knee direction)
+    default_animation: str = ""                                # what the prop plays on its own ("": the first)
 
 
 # ------------------------------------------------------------------ rotations (no mathutils: core is plain Python)
@@ -121,20 +130,22 @@ def nodes_block(bones: list[Bone]) -> str:
     return "nodes\n" + "".join(f'{i} "{b.name}" {b.parent}\n' for i, b in enumerate(bones)) + "end\n"
 
 
-def _pose_line(i: int, bone: Bone, pos: Vec3, rot: Vec3) -> str:
-    if bone.parent < 0:
+def _pose_line(i: int, bone: Bone, pos: Vec3, rot: Vec3, turn: bool = True) -> str:
+    if bone.parent < 0 and turn:
         pos, rot = _turn_pos(pos), _turn_rot(rot)
     return f"{i} {_f(pos[0])} {_f(pos[1])} {_f(pos[2])} {_f(rot[0])} {_f(rot[1])} {_f(rot[2])}\n"
 
 
-def rest_skeleton_block(bones: list[Bone]) -> str:
-    return "skeleton\ntime 0\n" + "".join(_pose_line(i, b, b.pos, b.rot) for i, b in enumerate(bones)) + "end\n"
+def rest_skeleton_block(bones: list[Bone], turn: bool = True) -> str:
+    return "skeleton\ntime 0\n" + "".join(_pose_line(i, b, b.pos, b.rot, turn) for i, b in enumerate(bones)) + "end\n"
 
 
-def _skinned_vertex_line(v, links) -> str:
+def _skinned_vertex_line(v, links, turn: bool = True) -> str:
     (x, y, z), (nx, ny, nz), (u, w) = v
+    if turn:
+        x, y, nx, ny = y, -x, ny, -nx
     links = _clean_links(links)
-    head = f"{links[0][0]} {_f(y)} {_f(-x)} {_f(z)} {_f(ny)} {_f(-nx)} {_f(nz)} {_f(u)} {_f(w)}"
+    head = f"{links[0][0]} {_f(x)} {_f(y)} {_f(z)} {_f(nx)} {_f(ny)} {_f(nz)} {_f(u)} {_f(w)}"
     return head + f" {len(links)}" + "".join(f" {b} {_f(wt)}" for b, wt in links) + "\n"
 
 
@@ -152,10 +163,11 @@ def _clean_links(links) -> list[tuple[int, float]]:
 
 def reference_smd(triangles, sk: Skeleton) -> str:
     """The mesh at its rest pose, skinned: every vertex with its bone weights."""
-    out = ["version 1\n", nodes_block(sk.bones), rest_skeleton_block(sk.bones), "triangles\n"]
+    turn = not sk.valve_space
+    out = ["version 1\n", nodes_block(sk.bones), rest_skeleton_block(sk.bones, turn), "triangles\n"]
     for (material, verts), links in zip(triangles, sk.weights):
         out.append(material + "\n")
-        out.extend(_skinned_vertex_line(v, l) for v, l in zip(verts, links))
+        out.extend(_skinned_vertex_line(v, l, turn) for v, l in zip(verts, links))
     out.append("end\n")
     return "".join(out)
 
@@ -164,7 +176,22 @@ def collision_smd(pieces, sk: Skeleton) -> str:
     """The collision hulls (rest pose), all on the first bone: a rigid collision model with the model's skeleton."""
     from .models import collision_smd as plain
     body = plain(pieces).split("triangles\n", 1)[1]
-    return "version 1\n" + nodes_block(sk.bones) + rest_skeleton_block(sk.bones) + "triangles\n" + body
+    if sk.valve_space:              # (plain() turns its points for studiomdl's static turn: here, none)
+        body = _unturn_lines(body)
+    return ("version 1\n" + nodes_block(sk.bones) + rest_skeleton_block(sk.bones, not sk.valve_space) + "triangles\n"
+            + body)
+
+
+def _unturn_lines(body: str) -> str:
+    out = []
+    for line in body.splitlines(keepends=True):
+        f = line.split()
+        if len(f) == 9:                         # "bone x y z nx ny nz u v", written turned (x, y) -> (y, -x)
+            x, y, nx, ny = -float(f[2]), float(f[1]), -float(f[5]), float(f[4])
+            f[1:3], f[4:6] = [_f(x), _f(y)], [_f(nx), _f(ny)]
+            line = " ".join(f) + "\n"
+        out.append(line)
+    return "".join(out)
 
 
 def animation_smd(sk: Skeleton, anim: Animation) -> str:
@@ -174,7 +201,7 @@ def animation_smd(sk: Skeleton, anim: Animation) -> str:
         out.append(f"time {t}\n")
         for i, b in enumerate(sk.bones):
             pos, rot = frame[i]
-            if b.parent < 0:                      # (the turned root's angles kept continuous from frame to frame)
+            if b.parent < 0 and not sk.valve_space:     # (the turned root's angles kept continuous frame to frame)
                 rot = near[i] = _turn_rot(rot, near.get(i))
                 pos = _turn_pos(pos)
                 out.append(f"{i} {_f(pos[0])} {_f(pos[1])} {_f(pos[2])} {_f(rot[0])} {_f(rot[1])} {_f(rot[2])}\n")
@@ -197,7 +224,16 @@ def qc_lines(sk: Skeleton) -> list[str]:
             opts += f" activity {a.activity} 1"
         lines.append(f'$sequence "{a.name}" "{sequence_file(a)}"{opts}')
     if not sk.animations:
-        lines.append('$sequence idle "model.smd" fps 30')
+        # (with the game's animations borrowed, its own name for the rest pose: an 'idle' here would hide theirs)
+        lines.append('$sequence "@reference" "model.smd" fps 30' if sk.includes else '$sequence idle "model.smd" fps 30')
+    for inc in sk.includes:
+        lines.append(f'$includemodel "{inc}"')
+    for i in sk.keep:
+        lines.append(f'$bonemerge "{sk.bones[i].name}"')
+    for name, bone, knee in sk.ikchains:
+        lines.append(f'$ikchain "{name}" "{sk.bones[bone].name}" knee {_f(knee[0])} {_f(knee[1])} {_f(knee[2])}')
+    for bone, group, mins, maxs in sk.hitboxes:
+        lines.append(f'$hbox {group} "{sk.bones[bone].name}" ' + " ".join(_f(c) for c in (*mins, *maxs)))
     for at in sk.attachments:
         b = sk.bones[at.bone]
         roll, pitch, yaw = (math.degrees(c) for c in at.rot)       # (rotate takes pitch, yaw, roll: about Y, Z, X)

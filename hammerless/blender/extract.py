@@ -548,9 +548,16 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
     if spec.skeleton is not None and spec.skeleton.animations:
         names = [a.name for a in spec.skeleton.animations]
         kv["DefaultAnim"] = next((n for n in names if n.lower() == "idle"), names[0])   # (it loops on its own)
+    elif spec.skeleton is not None and spec.skeleton.default_animation:
+        kv["DefaultAnim"] = spec.skeleton.default_animation
     kv.update(object_keyvalues(obj))
     origin = tuple(c * scale for c in loc)
-    return Entity(PROP_CLASSES[kind], origin, source_angles(rot.to_matrix().to_4x4()), kv, [], label or obj.name,
+    turn = rot.to_matrix().to_4x4()
+    if spec.skeleton is not None and spec.skeleton.valve_space:
+        # (the game's animations turn a character from -Y, how it faces in Blender, to +X: so the prop is turned
+        # back a quarter, after the object's own rotation)
+        turn = turn @ Matrix.Rotation(-math.pi / 2, 4, "Z")
+    return Entity(PROP_CLASSES[kind], origin, source_angles(turn), kv, [], label or obj.name,
                   object_outputs(obj))
 
 
@@ -579,6 +586,7 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
     eval_obj = obj.evaluated_get(depsgraph)
     mesh = eval_obj.to_mesh()
     skeleton = None
+    game_rest = None
     try:
         flip = (sca.x * sca.y * sca.z) < 0       # a mirrored copy: keep the faces facing out
         size = Vector((sca.x * scale, sca.y * scale, sca.z * scale))
@@ -643,6 +651,9 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
             materials.report.warnings.append(
                 f"Custom Model '{obj.name}' is mirrored (a negative scale): animated models can't be mirrored yet, so "
                 "it's built still. Apply the scale, or mirror the mesh and armature themselves")
+        elif arm is not None and arm.get("hl_game_model"):
+            from .gameskeleton import game_skeleton
+            skeleton, game_rest = game_skeleton(obj, arm, mesh, tri_vis, size, materials.report, content)
         elif arm is not None:
             skeleton = _skeleton(obj, arm, mesh, tri_vis, size, materials.report)
     finally:
@@ -651,7 +662,7 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
             arm.data.pose_position = rest_was
             bpy.context.view_layer.update()
     if skeleton is not None:
-        _sample_actions(obj, arm, skeleton, size, materials.report)
+        _sample_actions(obj, arm, skeleton, size, materials.report, game_rest)
     if kind == "PHYSICS" and not pieces:
         materials.report.warnings.append(
             f"Custom Model '{obj.name}' is a Physics Prop but has no solid part (every part is flat or thinner than "
@@ -797,7 +808,7 @@ def _armature_actions(arm):
     return sorted(out, key=lambda a: a.name.lower())
 
 
-def _sample_actions(obj, arm, sk, size, report):
+def _sample_actions(obj, arm, sk, size, report, game_rest=None):
     """Every action of the armature, frame by frame, as an animation (its name; looping when Cyclic Animation is on
     in the action's settings)."""
     from ..core import skeletal
@@ -811,7 +822,7 @@ def _sample_actions(obj, arm, sk, size, report):
     old_frame = scene.frame_current
     fps = scene.render.fps / (scene.render.fps_base or 1.0)
     space = _bone_space(obj, arm)
-    by_name = {b.name: arm.pose.bones[b.name] for b in sk.bones}
+    by_name = {b.name: arm.pose.bones.get(b.name) for b in sk.bones}
     parents = [sk.bones[b.parent].name if b.parent >= 0 else None for b in sk.bones]
     used = set()
     # (each action from the rest pose: a bone one action keys doesn't carry over into the next; the rig is put
@@ -834,6 +845,10 @@ def _sample_actions(obj, arm, sk, size, report):
             frames = []
             for f in range(start, max(end, start) + 1):
                 scene.frame_set(f)
+                if game_rest is not None:           # (a game skeleton: the pose in the game's bone frames)
+                    from .gameskeleton import game_pose
+                    frames.append(game_pose(arm, sk, game_rest, bpy.context.scene.hammerless.units_per_meter))
+                    continue
                 frame = []
                 for b, parent in zip(sk.bones, parents):
                     m = space @ by_name[b.name].matrix

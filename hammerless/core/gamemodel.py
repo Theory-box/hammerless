@@ -429,3 +429,36 @@ def retarget(src: GameModel, dst: GameModel, local_pose: Pose) -> Pose:
         k = by_name.get(bn.name.lower())
         out.append(local_pose[k] if k is not None else (bn.pos, bn.quat))
     return out
+
+
+STANDING_SEQUENCES = ("Idle_Neutral_01", "Idle_Standing_Align", "Idle", "idle")
+_UNTURN: Quat = (0.0, 0.0, -math.sqrt(0.5), math.sqrt(0.5))       # -90 deg about Z: undoes the animations' turn
+
+
+def standing_rest(content, model: GameModel) -> tuple[Pose, str]:
+    """A rest pose to model on: the model's own bind pose when it stands (survivors, specials), else frame 0 of one of
+    its idle animations with the animations' +90 deg turn taken off the root (the commons' bind pose lies along +Y).
+    Faces -Y like the game's files. Returns (local pose, the animation used or "" for the bind pose)."""
+    bind: Pose = [(b.pos, b.quat) for b in model.bones]
+    if _head_height(model, bind) > 30.0:
+        return bind, ""
+    for want in STANDING_SEQUENCES:
+        for src in animation_sources(content, model):
+            seq = next((s for s in src.sequences if s.name.lower() == want.lower()), None)
+            if seq is None:
+                continue
+            try:
+                pose = retarget(src, model, src.frame(seq, 0))
+            except ValueError:
+                continue
+            pose = [((p[1], -p[0], p[2]), _qmul(_UNTURN, q)) if model.bones[k].parent < 0 else (p, q)
+                    for k, (p, q) in enumerate(pose)]
+            if _head_height(model, pose) > 30.0:
+                return pose, seq.name
+    return bind, ""
+
+
+def _head_height(model: GameModel, local: Pose) -> float:
+    world = model.bone_world(local)
+    heads = [k for k, b in enumerate(model.bones) if "head" in b.name.lower()]
+    return max((world[k][0][2] for k in heads), default=0.0)
