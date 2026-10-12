@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.5 (test release, 2026-10-11)
 
 - **Node groups for logic graphs** (like Blender's shader / Geometry Nodes groups): Ctrl+G puts the selected nodes into a group used by one Group node (wires in and out become its inputs and outputs), Tab goes in and out, Ctrl+Alt+G ungroups; Group Input / Output inside, the sidebar's Group tab edits the sockets; Shift+A > Groups adds any group again. Each copy is built on its own (values typed on a Group node reach the nodes inside; Set / Get Variable *This Group Copy* is per copy). Tested in a real Blender window (make, enter, edit sockets, leave, ungroup: the built graph stays the same).
 - **Every example is built from plain nodes now**: the Script / Script Value code in Flashlight Battery, Third Person Muzzle Flash, Power-Up: Nuke and 8 other examples is replaced by nodes, with node groups where a part is reused (Flashlight Battery, Flashlight Is On, Flashlight Off, Muzzle Light, Explosion, Explode Common, Is a Survivor, Is a Special). The Nuke's wave is now a growing ring (the commons inside it explode, one with sound per tick). Tested in game: battery drain / empty / recharge, muzzle lights per shooter on the gun, the nuke wave.
