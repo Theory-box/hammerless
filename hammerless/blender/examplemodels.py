@@ -11,17 +11,38 @@ POD_RADIUS = 0.45          # metres
 SIDES = (("side_px", (1, 0)), ("side_nx", (-1, 0)), ("side_py", (0, 1)), ("side_ny", (0, -1)))
 
 
-def _pod_material():
-    mat = bpy.data.materials.get("Example Pod Flesh")
-    if mat is None:
-        mat = bpy.data.materials.new("Example Pod Flesh")
-        mat.diffuse_color = (0.55, 0.12, 0.10, 1.0)
-        mat.use_nodes = True
-        bsdf = mat.node_tree.nodes.get("Principled BSDF")
-        if bsdf is not None:
-            bsdf.inputs["Base Color"].default_value = (0.55, 0.12, 0.10, 1.0)
-        mat.hammerless.source_material = "models/infected/boomer/boomer"      # (the Boomer's skin, in the game)
+def flat_material(name: str, rgb, mottle: float = 0.08):
+    """A material of one colour (slightly mottled) as a small image of its own, packed in the .blend: built as a
+    texture of its own, lit like any model. (A character's material from the game would come out flat blue on
+    another model: the commons' and specials' shaders need what only their own entity sets.)"""
+    import random
+    mat = bpy.data.materials.get(name)
+    if mat is not None:
+        return mat
+    size = 32
+    img = bpy.data.images.new(name, size, size)
+    rnd = random.Random(name)
+    px = []
+    for _k in range(size * size):
+        f = 1.0 + rnd.uniform(-mottle, mottle)
+        px += [min(1.0, c * f) for c in rgb] + [1.0]
+    img.pixels = px
+    img.pack()
+    mat = bpy.data.materials.new(name)
+    mat.diffuse_color = (*rgb, 1.0)
+    mat.use_nodes = True
+    nt = mat.node_tree
+    bsdf = nt.nodes.get("Principled BSDF")
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    tex.location = (-300, 300)
+    if bsdf is not None:
+        nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
     return mat
+
+
+def _pod_material():
+    return flat_material("Example Pod Flesh", (0.55, 0.12, 0.10))
 
 
 def _key(pb, frame, loc):

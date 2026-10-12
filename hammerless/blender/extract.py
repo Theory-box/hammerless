@@ -681,6 +681,9 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
             bpy.context.view_layer.update()
     if skeleton is not None:
         _sample_actions(obj, arm, skeleton, size, materials.report, game_rest)
+        for m in set(t[0] for t in triangles):     # (its materials keep their colour on the infected: see models.py)
+            if m in ir.model_materials and len(ir.model_materials[m]) == 3:
+                ir.model_materials[m] = (*ir.model_materials[m], True)
     if kind == "PHYSICS" and not pieces:
         materials.report.warnings.append(
             f"Custom Model '{obj.name}' is a Physics Prop but has no solid part (every part is flat or thinner than "

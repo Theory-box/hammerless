@@ -116,9 +116,14 @@ def qc_text(spec: ModelSpec) -> str:
 
 # ------------------------------------------------------------------ materials
 
-def model_material_vmt(base_texture: str, translucent: bool = False, alphatest: bool = False) -> str:
-    """A model material (VertexLitGeneric: lit per vertex and by the map's light, as models are)."""
+def model_material_vmt(base_texture: str, translucent: bool = False, alphatest: bool = False,
+                       keep_colour: bool = False) -> str:
+    """A model material (VertexLitGeneric: lit per vertex and by the map's light, as models are). keep_colour: not
+    tinted by the entity (an infected sets its own random tint on whatever material it wears, for the commons'
+    shader: on this one it came out bright blue / white, measured)."""
     extra = ""
+    if keep_colour:
+        extra += '\t"$allowdiffusemodulation" "0"\n'
     if translucent:
         extra += '\t"$translucent" "1"\n'
     if alphatest:
@@ -138,12 +143,14 @@ def write_model_materials(game_dir: str, materials_dir: str, materials: dict[str
     written = []
     folder = os.path.join(game_dir, "materials", *materials_dir.strip("/").split("/"))
     os.makedirs(folder, exist_ok=True)
-    for name, (tex, translucent, alphatest) in materials.items():
+    for name, spec in materials.items():
+        tex, translucent, alphatest = spec[:3]
+        keep_colour = len(spec) > 3 and spec[3]
         path = os.path.join(folder, name + ".vmt")
         if tex.startswith("include:"):         # (one of the game's model materials, used as it is)
             text = f'"patch"\n{{\n\t"include" "materials/{tex[8:]}.vmt"\n}}\n'
         else:
-            text = model_material_vmt(tex, translucent, alphatest)
+            text = model_material_vmt(tex, translucent, alphatest, keep_colour)
         old = None
         if os.path.exists(path):
             with open(path, encoding="utf-8", errors="replace") as f:
