@@ -114,7 +114,7 @@ def closest_euler(e: Vec3, near: Vec3 | None) -> Vec3:
 # ------------------------------------------------------------------ SMD text
 
 def _f(v: float) -> str:
-    return f"{v:.6f}"
+    return f"{0.0 if abs(v) < 5e-7 else v:.6f}"          # (never "-0.000000")
 
 
 def nodes_block(bones: list[Bone]) -> str:
@@ -140,7 +140,10 @@ def _skinned_vertex_line(v, links) -> str:
 
 def _clean_links(links) -> list[tuple[int, float]]:
     """At most MAX_WEIGHTS bones, the strongest, adding up to 1 (a vertex with none: the first bone)."""
-    links = sorted(((b, w) for b, w in links if w > 1e-6), key=lambda bw: -bw[1])[:MAX_WEIGHTS]
+    merged: dict[int, float] = {}
+    for b, w in links:                          # (the same bone twice: one link)
+        merged[b] = merged.get(b, 0.0) + w
+    links = sorted(((b, w) for b, w in merged.items() if w > 1e-6), key=lambda bw: -bw[1])[:MAX_WEIGHTS]
     total = sum(w for _b, w in links)
     if total <= 0:
         return [(0, 1.0)]

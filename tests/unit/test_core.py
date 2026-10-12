@@ -3300,6 +3300,74 @@ class TestVmfImport(unittest.TestCase):
         self.assertEqual(new_top.get("uaxis"), "[1 0 0 0] 0.25")
 
 
+class TestSkeletalModels(unittest.TestCase):
+    """Animated Custom Models: the SMD / QC an armature becomes (core/skeletal.py)."""
+
+    def _spec(self):
+        from hammerless.core import models as m, skeletal as sk
+        bones = [sk.Bone("root", -1, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)), sk.Bone("top", 0, (0.0, 0.0, 20.0), (0.0, 0.0, 0.0))]
+        tri = [("mat", (((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 0.0)), ((10.0, 0.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0)),
+                        ((0.0, 0.0, 30.0), (0.0, 0.0, 1.0), (0.0, 1.0))))]
+        weights = [([(0, 1.0)], [], [(1, 0.6), (0, 0.2), (1, 0.0), (0, 0.1), (1, 0.1)])]
+        frames = [[((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)), ((0.0, 0.0, 20.0), (0.0, 0.0, 0.0))],
+                  [((0.0, 0.0, 0.0), (0.0, 0.0, 3.1)), ((0.0, 0.0, 25.0), (0.2, 0.0, 0.0))],
+                  [((0.0, 0.0, 0.0), (0.0, 0.0, -3.1)), ((0.0, 0.0, 25.0), (0.2, 0.0, 0.0))]]
+        anims = [sk.Animation("idle", frames, 30.0, True), sk.Animation("swell", frames[:2], 24.0, False)]
+        skel = sk.Skeleton(bones, weights, anims, [sk.Attachment("tip", 1, (0.0, 0.0, 5.0), (0.1, 0.2, 0.3))])
+        return m.ModelSpec("hammerless/t/pod", tri, [], "DYNAMIC", skeleton=skel)
+
+    def test_euler_round_trip(self):
+        from hammerless.core import skeletal as sk
+        for e in [(0.3, -1.2, 2.0), (1.0, 0.2, -0.4), (-2.5, 0.7, 3.0)]:
+            back = sk.matrix_to_euler(sk.euler_to_matrix(e))
+            m1, m2 = sk.euler_to_matrix(e), sk.euler_to_matrix(back)
+            self.assertTrue(all(abs(m1[i][j] - m2[i][j]) < 1e-9 for i in range(3) for j in range(3)))
+
+    def test_closest_euler_keeps_angles_continuous(self):
+        # the same rotation written near the previous frame's angles: no jump of a full turn
+        from hammerless.core import skeletal as sk
+        e = sk.closest_euler((0.0, 0.0, -3.1), (0.0, 0.0, 3.1))
+        self.assertAlmostEqual(e[2], -3.1 + 2 * math.pi, places=6)
+        m1, m2 = sk.euler_to_matrix((0.0, 0.0, -3.1)), sk.euler_to_matrix(e)
+        self.assertTrue(all(abs(m1[i][j] - m2[i][j]) < 1e-9 for i in range(3) for j in range(3)))
+
+    def test_qc_and_files(self):
+        from hammerless.core import models as m
+        spec = self._spec()
+        qc = m.qc_text(spec)
+        self.assertNotIn("$staticprop", qc)
+        self.assertIn('$sequence "idle" "anim_idle.smd" fps 30 loop', qc)
+        self.assertIn('$sequence "swell" "anim_swell.smd" fps 24\n', qc)
+        self.assertIn('$attachment "tip" "top"', qc)
+        files = m.source_files(spec)
+        self.assertEqual(sorted(files), ["anim_idle.smd", "anim_swell.smd", "model.smd"])
+        ref = files["model.smd"]
+        self.assertIn('0 "root" -1\n1 "top" 0\n', ref)
+        # the root is counter-turned (studiomdl turns it +90 about Z), children aren't
+        self.assertIn("0 0.000000 0.000000 0.000000 0.000000 0.000000 -1.570796", ref)
+        self.assertIn("1 0.000000 0.000000 20.000000 0.000000 0.000000 0.000000", ref)
+        # weights: the strongest 3, adding up to 1; a vertex with none on the first bone
+        lines = ref.split("triangles\n")[1].splitlines()
+        self.assertTrue(lines[2].endswith(" 1 0 1.000000"))
+        last = lines[3].split()
+        self.assertEqual(last[9], "2")              # (bone 0 listed twice: one link)
+        self.assertAlmostEqual(sum(float(w) for w in last[11::2]), 1.0, places=5)
+        self.assertEqual(last[10], "1")              # (the strongest first)
+        # the animation: one time block per frame; the root's angle continuous across +-pi
+        anim = files["anim_idle.smd"]
+        self.assertEqual(anim.count("time "), 3)
+        roots = [l for l in anim.splitlines() if l.startswith("0 ") and len(l.split()) == 7]
+        zs = [float(l.split()[6]) for l in roots]
+        self.assertLess(abs(zs[2] - zs[1]), 0.2)      # (3.1 to -3.1 is a small turn, not a jump of 6.2)
+
+    def test_problems(self):
+        from hammerless.core import skeletal as sk
+        bones = [sk.Bone(f"b{i}", i - 1, (0.0, 0.0, 1.0), (0.0, 0.0, 0.0)) for i in range(130)]
+        self.assertTrue(any("bones" in p for p in sk.problems(sk.Skeleton(bones, []))))
+        twice = sk.Skeleton(bones[:2], [], [sk.Animation("Idle", [[]]), sk.Animation("idle", [[]])])
+        self.assertTrue(any("same name" in p for p in sk.problems(twice)))
+
+
 class TestStringtableDictionary(unittest.TestCase):
     """The game's stringtable dictionary is carried from one build to the next (it saves ~10 s of map load)."""
 
