@@ -322,6 +322,15 @@ def check(run: Run, n: int, b: Bench):
         assert slow < 0.5, f"the game ran at {slow:.2f}x after a headshot"
         assert back > 0.8, f"still at {back:.2f}x afterwards"
         return f"headshot: game at {slow:.2f}x, then back to {back:.2f}x, no cheats"
+    if n == 53:
+        # (the light itself switching is tests/ingame/test_lightstyles.py: this map isn't lit)
+        lights = b.value('(function() { local n = 0; for (local e = null; e = Entities.FindByName(e, "power_lights");) '
+                         'if (e.GetClassname() == "light") n++; return n; })()')
+        assert lights == 2, f"{lights} lights named power_lights in the map"
+        mk = m(); b.console(f"ent_fire {run.obj(53, 'button')} Press", wait=4)
+        run.expect(53, mk, "button.pressed -> stutter.SetPattern", "button.pressed -> wait.in",
+                   "wait.out -> off.TurnOff", "wait.out -> horde.start")
+        return "both lamps are named lights: stutter, then out with a horde"
     if n == 38:
         # the question the game asks about each special the Director spawns, asked here the same way
         got = b.value("[" + ", ".join(f"::HL_Hook_ConvertZombieClass.call(::HL_Scope, {t})" for t in (1, 3, 6, 8)) + "]")

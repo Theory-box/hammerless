@@ -282,6 +282,25 @@ def _physics_class_set(self, value):
         self.physics_class_name = items[value][0]
 
 
+# the game's built-in light styles (the light's "style" key)
+LIGHT_PATTERNS = [
+    ("0", "Steady", "Always on at full brightness"),
+    ("1", "Flicker", "An irregular flicker"),
+    ("6", "Flicker 2", "Another irregular flicker"),
+    ("10", "Fluorescent Flicker", "A failing fluorescent tube: mostly on, dropping out"),
+    ("3", "Candle", "A candle's waver"),
+    ("7", "Candle 2", "Another candle's waver"),
+    ("8", "Candle 3", "A third candle's waver"),
+    ("5", "Gentle Pulse", "Slowly brighter and dimmer"),
+    ("2", "Slow Strong Pulse", "Slowly from dark to bright and back"),
+    ("11", "Slow Pulse (never dark)", "Slowly brighter and dimmer, never going dark"),
+    ("4", "Fast Strobe", "Quickly on and off"),
+    ("9", "Slow Strobe", "Slowly on and off"),
+    ("12", "Underwater", "An underwater shimmer"),
+    ("CUSTOM", "Custom", "Your own steps (makes the light switchable)"),
+]
+
+
 class HL_ObjectSettings(bpy.types.PropertyGroup):
     role: EnumProperty(name="Role", items=OBJECT_ROLES, default="AUTO")
     classname: StringProperty(name="Class", description="Entity classname",
@@ -311,6 +330,17 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
     use_convex_hull: BoolProperty(
         name="Use Convex Hull",
         description="Wrap each loose part in its convex hull instead of requiring it to be convex")
+    light_pattern: EnumProperty(name="Pattern", default="0", items=LIGHT_PATTERNS,
+                                description="How the light's brightness changes over time in the game (its baked "
+                                            "light flickers, pulses or strobes)")
+    light_custom: StringProperty(name="Custom", default="mmamammmmammamamaaamammma",
+                                 description="Brightness steps, ten a second: a = dark, m = normal, z = double")
+    light_switchable: BoolProperty(name="Switchable", default=False,
+                                   description="Logic can turn it on and off (TurnOn, TurnOff, Toggle, SetPattern). "
+                                               "Its light is baked into a layer of its own: at most 3 switchable or "
+                                               "patterned lights may reach the same surface, 32 switchable in a map")
+    light_start_off: BoolProperty(name="Starts Off", default=False,
+                                  description="Dark when the map starts, until logic turns it on")
     terrain_power: EnumProperty(name="Detail", default="3", items=[
         ("2", "Low (power 2)", "5x5 vertices per patch"),
         ("3", "Medium (power 3)", "9x9 vertices per patch"),

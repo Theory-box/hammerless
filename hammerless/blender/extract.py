@@ -931,7 +931,32 @@ def light_entity(obj, scale: float) -> Entity:
             cone = math.degrees(lamp.spot_size) / 2
             kv.setdefault("_cone", str(round(cone)))
             kv.setdefault("_inner_cone", str(round(cone * (1 - lamp.spot_blend))))
+        kv.update(light_style_keyvalues(obj, kv))
     return Entity(cls, origin, (pitch, yaw, roll), kv, source=obj.name)
+
+
+def light_style_keyvalues(obj, kv: dict[str, str]) -> dict[str, str]:
+    """A light's Pattern, Switchable and Starts Off as the game's keys. A switchable light needs a name (the map
+    compiler gives each named light a light style of its own, which the game turns on and off): its targetname, or
+    one made from the object's name. Keys set by hand win."""
+    hs = obj.hammerless
+    out = {}
+    custom = hs.light_pattern == "CUSTOM"
+    if hs.light_pattern not in ("0", "CUSTOM") and "style" not in kv:
+        out["style"] = hs.light_pattern
+    if custom and "pattern" not in kv:
+        out["pattern"] = "".join(c for c in hs.light_custom.lower() if "a" <= c <= "z") or "m"
+    if (hs.light_switchable or custom or hs.light_start_off) and not kv.get("targetname"):
+        out["targetname"] = light_name(obj)
+    if hs.light_start_off and "spawnflags" not in kv:
+        out["spawnflags"] = "1"                   # (initially dark)
+    return out
+
+
+def light_name(obj) -> str:
+    """The name logic and the game know a switchable light by: its targetname, or one made from its name."""
+    name = next((kv.value for kv in obj.hammerless.keyvalues if kv.key == "targetname" and kv.value), "")
+    return name or "hl_light_" + (re.sub(r"[^a-z0-9_]+", "_", obj.name.lower()).strip("_") or "light")
 
 
 # ---------------------------------------------------------------- main

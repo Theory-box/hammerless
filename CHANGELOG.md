@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Flickering and switchable lights** (Selected Object > Light, on point and spot lights): **Pattern** makes the baked light flicker, waver, pulse or strobe in the game (the game's 12 patterns, or your own *Custom* brightness steps); **Switchable** lets logic turn it on and off (TurnOn, TurnOff, Toggle, SetPattern on an Entity Events node, which now accepts Blender lights); **Starts Off** keeps it dark until turned on. Each such light is baked into a layer of its own by Hammerless's compilers (no fallback to Valve's). Tested in game: on, off, back on, a pattern, a flicker, starting off; characters in the room dim with it.
+- **New example: Power Goes Out**: a button makes the lights stutter, then die as a horde comes; 30 seconds later the power returns.
+
 ## 0.14.1 (test release, 2026-10-12)
 
 - **Placed characters** (Add > Placed Character): one of the game's characters (commons, survivors, specials) playing one of its own animations in a loop: sitting, lying, leaning, banging on a door, in a chair... (a searchable list of the character's animations). In Blender the preview is the real character posed at a frame of that animation. Shots reach it; nothing is compiled (the game's own model).

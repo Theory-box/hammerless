@@ -64,6 +64,7 @@ Everything is in the sidebar (**N**) > **Hammerless** tab. Each panel collapses,
 |---|---|---|
 | Material | brushes, terrain | Game Material (🔍 searches every L4D2 material), Surface (friction and footsteps), Texture Scale, Lightmap Scale |
 | Model | props and items | The game model (🔍 picks one) |
+| Light | point and spot lights | **Pattern** (steady, or one of the game's flickers, candles, pulses and strobes, or *Custom* brightness steps), **Switchable** (logic can turn it on and off: TurnOn, TurnOff, Toggle, SetPattern; it shows the name logic knows it by), **Starts Off**. A switchable or patterned light is baked into a layer of its own: at most 3 of them may reach the same surface, and 32 switchable names in a map (lights with the same name switch together). Characters dim and brighten with it too |
 | Terrain | terrain | Detail and patch size |
 | Settings | entities | Keyvalues, with *Reset to Defaults* |
 | Outputs | entities | When something happens here, tell another object to do something |

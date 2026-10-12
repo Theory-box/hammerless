@@ -478,9 +478,20 @@ class HL_NodeObjectInfo(_Node, bpy.types.Node):
         layout.prop(self, "target", text="")
 
 
+def _object_class(obj) -> str:
+    """The entity class a scene object becomes ("" for a plain mesh): a Blender light is a light entity (a sun can't
+    be switched: none)."""
+    from .extract import LIGHT_CLASS, effective_role
+    if obj is None:
+        return ""
+    if obj.type == "LIGHT" and effective_role(obj) == "LIGHT":
+        cls = LIGHT_CLASS.get(obj.data.type, "light")
+        return "" if cls == "light_environment" else cls
+    return obj.hammerless.classname if obj.hammerless.role in ("ENTITY", "BRUSH_ENTITY") else ""
+
+
 def _object_update(self, context):
-    cls = self.target.hammerless.classname if self.target and self.target.hammerless.role in (
-        "ENTITY", "BRUSH_ENTITY") else ""
+    cls = _object_class(self.target)
     self.classname = cls
     _rebuild_entity_sockets(self, cls)
     _label_from_target(self, context)

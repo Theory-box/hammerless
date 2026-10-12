@@ -432,6 +432,31 @@ class HL_PT_obj_model(_Panel, bpy.types.Panel):
         row.operator("hammerless.pick_model", text="", icon="VIEWZOOM")
 
 
+class HL_PT_obj_light(_Panel, bpy.types.Panel):
+    bl_label = "Light"
+    bl_parent_id = "HL_PT_object"
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.object
+        return _obj_role(context) == "LIGHT" and obj.type == "LIGHT" and obj.data.type != "SUN"
+
+    def draw(self, context):
+        from .extract import light_name
+        obj = context.object
+        hs = obj.hammerless
+        col = self.layout.column()
+        col.prop(hs, "light_pattern")
+        if hs.light_pattern == "CUSTOM":
+            col.prop(hs, "light_custom", text="Steps")
+        col.prop(hs, "light_switchable")
+        col.prop(hs, "light_start_off")
+        if hs.light_switchable or hs.light_pattern == "CUSTOM" or hs.light_start_off:
+            col.label(text="Logic name: " + light_name(obj), icon="LINKED")
+        elif hs.light_pattern != "0":
+            col.label(text="Flickers on its own; Switchable to control it", icon="INFO")
+
+
 class HL_PT_obj_material(_Panel, bpy.types.Panel):
     bl_label = "Material"
     bl_parent_id = "HL_PT_object"
@@ -1089,7 +1114,7 @@ def _add_menu(self, context):
 
 CLASSES = (HL_UL_keyvalues, HL_UL_outputs,
            HL_PT_build, HL_PT_problems,
-           HL_PT_object, HL_PT_obj_model, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
+           HL_PT_object, HL_PT_obj_model, HL_PT_obj_light, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
            HL_PT_lighting, HL_PT_view_light, HL_PT_environment, HL_PT_sun, HL_PT_fog, HL_PT_light_quality,
            HL_PT_light_advanced,
            HL_PT_visibility, HL_PT_navmesh, HL_PT_view_nav, HL_PT_sound, HL_PT_director, HL_PT_logic,

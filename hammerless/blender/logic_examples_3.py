@@ -805,4 +805,31 @@ EXAMPLES_3 = [
                 ("swap.then", "die.run"), ("swap.common", "die.target"), ("ask.attacker", "die.p2")],
          steps=[("Hit (the first time): a common in its place, killed at once",
                  ["ask", "vname", "is_husk", "used", "fresh", "both", "if_hit", "mark", "swap", "die"])]),
+    dict(title="Power Goes Out", level="Lights",
+         objects={"button": ("BUTTON", (0.0, -1.5, 1.0)),
+                  "lamp1": ("LAMP", (-2.0, 1.0, 2.5), {"light_switchable": True, "targetname": "power_lights"}),
+                  "lamp2": ("LAMP", (2.0, 1.0, 2.5), {"light_switchable": True, "targetname": "power_lights"})},
+         about="Baked lights logic can switch: a light set Switchable (Light panel) gets a layer of its own in the "
+               "baked lighting, which the game turns on, off or flickers (TurnOn, TurnOff, Toggle, SetPattern). "
+               "Lights with the same name switch together: both lamps here are power_lights, so one Entity Events "
+               "node drives them all. Pressing the button: the lights stutter (SetPattern: brightness steps ten a "
+               "second, a = dark, m = normal), die and a horde comes; 30 seconds later the power comes back "
+               "(SetPattern m: steady). Put the lamps inside, where the sun doesn't drown them.",
+         nodes=[N("button", "HL_NodeButton", 0, 0, sockets={"object": "@button"}, once=True),
+                N("stutter", "HL_NodeObject", 1, 0, label="Lights stutter", target="@lamp1",
+                  sockets={"SetPattern": "mmamammmmammamamaaamammma"}),
+                N("warn", "HL_NodeMessage", 1, 1, text="Something's wrong with the power...", seconds=3.0),
+                N("wait", "HL_NodeDelay", 2, 0, seconds=3.0),
+                N("off", "HL_NodeObject", 3, 0, label="Lights out", target="@lamp1"),
+                N("horde", "HL_NodeHorde", 3, 1),
+                N("dark", "HL_NodeMessage", 3, 2, text="The power's out!", seconds=3.0),
+                N("later", "HL_NodeDelay", 4, 0, seconds=30.0),
+                N("back", "HL_NodeObject", 5, 0, label="Power back (steady)", target="@lamp1",
+                  sockets={"SetPattern": "m"})],
+         links=[("button.pressed", "stutter.SetPattern"), ("button.pressed", "warn.show"),
+                ("button.pressed", "wait.in"), ("wait.out", "off.TurnOff"), ("wait.out", "horde.start"),
+                ("wait.out", "dark.show"), ("wait.out", "later.in"), ("later.out", "back.SetPattern")],
+         steps=[("Press: the lights stutter", ["button", "stutter", "warn", "wait"]),
+                ("3 s later: out, and a horde", ["off", "horde", "dark", "later"]),
+                ("30 s later: the power comes back", ["back"])]),
 ]

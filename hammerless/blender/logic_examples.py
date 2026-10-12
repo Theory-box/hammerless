@@ -524,6 +524,17 @@ def _objects(context, number, example):
                     while v in taken:
                         v, n = f"{stem}_{n}", n + 1
                 _set_kv(obj, k, v)
+        elif shape == "LAMP":                        # (a Blender point light: its light settings, keyvalues)
+            obj = bpy.data.objects.new(name, bpy.data.lights.new(name, "POINT"))
+            obj.data.energy = 60.0
+            obj.location = where
+            coll.objects.link(obj)
+            for k, v in (extra[0] if extra else {}).items():
+                if k.startswith("light_"):
+                    setattr(obj.hammerless, k, v)
+                else:
+                    kv = obj.hammerless.keyvalues.add()
+                    kv.key, kv.value = k, str(v)
         elif shape == "SPOT":
             obj = bpy.data.objects.new(name, None)
             obj.empty_display_type, obj.empty_display_size = "SINGLE_ARROW", 0.5

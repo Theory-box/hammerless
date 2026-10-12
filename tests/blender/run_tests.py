@@ -1745,6 +1745,38 @@ def test_sky_dropdown():
     assert s.sky_choice == "CUSTOM"                                # (a name the game doesn't have)
 
 
+def test_light_patterns():
+    # a light's Pattern / Switchable / Starts Off become the game's keys; logic sees a Blender light as an entity
+    from hammerless.blender.extract import light_entity
+    from hammerless.blender.logic import _object_class
+    reset_scene()
+
+    def lamp(name, kind="POINT", **settings):
+        o = bpy.data.objects.new(name, bpy.data.lights.new(name, kind))
+        bpy.context.scene.collection.objects.link(o)
+        for k, v in settings.items():
+            setattr(o.hammerless, k, v)
+        return o
+
+    kv = light_entity(lamp("Plain"), 52.49).keyvalues
+    assert not {"style", "pattern", "targetname", "spawnflags"} & set(kv), kv
+    kv = light_entity(lamp("Tube", light_pattern="10"), 52.49).keyvalues
+    assert kv["style"] == "10" and "targetname" not in kv, kv            # (flickers on its own, unnamed)
+    kv = light_entity(lamp("Hall Lamp", light_switchable=True, light_pattern="3"), 52.49).keyvalues
+    assert kv["targetname"] == "hl_light_hall_lamp" and kv["style"] == "3", kv
+    kv = light_entity(lamp("Siren", "SPOT", light_pattern="CUSTOM", light_custom="az Z9m"), 52.49).keyvalues
+    assert kv["pattern"] == "azzm" and kv["targetname"] == "hl_light_siren", kv
+    kv = light_entity(lamp("Dark", light_start_off=True), 52.49).keyvalues
+    assert kv["spawnflags"] == "1" and kv["targetname"] == "hl_light_dark", kv
+    named = lamp("Named", light_switchable=True)
+    k = named.hammerless.keyvalues.add()
+    k.key, k.value = "targetname", "my_lamp"
+    assert light_entity(named, 52.49).keyvalues["targetname"] == "my_lamp"   # (its own name wins)
+    assert _object_class(named) == "light"
+    assert _object_class(lamp("Spot", "SPOT")) == "light_spot"
+    assert _object_class(lamp("Sun", "SUN")) == ""
+
+
 # ---------------------------------------------------------------- runner
 
 def main():
