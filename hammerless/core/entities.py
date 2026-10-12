@@ -574,11 +574,25 @@ def zombie_spawn_area() -> Preset:
                   [PresetPart("nav_region", entity=ent)])
 
 
+def car_alarm(name: str = "car_alarm") -> Preset:
+    """Valve's own alarm car (its instance from the game's sdk_content: the car, its two kinds of glass, blinking
+    lights, headlights, the alarm and chirp sounds, a random colour and the horde when it goes off)."""
+    return Preset("CAR_ALARM", "Car Alarm",
+                  "The campaigns' alarm car: shoot it or bump it and the alarm goes off, its lights flash and a "
+                  "horde comes. It's Valve's own instance (instance/prop_car_alarm.vmf from the game's "
+                  "sdk_content, copied next to the map when it's built). Face it with the preset's rotation.",
+                  [PresetPart("car", entity=Entity("func_instance", (0, 0, 0), (0, 0, 0), {
+                      "targetname": name, "file": "instance/prop_car_alarm.vmf", "fixup_style": "0",
+                      "replace01": "$start_off 0",
+                      "model": "models/props_vehicles/cara_95sedan.mdl"}))])     # (the model: Blender's preview)
+
+
 PRESET_BUILDERS = {"START_SAFE_ROOM": start_safe_room, "END_SAFE_ROOM": end_safe_room,
                    "HORDE_TRIGGER": horde_trigger, "HORDE_BUTTON": horde_button,
                    "TANK_AMBUSH": tank_ambush, "CRESCENDO_BUTTON": crescendo_button,
                    "ZOMBIE_SPAWN_AREA": zombie_spawn_area, "LADDER": ladder,
-                   "ZOMBIE_LADDER": zombie_ladder, "ZOMBIE_CLIMB": zombie_climb, "GATE_BUTTON": gate_button}
+                   "ZOMBIE_LADDER": zombie_ladder, "ZOMBIE_CLIMB": zombie_climb, "GATE_BUTTON": gate_button,
+                   "CAR_ALARM": car_alarm}
 PRESETS = {k: f() for k, f in PRESET_BUILDERS.items()}  # default instances (labels, tests)
 
 

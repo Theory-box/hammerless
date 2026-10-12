@@ -443,6 +443,12 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
             f.write(text)
         if imported and "func_instance" in text:
             vmfimport.copy_instances(context.scene, os.path.dirname(path), rep2)
+        if "func_instance" in text:              # (the game's own instances, e.g. the Car Alarm: copied beside it)
+            from ..core.mapcompiler import fetch_game_instances
+            _copied, missing = fetch_game_instances(path, root)
+            for file in missing:
+                rep2.warnings.append(f"Instance '{file}' isn't beside the map or in the game's sdk_content: it's left "
+                                     "out of the map")
         with open(cc.sources_path(path), "w", encoding="utf-8") as f:
             json.dump({str(k): v for k, v in rep2.solid_sources.items()}, f)
     except OSError as ex:

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Car Alarm** (Add > L4D2 > Car Alarm): the campaigns' alarm car, Valve's own instance (the car, its glass, blinking lights, headlights, alarm and chirp sounds, random colour). Shoot it or bump it: the alarm goes off and a horde comes. The build copies the instance from the game's sdk_content beside the map (any instance a map names that the game has). Tested in game: a shot sets that car off (not another), and the horde comes.
+- Logic node headers always show the node's type ("Text Check: A pod?"); example titles are a Note after it. Older files convert when opened.
+
 ## 0.15.0 (test release, 2026-10-12)
 
 - **Flickering and switchable lights** (Selected Object > Light, on point and spot lights): **Pattern** makes the baked light flicker, waver, pulse or strobe in the game (the game's 12 patterns, or your own *Custom* brightness steps); **Switchable** lets logic turn it on and off (TurnOn, TurnOff, Toggle, SetPattern on an Entity Events node, which now accepts Blender lights); **Starts Off** keeps it dark until turned on. Each such light is baked into a layer of its own by Hammerless's compilers (no fallback to Valve's). Tested in game: on, off, back on, a pattern, a flicker, starting off; characters in the room dim with it.

@@ -377,6 +377,44 @@ def _instance_path(main_vmf: str, file: str) -> str | None:
     return None
 
 
+def fetch_game_instances(main_vmf: str, game_root: str | None) -> tuple[list[str], list[str]]:
+    """Instance files the map names that aren't beside it (e.g. Valve's instance/prop_car_alarm.vmf): copied from the
+    game's sdk_content/mapsrc next to the map, where the compilers look, and the instances those name too.
+    Returns (copied, missing) file names."""
+    import shutil
+    from .vmf import parse
+    copied, missing, seen = [], [], set()
+    roots = [os.path.join(game_root, "sdk_content", "mapsrc")] if game_root else []
+    queue = [main_vmf]
+    while queue:
+        with open(queue.pop(0), encoding="latin-1") as f:
+            text = f.read()
+        if "func_instance" not in text:
+            continue
+        for b in parse(text):
+            if b.name.lower() != "entity" or (b.get("classname") or "") != "func_instance" or not b.get("file"):
+                continue
+            file = b.get("file")
+            if file.lower() in seen:
+                continue
+            seen.add(file.lower())
+            path = _instance_path(main_vmf, file)
+            if path is None:
+                stem, ext = os.path.splitext(file.replace("\\", "/"))
+                rel = (stem if ext else file.replace("\\", "/")) + ".vmf"
+                src = next((os.path.join(r, *rel.split("/")) for r in roots
+                            if os.path.isfile(os.path.join(r, *rel.split("/")))), None)
+                if src is None:
+                    missing.append(file)
+                    continue
+                path = os.path.join(os.path.dirname(os.path.abspath(main_vmf)), *rel.split("/"))
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                shutil.copyfile(src, path)
+                copied.append(file)
+            queue.append(path)
+    return copied, missing
+
+
 def vmf_instances(main_vmf: str) -> list[tuple[str, str]]:
     """The instance files a map pulls in, as vbsp reads them (the map's own func_instances in order, then those
     the instances bring): (the "file" key, its path). Files that can't be found are left out."""
