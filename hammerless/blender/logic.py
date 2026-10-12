@@ -1679,8 +1679,8 @@ class HL_NodeTextCheck(_Block, bpy.types.Node):
 
 
 class HL_NodeSplitText(_Block, bpy.types.Node):
-    """Cuts text into a list at each Separator (spaces around each piece trimmed): 'a, b, c' gives a list of 3 (Get
-    Field reads one by number, 0 = the first; For Each goes through them)"""
+    """Cuts text into a list at each Separator (spaces around each piece trimmed, empty pieces left out): 'a, b, c'
+    gives a list of 3 (Get Field reads one by number, 0 = the first; For Each goes through them)"""
     bl_idname, bl_label, bl_icon = "HL_NodeSplitText", "Split Text", "ALIGN_JUSTIFY"
     kind = "SPLIT_TEXT"
 

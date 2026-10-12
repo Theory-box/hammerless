@@ -1320,6 +1320,21 @@ def test_logic_node_groups():
     # a group can't go inside itself
     from hammerless.blender.logicgroups import _ancestors_ok
     assert not _ancestors_ok(inner, outer) and _ancestors_ok(outer, inner)
+    # a group that passes its input straight to its output: one wire through it, not two
+    through = new_group_tree("Through")
+    new_item(through, "In", "event", False, uid="i")
+    new_item(through, "Out", "event", True, uid="o")
+    tin, tout = through.nodes.new("HL_NodeGroupInput"), through.nodes.new("HL_NodeGroupOutput")
+    sync(through)
+    through.links.new(tin.outputs["i"], tout.inputs["o"])
+    main2 = new_tree(bpy.context)
+    st, gt, ms = main2.nodes.new("HL_NodeMapStart"), main2.nodes.new("HL_NodeGroup"), main2.nodes.new("HL_NodeMessage")
+    gt.name, ms.name = "pass", "msg"
+    gt.group = through
+    main2.links.new(st.outputs[0], gt.inputs["i"])
+    main2.links.new(gt.outputs["o"], ms.inputs[0])
+    flat2 = flatten(bpy.context, main2, Report())
+    assert [(l.from_node, l.to_node) for l in flat2.links] == [(st.name, "msg")], flat2.links
 
 
 def test_logic_example_groups_reused():
@@ -1333,6 +1348,12 @@ def test_logic_example_groups_reused():
     assert not problems, problems
     groups = sorted(t.name for t in bpy.data.node_groups if getattr(t, "is_group", False))
     assert groups == ["Flashlight Battery", "Flashlight Is On", "Flashlight Off"], groups
+    # one edited since: adding the example again makes a fresh copy of that one, the others are used again
+    bpy.data.node_groups["Flashlight Off"].nodes["bit"].inputs["b"].value = 8.0
+    build_example(bpy.context, i, problems)
+    groups = sorted(t.name for t in bpy.data.node_groups if getattr(t, "is_group", False))
+    assert groups == ["Flashlight Battery", "Flashlight Battery.001", "Flashlight Is On", "Flashlight Off",
+                      "Flashlight Off.001"], groups
 
 
 def test_animated_custom_model():

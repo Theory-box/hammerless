@@ -201,14 +201,17 @@ def _const_of(sock):
     return v
 
 
-def flatten(context, tree, report, prefix: str = "", stack: tuple = ()) -> _Flat:
+def flatten(context, tree, report, prefix: str = "", stack: tuple = (), checked: set | None = None) -> _Flat:
     """The tree's nodes and wires with every Group node replaced by what's inside it (recursively)."""
     from .logic import _Node, _check_nodes, _compiled_links
     flat = _Flat()
     if tree.name in stack:
         report.warnings.append(f"{tree.name}: the group is inside itself, so that copy is left out")
         return flat
-    _check_nodes(context, tree, report)
+    checked = set() if checked is None else checked
+    if tree.name not in checked:              # (a group used several times: its problems reported once)
+        checked.add(tree.name)
+        _check_nodes(context, tree, report)
     nodes = {n.name: n for n in tree.nodes if isinstance(n, _Node) and not n.mute and n.kind != "OBJECT_INFO"}
     links = _compiled_links(tree, report)
     sub: dict[str, _Flat] = {}
@@ -218,7 +221,7 @@ def flatten(context, tree, report, prefix: str = "", stack: tuple = ()) -> _Flat
             if n.group is None:
                 report.warnings.append(f"{tree.name}: Group node '{n.label or n.name}' has no group picked")
                 continue
-            sub[n.name] = f = flatten(context, n.group, report, prefix + n.name + "/", stack + (tree.name,))
+            sub[n.name] = f = flatten(context, n.group, report, prefix + n.name + "/", stack + (tree.name,), checked)
             flat.nodes += f.nodes
             flat.links += f.links
         elif n.kind not in ("GROUP_IN", "GROUP_OUT"):
@@ -276,6 +279,18 @@ def flatten(context, tree, report, prefix: str = "", stack: tuple = ()) -> _Flat
                     flat.outs.setdefault(t[1], []).append(s)
                 else:
                     flat.links.append(LLink(s[0], s[1], t[0], t[1], data=l.data))
+    seen, unique = set(), []
+    for l in flat.links:          # (a wire through a group is found from its input's side and its output's: once)
+        key = (l.from_node, l.from_socket, l.to_node, l.to_socket, l.data)
+        if key not in seen:
+            seen.add(key)
+            unique.append(l)
+    flat.links = unique
+    if getattr(tree, "is_group", False):
+        for it in tree.group_items:
+            if it.is_output and it.kind != "event" and len({tuple(x) for x in flat.outs.get(it.uid, [])}) > 1:
+                report.warnings.append(f"{tree.name}: the output '{it.name}' is fed by more than one Group Output "
+                                       "node, so only one of them gives the value: wire it from one place")
     # a value typed on a Group node's (unwired) input goes to the nodes inside it
     wired = {(l.to_node, l.to_socket) for l in flat.links if l.data}
     for name, n in nodes.items():
@@ -377,6 +392,8 @@ class HL_OT_logic_group_make(_InLogic, bpy.types.Operator):
                                          "into the group: select its Object Info node too")
                 return {"CANCELLED"}
         group = new_group_tree("Group")
+        for n in parent.nodes:            # (a selected Group Input / Output or frame isn't copied in)
+            n.select = n.name in names
         # (the nodes are copied with Blender's own clipboard, which keeps their settings and the wires between them)
         bpy.ops.node.clipboard_copy()
         center = [sum(n.location[i] for n in sel) / len(sel) for i in (0, 1)]
@@ -397,7 +414,7 @@ class HL_OT_logic_group_make(_InLogic, bpy.types.Operator):
         for l in crossing_in:
             key = (l.from_node.name, l.from_socket.identifier)
             if key not in in_items:
-                in_items[key] = new_item(group, l.to_socket.name, KIND_OF_SOCKET.get(l.to_socket.bl_idname, "any"),
+                in_items[key] = new_item(group, l.to_socket.name, KIND_OF_SOCKET.get(l.from_socket.bl_idname, "any"),
                                          False).uid
         for l in crossing_out:
             key = (l.from_node.name, l.from_socket.identifier)

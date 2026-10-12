@@ -556,6 +556,33 @@ def _group_signature(name, spec) -> str:
     return hashlib.sha1(repr((name, spec)).encode()).hexdigest()[:16]
 
 
+def _group_state(tree) -> str:
+    """What a group is made of (its sockets, nodes, settings and wires), to tell whether it was edited."""
+    import hashlib
+    parts = [repr([(i.uid, i.name, i.kind, i.is_output) for i in tree.group_items])]
+    for n in sorted(tree.nodes, key=lambda n: n.name):
+        if n.bl_idname == "NodeFrame":
+            continue
+        props = []
+        for p in n.bl_rna.properties:
+            if p.identifier in ("rna_type", "location", "location_absolute", "width", "height", "dimensions", "select",
+                                "parent", "inputs", "outputs", "internal_links", "show_options", "show_preview",
+                                "hide", "show_texture", "color", "use_custom_color", "width_hidden"):
+                continue
+            try:
+                v = getattr(n, p.identifier)
+            except AttributeError:
+                continue
+            props.append((p.identifier, getattr(v, "name", v) if not isinstance(v, (int, float, str, bool)) else v))
+        socks = [(s.identifier, getattr(s, "value", None) if not hasattr(getattr(s, "value", None), "name")
+                  else s.value.name) for s in n.inputs]
+        parts.append(repr((n.name, n.bl_idname, props, [tuple(x) if hasattr(x, "__len__") and not isinstance(x, str)
+                                                         else x for _k, x in socks])))
+    parts.append(repr(sorted((l.from_node.name, l.from_socket.identifier, l.to_node.name, l.to_socket.identifier)
+                             for l in tree.links)))
+    return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:16]
+
+
 def _groups(ex, objects, problems) -> dict:
     """The example's node groups (in order: a group may use the ones before it). One already in the file from the same
     example (unchanged) is used again rather than copied."""
@@ -563,12 +590,18 @@ def _groups(ex, objects, problems) -> dict:
     made = {}
     for name, spec in (ex.get("groups") or {}).items():
         sig = _group_signature(name, spec)
-        found = next((g for g in bpy.data.node_groups if g.get("hl_example_group") == sig), None)
-        if found is not None:
+        found = next((g for g in bpy.data.node_groups if g.get("hl_example_group") == sig
+                      and getattr(g, "is_group", False) and g.get("hl_example_state") == _group_state(g)), None)
+        if found is not None and any(n.bl_idname == "HL_NodeGroup" and n.group is not None and n.group.get("hl_example_group")
+                                     and made.get(n.group.get("hl_example_name", "")) not in (None, n.group)
+                                     for n in found.nodes):
+            found = None               # (a group it uses was made again: so is it)
+        if found is not None:          # (an example group someone edited since isn't used: a fresh copy is made)
             made[name] = found
             continue
         tree = new_group_tree(name)
         tree["hl_example_group"] = sig
+        tree["hl_example_name"] = name
         for ident, label, kind in spec.get("inputs", []):
             new_item(tree, label, kind, False, uid=ident)
         for ident, label, kind in spec.get("outputs", []):
@@ -593,6 +626,7 @@ def _groups(ex, objects, problems) -> dict:
         if spec.get("about"):
             lines = textwrap.wrap(spec["about"], 90)
             _note(tree, name, lines, (min(cols) - 1) * COL, 120.0 + 22 * len(lines) + 60, 800.0)
+        tree["hl_example_state"] = _group_state(tree)
         made[name] = tree
     return made
 

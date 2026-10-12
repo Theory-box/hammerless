@@ -1068,7 +1068,8 @@ class _Compiler:
             # (an input sent to an entity handle, e.g. one just spawned: the way an Object node's inputs are, by name,
             # needs a name only it has)
             ent = self.typed_in(n, "entity", vs.THING)
-            args = ", ".join((self.typed_in(n, "input", vs.TEXT), self.typed_in(n, "value", vs.TEXT),
+            self.helper("HL_Str", HELPERS["HL_Str"])
+            args = ", ".join((f'HL_Str({self.typed_in(n, "input", vs.TEXT)})', f'HL_Str({self.typed_in(n, "value", vs.TEXT)})',
                               f"({self.typed_in(n, 'delay', vs.NUM)}).tofloat()", self.typed_in(n, "activator", vs.THING)))
             body = (f"    local hl_e = {ent};\n"
                     f'    if (hl_e != null && hl_e.IsValid()) DoEntFire("!self", {args}, hl_e);\n@@then@@')
@@ -1161,12 +1162,14 @@ class _Compiler:
                     "ENDS": "t.len() >= f.len() && t.slice(t.len() - f.len()) == f",
                     "EQUAL": "t == f"}.get(s.get("op", "CONTAINS"), "t.find(f) != null")
             return (f"(function(t, f) {{ if (t == null || f == null) return false; t = t.tostring(); f = f.tostring(); "
+                    f"if (f.len() == 0) return false; "
                     f"return {test}; }})({a}, {b})")
         if k == "SPLIT_TEXT":
             t, sep = self.typed_in(n, "text", vs.TEXT), self.typed_in(n, "separator", vs.TEXT)
             parts = (f"(function(t, s) {{ local out = []; if (t == null) return out; t = t.tostring(); s = (s == null || "
                      f's == "") ? "," : s.tostring(); local i = 0; while (true) {{ local j = t.find(s, i); '
-                     f"out.append(strip(j == null ? t.slice(i) : t.slice(i, j))); if (j == null) break; "
+                     f"local piece = strip(j == null ? t.slice(i) : t.slice(i, j)); if (piece.len() > 0) out.append(piece); "
+                     f"if (j == null) break; "
                      f"i = j + s.len(); }} return out; }})({t}, {sep})")
             return f"{parts}.len().tofloat()" if sock == "count" else parts
         if k == "PICK":

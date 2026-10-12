@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Fixes to node groups (from an audit):
+  - an event passed straight through a group (input wired to output) fired twice, four times when nested;
+  - Make Group (Ctrl+G) gave an input the type of the node inside, not of what's wired in, which could break the wire;
+  - Make Group could copy a selected Group Input / Output or frame in;
+  - re-adding an example reused its group even after you edited it (now a fresh copy, and the groups that use it too);
+  - two Group Outputs feeding one value output now warn;
+  - a group's problems are reported once, not once per copy.
+- Fixes to the new nodes:
+  - Text Check with nothing to look for is false;
+  - Fire Input takes numbers wired into Input / Value;
+  - Split Text leaves out empty pieces.
 - **Animated Custom Models**: a Custom Model whose mesh has an Armature modifier becomes an animated game model. Its deform bones, vertex weights (the strongest 3 per vertex) and every action of the armature (its action and the actions on its NLA tracks) become animations named after the actions; Cyclic Animation on makes one loop. Empties parented to a bone become attachment points. The prop is a prop_dynamic playing `idle` (or its first animation) on its own; logic plays others by name. Built through the game's studiomdl (our own model writer still makes the static props). Tested in game: a pod plays its idle and swell animations, its bones move.
 - **New example: Swelling Pod** (Examples 3): an animated pod made by the example (mesh, armature, 'idle' and 'swell' actions), its behaviour a node group. A survivor who comes close sets it off: it swells, grows and bursts (an explosion, damage and a green flash of spores for survivors close by); shot, it bursts at once. Duplicates work too. Tested in game: walk-up (swell, grow, burst, 20 damage, removed) and shooting (bursts on the next tick, with nobody near).
 - Per Player variables also work per entity (a prop, an infected wired into Player); a player's and an entity's values are kept apart now (before, a player's user id and an entity's number could share one).
