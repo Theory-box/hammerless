@@ -33,6 +33,7 @@ class ModelSpec:
     mass: float = 0.0                           # PHYSICS: kg (0: studiomdl works it out from the volume)
     physics_class: str = "Wooden.Medium"        # PHYSICS: a class from the game's scripts/propdata.txt
     materials_dir: str = ""                     # "models/hammerless/<map>/" (materials/<this><name>.vmt)
+    skeleton: object = None                     # a skeletal.Skeleton: an animated model (bones, weights, actions)
 
 
 def model_files(name: str) -> list[str]:
@@ -91,12 +92,16 @@ def collision_smd(pieces) -> str:
 
 def qc_text(spec: ModelSpec) -> str:
     lines = [f'$modelname "{spec.name}.mdl"']
-    if spec.kind != PHYSICS:
+    if spec.kind != PHYSICS and spec.skeleton is None:
         lines.append("$staticprop")
     lines += ['$body body "model.smd"',
               f'$surfaceprop "{spec.surfaceprop}"',
-              f'$cdmaterials "{spec.materials_dir}"',
-              '$sequence idle "model.smd" fps 30']
+              f'$cdmaterials "{spec.materials_dir}"']
+    if spec.skeleton is not None:
+        from .skeletal import qc_lines
+        lines += qc_lines(spec.skeleton)
+    else:
+        lines.append('$sequence idle "model.smd" fps 30')
     if spec.collision:
         opts = []
         if len(spec.collision) > 1:
@@ -159,11 +164,9 @@ class ModelResult:
 def compile_model(studiomdl: str, game_dir: str, spec: ModelSpec, work_dir: str) -> ModelResult:
     """Write the SMDs and QC into work_dir and run studiomdl; the model lands in game_dir/models/."""
     os.makedirs(work_dir, exist_ok=True)
-    with open(os.path.join(work_dir, "model.smd"), "w", encoding="utf-8") as f:
-        f.write(reference_smd(spec.triangles))
-    if spec.collision:
-        with open(os.path.join(work_dir, "collision.smd"), "w", encoding="utf-8") as f:
-            f.write(collision_smd(spec.collision))
+    for file, text in source_files(spec).items():
+        with open(os.path.join(work_dir, file), "w", encoding="utf-8") as f:
+            f.write(text)
     qc = os.path.join(work_dir, "model.qc")
     with open(qc, "w", encoding="utf-8") as f:
         f.write(qc_text(spec))
@@ -174,6 +177,24 @@ def compile_model(studiomdl: str, game_dir: str, spec: ModelSpec, work_dir: str)
     files = [f for f in model_files(spec.name) if os.path.exists(os.path.join(game_dir, *f.split("/")))]
     ok = 'Completed "model.qc"' in log and any(f.endswith(".mdl") for f in files)
     return ModelResult(ok, files, log)
+
+
+def source_files(spec: ModelSpec) -> dict[str, str]:
+    """The SMDs studiomdl reads for spec (the QC goes next to them): the mesh, the collision and, for an animated
+    model, one per animation."""
+    if spec.skeleton is None:
+        files = {"model.smd": reference_smd(spec.triangles)}
+        if spec.collision:
+            files["collision.smd"] = collision_smd(spec.collision)
+        return files
+    from . import skeletal
+    sk = spec.skeleton
+    files = {"model.smd": skeletal.reference_smd(spec.triangles, sk)}
+    if spec.collision:
+        files["collision.smd"] = skeletal.collision_smd(spec.collision, sk)
+    for a in sk.animations:
+        files[skeletal.sequence_file(a)] = skeletal.animation_smd(sk, a)
+    return files
 
 
 def write_model_files(game_dir: str, spec: ModelSpec, density: float = 2000.0) -> list[str]:

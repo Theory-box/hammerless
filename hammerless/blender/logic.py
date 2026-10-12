@@ -1481,7 +1481,7 @@ class HL_NodeForEach(_Block, bpy.types.Node):
         return {"what": self.what}
 
 
-SCOPE_ITEMS = [("MAP", "Map", "One value for the whole map"), ("PLAYER", "Per Player", "A value for each player"),
+SCOPE_ITEMS = [("MAP", "Map", "One value for the whole map"), ("PLAYER", "Per Player", "A value for each player (or each entity wired into Player: a prop, an infected)"),
                ("GROUP", "This Group Copy", "Inside a node group: a value for each Group node using it (outside a "
                                             "group: the same as Map)")]
 

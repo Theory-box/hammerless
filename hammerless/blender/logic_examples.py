@@ -497,6 +497,9 @@ def _objects(context, number, example):
             from .ops import make_entity_object
             obj = make_entity_object(context, shape.split(":", 1)[1], where, collection=coll, name=name,
                                      keyvalues=extra[0] if extra else None)
+        elif shape == "POD":                       # (an animated model: mesh, armature, actions)
+            from .examplemodels import make_pod
+            obj = make_pod(context, name, where, coll)
         elif shape == "SPOT":
             obj = bpy.data.objects.new(name, None)
             obj.empty_display_type, obj.empty_display_size = "SINGLE_ARROW", 0.5

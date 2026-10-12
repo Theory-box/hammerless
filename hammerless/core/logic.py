@@ -165,7 +165,7 @@ HELPERS = {
         "        if (ty == \"integer\" || ty == \"float\" || ty == \"bool\" || ty == \"string\") t[k] <- x;\n"
         "    }\n"
         "    SaveTable(\"hl_kept\", t);\n}\n"
-        "::HL_PKey <- function(p) { return (p == null) ? \"\" : (\"GetPlayerUserId\" in p ? p.GetPlayerUserId() : p.GetEntityIndex()).tostring(); }\n"
+        "::HL_PKey <- function(p) { return (p == null) ? \"\" : (\"GetPlayerUserId\" in p ? \"u\" + p.GetPlayerUserId() : \"e\" + p.GetEntityIndex()); }\n"   # (players and other entities apart)
         "::HL_PVarGet <- function(p, name, d) {\n    local k = ::HL_PKey(p);\n"
         "    return (k in ::HL_PVar && name in ::HL_PVar[k] && ::HL_PVar[k][name] != null) ? ::HL_PVar[k][name] : d;\n}\n"
         "::HL_PVarSet <- function(p, name, v) {\n    local k = ::HL_PKey(p);\n"

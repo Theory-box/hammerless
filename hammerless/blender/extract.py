@@ -520,17 +520,21 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
     matrix = matrix if matrix is not None else obj.matrix_world
     loc, rot, sca = matrix.decompose()
     kind = hs.model_kind
+    arm = obj.find_armature()
+    if arm is not None:
+        kind = "DYNAMIC"                 # (an animated model: the game plays animations on a prop_dynamic)
     collide = hs.model_collision if kind != "PHYSICS" else "HULLS"
     # the model is the mesh with modifiers applied: with any on, objects sharing the mesh can differ
     modified = any(m.show_viewport for m in obj.modifiers)
     shape = f"{obj.data.name}@{obj.name}" if modified else obj.data.name
     key = (shape, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class_name or hs.physics_class, round(hs.model_mass, 3),
-           tuple(slot.material.name if slot.material else "" for slot in obj.material_slots))
+           tuple(slot.material.name if slot.material else "" for slot in obj.material_slots),
+           arm.name if arm is not None else "")
     name = getattr(ir, "_model_keys", {}).get(key)
     if name is None:
         import hashlib
         stem = safe_name(obj.name if modified else obj.data.name)
-        if key[1:] != ((1.0, 1.0, 1.0), "STATIC", "HULLS", key[4], key[5], key[6]):
+        if key[1:] != ((1.0, 1.0, 1.0), "STATIC", "HULLS", key[4], key[5], key[6], ""):
             stem += "_" + hashlib.sha1(repr(key).encode()).hexdigest()[:6]
         name = f"hammerless/{ir.settings.name}/{stem}"
         while name in ir.models:              # two meshes whose names clean up the same
@@ -541,6 +545,9 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
     kv = {"model": f"models/{name}.mdl", "solid": "6" if spec.collision else "0"}
     if kind == "STATIC":
         kv["disableshadows"] = "0"
+    if spec.skeleton is not None and spec.skeleton.animations:
+        names = [a.name for a in spec.skeleton.animations]
+        kv["DefaultAnim"] = next((n for n in names if n.lower() == "idle"), names[0])   # (it loops on its own)
     kv.update(object_keyvalues(obj))
     origin = tuple(c * scale for c in loc)
     return Entity(PROP_CLASSES[kind], origin, source_angles(rot.to_matrix().to_4x4()), kv, [], label or obj.name,
@@ -562,8 +569,16 @@ def _hull_thickness(hull) -> float:
 def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, collide):
     from ..core.models import ModelSpec
     from ..core.phywrite import MAX_PIECE_TRIANGLES
+    arm = obj.find_armature()
+    rest_was = None
+    if arm is not None:                      # the mesh as modelled (rest pose): the animations come from the bones
+        rest_was = arm.data.pose_position
+        arm.data.pose_position = "REST"
+        bpy.context.view_layer.update()
+        depsgraph = bpy.context.evaluated_depsgraph_get()
     eval_obj = obj.evaluated_get(depsgraph)
     mesh = eval_obj.to_mesh()
+    skeleton = None
     try:
         flip = (sca.x * sca.y * sca.z) < 0       # a mirrored copy: keep the faces facing out
         size = Vector((sca.x * scale, sca.y * scale, sca.z * scale))
@@ -573,6 +588,7 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
         slots = obj.material_slots
         mat_names: dict[int, str] = {}
         triangles = []
+        tri_vis = []
         for tri in mesh.loop_triangles:
             mi = tri.material_index
             if mi not in mat_names:
@@ -593,6 +609,8 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
             if flip:
                 verts.reverse()
             triangles.append((mat_names[mi], tuple(verts)))
+            if arm is not None:
+                tri_vis.append(tuple(reversed(tri.vertices)) if flip else tuple(tri.vertices))
         pieces = []
         if collide == "HULLS":
             bm = bmesh.new()
@@ -621,8 +639,15 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
                                        [tuple(v.index for v in f.verts) for f in hull.faces]))
                 hull.free()
             bm.free()
+        if arm is not None:
+            skeleton = _skeleton(obj, arm, mesh, tri_vis, size, materials.report)
     finally:
         eval_obj.to_mesh_clear()
+        if rest_was is not None:
+            arm.data.pose_position = rest_was
+            bpy.context.view_layer.update()
+    if skeleton is not None:
+        _sample_actions(obj, arm, skeleton, size, materials.report)
     if kind == "PHYSICS" and not pieces:
         materials.report.warnings.append(
             f"Custom Model '{obj.name}' is a Physics Prop but has no solid part (every part is flat or thinner than "
@@ -634,7 +659,187 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
             surface = slot.material.hammerless.surface
             break
     return ModelSpec(name, triangles, pieces, kind, surface, obj.hammerless.model_mass, obj.hammerless.physics_class_name or obj.hammerless.physics_class,
-                     f"models/hammerless/{ir.settings.name}/")
+                     f"models/hammerless/{ir.settings.name}/", skeleton)
+
+
+# ---------------------------------------------------------------- animated models (armatures)
+
+def _bone_space(obj, arm):
+    """Armature space -> the model's (the mesh object's own axes, before its scale): bones are in the same space
+    as the vertices."""
+    loc, rot, _sca = obj.matrix_world.decompose()
+    return Matrix.LocRotScale(loc, rot, None).inverted() @ arm.matrix_world
+
+
+def _local(m_parent, m, size) -> tuple:
+    """A bone's position and rotation relative to its parent (None: the model), scale dropped, in Hammer units."""
+    rel = m if m_parent is None else _unscaled(m_parent).inverted() @ m
+    loc, rot, _s = rel.decompose()
+    if m_parent is None:
+        loc = Vector((loc.x * size.x, loc.y * size.y, loc.z * size.z))
+    else:
+        loc = loc * size.x        # (children: the model's scale is uniform, checked in _skeleton)
+    e = rot.to_euler("XYZ")
+    return (loc.x, loc.y, loc.z), (e.x, e.y, e.z)
+
+
+def _unscaled(m):
+    loc, rot, _s = m.decompose()
+    return Matrix.LocRotScale(loc, rot, None)
+
+
+def _deform_bones(arm):
+    """The armature's deform bones, parents before children (a bone's parent: its nearest deform ancestor)."""
+    out = []
+
+    def walk(b):
+        if b.use_deform:
+            out.append(b)
+        for c in b.children:
+            walk(c)
+    for b in arm.data.bones:
+        if b.parent is None:
+            walk(b)
+    return out
+
+
+def _deform_parent(b, index):
+    p = b.parent
+    while p is not None and p.name not in index:
+        p = p.parent
+    return index[p.name] if p is not None else -1
+
+
+def _skeleton(obj, arm, mesh, tri_vis, size, report):
+    from ..core import skeletal
+    bones = _deform_bones(arm)
+    if not bones:
+        report.warnings.append(f"Custom Model '{obj.name}': its armature '{arm.name}' has no deform bones, so it's "
+                               "built as a still model")
+        return None
+    if max(size) - min(size) > 1e-4 * max(size):
+        report.warnings.append(f"Custom Model '{obj.name}' is scaled unevenly: an animated model's bones need the same "
+                               "scale on X, Y and Z (apply the scale)")
+    index = {b.name: i for i, b in enumerate(bones)}
+    space = _bone_space(obj, arm)
+    sk_bones = []
+    for b in bones:
+        pi = _deform_parent(b, index)
+        m = space @ b.matrix_local
+        mp = space @ bones[pi].matrix_local if pi >= 0 else None
+        pos, rot = _local(mp, m, size)
+        sk_bones.append(skeletal.Bone(b.name, pi, pos, rot))
+    # vertex weights: vertex groups named after deform bones
+    group_bone = {g.index: index[g.name] for g in obj.vertex_groups if g.name in index}
+    per_vertex = []
+    for v in mesh.vertices:
+        per_vertex.append([(group_bone[g.group], g.weight) for g in v.groups if g.group in group_bone])
+    weights = [tuple(per_vertex[i] for i in vis) for vis in tri_vis]
+    # attachments: empties parented to a bone
+    atts = []
+    for child in arm.children:
+        if child.type == "EMPTY" and child.parent_type == "BONE" and child.parent_bone in index:
+            bi = index[child.parent_bone]
+            m = (arm.matrix_world @ bones[bi].matrix_local).inverted() @ child.matrix_world
+            loc, rot, _s = m.decompose()
+            e = rot.to_euler("XYZ")
+            atts.append(skeletal.Attachment(child.name, bi, tuple(loc * size.x), (e.x, e.y, e.z)))
+    sk = skeletal.Skeleton(sk_bones, weights, [], atts)
+    for p in skeletal.problems(sk):
+        report.warnings.append(f"Custom Model '{obj.name}': {p}")
+    return sk
+
+
+def _action_curves(act):
+    """An action's F-curves (Blender 4.4's slotted actions keep them in layers / strips / channel bags)."""
+    try:
+        curves = list(act.fcurves)
+        if curves:
+            return curves
+    except (AttributeError, RuntimeError):
+        pass
+    out = []
+    for layer in getattr(act, "layers", []):
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", []):
+                out += list(bag.fcurves)
+    return out
+
+
+def _armature_actions(arm):
+    """The armature's animations: its action and the actions on its NLA tracks (Blender's way of keeping several
+    per object); with none of those, every action that moves bones of these names."""
+    ad = arm.animation_data
+    own = []
+    if ad is not None:
+        if ad.action is not None:
+            own.append(ad.action)
+        for track in ad.nla_tracks:
+            for strip in track.strips:
+                if strip.action is not None and strip.action not in own:
+                    own.append(strip.action)
+    if own:
+        return own
+    names = {b.name for b in arm.data.bones}
+    out = []
+    for act in bpy.data.actions:
+        for fc in _action_curves(act):
+            m = re.match(r'pose\.bones\["(.+?)"\]', fc.data_path)
+            if m and m.group(1) in names:
+                out.append(act)
+                break
+    return sorted(out, key=lambda a: a.name.lower())
+
+
+def _sample_actions(obj, arm, sk, size, report):
+    """Every action of the armature, frame by frame, as an animation (its name; looping when Cyclic Animation is on
+    in the action's settings)."""
+    from ..core import skeletal
+    actions = _armature_actions(arm)
+    if not actions:
+        return
+    scene = bpy.context.scene
+    ad = arm.animation_data or arm.animation_data_create()
+    old_action, old_slot, old_nla = ad.action, getattr(ad, "action_slot", None), ad.use_nla
+    ad.use_nla = False                       # (only the action being sampled moves the bones)
+    old_frame = scene.frame_current
+    fps = scene.render.fps / (scene.render.fps_base or 1.0)
+    space = _bone_space(obj, arm)
+    by_name = {b.name: arm.pose.bones[b.name] for b in sk.bones}
+    parents = [sk.bones[b.parent].name if b.parent >= 0 else None for b in sk.bones]
+    used = set()
+    try:
+        for act in actions:
+            ad.action = act
+            slots = list(getattr(act, "slots", []))
+            if slots and hasattr(ad, "action_slot"):
+                ad.action_slot = next((sl for sl in slots if getattr(sl, "target_id_type", "") == "OBJECT"), slots[0])
+            start, end = (int(round(f)) for f in act.frame_range)
+            frames = []
+            for f in range(start, max(end, start) + 1):
+                scene.frame_set(f)
+                frame = []
+                for b, parent in zip(sk.bones, parents):
+                    m = space @ by_name[b.name].matrix
+                    mp = space @ by_name[parent].matrix if parent is not None else None
+                    frame.append(_local(mp, m, size))
+                frames.append(frame)
+            # (the animation's name: the action's, or its 'hl_name' property when the action's name must differ,
+            # e.g. two models each with an 'idle')
+            name = re.sub(r"[^A-Za-z0-9_]+", "_", str(act.get("hl_name") or act.name)).strip("_") or "anim"
+            while name.lower() in used:
+                name += "_2"
+            used.add(name.lower())
+            sk.animations.append(skeletal.Animation(name, frames, fps, bool(getattr(act, "use_cyclic", False))))
+    finally:
+        ad.use_nla = old_nla
+        ad.action = old_action
+        if old_slot is not None and hasattr(ad, "action_slot"):
+            try:
+                ad.action_slot = old_slot
+            except (TypeError, RuntimeError):
+                pass
+        scene.frame_set(old_frame)
 
 
 def object_keyvalues(obj) -> dict[str, str]:

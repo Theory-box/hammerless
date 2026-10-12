@@ -332,7 +332,8 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
     from ..core import models as m
     studiomdl = os.path.join(root, "bin", "studiomdl.exe")
     own = context_scene_setting("model_compiler", "HAMMERLESS") == "HAMMERLESS"
-    if not own and not os.path.exists(studiomdl):
+    animated = any(spec.skeleton is not None for spec in ir.models.values())
+    if (animated or not own) and not os.path.exists(studiomdl):
         rep.errors.append("Custom Models need studiomdl.exe from the Left 4 Dead 2 Authoring Tools (Steam > Library > "
                           "Tools): it isn't in the game's bin folder")
         return
@@ -340,8 +341,8 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
     built = 0
     writer = _writer_version() if own else "studiomdl"     # (a fixed model writer makes the models again)
     for name, spec in ir.models.items():
-        sig = hashlib.sha1((m.reference_smd(spec.triangles) + m.collision_smd(spec.collision)
-                            + m.qc_text(spec) + writer).encode()).hexdigest()
+        sig = hashlib.sha1(("".join(m.source_files(spec).values()) + m.qc_text(spec)
+                            + (writer if spec.skeleton is None else "studiomdl")).encode()).hexdigest()
         folder = os.path.join(work, "models", name.split("/")[-1])
         stamp = os.path.join(folder, "built.sha1")
         files = m.model_files(name)[:3] + (m.model_files(name)[3:] if spec.collision else [])   # (.phy too)
@@ -352,7 +353,7 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
                 old = f.read()
         if old == sig:
             continue
-        if own:
+        if own and spec.skeleton is None:      # (animated models: studiomdl; our writer makes static props only)
             try:
                 from ..core.surfaces import surface_density
                 os.makedirs(folder, exist_ok=True)
