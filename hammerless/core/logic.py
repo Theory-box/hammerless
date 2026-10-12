@@ -558,8 +558,8 @@ class _Compiler:
             if e is None:
                 self.problems.append(f"Logic node '{nid}': " + (
                     "pick an object" if not n.obj else
-                    f"'{n.obj}' is a plain mesh. Use a Button, Move Over Time or Show/Hide node on it, "
-                    "or set its Role to an entity"))
+                    f"'{n.obj}' isn't built as an entity: it's outside the map collection (move it in), or it's a "
+                    "plain mesh (use a Button, Move Over Time or Show/Hide node on it, or set its Role to an entity)"))
                 return
             name = self.name_of(e, n.obj or DIRECTOR)
             for sock in s.get("outputs", []):

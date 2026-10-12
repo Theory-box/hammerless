@@ -1228,6 +1228,33 @@ def test_vmf_import_sky():
     assert world.get("skyname") == "sky_l4d_c1_2_hdr"
 
 
+def test_example_objects_in_map_collection():
+    # an example's objects go into the map collection when there is one (outside it they aren't built: Slow
+    # Motion Headshots' Time Scale entity was missing from an imported map, so its Start / Stop did nothing)
+    from hammerless.blender.logic_examples import all_examples, build_example
+    from hammerless.blender.mapcollection import map_collection
+    from hammerless.core.compile import find_game_root
+    real = find_game_root()
+    if not (real and os.path.exists(os.path.join(real, "bin", "left4dead2.fgd"))):
+        return
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    bpy.ops.hammerless.add_entity(classname="info_survivor_position")
+    bpy.ops.hammerless.organize_scene()
+    coll = map_collection(bpy.context.scene)
+    assert coll is not None
+    i = next(k for k, e in enumerate(all_examples()) if e["title"] == "Slow Motion Headshots")
+    problems = []
+    build_example(bpy.context, i, problems)
+    assert not problems, problems
+    slowmo = next(o for o in bpy.data.objects if o.name.endswith("slowmo"))
+    assert slowmo.name in coll.all_objects, [c.name for c in slowmo.users_collection]
+    path = os.path.join(TMP, "build", "test_map.vmf")
+    data, log = export()
+    assert data is not None, log
+    assert "func_timescale" in open(path, encoding="utf-8").read(), log
+
+
 def test_organize_scene():
     # Organize Scene: the map collection named after the map, sorted by kind; the map builds the same; then only
     # what's inside it is built; renaming the map renames it

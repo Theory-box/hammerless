@@ -451,7 +451,8 @@ def _objects(context, number, example):
     if not wanted:
         return {}
     coll = bpy.data.collections.new(f"Example {number:02d} objects")
-    context.scene.collection.children.link(coll)
+    from .mapcollection import map_collection
+    (map_collection(context.scene) or context.scene.collection).children.link(coll)   # (outside it: not built)
     base = context.scene.cursor.location.copy()
     made = {}
     for key, (shape, offset, *extra) in wanted.items():
