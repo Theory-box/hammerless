@@ -205,6 +205,110 @@ SWELLING_POD = dict(
              "gone"])])
 
 
+REPLACE_WITH_COMMON = dict(
+    about="Swaps a placed character for a real common infected where it is: same model, same body variant, facing "
+          "the same way (an 'infected' entity made there, given the prop's model), and removes the prop. Common is the "
+          "new one.",
+    inputs=[("run", "Run", "event"), ("prop", "Placed Character", "thing")],
+    outputs=[("then", "Then", "event"), ("common", "Common", "thing")],
+    nodes=[fn("at", "entity:GetOrigin", 0, 2), fn("facing", "entity:GetAngles", 0, 3),
+           N("kv", "HL_NodeMakeTable", 1, 2, fields="origin: vec, angles: vec"),
+           fn("spawn", "SpawnEntityFromTable", 1, 0, {"p0": "infected"}),
+           fn("model", "entity:GetModelName", 1, 4),
+           fn("wear", "entity:SetModel", 2, 0),
+           fn("body", "NetProps.GetPropInt", 2, 4, {"p1": "m_nBody"}),
+           fn("same_body", "NetProps.SetPropInt", 3, 0, {"p1": "m_nBody"}),
+           N("gone", "HL_NodeFireInput", 4, 0, label="Remove the prop", sockets={"input": "Kill"})],
+    links=[("in.prop", "at.target"), ("in.prop", "facing.target"), ("at.result", "kv.f_origin"),
+           ("facing.result", "kv.f_angles"), ("in.run", "spawn.run"), ("kv.table", "spawn.p1"),
+           ("spawn.then", "wear.run"), ("spawn.result", "wear.target"), ("in.prop", "model.target"),
+           ("model.result", "wear.p0"), ("wear.then", "same_body.run"), ("spawn.result", "same_body.p0"),
+           ("in.prop", "body.p0"), ("body.result", "same_body.p2"), ("same_body.then", "gone.run"),
+           ("in.prop", "gone.entity"), ("gone.then", "out.then"), ("spawn.result", "out.common")])
+
+STAND_UP = dict(
+    about="The animation a placed common gets up with, from the pose it's in (lying, sitting in a chair, sitting), and "
+          "how long it takes (none: 0, it wakes at once).",
+    inputs=[("prop", "Placed Character", "thing")],
+    outputs=[("anim", "Animation", "text"), ("seconds", "Seconds", "num")],
+    nodes=[fn("now_seq", "entity:GetSequence", 0, 0), fn("name", "entity:GetSequenceName", 1, 0),
+           N("lying", "HL_NodeTextCheck", 2, 0, op="CONTAINS", sockets={"b": "Lying"}),
+           N("chair", "HL_NodeTextCheck", 2, 1, op="CONTAINS", sockets={"b": "Chair"}),
+           N("sitting", "HL_NodeTextCheck", 2, 2, op="CONTAINS", sockets={"b": "Sitting"}),
+           N("pick_sit", "HL_NodePickValue", 3, 2, value_kind="text", sockets={"a": "Sitting_to_Standing_Alert", "b": ""}),
+           N("pick_chair", "HL_NodePickValue", 4, 1, value_kind="text",
+             sockets={"a": "Sitting_in_Chair_to_Standing_Alert"}),
+           N("pick_lying", "HL_NodePickValue", 5, 0, value_kind="text", sockets={"a": "Lying_to_Standing_Alert"}),
+           fn("seq", "entity:LookupSequence", 5, 2), fn("length", "entity:GetSequenceDuration", 6, 2),
+           N("has", "HL_NodeCheck", 5, 3, op="NOT_EQUAL"),
+           N("text", "HL_NodeFormatText", 4, 3, template=""),
+           N("seconds", "HL_NodePickValue", 7, 2, sockets={"b": 0.0})],
+    links=[("in.prop", "now_seq.target"), ("in.prop", "name.target"), ("now_seq.result", "name.p0"),
+           ("name.result", "lying.a"), ("name.result", "chair.a"), ("name.result", "sitting.a"),
+           ("sitting.result", "pick_sit.condition"), ("chair.result", "pick_chair.condition"),
+           ("pick_sit.value", "pick_chair.b"), ("lying.result", "pick_lying.condition"),
+           ("pick_chair.value", "pick_lying.b"), ("pick_lying.value", "out.anim"),
+           ("in.prop", "seq.target"), ("pick_lying.value", "seq.p0"), ("in.prop", "length.target"),
+           ("seq.result", "length.p0"), ("pick_lying.value", "has.a"), ("text.result", "has.b"),
+           ("has.result", "seconds.condition"), ("length.result", "seconds.a"), ("seconds.value", "out.seconds")])
+
+WAKE_SLEEPER = dict(
+    about="Wakes a sleeper (once): it plays its stand-up animation, and its per-entity variable 'wake_at' is set to when "
+          "it will be up (the Sleeper group swaps it for a real common then).",
+    inputs=[("run", "Run", "event"), ("prop", "Sleeper", "thing")],
+    outputs=[("then", "Then", "event")],
+    nodes=[N("wake_at", "HL_NodeGetVariable", 0, 2, var_name="wake_at", scope="PLAYER"),
+           N("asleep", "HL_NodeCompare", 1, 2, label="Asleep?", op="LESS_EQUAL", sockets={"b": 0.0}),
+           N("if_asleep", "HL_NodeIf", 1, 0),
+           N("stand", "HL_NodeGroup", 1, 4, group="Stand Up Animation"),
+           fn("now", "Time", 2, 3),
+           N("when", "HL_NodeMath", 2, 4, op="ADD", sockets={"b": 0.0}),
+           N("min_time", "HL_NodeMath", 3, 4, label="At least a moment", op="MAXIMUM", sockets={"b": 0.1}),
+           N("set", "HL_NodeSetVariable", 2, 0, var_name="wake_at", scope="PLAYER"),
+           N("play", "HL_NodeFireInput", 3, 0, label="Stand up", sockets={"input": "SetAnimation"})],
+    links=[("in.prop", "wake_at.player"), ("wake_at.result", "asleep.a"), ("in.run", "if_asleep.in"),
+           ("asleep.result", "if_asleep.condition"), ("in.prop", "stand.prop"),
+           ("stand.seconds", "min_time.a"), ("now.result", "when.a"), ("min_time.value", "when.b"),
+           ("if_asleep.true", "set.run"), ("in.prop", "set.player"), ("when.value", "set.value"),
+           ("set.then", "play.run"), ("in.prop", "play.entity"), ("stand.anim", "play.value"),
+           ("play.then", "out.then")])
+
+SLEEPER = dict(
+    about="One sleeper, every tick: asleep, a survivor within Radius wakes it (Wake Sleeper); woken and up (its "
+          "'wake_at' passed), it becomes a real common (Replace With Common) that a moment later rushes the survivor "
+          "closest to where it was.",
+    inputs=[("run", "Run", "event"), ("prop", "Sleeper", "thing"), ("radius", "Radius", "num")],
+    outputs=[("then", "Then", "event")],
+    nodes=[N("wake_at", "HL_NodeGetVariable", 0, 4, var_name="wake_at", scope="PLAYER"),
+           N("woken", "HL_NodeCompare", 1, 4, label="Woken?", op="GREATER", sockets={"b": 0.0}),
+           N("if_woken", "HL_NodeIf", 1, 0),
+           fn("at", "entity:GetOrigin", 0, 5),
+           fn("near", "Entities.FindByClassnameWithin", 2, 5, {"p1": "player"}),
+           N("survivor", "HL_NodeGroup", 3, 5, group="Is a Survivor"),
+           N("if_near", "HL_NodeIf", 2, 1),
+           N("wake", "HL_NodeGroup", 3, 1, group="Wake Sleeper"),
+           fn("now", "Time", 2, 6),
+           N("up", "HL_NodeCompare", 3, 6, label="Up?", op="GREATER_EQUAL"),
+           N("if_up", "HL_NodeIf", 2, 0),
+           N("where", "HL_NodeSetVariable", 3, 0, label="Where it was", var_name="sleeper_woke_at", value_kind="vec"),
+           N("swap", "HL_NodeGroup", 4, 0, group="Replace With Common"),
+           N("wait", "HL_NodeDelay", 5, 0, label="A moment (the common gets going)", seconds=0.3),
+           N("where_get", "HL_NodeGetVariable", 5, 2, var_name="sleeper_woke_at", value_kind="vec"),
+           fn("closest", "Director.GetClosestSurvivor", 6, 2),
+           fn("rush", "RushVictim", 6, 0, {"p1": 800.0})],
+    links=[("in.prop", "wake_at.player"), ("wake_at.result", "woken.a"), ("in.run", "if_woken.in"),
+           ("woken.result", "if_woken.condition"),
+           ("if_woken.false", "if_near.in"), ("in.prop", "at.target"), ("at.result", "near.p2"),
+           ("in.radius", "near.p3"), ("near.result", "survivor.entity"), ("survivor.result", "if_near.condition"),
+           ("if_near.true", "wake.run"), ("in.prop", "wake.prop"), ("wake.then", "out.then"),
+           ("if_near.false", "out.then"),
+           ("if_woken.true", "if_up.in"), ("now.result", "up.a"), ("wake_at.result", "up.b"),
+           ("up.result", "if_up.condition"), ("if_up.true", "where.run"), ("at.result", "where.value"),
+           ("where.then", "swap.run"), ("in.prop", "swap.prop"), ("swap.then", "wait.in"),
+           ("wait.out", "rush.run"), ("where_get.result", "closest.p0"), ("closest.result", "rush.p0"),
+           ("rush.then", "out.then"), ("if_up.false", "out.then")])
+
+
 MUZZLE_LIGHT = dict(
     about="Flashes a light on a player's gun muzzle for one server tick (0.03 s). The light is one per player (named "
           "Light Name_<player number>), made at their first shot (only when Brightness is above 0), and put on the "
@@ -594,4 +698,66 @@ EXAMPLES_3 = [
          steps=[("Twice a second, every common not in our model yet", ["timer", "each", "theirs", "ours", "other",
                                                                       "if_other"]),
                 ("Wear the mannequin's model", ["wear"])]),
+    dict(title="Sleepers", level="Placed Characters",
+         objects={"sleeper1": ("PLACED:COMMON_MALE:Lying03", (0.0, 0.0, 0.0), {"targetname": "sleeper_1"}),
+                  "sleeper2": ("PLACED:COMMON_FEMALE:Sitting06", (2.0, 1.5, 0.0), {"targetname": "sleeper_2"}),
+                  "sleeper3": ("PLACED:COMMON_MALE:Lying06", (-2.0, 2.5, 0.0), {"targetname": "sleeper_3", "body": "3"})},
+         about="Placed characters (Add > Placed Character) lying and sitting, named sleeper_... They're bodies until "
+               "disturbed: a survivor walking close, a gunshot nearby, or a shot at one wakes it. It gets up with the "
+               "right animation for its pose (the 'Stand Up Animation' group), becomes a real common in the same "
+               "clothes ('Replace With Common') and rushes the closest survivor. Every tick For Each runs the "
+               "'Sleeper' group for each one named sleeper*: name more placed characters that way to add sleepers. "
+               "(Shots need Hammerless's game mode for the Override: Build & Play starts it.)",
+         groups={"Is a Survivor": IS_A_SURVIVOR, "Replace With Common": REPLACE_WITH_COMMON,
+                 "Stand Up Animation": STAND_UP, "Wake Sleeper": WAKE_SLEEPER, "Sleeper": SLEEPER},
+         nodes=[N("timer", "HL_NodeTimer", 0, 0, seconds=0.2),
+                N("each", "HL_NodeForEach", 1, 0, what="NAME", sockets={"match": "sleeper*"}),
+                N("sleeper", "HL_NodeGroup", 2, 0, group="Sleeper", sockets={"radius": 180.0}),
+                # a gunshot nearby
+                ev("shot", "weapon_fire", 0, 3),
+                N("each2", "HL_NodeForEach", 1, 3, what="NAME", sockets={"match": "sleeper*"}),
+                fn("shooter_at", "entity:GetOrigin", 1, 5), fn("sleeper_at", "entity:GetOrigin", 1, 6),
+                N("dist", "HL_NodeVectorMath", 2, 5, op="DISTANCE"),
+                N("loud", "HL_NodeCompare", 3, 5, label="Within hearing?", op="LESS_EQUAL", sockets={"b": 500.0}),
+                N("if_loud", "HL_NodeIf", 2, 3),
+                N("wake_loud", "HL_NodeGroup", 3, 3, group="Wake Sleeper"),
+                # shot at
+                N("ask", "HL_NodeOverride", 0, 8, hook="AllowTakeDamage"),
+                fn("vname", "entity:GetName", 1, 9),
+                N("is_sleeper", "HL_NodeTextCheck", 2, 9, op="STARTS", sockets={"b": "sleeper"}),
+                N("if_hit", "HL_NodeIf", 2, 8),
+                N("wake_hit", "HL_NodeGroup", 3, 8, group="Wake Sleeper")],
+         links=[("timer.tick", "each.run"), ("each.each", "sleeper.run"), ("each.item", "sleeper.prop"),
+                ("shot.happened", "each2.run"), ("each2.each", "if_loud.in"), ("shot.userid", "shooter_at.target"),
+                ("each2.item", "sleeper_at.target"), ("shooter_at.result", "dist.a"), ("sleeper_at.result", "dist.b"),
+                ("dist.value", "loud.a"), ("loud.result", "if_loud.condition"), ("if_loud.true", "wake_loud.run"),
+                ("each2.item", "wake_loud.prop"),
+                ("ask.asked", "if_hit.in"), ("ask.victim", "vname.target"), ("vname.result", "is_sleeper.a"),
+                ("is_sleeper.result", "if_hit.condition"), ("if_hit.true", "wake_hit.run"),
+                ("ask.victim", "wake_hit.prop")],
+         steps=[("Every tick, each sleeper: close survivors wake it; up, it becomes a common (Tab into the group)",
+                 ["timer", "each", "sleeper"]),
+                ("A gunshot within hearing wakes them", ["shot", "each2", "shooter_at", "sleeper_at", "dist", "loud",
+                                                         "if_loud", "wake_loud"]),
+                ("Shot at: wakes", ["ask", "vname", "is_sleeper", "if_hit", "wake_hit"])]),
+    dict(title="Husks", level="Placed Characters",
+         objects={"husk1": ("PLACED:COMMON_MALE:LeaningForward04", (0.0, 0.0, 0.0), {"targetname": "husk_1"}),
+                  "husk2": ("PLACED:COMMON_FEMALE:Sitting_in_Chair01", (2.0, 0.0, 0.0), {"targetname": "husk_2"}),
+                  "husk3": ("PLACED:COMMON_MALE:AttackDoor_01", (-2.0, 0.0, 0.0), {"targetname": "husk_3"})},
+         about="Husks: half-dead bodies that only fill the scene (leaning, sitting, banging on a door: Add > Placed "
+               "Character with any animation), named husk_... They never attack; one hit and they fall like a killed "
+               "common: Replace With Common puts a real common in their place and it takes enough damage to die at "
+               "once (its death and ragdoll are the game's own). (The Override needs Hammerless's game mode: Build "
+               "& Play starts it.)",
+         groups={"Replace With Common": REPLACE_WITH_COMMON},
+         nodes=[N("ask", "HL_NodeOverride", 0, 0, hook="AllowTakeDamage"),
+                fn("vname", "entity:GetName", 1, 1),
+                N("is_husk", "HL_NodeTextCheck", 2, 1, op="STARTS", sockets={"b": "husk"}),
+                N("if_hit", "HL_NodeIf", 2, 0),
+                N("swap", "HL_NodeGroup", 3, 0, group="Replace With Common"),
+                fn("die", "entity:TakeDamage", 4, 0, {"p0": 10000.0, "p1": 2.0})],
+         links=[("ask.asked", "if_hit.in"), ("ask.victim", "vname.target"), ("vname.result", "is_husk.a"),
+                ("is_husk.result", "if_hit.condition"), ("if_hit.true", "swap.run"), ("ask.victim", "swap.prop"),
+                ("swap.then", "die.run"), ("swap.common", "die.target"), ("ask.attacker", "die.p2")],
+         steps=[("Hit: a common in its place, killed at once", ["ask", "vname", "is_husk", "if_hit", "swap", "die"])]),
 ]

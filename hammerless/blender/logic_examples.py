@@ -510,6 +510,12 @@ def _objects(context, number, example):
             arm = build_armature(context, gm, content, name + " Skeleton", coll)
             context.scene.cursor.location = base
             obj = make_mannequin(context, arm, name, coll)
+        elif shape.startswith("PLACED:"):            # (one of the game's characters playing an animation)
+            from .placedchar import _set_kv, make_placed_character
+            _tag, character, anim = shape.split(":", 2)
+            obj = make_placed_character(context, character, where, coll, name=name, animation=anim)
+            for k, v in (extra[0] if extra else {}).items():
+                _set_kv(obj, k, v)
         elif shape == "SPOT":
             obj = bpy.data.objects.new(name, None)
             obj.empty_display_type, obj.empty_display_size = "SINGLE_ARROW", 0.5

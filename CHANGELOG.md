@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Placed characters** (Add > Placed Character): one of the game's characters (commons, survivors, specials) playing one of its own animations in a loop: sitting, lying, leaning, banging on a door, in a chair... (a searchable list of the character's animations). In Blender the preview is the real character posed at a frame of that animation. Shots reach it; nothing is compiled (the game's own model).
+- **New example: Sleepers**: bodies lying and sitting until disturbed. A survivor walking close, a gunshot within hearing or a shot at one wakes it: it gets up with the right animation for its pose, becomes a real common in the same clothes and rushes the closest survivor. Built from node groups: Sleeper, Wake Sleeper, Stand Up Animation, Replace With Common. Tested in game: walk-up and gunshot wakes, the woken commons attacked.
+- **New example: Husks**: half-dead bodies that only fill the scene; one hit and they fall like a killed common (a real common in their place, killed at once). Tested in game.
 ## 0.14.0 (test release, 2026-10-12)
 
 - **Import Game Mesh** (on a game skeleton): the character's own mesh (body / head variant), standing on the skeleton, weighted to its bones, with its materials, as a Custom Model to edit into your own. Its game materials are used as they are (the commons' Infected shader, with their colour gradients). Tested in game: commons wearing our rebuilt copy of the common look like the originals.

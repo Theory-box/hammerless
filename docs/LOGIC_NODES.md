@@ -120,6 +120,8 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | 47 | Third Person Muzzle Flash | The 'Muzzle Light' group used twice (a light for everything, an extra one for models), Ent Fire (inputs sent by name), Make Table |
 | 49 | Swelling Pod | An animated Custom Model (a pod made by the example: mesh, armature, 'idle' and 'swell' actions) with its behaviour in the 'Swelling Pod' group: walk close and it swells, grows and bursts (explosion, damage, spores); shot (Override Allow Take Damage), it bursts at once; per-entity variables keep each pod's state |
 | 50 | Reskinned Commons | A mannequin on the game's common-infected skeleton (Add > Game Skeleton); every common infected wears its model (For Each common, Get Model Name, Compare Values, Set Model) and keeps behaving as a common |
+| 51 | Sleepers | Placed characters woken by a survivor close, a gunshot within hearing or a shot; a stand-up animation chosen from their pose; Replace With Common, Director.GetClosestSurvivor, RushVictim (groups: Sleeper, Wake Sleeper, Stand Up Animation, Replace With Common) |
+| 52 | Husks | Placed characters that fall like a killed common when hit (Replace With Common, Take Damage) |
 | 48 | Flashlight Battery | The 'Flashlight Battery' group (with 'Flashlight Is On' / 'Flashlight Off' inside it), per-player variables, Math bit operations, text built up in a For Each, HUD Text |
 
 `demo/hl_test_nuke.blend` (made by `tests/fixtures/nuke_test.py`) is the demo level with it, set so the first kill drops it, and 40 commons on the field.

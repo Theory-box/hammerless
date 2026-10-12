@@ -29,6 +29,12 @@ At build, the model borrows the whole animation library of that character (the c
 
 **On the infected themselves:** the game's own entities can wear the model. **Examples 3 > Reskinned Commons** puts every common infected in a mannequin with For Each and Set Model; they walk, sit, attack, flinch and die as commons do. A survivor bot can wear a model on a survivor skeleton the same way (tested: it plays the survivors' animations and holds its gun).
 
+## 3. Placed characters
+
+**Add > Placed Character** puts one of the game's characters in the map playing one of its own animations in a loop: sitting, lying, leaning, sitting in a chair, banging on a door, a death pose... Pick the animation from the list in the object panel; the preview in Blender shows the real character at the **Pose Frame** you choose. In the game it's the game's own model (nothing to compile), solid to shots.
+
+Give them behaviour with logic: **Examples 3 > Sleepers** (they wake when disturbed, stand up and become real commons that attack) and **Husks** (one hit and they fall). Both find their placed characters by name (sleeper..., husk...), so naming more placed characters that way adds them.
+
 ## Notes
 
 - Animated models are compiled by the game's own studiomdl (bin/studiomdl.exe from the L4D2 Authoring Tools). Our own model writer still makes the static props.
