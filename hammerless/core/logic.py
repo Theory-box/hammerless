@@ -108,10 +108,10 @@ def _base(source: str) -> str:
 
 
 BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
-                 "CAMERA", "FIRE_INPUT")
+                 "CAMERA", "FIRE_INPUT", "SET_PROP")
 CLIENT_COMMAND = "hl_clientcommand"     # the map's point_clientcommand: a console command run on one player
 BLOCK_VALUES = ("GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
-                "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE")
+                "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE", "GET_PROP")
 VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
 
 
@@ -176,6 +176,26 @@ HELPERS = {
         "    if (typeof t == \"array\") { local i = key.tointeger(); return (i >= 0 && i < t.len()) ? t[i] : null; }\n"
         "    try { return (key in t) ? t[key] : null; } catch (e) { return null; }\n}\n"
         "::HL_Count_ <- function(t) { return (t == null) ? 0.0 : t.len().tofloat(); }"),
+    "HL_Prop": (
+        "::HL_GetProp <- function(e, name, t, i) {   // an entity property (t: i f v s e; i: list index or null)\n"
+        "    if (e == null || !e.IsValid() || !NetProps.HasProp(e, name))\n"
+        "        return (t == \"s\") ? \"\" : (t == \"v\") ? Vector(0, 0, 0) : (t == \"e\") ? null : 0;\n"
+        "    switch (t) {\n"
+        "        case \"f\": return (i == null) ? NetProps.GetPropFloat(e, name) : NetProps.GetPropFloatArray(e, name, i);\n"
+        "        case \"v\": return (i == null) ? NetProps.GetPropVector(e, name) : NetProps.GetPropVectorArray(e, name, i);\n"
+        "        case \"s\": return (i == null) ? NetProps.GetPropString(e, name) : NetProps.GetPropStringArray(e, name, i);\n"
+        "        case \"e\": return (i == null) ? NetProps.GetPropEntity(e, name) : NetProps.GetPropEntityArray(e, name, i);\n"
+        "    }\n"
+        "    return (i == null) ? NetProps.GetPropInt(e, name) : NetProps.GetPropIntArray(e, name, i);\n}\n"
+        "::HL_SetProp <- function(e, name, t, i, v) {\n"
+        "    if (e == null || !e.IsValid() || !NetProps.HasProp(e, name)) return;\n"
+        "    switch (t) {\n"
+        "        case \"f\": if (i == null) NetProps.SetPropFloat(e, name, v.tofloat()); else NetProps.SetPropFloatArray(e, name, v.tofloat(), i); return;\n"
+        "        case \"v\": if (i == null) NetProps.SetPropVector(e, name, v); else NetProps.SetPropVectorArray(e, name, v, i); return;\n"
+        "        case \"s\": if (i == null) NetProps.SetPropString(e, name, v.tostring()); else NetProps.SetPropStringArray(e, name, v.tostring(), i); return;\n"
+        "        case \"e\": if (i == null) NetProps.SetPropEntity(e, name, v); else NetProps.SetPropEntityArray(e, name, v, i); return;\n"
+        "    }\n"
+        "    if (i == null) NetProps.SetPropInt(e, name, v.tointeger()); else NetProps.SetPropIntArray(e, name, v.tointeger(), i);\n}"),
     "HL_Str": (
         "::HL_Str <- function(v) {   // any value as readable text\n"
         "    if (v == null) return \"\";\n"
@@ -1006,6 +1026,20 @@ class _Compiler:
             else:
                 line = f"    HL_VarSet({name}, {value}, {'true' if s.get('keep') else 'false'});\n"
             self.script_action(nid, fn, line + "@@then@@", ["then"], take)
+        elif k == "SET_PROP":
+            from . import netprops
+            self.helper("HL_Prop", HELPERS["HL_Prop"])
+            name = s.get("key") or ""
+            if not name:
+                self.problems.append(f"Logic node '{nid}': pick a property")
+                return
+            t, is_list = netprops.type_of(name, s.get("type", "int"), s.get("list", False))
+            ent = self.typed_in(n, "entity", vs.THING)
+            index = f"({self.typed_in(n, 'index', vs.NUM)}).tointeger()" if is_list else "null"
+            value = self.typed_in(n, "value", netprops.KINDS[t])
+            line = (f"    HL_SetProp({ent}, {vs.literal(vs.TEXT, name)}, \"{netprops.LETTERS[t]}\", {index}, "
+                    f"{value});\n")
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
         elif k == "DIRECTOR_OPTION":
             from .director_options import BY_KEY
             self.helper("HL_DirOpts", HELPERS["HL_DirOpts"])
@@ -1118,6 +1152,14 @@ class _Compiler:
                 return self.typed_in(n, "f_" + name, kind)
             body = ", ".join(f'["{name}"] = {field(name, kind)}' for name, kind in rows)
             return f"{{ {body} }}"
+        if k == "GET_PROP":
+            from . import netprops
+            self.helper("HL_Prop", HELPERS["HL_Prop"])
+            name = s.get("key") or ""
+            t, is_list = netprops.type_of(name, s.get("type", "int"), s.get("list", False))
+            index = f"({self.typed_in(n, 'index', vs.NUM)}).tointeger()" if is_list else "null"
+            return (f"HL_GetProp({self.typed_in(n, 'entity', vs.THING)}, {vs.literal(vs.TEXT, name)}, "
+                    f"\"{netprops.LETTERS[t]}\", {index})")
         if k == "GET_FIELD":
             self.helper("HL_Field", HELPERS["HL_Field"])
             table = self.typed_in(n, "table", vs.ANY)

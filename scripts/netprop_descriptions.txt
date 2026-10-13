@@ -1,0 +1,50 @@
+# Our own descriptions of the entity properties worth knowing (scripts/netprop_catalog.py build reads them).
+# "name: text". Properties listed here come first in the node's picker, under "Common".
+m_iHealth: Health now.
+m_iMaxHealth: Most health it can have (a survivor's 100; healing stops here).
+m_healthBuffer: A survivor's temporary health (pills, adrenaline, being revived), on top of Health; it drains away.
+m_healthBufferTime: When the temporary health was last set (it drains from then).
+m_isIncapacitated: 1 while a survivor is down.
+m_currentReviveCount: How many times a survivor has been revived since their last heal (3 = black and white).
+m_bIsOnThirdStrike: 1 when a survivor is black and white (the next fall kills).
+m_isGoingToDie: 1 when a survivor will die if incapacitated again.
+m_flLaggedMovementValue: Speed multiplier: 1 normal, 2 twice as fast, 0.5 half (players and the infected).
+m_flGravity: Gravity multiplier for a player: 1 normal, 0.5 floaty (0 counts as 1).
+m_iFOV: A player's field of view in degrees (0 = their own setting).
+m_Local.m_iHideHUD: Hides parts of a player's HUD (a bit mask; 0 shows everything). The game sets it again itself within a second: set it on a timer to keep it.
+m_hViewEntity: The entity a player looks through, like a security camera (none = their own eyes).
+m_Glow.m_iGlowType: Outline glow: 0 off, 1 when used, 2 when looked at, 3 always (through walls).
+m_Glow.m_glowColorOverride: Outline colour as one number: red + green x 256 + blue x 65536 (0 = the game's colour).
+m_Glow.m_nGlowRange: How far away the outline shows (0 = any distance).
+m_Glow.m_nGlowRangeMin: The outline only shows beyond this distance.
+m_Glow.m_bFlashing: 1 makes the outline pulse.
+m_clrRender: Colour tint and see-through amount as one number: red + green x 256 + blue x 65536 + alpha x 16777216.
+m_nRenderMode: How it's drawn (1 or 10 let the alpha in Render Colour make it see-through; 10 = hidden).
+m_nRenderFX: Drawing effects (pulse, flicker, fade...), by number.
+m_flModelScale: Model size: 1 normal, 2 twice as big (props and other models).
+m_nSkin: Which skin (texture set) the model shows.
+m_nBody: Which body groups the model shows (a number that combines them).
+m_nSequence: The animation playing, by number.
+m_flPlaybackRate: Animation speed: 1 normal, 0 frozen.
+m_flCycle: How far through its animation it is, 0 to 1 (hold it with Playback Rate 0).
+m_iTeamNum: Team: 2 survivors, 3 infected.
+m_zombieClass: Which infected a player is: 1 Smoker, 2 Boomer, 3 Hunter, 4 Spitter, 5 Jockey, 6 Charger, 8 Tank (9 survivor).
+m_isGhost: 1 while an infected player is still a ghost (not spawned).
+m_frustration: A Tank's frustration, 0 to 100 (at 100 a player Tank loses control).
+m_hActiveWeapon: The weapon a player holds.
+m_iAmmo: A player's reserve ammo, one slot per ammo type (index = the type).
+m_iClip1: Rounds in a weapon's clip.
+m_upgradeBitVec: A weapon's upgrades as bits (1 incendiary, 2 explosive, 4 laser sight).
+m_nUpgradedPrimaryAmmoLoaded: Incendiary or explosive rounds left in a weapon.
+m_afButtonForced: Buttons held down for a player whatever they press (a bit mask; 1 = attack).
+m_afButtonDisabled: Buttons a player's presses are ignored for (a bit mask).
+m_fFlags: State bits (on the ground, ducking, frozen...).
+m_takedamage: Whether it can be hurt: 0 never, 1 damage events only (no health lost), 2 normally.
+m_CollisionGroup: What it collides with, by group number (e.g. 1 = debris: players walk through).
+m_hOwnerEntity: The entity that owns it (a weapon's holder, a projectile's thrower).
+m_iName: Its name (the targetname logic uses).
+m_ModelName: The model it shows.
+m_vecOrigin: Where it is.
+m_angRotation: Which way it faces.
+m_vecVelocity: How fast it's moving (read only for most things).
+m_bSurvivorGlowEnabled: 1 shows the survivors' outlines to this player.

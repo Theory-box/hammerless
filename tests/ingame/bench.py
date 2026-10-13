@@ -95,6 +95,8 @@ class Bench:
     def run(self, code: str, timeout: float = 10.0):
         """Run Squirrel in the game (root scope) and return what it returns, as Python values
         (entities as {'ent', 'class', 'name'}, vectors as [x, y, z])."""
+        if len(code.encode("utf-8")) > 60000:       # (the game reads requests with a 64 KB limit: a longer one
+            raise BenchError(f"request too long ({len(code)} chars): send it in parts")   # would block the bench)
         self._id += 1
         rid = str(self._id)
         tmp = os.path.join(self.ems, "hl_bench_in.tmp")

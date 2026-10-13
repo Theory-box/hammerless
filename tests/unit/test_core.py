@@ -1029,6 +1029,32 @@ class TestScriptNodes(unittest.TestCase):
         self.assertIn(").bindenv(::HL_Scope)", script)                 # (its helpers are in the script scope)
         self.assertNotIn("RunScriptCode", script)
 
+    def test_entity_properties(self):
+        """Get / Set Entity Property: NetProps through the HL_GetProp / HL_SetProp helpers, typed from the game's
+        catalogue (a float, a list with an index), or as the node says for a name the catalogue doesn't have."""
+        from hammerless.core import netprops
+        from hammerless.core.logic import LLink, LNode, compile_graph
+        self.assertEqual(netprops.type_of("m_flLaggedMovementValue"), ("float", False))
+        self.assertEqual(netprops.type_of("m_iAmmo"), ("int", True))
+        self.assertEqual(netprops.type_of("m_hViewEntity")[0], "entity")
+        self.assertEqual(netprops.type_of("m_nNotAProp", "string"), ("string", False))
+        ir = MapIR()
+        nodes = [LNode("Hurt", "SCRIPT_EVENT", {"event": "player_hurt"}),
+                 LNode("Fast", "SET_PROP", {"key": "m_flLaggedMovementValue"}, consts={"value": 1.5}),
+                 LNode("Ammo", "GET_PROP", {"key": "m_iAmmo"}, consts={"index": 3.0}),
+                 LNode("Heal", "SET_PROP", {"key": "m_iHealth"}),
+                 LNode("Mine", "SET_PROP", {"key": "m_nNotAProp", "type": "string"}, consts={"value": "hi"})]
+        links = [LLink("Hurt", "happened", "Fast", "run"), LLink("Hurt", "userid", "Fast", "entity", data=True),
+                 LLink("Fast", "then", "Heal", "run"), LLink("Hurt", "userid", "Heal", "entity", data=True),
+                 LLink("Hurt", "userid", "Ammo", "entity", data=True), LLink("Ammo", "value", "Heal", "value", data=True),
+                 LLink("Heal", "then", "Mine", "run"), LLink("Hurt", "userid", "Mine", "entity", data=True)]
+        self.assertEqual(compile_graph(nodes, links, ir), [])
+        script = next(v for k, v in ir.extra_scripts.items() if "logic_" in k)
+        self.assertIn("::HL_GetProp <- function(e, name, t, i)", script)
+        self.assertRegex(script, r'HL_SetProp\(.*"m_flLaggedMovementValue", "f", null, 1\.5\);')
+        self.assertRegex(script, r'HL_SetProp\(.*"m_iHealth", "i", null, HL_GetProp\(.*"m_iAmmo", "i", \(3(\.0)?\)\.tointeger\(\)\)\);')
+        self.assertRegex(script, r'HL_SetProp\(.*"m_nNotAProp", "s", null, "hi"\);')
+
     def test_event_fields_by_key(self):
         """An event field named like a Squirrel keyword ("class") is read by key, not as .class."""
         from hammerless.core import vscript as vs

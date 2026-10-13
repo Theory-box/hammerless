@@ -26,14 +26,20 @@ The Add menu has one place per purpose:
 | **Events** | Map Start, Volume (a trigger box), Button, Timer, Game Event. **All Game Events**: any of the game's 381 events (player hurt, item picked up, tank killed...), with its details as values (user ids already turned into players, entity ids into entities). |
 | **Flow** | When (fires when a condition becomes true), If, Sequence, Delay, Once, Gate, Branch, Counter, Random, For Each (survivors, infected, players, commons, entities by class or name, a list) |
 | **Values** | Value, Math (with bit operations for flags), Compare, Boolean Math, Random Value, Path Progress (furthest / average / last survivor, 0 to 1), Infected Count; Set / Get Variable (for the map, per player, or per copy of a node group; kept across maps if you like; Add adds on to a number or the end of a text), Format Text, Compare Values, Pick Value (one of two values by a condition), Text Check (contains / starts with / ends with / equals), Split Text (text into a list); Make / Break Vector, Vector Math; Make Table, Get Field |
-| **Scene** | Object Info (picks a scene object to hand to other nodes), Entity Events (an object's own events, e.g. a door opening), Collision (solid for players and/or the nav) |
-| **Actions** | Move Over Time (Mover), Show / Hide Object, Horde, Crescendo, Spawn Zombie (a spot, or the game picks; *Only If Fewer Than*), Play Sound, Teleport Survivors, Camera (first person / the game's over-the-shoulder third person; Player empty: whoever set it off, or everyone), Fire Input (sends an input to an entity wired in, e.g. one just spawned). **All Game Functions**: all 419 of the game's script functions, grouped (Player, Director, Nav Mesh, Entity, Find Entities, Spawning, Sound...) or found with *Search...* |
-| **Director** | Director, Director Settings, Director Setting (any of the ~140 Director settings, changed while playing), Director Mood (the Director's intensity, 0 calm to 1 furious, and warnings 60 s and 20 s before a mob) |
+| **Scene** | Object Info (picks a scene object to hand to other nodes), Entity Events (an object's own events, e.g. a door opening), Collision (solid for players and/or the nav), Get Entity Property (reads any property the game keeps on an entity, see below) |
+| **Actions** | Move Over Time (Mover), Show / Hide Object, Horde, Crescendo, Spawn Zombie (a spot, or the game picks; *Only If Fewer Than*), Play Sound, Teleport Survivors, Camera (first person / the game's over-the-shoulder third person; Player empty: whoever set it off, or everyone), Fire Input (sends an input to an entity wired in, e.g. one just spawned), Set Entity Property (changes any property the game keeps on an entity, see below). **All Game Functions**: all 419 of the game's script functions, grouped (Player, Director, Nav Mesh, Entity, Find Entities, Spawning, Sound...) or found with *Search...* |
+| **Director** | Director, Director Settings, Director Setting (any of the 124 Director settings, changed while playing), Director Mood (the Director's intensity, 0 calm to 1 furious, and warnings 60 s and 20 s before a mob) |
 | **HUD & Messages** | Show Message, Objective, HUD Text, HUD Hide |
 | **Overrides** | Override, Answer |
 | **Groups** | Make Group (Ctrl+G), Ungroup (Ctrl+Alt+G), Group Input / Output (inside a group), and every node group in the file |
 | **Script** | Script and Script Value (your own Squirrel code; the examples don't use them: everything they do is built from nodes) |
-| **Examples**, **Examples 2** | 41 ready-made graphs to learn from (below) |
+| **Examples**, **Examples 2**, **Examples 3** | 55 ready-made graphs to learn from (below) |
+
+### Entity properties
+
+**Get Entity Property** and **Set Entity Property** read and change what the game keeps on an entity: a player's health, speed (`m_flLaggedMovementValue`), gravity, field of view, revive count; any entity's outline glow, colour and see-through amount, model scale, skin, animation frame, collision; a weapon's clip and upgrades; and much more. The search button lists all 2,511 properties the game has (taken from the game itself), the ones worth knowing first as *Common*, with a description; set **For** to a class (player, prop_dynamic, infected...) to list only what it has. The node's sockets follow the property: a number, text, a vector or an entity, with an **Index** for the ones that hold a list (a player's `m_iAmmo`, one slot per ammo type). An entity without the property is left alone (Get gives 0 or nothing).
+
+A few properties are put back by the game itself every moment, so a Set doesn't last: `m_Local.m_iHideHUD` (hiding HUD parts) is one. Set those again on a Timer. Example 55 (Speed Boost) uses both nodes.
 
 Game functions that only work something out (Get Health, Find By Name...) just give a Result; actions (Give Item, Stagger...) run when an event wire arrives and then fire *Then*. Wire colours for script values: teal **text**, purple **vector**, pink **entity / player / nav area**, dark grey **any value**.
 
@@ -124,6 +130,7 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | 52 | Husks | Placed characters that fall like a killed common when hit (Replace With Common, Take Damage) |
 | 53 | Power Goes Out | Switchable baked lights (Light panel) driven from Entity Events: SetPattern to stutter, TurnOff with a horde, SetPattern m to bring the power back; lights sharing a name switch together |
 | 54 | Lights Flicker While a Tank Lives | Game events tank_spawn / tank_killed, SetPattern on lights sharing a name, Director.IsTankInPlay with Not and If (steady only when no Tank is left) |
+| 55 | Speed Boost | Set Entity Property on every survivor (speed, outline glow and its colour) for 10 s; Get Entity Property reads their health to top up anyone under 40 (For Each, Compare, If) |
 | 48 | Flashlight Battery | The 'Flashlight Battery' group (with 'Flashlight Is On' / 'Flashlight Off' inside it), per-player variables, Math bit operations, text built up in a For Each, HUD Text |
 
 `demo/hl_test_nuke.blend` (made by `tests/fixtures/nuke_test.py`) is the demo level with it, set so the first kill drops it, and 40 commons on the field.

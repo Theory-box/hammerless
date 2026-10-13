@@ -1881,6 +1881,133 @@ class HL_OT_logic_pick_option(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# ---------------------------------------------------------------- entity properties (NetProps)
+
+def _prop_items(self, context):
+    """The picker's list: properties with a description first ("Common"), then every other; only those the
+    node's For class has when one is set."""
+    from ..core import netprops
+    node = _node_in_editor(context, getattr(self, "node_name", ""))
+    cls = (node.for_class.strip().lower() if node is not None else "")
+    if _prop_items.cache.get("for") != cls or not _prop_items.cache.get("items"):
+        items = []
+        for name, p in sorted(netprops.props().items(), key=lambda kv: (not kv[1].get("desc"), kv[0].lower())):
+            if cls and cls not in p.get("classes", ()):
+                continue
+            what = p["type"] + (f" list of {p['size']}" if p.get("size") else "")
+            label = f"{'Common: ' if p.get('desc') else ''}{name} ({what})"
+            tip = p.get("desc") or ("Has it: " + ", ".join(p.get("classes", [])[:8])
+                                    + (" ..." if len(p.get("classes", [])) > 8 else ""))
+            items.append((name, label, tip))
+        _prop_items.cache = {"for": cls, "items": items or [("", "Nothing for that class", "")]}
+    return _prop_items.cache["items"]
+
+
+_prop_items.cache = {}
+
+PROP_TYPES = [("int", "Whole Number", ""), ("float", "Number", ""), ("vector", "Vector", ""),
+              ("string", "Text", ""), ("entity", "Entity", "")]
+
+
+@_keeps_links
+def _rebuild_prop(self, context=None):
+    from ..core import netprops
+    self.inputs.clear()
+    self.outputs.clear()
+    setter = self.kind == "SET_PROP"
+    t, is_list = netprops.type_of(self.key, self.type, self.list)
+    kind = netprops.KINDS[t]
+    if setter:
+        self.ev_in("run", "Run")
+    _data_socket(self.inputs, "thing", "entity", "Entity")
+    if is_list:
+        _data_socket(self.inputs, "num", "index", "Index")
+    if setter:
+        _data_socket(self.inputs, kind, "value", "Value")
+        self.ev_out("then", "Then")
+    else:
+        _data_socket(self.outputs, kind, "value", "Value")
+    self.auto_title = self.key
+
+
+class _PropNode(_Block):
+    key: StringProperty(name="Property", default="", update=_rebuild_prop,
+                        description="The property's name, e.g. m_iHealth (Pick searches the game's list)")
+    for_class: StringProperty(name="For", default="",
+                              description="Only list the properties this entity class has (player, prop_dynamic, "
+                                          "infected...). Empty: every property")
+    type: EnumProperty(name="Type", items=PROP_TYPES, default="int", update=_rebuild_prop,
+                       description="For a name the game's list doesn't have: what kind of value it holds")
+    list: BoolProperty(name="List", default=False, update=_rebuild_prop,
+                       description="For a name the game's list doesn't have: it holds several values (an Index picks one)")
+
+    def make_sockets(self):
+        _rebuild_prop(self)
+
+    def draw_buttons(self, context, layout):
+        from ..core import netprops
+        row = layout.row(align=True)
+        row.prop(self, "key", text="")
+        op = row.operator("hammerless.logic_pick_property", text="", icon="VIEWZOOM")
+        op.node_name = self.name
+        layout.prop(self, "for_class")
+        if self.key and netprops.info(self.key) is None:
+            row = layout.row(align=True)
+            row.prop(self, "type", text="")
+            row.prop(self, "list")
+
+    def draw_buttons_ext(self, context, layout):
+        from ..core import netprops
+        self.draw_buttons(context, layout)
+        p = netprops.info(self.key)
+        if p:
+            box = layout.box()
+            for line in _wrap(p.get("desc") or "No description: see the classes that have it below.", 40):
+                box.label(text=line)
+            if not p.get("networked", True):
+                box.label(text="Server only (players' screens don't get it)")
+            for line in _wrap("Has it: " + ", ".join(p.get("classes", [])[:30]), 40):
+                box.label(text=line)
+
+    def settings(self):
+        return {"key": self.key, "type": self.type, "list": self.list}
+
+
+class HL_NodeGetProperty(_PropNode, bpy.types.Node):
+    """Reads one of an entity's properties: anything the game keeps on it (health, speed, glow, colour, model scale,
+    ammo...). The game's whole list is searchable; nothing (0, empty) when the entity doesn't have it"""
+    bl_idname, bl_label, bl_icon = "HL_NodeGetProperty", "Get Entity Property", "PROPERTIES"
+    kind = "GET_PROP"
+
+
+class HL_NodeSetProperty(_PropNode, bpy.types.Node):
+    """Changes one of an entity's properties (health, speed, glow, colour, model scale, ammo...). Some are put back
+    by the game every moment (it decides them itself): set those again on a timer, or use another way.
+    Nothing happens when the entity doesn't have it"""
+    bl_idname, bl_label, bl_icon = "HL_NodeSetProperty", "Set Entity Property", "PROPERTIES"
+    kind = "SET_PROP"
+
+
+class HL_OT_logic_pick_property(bpy.types.Operator):
+    bl_idname = "hammerless.logic_pick_property"
+    bl_label = "Pick Entity Property"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_description = "Search the game's entity properties (the node's For limits it to one class)"
+    bl_property = "choice"
+    node_name: StringProperty(options={"HIDDEN"})
+    choice: EnumProperty(items=_prop_items)
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        node = _node_in_editor(context, self.node_name)
+        if node is not None and self.choice:
+            node.key = self.choice
+        return {"FINISHED"}
+
+
 def _hud_slots(self, context):
     from ..core.director_options import HUD_SLOTS
     return HUD_SLOTS
@@ -2053,7 +2180,7 @@ class HL_NodeDirectorMood(_Block, bpy.types.Node):
 
 
 DIRECTOR_CLASSES = (HL_NodeDirectorOption, HL_NodeDirectorMood, HL_NodeHudText, HL_NodeHudHide, HL_NodeOverride,
-                    HL_NodeOverrideAnswer)
+                    HL_NodeOverrideAnswer, HL_NodeGetProperty, HL_NodeSetProperty)
 
 
 CATEGORIES = [
@@ -2083,9 +2210,9 @@ MENU_LAYOUT = [
                 HL_NodeInfectedCount, None, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeFormatText, HL_NodeTextCheck, HL_NodeSplitText,
                 HL_NodeCheck, HL_NodePickValue, None, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, None,
                 HL_NodeMakeTable, HL_NodeGetField]),
-    ("Scene", [HL_NodeObjectInfo, HL_NodeObject, HL_NodeCollision]),
+    ("Scene", [HL_NodeObjectInfo, HL_NodeObject, HL_NodeCollision, None, HL_NodeGetProperty]),
     ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
-                 HL_NodeTeleport, HL_NodeFireInput, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
+                 HL_NodeTeleport, HL_NodeFireInput, HL_NodeSetProperty, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
     ("Director", [HL_NodeDirector, HL_NodeDirectorSettings, HL_NodeDirectorOption, HL_NodeDirectorMood]),
     ("HUD & Messages", [HL_NodeMessage, HL_NodeObjective, None, HL_NodeHudText, HL_NodeHudHide]),
     ("Overrides", [HL_NodeOverride, HL_NodeOverrideAnswer]),
@@ -2325,7 +2452,8 @@ def migrate_labels(tree) -> None:
 
 
 AUTO_TITLED = {"HL_NodeObject", "HL_NodeObjectInfo", "HL_NodeGameEvent", "HL_NodeScriptCall", "HL_NodeScriptEvent",
-               "HL_NodeDirectorOption", "HL_NodeOverride", "HL_NodeOverrideAnswer"}
+               "HL_NodeDirectorOption", "HL_NodeOverride", "HL_NodeOverrideAnswer", "HL_NodeGetProperty",
+               "HL_NodeSetProperty"}
 
 
 @bpy.app.handlers.persistent
@@ -2466,7 +2594,7 @@ class HL_OT_logic_refresh_node(bpy.types.Operator):
 CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_BoolSocket, HL_TextSocket, HL_VectorSocket,
            HL_ThingSocket, HL_AnySocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + tuple(SCRIPT_MENUS) + (
     HL_NodeScriptCall, HL_NodeScriptEvent, HL_OT_logic_pick_function, HL_OT_logic_pick_event) + BLOCK_CLASSES + (
-    ) + DIRECTOR_CLASSES + (HL_OT_logic_pick_option,
+    ) + DIRECTOR_CLASSES + (HL_OT_logic_pick_option, HL_OT_logic_pick_property,
     HL_OT_logic_new, HL_OT_logic_from_outputs, HL_OT_logic_refresh_node)
 
 

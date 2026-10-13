@@ -943,4 +943,42 @@ EXAMPLES_3 = [
                 ("alive.result", "none.a"), ("none.result", "if_none.condition"), ("if_none.true", "steady.SetPattern")],
          steps=[("A Tank spawns: the lights flicker", ["spawn", "flicker"]),
                 ("A Tank dies and none is left: steady", ["died", "wait", "alive", "none", "if_none", "steady"])]),
+
+    dict(title="Speed Boost", level="Power-Ups",
+         objects={"button": ("BUTTON", (0.0, 0.0, 1.0))},
+         about="Press the button: for 10 seconds every survivor runs 1.6 times as fast and glows green through walls. "
+               "Entity properties are what the game keeps on every entity, and Set Entity Property changes one: "
+               "m_flLaggedMovementValue is a player's speed (1 = normal), m_Glow.m_iGlowType their outline (3 = "
+               "always), m_Glow.m_glowColorOverride its colour (red + green x 256 + blue x 65536: 65280 = green). "
+               "When the boost ends, Get Entity Property reads each survivor's m_iHealth: anyone under 40 is "
+               "topped up to 40. The search button on the node lists every property the game has; For limits it "
+               "to one kind of entity (player, prop_dynamic...).",
+         nodes=[N("button", "HL_NodeButton", 0, 0, sockets={"object": "@button"}, once=False),
+                N("each", "HL_NodeForEach", 1, 0, what="SURVIVORS"),
+                N("fast", "HL_NodeSetProperty", 2, 0, label="Run faster", key="m_flLaggedMovementValue",
+                  sockets={"value": 1.6}),
+                N("glow", "HL_NodeSetProperty", 3, 0, label="Outline always", key="m_Glow.m_iGlowType",
+                  sockets={"value": 3.0}),
+                N("green", "HL_NodeSetProperty", 4, 0, label="Green", key="m_Glow.m_glowColorOverride",
+                  sockets={"value": 65280.0}),
+                N("wait", "HL_NodeDelay", 1, 2, seconds=10.0),
+                N("each2", "HL_NodeForEach", 2, 2, what="SURVIVORS"),
+                N("normal", "HL_NodeSetProperty", 3, 2, label="Normal speed", key="m_flLaggedMovementValue",
+                  sockets={"value": 1.0}),
+                N("no_glow", "HL_NodeSetProperty", 4, 2, label="No outline", key="m_Glow.m_iGlowType",
+                  sockets={"value": 0.0}),
+                N("health", "HL_NodeGetProperty", 3, 4, label="Their health", key="m_iHealth"),
+                N("low", "HL_NodeCompare", 4, 4, op="LESS", sockets={"b": 40.0}),
+                N("if_low", "HL_NodeIf", 5, 2),
+                N("top_up", "HL_NodeSetProperty", 6, 2, label="Top up", key="m_iHealth", sockets={"value": 40.0})],
+         links=[("button.pressed", "each.run"), ("each.each", "fast.run"), ("each.item", "fast.entity"),
+                ("fast.then", "glow.run"), ("each.item", "glow.entity"), ("glow.then", "green.run"),
+                ("each.item", "green.entity"),
+                ("button.pressed", "wait.in"), ("wait.out", "each2.run"), ("each2.each", "normal.run"),
+                ("each2.item", "normal.entity"), ("normal.then", "no_glow.run"), ("each2.item", "no_glow.entity"),
+                ("each2.item", "health.entity"), ("health.value", "low.a"), ("low.result", "if_low.condition"),
+                ("no_glow.then", "if_low.in"), ("if_low.true", "top_up.run"), ("each2.item", "top_up.entity")],
+         steps=[("Press: every survivor fast and glowing", ["button", "each", "fast", "glow", "green"]),
+                ("10 s later: back to normal", ["wait", "each2", "normal", "no_glow"]),
+                ("Anyone under 40 health gets 40", ["health", "low", "if_low", "top_up"])]),
 ]

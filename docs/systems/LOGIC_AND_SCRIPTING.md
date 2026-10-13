@@ -89,6 +89,16 @@ Several Override nodes can answer the same question. Most questions are "yes unl
 
 Director settings changed while playing go to the top-most DirectorOptions table that exists; the game chains its tables and re-reads them each think. Map-wide settings are written at spawn into the map's own table. A crescendo replaces the local table and leaves it empty when it ends; the map-wide ones stay in force. See [Hordes & Events](../HORDE_EVENTS.md) for what that means in practice.
 
+### Entity properties (NetProps)
+
+Scripts can read and write an entity's internal properties by name with the game's `NetProps` functions, but the game has no list of the names. We built one from the game itself (`scripts/netprop_catalog.py`):
+
+- **The networked properties** come from a recorded demo. Every demo starts with the server's full property tables, the ones a client needs to read entity updates: 407 tables across 278 server classes. Their bit-packed layout had to be measured. L4D2 stores a numeric property's bit count in 6 bits where other Source games use 7, and its demos carry 4 split-screen command blocks per packet. The names are flattened the way NetProps takes them: base classes merged, containers like `localdata` looked inside, nested tables as `m_Local.m_iHideHUD`, lists by name with a size.
+- **The server-only properties** (NetProps reads those too, e.g. a player's `m_flGravity` or any entity's `m_iName`) and **which class has what** come from asking the running game. One entity of each of the 382 classes the game's entity definitions name is spawned out of sight. Every candidate name (the networked ones plus every `m_...` string in the game's server code) is tried on it with `HasProp`, and `GetPropType` and `GetPropArraySize` are kept. 335 classes could be made this way. 3 crash or hang the game (the area portals and `trigger_finale`) and are skipped. The result: 2,511 properties with their type, list size and classes.
+- **Checked:** on a live map, the game accepted 1,617 of 1,629 flattened names on 14 entity classes. The 12 misses were a misidentified class, not wrong names. Each of the 48 described properties was set to a test value and read back a second later. All stuck except `m_Local.m_iHideHUD`, which the game rewrites itself. The `Set...Array` functions take the value before the index (checked).
+
+**Get Entity Property** and **Set Entity Property** use the catalogue: a searchable picker (the described ones first), sockets typed from the property, an Index for lists. They compile to two helpers that do nothing (or give 0) when the entity is gone or doesn't have the property. Example 55 (Speed Boost) uses them and is checked in game.
+
 ### Why a game mode, and why an addon VPK
 
 Measured in the game: the hooks and the custom HUD only work in **scripted mode**, and plain co-op never turns it on. Scripted mode needs a game mode with its own script. The hooks must also exist when the mode starts, not later.

@@ -1812,6 +1812,36 @@ def test_node_headers_show_type():
     assert ev.label == "" and ev.draw_label() == "Override: AllowTakeDamage", ev.draw_label()
 
 
+def test_entity_property_nodes():
+    # Get / Set Entity Property: sockets follow the property's type from the game's list (an Index for a list),
+    # the node says the type for a name the list doesn't have, and the picker lists described ones as Common
+    from hammerless.blender.logic import _prop_items, new_tree
+    reset_scene()
+    tree = new_tree(bpy.context)
+    get = tree.nodes.new("HL_NodeGetProperty")
+    get.key = "m_iAmmo"
+    assert [s.identifier for s in get.inputs] == ["entity", "index"], [s.identifier for s in get.inputs]
+    assert get.draw_label() == "Get Entity Property: m_iAmmo", get.draw_label()
+    put = tree.nodes.new("HL_NodeSetProperty")
+    put.key = "m_flModelScale"
+    assert [s.identifier for s in put.inputs] == ["run", "entity", "value"], [s.identifier for s in put.inputs]
+    assert put.inputs["value"].bl_idname == "HL_FloatSocket", put.inputs["value"].bl_idname
+    put.key = "m_hViewEntity"
+    assert put.inputs["value"].bl_idname == "HL_ThingSocket", put.inputs["value"].bl_idname
+    put.key = "m_nNotInTheList"
+    put.type, put.list = "vector", True
+    assert [s.identifier for s in put.inputs] == ["run", "entity", "index", "value"], [s.identifier for s in put.inputs]
+    assert put.inputs["value"].bl_idname == "HL_VectorSocket", put.inputs["value"].bl_idname
+
+    class Ctx:                                         # (the picker reads the node's For through the editor)
+        space_data = None
+    _prop_items.cache = {}
+    items = _prop_items(type("Op", (), {"node_name": ""})(), Ctx())
+    names = [i[0] for i in items]
+    assert "m_iHealth" in names and len(names) > 2000, len(names)
+    assert next(i for i in items if i[0] == "m_flModelScale")[1].startswith("Common:"), "described ones are Common"
+
+
 def test_example_groups_dont_pile_up():
     # adding an example, deleting its nodes and adding it again leaves one copy of each group, no '.001's, and
     # Remove Unused Groups clears groups nothing uses (a group you made and kept goes only with that button)

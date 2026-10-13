@@ -369,6 +369,22 @@ def check(run: Run, n: int, b: Bench):
         mk = m(); b.run('FireGameEvent("tank_killed", { userid = 0, attacker = T.host().GetPlayerUserId() });'); time.sleep(1.5)
         run.expect(54, mk, "died.happened -> wait.in", "if_none.true -> steady.SetPattern")
         return "a Tank's spawn sets the flicker; its death with no Tank left sets them steady"
+    if n == 55:
+        props = ('[NetProps.GetPropFloat(T.host(), "m_flLaggedMovementValue"), '
+                 'NetProps.GetPropInt(T.host(), "m_Glow.m_iGlowType"), '
+                 'NetProps.GetPropInt(T.host(), "m_Glow.m_glowColorOverride"), T.host().GetHealth()]')
+        b.run("T.host().SetHealth(25);")
+        mk = m(); b.console(f"ent_fire {run.obj(55, 'button')} Press", wait=1.5)
+        run.expect(55, mk, "button.pressed -> each.run", "fast.then -> glow.run")
+        boosted = b.value(props)
+        assert boosted[:3] == [1.6, 3, 65280] or (abs(boosted[0] - 1.6) < 1e-4 and boosted[1:3] == [3, 65280]), \
+            f"boost not applied: speed, glow, colour = {boosted[:3]}"
+        time.sleep(10)
+        after = b.value(props)
+        assert abs(after[0] - 1.0) < 1e-4 and after[1] == 0, f"not back to normal: {after}"
+        assert after[3] == 40, f"health {after[3]}, not topped up to 40"
+        return f"speed {boosted[0]:.1f}, glow {boosted[1]} colour {boosted[2]}; after: speed {after[0]:.1f}, " \
+               f"glow {after[1]}, health 25 -> {after[3]}"
     if n == 38:
         # the question the game asks about each special the Director spawns, asked here the same way
         got = b.value("[" + ", ".join(f"::HL_Hook_ConvertZombieClass.call(::HL_Scope, {t})" for t in (1, 3, 6, 8)) + "]")

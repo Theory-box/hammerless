@@ -16,7 +16,7 @@ tests/blender/         headless Blender tests
 tests/fixtures/        scripts that build test scenes; vis/: a small compiled map and vvis's output, for hlvvis
 tests/compile/         real-compile helpers (need the Authoring Tools)
 tests/ingame/          the test bench (drives the running game from Python), the example regression, probes (see its README)
-scripts/               release helpers (the release zip)
+scripts/               release helpers (the release zip); catalogues taken from the game: vscript_catalog.py (the script API), netprop_catalog.py (entity properties: a demo's tables + asking the running game on every class)
 demo/                  demo maps: demo_level.blend (a full small level), demo_level2.blend (the next map, for testing the safe room transition); made by the scripts in tests/fixtures/ (demo_level.blend was hand-edited since)
 docs/                  user guides
 docs/dev/              design notes, Hammer feature audit, playtest checklist
