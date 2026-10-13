@@ -24,7 +24,7 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 | `logic/` | Graph -> VScript compiler and the facts it is built on, the script API dump method, scripted mode and hooks, the NetProps catalogue method and what sticks, the test bench, examples and what each measured, enemies on bot bodies | written |
 | `models/` | The own model writer matched to studiomdl, animated models through SMD/QC and what studiomdl was measured to do, the game's `.mdl`/`.ani` format decoded (frame-anims), game skeletons and placed characters, VTF/VMT, alpha, materials, parallax | written |
 | `sound/` | What a map can control of the sound engine (measured), new sounds through an addon VPK with its own `sound.cache` (format decoded), DSP presets, the automatic soundscapes, the shelved impulse-response work | written |
-| `loading/` | Boot and map-load times, prestart, stringtable dictionary, sv_lan | to write |
+| `loading/` | Build & Play step by step, the game prestart, the parallel build and its critical path, smart builds and `hlvbsp -onlyents`, the kept nav, Fast Map Loading (`sv_lan 1`), the stringtable dictionary, every load timing | written |
 | `game-facts/` | BSP format facts (version 21 lumps, write order), game limits, engine behaviours | to write |
 
 ## Conventions
@@ -106,6 +106,12 @@ Every page follows these rules so the facts stay traceable and checkable:
 | Page | What it covers |
 |---|---|
 | [sound/README.md](sound/README.md) | The automatic soundscapes and their trace, per-map `level_sounds`, per-player DSP through `point_clientcommand`, mix layers, the retail DSP cvars and the measured distance dulling, why new sounds failed and the addon `sound.cache` that fixes it (format), addon `dsp_presets.txt`, the shelved gunfire acoustics v1/v2, limits |
+
+### loading/
+
+| Page | What it covers |
+|---|---|
+| [loading/README.md](loading/README.md) | The nine steps and where each runs, boot and load timings (`BinkOpen(`, the 6 s Steam wait), the stringtable dictionary findings and how it is carried over, the parallel build's lessons (contention, the GIL), smart build plans and when they fall back, the kept nav, audit items, the two-way link and cancel, limits |
 
 Other areas: to write (see the table above).
 
