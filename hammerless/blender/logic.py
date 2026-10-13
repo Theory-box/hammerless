@@ -18,7 +18,8 @@ EVENT_COLOR = (1.0, 0.62, 0.15, 1.0)
 OBJECT_COLOR = (0.35, 0.65, 1.0, 1.0)
 FLOAT_COLOR = (0.63, 0.63, 0.63, 1.0)       # Blender's colours: grey numbers, pink true/false
 BOOL_COLOR = (0.80, 0.65, 0.84, 1.0)
-DATA_SOCKETS = ("HL_FloatSocket", "HL_BoolSocket", "HL_TextSocket", "HL_VectorSocket", "HL_ThingSocket", "HL_AnySocket")
+DATA_SOCKETS = ("HL_FloatSocket", "HL_BoolSocket", "HL_TextSocket", "HL_VectorSocket", "HL_ThingSocket", "HL_AnySocket",
+                "HL_IntSocket")
 CATEGORY_COLORS = {"Events": (0.45, 0.18, 0.16), "Scene": (0.16, 0.33, 0.40), "Flow": (0.25, 0.25, 0.30),
                    "Values": (0.22, 0.22, 0.40),
                    "Actions": (0.18, 0.36, 0.20), "Director": (0.33, 0.20, 0.42), "Objectives": (0.45, 0.38, 0.12),
@@ -86,6 +87,27 @@ class HL_FloatSocket(bpy.types.NodeSocket):
     bl_idname = "HL_FloatSocket"
     bl_label = "Number"
     value: FloatProperty(name="Value", default=0.0)
+
+    def draw(self, context, layout, node, text):
+        if self.is_output or self.is_linked:
+            layout.label(text=text)
+        else:
+            layout.prop(self, "value", text=text)
+
+    def draw_color(self, context, node):
+        return FLOAT_COLOR
+
+    @classmethod
+    def draw_color_simple(cls):
+        return FLOAT_COLOR
+
+
+class HL_IntSocket(bpy.types.NodeSocket):
+    """A whole number (wire a number in, or type it here). Kept exactly, every digit: a colour with its see-through
+    amount is a number in the billions, which a Number input would round (it keeps about 7 digits)"""
+    bl_idname = "HL_IntSocket"
+    bl_label = "Whole Number"
+    value: IntProperty(name="Value", default=0)
 
     def draw(self, context, layout, node, text):
         if self.is_output or self.is_linked:
@@ -1923,7 +1945,10 @@ def _rebuild_prop(self, context=None):
     if is_list:
         _data_socket(self.inputs, "num", "index", "Index")
     if setter:
-        _data_socket(self.inputs, kind, "value", "Value")
+        if t == "int":                       # (exact: colours with their alpha, flags; see HL_IntSocket)
+            self.inputs.new("HL_IntSocket", "Value", identifier="value")
+        else:
+            _data_socket(self.inputs, kind, "value", "Value")
         self.ev_out("then", "Then")
     else:
         _data_socket(self.outputs, kind, "value", "Value")
@@ -2299,8 +2324,10 @@ def _compiled_links(tree, report):
             for src, out in _sources(inp):
                 if not isinstance(src, _Node):
                     continue
-                if out.bl_idname != inp.bl_idname and not (out.bl_idname in DATA_SOCKETS and inp.bl_idname in DATA_SOCKETS
-                                                            and "HL_AnySocket" in (out.bl_idname, inp.bl_idname)):
+                numbers = {out.bl_idname, inp.bl_idname} <= {"HL_FloatSocket", "HL_IntSocket"}   # (a number into a
+                if out.bl_idname != inp.bl_idname and not numbers and not (    # whole number: the game rounds it)
+                        out.bl_idname in DATA_SOCKETS and inp.bl_idname in DATA_SOCKETS
+                        and "HL_AnySocket" in (out.bl_idname, inp.bl_idname)):
                     report.warnings.append(f"{tree.name}: the wire from '{node_title(src)}' to "
                                            f"'{node_title(node)}' joins a {out.bl_label} with a "
                                            f"{inp.bl_label}, so it does nothing")
@@ -2591,7 +2618,7 @@ class HL_OT_logic_refresh_node(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_BoolSocket, HL_TextSocket, HL_VectorSocket,
+CLASSES = (HL_LogicTree, HL_EventSocket, HL_ObjectSocket, HL_FloatSocket, HL_IntSocket, HL_BoolSocket, HL_TextSocket, HL_VectorSocket,
            HL_ThingSocket, HL_AnySocket) + NODE_CLASSES + tuple(CATEGORY_MENUS) + tuple(SCRIPT_MENUS) + (
     HL_NodeScriptCall, HL_NodeScriptEvent, HL_OT_logic_pick_function, HL_OT_logic_pick_event) + BLOCK_CLASSES + (
     ) + DIRECTOR_CLASSES + (HL_OT_logic_pick_option, HL_OT_logic_pick_property,

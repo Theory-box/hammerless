@@ -1050,6 +1050,11 @@ class _Compiler:
             ent = self.typed_in(n, "entity", vs.THING)
             index = f"({self.typed_in(n, 'index', vs.NUM)}).tointeger()" if is_list else "null"
             value = self.typed_in(n, "value", netprops.KINDS[t])
+            typed = n.consts.get("value")
+            if t == "int" and (nid, "value") not in self.data_links and isinstance(typed, int) \
+                    and not isinstance(typed, bool):
+                value = str(typed)          # (a whole number as one: the game's script numbers with a point keep
+                #                             only about 7 digits, a colour with its alpha has 10)
             line = (f"    HL_SetProp({ent}, {vs.literal(vs.TEXT, name)}, \"{netprops.LETTERS[t]}\", {index}, "
                     f"{value});\n")
             self.script_action(nid, fn, line + "@@then@@", ["then"], take)

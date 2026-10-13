@@ -26,7 +26,7 @@ def node_title(node) -> str:
 ITEM_KINDS = [("event", "Event", "An event wire (orange)"), ("num", "Number", ""), ("bool", "True/False", ""),
               ("text", "Text", ""), ("vec", "Vector", ""), ("thing", "Entity / Player", ""),
               ("any", "Anything", "Any value")]
-KIND_OF_SOCKET = {"HL_EventSocket": "event", "HL_FloatSocket": "num", "HL_BoolSocket": "bool",
+KIND_OF_SOCKET = {"HL_EventSocket": "event", "HL_FloatSocket": "num", "HL_IntSocket": "num", "HL_BoolSocket": "bool",
                   "HL_TextSocket": "text", "HL_VectorSocket": "vec", "HL_ThingSocket": "thing", "HL_AnySocket": "any"}
 GROUP_COLOR = (0.20, 0.30, 0.22)
 

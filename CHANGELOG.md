@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Set Entity Property keeps whole numbers exact**: a whole-number property (a colour with its see-through amount, flags, counts) gets a Whole Number input that keeps every digit; a Number input rounds past about 7 digits, which turned colours with alpha into other colours.
 - Hammerless's light compiler now does vrad's `-softsun`, `-textureshadows` (alpha-tested foliage and fences casting partial shadows), `-scale` and `-ambient` in Extra vrad Options (they used to be left out); Exact lighting matches Valve's vrad to the byte with them (no supersampling). A map with no vis now gets vrad's faint ambient light, as Valve's vrad gives it.
 - **Fast lighting is Hammerless's own**: the Fast quality is Normal's lighting with cheaper settings (no supersampling, 2 bounces, no prop lighting), no longer Valve's vrad in its rough `-fast` mode. The Fast Lighting checkbox is gone.
 - **No more LDR lighting setting**: L4D2 only uses HDR lighting (Valve's own maps have none in LDR), and choosing LDR made Valve's vrad light the map. Every build is HDR.

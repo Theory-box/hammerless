@@ -1826,6 +1826,10 @@ def test_entity_property_nodes():
     put.key = "m_flModelScale"
     assert [s.identifier for s in put.inputs] == ["run", "entity", "value"], [s.identifier for s in put.inputs]
     assert put.inputs["value"].bl_idname == "HL_FloatSocket", put.inputs["value"].bl_idname
+    put.key = "m_clrRender"                         # (a whole number: an exact input, colours with alpha in billions)
+    assert put.inputs["value"].bl_idname == "HL_IntSocket", put.inputs["value"].bl_idname
+    put.inputs["value"].value = 1191182335
+    assert put.to_lnode(bpy.context).consts["value"] == 1191182335
     put.key = "m_hViewEntity"
     assert put.inputs["value"].bl_idname == "HL_ThingSocket", put.inputs["value"].bl_idname
     put.key = "m_nNotInTheList"

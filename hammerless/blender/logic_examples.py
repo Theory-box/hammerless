@@ -573,7 +573,8 @@ def _fill(tree, node_specs, link_specs, objects, groups, problems, io=None):
             if sock is None:
                 problems.append(f"'{node.name}' has no input '{ident}'")
                 continue
-            sock.value = _value(v, objects)
+            v = _value(v, objects)
+            sock.value = int(round(v)) if sock.bl_idname == "HL_IntSocket" else v
         nodes[spec["id"]] = node
     for a, b in link_specs:
         (an, ao), (bn, bi) = a.split("."), b.split(".")

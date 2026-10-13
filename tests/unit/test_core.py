@@ -1054,6 +1054,14 @@ class TestScriptNodes(unittest.TestCase):
         self.assertRegex(script, r'HL_SetProp\(.*"m_flLaggedMovementValue", "f", null, 1\.5\);')
         self.assertRegex(script, r'HL_SetProp\(.*"m_iHealth", "i", null, HL_GetProp\(.*"m_iAmmo", "i", \(3(\.0)?\)\.tointeger\(\)\)\);')
         self.assertRegex(script, r'HL_SetProp\(.*"m_nNotAProp", "s", null, "hi"\);')
+        # a whole-number property typed on its (whole number) input keeps every digit: written without a point
+        ir = MapIR()
+        nodes = [LNode("Hurt", "SCRIPT_EVENT", {"event": "player_hurt"}),
+                 LNode("Tint", "SET_PROP", {"key": "m_clrRender"}, consts={"value": 1191182335})]
+        links = [LLink("Hurt", "happened", "Tint", "run"), LLink("Hurt", "userid", "Tint", "entity", data=True)]
+        self.assertEqual(compile_graph(nodes, links, ir), [])
+        script = next(v for k, v in ir.extra_scripts.items() if "logic_" in k)
+        self.assertRegex(script, r'HL_SetProp\(.*"m_clrRender", "i", null, 1191182335\);')
 
     def test_big_numbers_kept_whole(self):
         """A number typed on a socket keeps every digit: a colour like 16711680 (blue) isn't rounded to 1.67117e+07."""
