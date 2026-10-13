@@ -43,6 +43,40 @@ void AddFileToPak(const char *name, unsigned char *data, int len) {
     f->crc = crc32(data, len);
 }
 
+static int get16(const unsigned char *p) { return p[0] | p[1] << 8; }
+static unsigned get32(const unsigned char *p) { return (unsigned)get16(p) | (unsigned)get16(p + 2) << 16; }
+
+/* The files of a map's pakfile (-onlyents keeps them). vbsp reads the zip's directory and writes the files again
+ * its own way (stored, no dates, its comment), whoever wrote the zip: Python's zipfile after Hammerless took
+ * stale.txt out, bspzip, ... Its zip code doesn't know compression: a compressed file's bytes are kept as they are
+ * and written as a stored file (measured; no Hammerless map has one). */
+void LoadPakLump(const unsigned char *zip, int len) {
+    int end = -1;
+    for (int at = len - 22; at >= 0 && at >= len - 22 - 65535; at--)
+        if (get32(zip + at) == 0x06054b50) {
+            end = at;
+            break;
+        }
+    if (end < 0) Error("The map's pakfile isn't a zip (no directory)");
+    int count = get16(zip + end + 10);
+    unsigned at = get32(zip + end + 16);
+    for (int i = 0; i < count; i++) {
+        if (at + 46 > (unsigned)len || get32(zip + at) != 0x02014b50) Error("The map's pakfile has a broken directory");
+        const unsigned char *c = zip + at;
+        int nl = get16(c + 28), xl = get16(c + 30), cl = get16(c + 32);
+        unsigned csize = get32(c + 20), local = get32(c + 42);
+        if (at + 46 + nl > (unsigned)len || local + 30 > (unsigned)len) Error("The map's pakfile has a broken directory");
+        char name[300];
+        snprintf(name, sizeof(name), "%.*s", nl, (const char *)c + 46);
+        unsigned data = local + 30 + get16(zip + local + 26) + get16(zip + local + 28);
+        if (data + csize > (unsigned)len) Error("The map's pakfile has a broken file (%s)", name);
+        unsigned char *copy = xalloc(csize + 1);
+        memcpy(copy, zip + data, csize);
+        AddFileToPak(name, copy, (int)csize);
+        at += 46 + nl + xl + cl;
+    }
+}
+
 static void put16(unsigned char *p, int v) { p[0] = (unsigned char)v; p[1] = (unsigned char)(v >> 8); }
 static void put32(unsigned char *p, unsigned v) { put16(p, (int)(v & 0xFFFF)); put16(p + 2, (int)(v >> 16)); }
 

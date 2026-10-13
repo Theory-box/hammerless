@@ -397,15 +397,15 @@ void ComputeBoundsNoSkybox(void) {
     }
 }
 
-static char *entdata;
-static int entdatasize;
+char *entdata;
+int entdatasize;
 
 static void StripTrailing(char *e) {
     char *s = e + strlen(e) - 1;
     while (s >= e && *s <= 32) *s-- = 0;
 }
 
-static void UnparseEntities(void) {
+void UnparseEntities(void) {
     size_t cap = 1 << 16, n = 0;
     entdata = xalloc(cap);
     char key[1024], value[1024], line[2100];
@@ -598,21 +598,51 @@ static void CompactTexinfos(void) {
 typedef struct { const void *data; int len, version; } lump_t;
 static lump_t lumps[64];
 
-static void SetLump(int i, const void *data, int len, int version) {
+void SetLump(int i, const void *data, int len, int version) {
     lumps[i].data = data;
     lumps[i].len = len;
     lumps[i].version = version;
 }
 
-/* The order L4D2's vbsp writes lumps in (measured; an empty lump takes the current offset). */
-static const int lump_order[] = {59, 6, 2, 43, 44, 10, 17, 1, 18, 19, 14, 5, 20, 21, 4, 0, 29, 62, 26, 3, 12, 13, 7, 33,
-                                 48, 28, 9, 8, 53, 37, 38, 39, 30, 31, 51, 52, 55, 56, 16, 36, 45, 50, 60, 61, 46, 15,
-                                 41, 42, 54, 34, 47, 11, 27, 22, 23, 24, 25, 49, 35, 40};
+/* The order L4D2's vbsp writes lumps in. An empty lump takes the current offset, so its place shows only beside
+ * lumps with data: measured across Valve's compiles, lit maps (vrad's lumps: the HDR faces 58, the leaf ambient
+ * lighting 56 52 51 55, the world lights 15 54, which -onlyents rewrites) and the game's own maps. */
+static const int lump_order[] = {59, 6, 2, 43, 44, 10, 17, 1, 18, 19, 14, 5, 20, 21, 4, 0, 29, 62, 26, 3, 12, 13, 7, 58,
+                                 33, 48, 28, 9, 8, 53, 37, 38, 39, 30, 31, 56, 52, 51, 55, 16, 36, 45, 50, 60, 61, 46,
+                                 42, 41, 15, 54, 34, 47, 11, 27, 22, 23, 24, 25, 49, 35, 40};
+#define NUM_ORDERED ((int)(sizeof(lump_order) / sizeof(lump_order[0])))
+
+static int InLumpOrder(int i) {
+    for (int k = 0; k < NUM_ORDERED; k++)
+        if (lump_order[k] == i) return 1;
+    return 0;
+}
+
+/* Is lump i written (given a place in the file)? The HDR faces only when there are some (an empty one keeps an
+ * all-zero entry); a lump vbsp doesn't know (not in the order) only when it has data, after the others. */
+static int LumpWritten(int i, int ordered) {
+    if (i == 58 || !ordered) return lumps[i].len > 0;
+    return 1;
+}
 
 extern unsigned char *phys_collide; extern int phys_collide_len;
 unsigned char *phys_collide; int phys_collide_len;
 
-static void WriteBSPFile(const char *path) {
+/* Where lump i starts in the file (the game lump's directory holds file offsets). */
+int LumpFileOffset(int lump) {
+    int offset = 1036;
+    for (int pass = 0; pass < 2; pass++)
+        for (int k = 0; k < (pass ? 64 : NUM_ORDERED); k++) {
+            int i = pass ? k : lump_order[k];
+            if (pass && InLumpOrder(i)) continue;
+            if (!LumpWritten(i, !pass)) continue;
+            if (i == lump) return offset;
+            offset = (offset + lumps[i].len + 3) & ~3;
+        }
+    return offset;
+}
+
+void WriteBSPFile(const char *path) {
     /* written beside it, then put in its place: a failed write (full disk) fails instead of leaving half a map */
     char tmp[1100];
     snprintf(tmp, sizeof(tmp), "%s.writing", path);
@@ -627,20 +657,24 @@ static void WriteBSPFile(const char *path) {
     memcpy(header + 8 + 64 * 16, &map_revision, 4);
     bad |= fwrite(header, 1, sizeof(header), f) != sizeof(header);
     int offset = (int)sizeof(header);
-    for (unsigned k = 0; k < sizeof(lump_order) / sizeof(lump_order[0]); k++) {
-        int i = lump_order[k];
-        lump_t *l = &lumps[i];
-        int fields[4] = {l->version, offset, l->len, 0};
-        memcpy(header + 8 + 16 * i, fields, 16);
-        if (l->len) {
-            bad |= fwrite(l->data, 1, l->len, f) != (size_t)l->len;
-            offset += l->len;
-            static const unsigned char zero[4] = {0};
-            int pad = (4 - (offset & 3)) & 3;
-            bad |= fwrite(zero, 1, pad, f) != (size_t)pad;
-            offset += pad;
+    /* vbsp's order, then any lump it doesn't know of (one an earlier tool wrote: kept, in number order) */
+    for (int pass = 0; pass < 2; pass++)
+        for (int k = 0; k < (pass ? 64 : NUM_ORDERED); k++) {
+            int i = pass ? k : lump_order[k];
+            if (pass && InLumpOrder(i)) continue;
+            if (!LumpWritten(i, !pass)) continue;
+            lump_t *l = &lumps[i];
+            int fields[4] = {l->version, offset, l->len, 0};
+            memcpy(header + 8 + 16 * i, fields, 16);
+            if (l->len) {
+                bad |= fwrite(l->data, 1, l->len, f) != (size_t)l->len;
+                offset += l->len;
+                static const unsigned char zero[4] = {0};
+                int pad = (4 - (offset & 3)) & 3;
+                bad |= fwrite(zero, 1, pad, f) != (size_t)pad;
+                offset += pad;
+            }
         }
-    }
     bad |= fseek(f, 0, SEEK_SET) != 0;
     bad |= fwrite(header, 1, sizeof(header), f) != sizeof(header);
     bad |= fclose(f) != 0;
@@ -900,13 +934,7 @@ void EndBSPFile(const char *path) {
     memcpy(game + 36 + sprp_len, dprp, dprp_len);
     SetLump(35, game, gamelen, 0);
     {
-        int offset = 1036;
-        for (unsigned k = 0; k < sizeof(lump_order) / sizeof(lump_order[0]); k++) {
-            int i = lump_order[k];
-            if (i == 35) break;
-            offset += lumps[i].len;
-            offset = (offset + 3) & ~3;
-        }
+        int offset = LumpFileOffset(35);
         int o1 = offset + 4 + 2 * 16, o2 = o1 + sprp_len;
         memcpy(game + 12, &o1, 4);
         memcpy(game + 28, &o2, 4);

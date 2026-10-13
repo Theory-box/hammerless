@@ -101,7 +101,7 @@ Every build compares the new `.vmf` with the one the current `.bsp` was compiled
 | Plan | When | What runs |
 |---|---|---|
 | **same** | Nothing that reaches the map changed, same options, and the game has this build's map | Nothing: "Map unchanged, skipped compiling" |
-| **entities** | Only entity keyvalues, outputs or point entities changed | `vbsp -onlyents` rewrites the entity lump; geometry, vis and lighting are kept |
+| **entities** | Only entity keyvalues, outputs or point entities changed | The map compiler's `-onlyents` rewrites the entity lump; geometry, vis and lighting are kept |
 | **remix** | Only the colour or brightness of lights baked into layers of their own changed (Live Light Mixing) | `-onlyents`, then the light compiler mixes the layers at their new weights (`-remix`): no bake |
 | **lighting** | Lights or static props changed, geometry didn't | `-onlyents`, then the light compiler |
 | **full** | Geometry changed | Map compiler, vis, light |
@@ -117,7 +117,7 @@ A smart build also falls back to a full compile when:
 
 A lower-quality vis is upgraded without recompiling geometry: after **Bake Lighting** (fast vis), the next build adds only the full vis, and leaves the lighting alone unless lights changed or the vis is radial.
 
-`vbsp -onlyents` leaves a `stale.txt` in the map, which makes the engine treat the map as not final. A smart build's map is equivalent to a full compile, so Hammerless removes it.
+`-onlyents` is Hammerless's own (`hlvbsp -onlyents`), and writes the same file as Valve's `vbsp -onlyents`; Valve's runs only if ours fails, or when Valve's map compiler is chosen. Like Valve's, it leaves a `stale.txt` in the map, which makes the engine treat the map as not final. A smart build's map is equivalent to a full compile, so Hammerless removes it.
 
 ### The nav mesh is kept when its inputs are unchanged
 
@@ -171,7 +171,7 @@ The flow is only computed when the end room's changelevel names a different, rea
 
 ## Valve's tools are never a silent fallback
 
-Hammerless's map, vis and light compilers are the defaults. Valve's `vbsp`, `vvis` and `vrad` stay as a safety net: if one of ours fails or can't do something yet, Valve's runs instead. When that happens, the build says so in the log and lists it as a warning in Problems. After a fallback caused by a failure, the next build compiles everything again rather than building on that result. Any fallback is treated as a bug to fix, not an accepted outcome. Valve's tools still run in a few known cases, each noted in the log and Problems: `vbsp -onlyents` in smart builds (it only rewrites the entity lump), Fast lighting, and extra options only Valve's vrad or vvis understand.
+Hammerless's map, vis and light compilers are the defaults. Valve's `vbsp`, `vvis` and `vrad` stay as a safety net: if one of ours fails or can't do something yet, Valve's runs instead. When that happens, the build says so in the log and lists it as a warning in Problems. After a fallback caused by a failure, the next build compiles everything again rather than building on that result. Any fallback is treated as a bug to fix, not an accepted outcome. Valve's tools still run in a few known cases, each noted in the log and Problems: Fast lighting, and extra options only Valve's vrad or vvis understand.
 
 ## Measured timings
 

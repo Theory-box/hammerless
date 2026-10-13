@@ -29,7 +29,7 @@ TARGETS = {
     "hlvvis": ([], "hlvvis.exe", "hlvvis.c"),
     "hlvbsp": (["32bit"], "hlvbsp.exe", ["hlvbsp/main.c", "hlvbsp/poly.c", "hlvbsp/map.c", "hlvbsp/instance.c", "hlvbsp/brush.c", "hlvbsp/csg.c",
                                   "hlvbsp/portals.c", "hlvbsp/faces.c", "hlvbsp/detail.c", "hlvbsp/write.c",
-                                  "hlvbsp/phys.c", "hlvbsp/disp.c", "hlvbsp/pak.c", "hlvbsp/staticprop.c", "hlvbsp/detail_props.c", "hlvbsp/overlay.c", "hlvbsp/water.c", "hlvbsp/cubemap.c", "hlvbsp/occluder.c"]),
+                                  "hlvbsp/phys.c", "hlvbsp/disp.c", "hlvbsp/pak.c", "hlvbsp/staticprop.c", "hlvbsp/detail_props.c", "hlvbsp/overlay.c", "hlvbsp/water.c", "hlvbsp/cubemap.c", "hlvbsp/occluder.c", "hlvbsp/onlyents.c"]),
     # 64-bit (room for Embree); prop collision comes from hlphys.exe, 32-bit like the game's vphysics.dll
     "hlvrad": (["-I" + os.path.join(HERE, "third_party", "embree4"), "-I" + os.path.join(HERE, "third_party", "vulkan")], "hlvrad.exe", ["hlvrad/main.c", "hlvrad/bspio.c", "hlvrad/normals.c", "hlvrad/layout.c", "hlvrad/vis.c", "hlvrad/entities.c", "hlvrad/lights.c", "hlvrad/winding.c", "hlvrad/raytrace.c", "hlvrad/anorms.c", "hlvrad/direct.c", "hlvrad/disp.c", "hlvrad/staticprops.c", "hlvrad/bounce.c", "hlvrad/texlights.c", "hlvrad/leafambient.c", "hlvrad/detailprops.c", "hlvrad/spropvlight.c", "hlvrad/threads.c", "hlvrad/skymap.c", "hlvrad/modelfile.c", "hlvrad/embree.c", "hlvrad/gpu.c", "hlvrad/nobake.c", "hlvrad/keeplight.c", "hlvrad/remix.c"]),
     "hlphys": (["32bit"], "hlphys.exe", ["hlvrad/hlphys.c", "hlvrad/physcollide.c", "hlvrad/modelfile.c"]),

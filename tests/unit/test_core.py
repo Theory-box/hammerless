@@ -3614,6 +3614,126 @@ class TestGameMeshes(unittest.TestCase):
         self.assertIn("gambler_body", m.materials)
 
 
+class TestOnlyEnts(unittest.TestCase):
+    """hlvbsp -onlyents (smart builds' entity-only step) on a small map it compiled (no game needed). That it
+    matches Valve's vbsp -onlyents byte for byte is tests/compile/onlyents_suite.py's job (needs the game)."""
+
+    MAT = "DEV/DEV_MEASUREGENERIC01B\t0\t0\t128\t128\t0.11\t0.11\t0.11\tconcrete\t1\t-\t-\t-\n"
+
+    @staticmethod
+    def _vmf(ents: str) -> str:
+        sid = [0]
+
+        def box(lo, hi):
+            (x0, y0, z0), (x1, y1, z1) = lo, hi
+            planes = [((x0, y1, z1), (x1, y1, z1), (x1, y0, z1)), ((x0, y0, z0), (x1, y0, z0), (x1, y1, z0)),
+                      ((x0, y1, z1), (x0, y0, z1), (x0, y0, z0)), ((x1, y1, z0), (x1, y0, z0), (x1, y0, z1)),
+                      ((x1, y1, z1), (x0, y1, z1), (x0, y1, z0)), ((x1, y0, z0), (x0, y0, z0), (x0, y0, z1))]
+            sides = []
+            for p in planes:
+                sid[0] += 1
+                pts = " ".join("(%g %g %g)" % q for q in p)
+                sides.append('side { "id" "%d" "plane" "%s" "material" "DEV/DEV_MEASUREGENERIC01B" '
+                             '"uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" "lightmapscale" "16" }' % (sid[0], pts))
+            return 'solid { "id" "%d" %s }' % (sid[0] + 1000, " ".join(sides))
+        walls = [box((-16, -16, -16), (528, 528, 0)), box((-16, -16, 256), (528, 528, 272)),
+                 box((-16, -16, 0), (0, 528, 256)), box((512, -16, 0), (528, 528, 256)),
+                 box((0, -16, 0), (512, 0, 256)), box((0, 512, 0), (512, 528, 256))]
+        return ('world { "id" "1" "mapversion" "3" "classname" "worldspawn" "skyname" "" %s }\n'
+                'entity { "id" "2" "classname" "info_player_start" "origin" "100 100 16" }\n%s\n'
+                % (" ".join(walls), ents))
+
+    @staticmethod
+    def _lumps(path):
+        import struct
+        data = open(path, "rb").read()
+        out = {}
+        for i in range(64):
+            v, o, n, _c = struct.unpack_from("<4i", data, 8 + 16 * i)
+            out[i] = data[o:o + n]
+        return data, out
+
+    def test_entities_put_into_the_compiled_map(self):
+        import io
+        import shutil
+        import struct
+        import subprocess
+        import tempfile
+        import zipfile
+        from hammerless.core.buildplan import strip_stale
+        from hammerless.core.compile import HLVBSP
+        if not os.path.exists(HLVBSP):
+            self.skipTest("hlvbsp.exe not built")
+        work = tempfile.mkdtemp()
+        base = os.path.join(work, "hl_test_oe")
+        open(os.path.join(work, "mat.txt"), "w").write(self.MAT)
+        light = 'entity { "id" "3" "classname" "light" "_light" "255 255 255 200" "origin" "%s" }'
+        open(base + ".vmf", "w").write(self._vmf(light % "256 256 128"))
+        cmd = [HLVBSP, "-materials", os.path.join(work, "mat.txt"), base]
+        self.assertEqual(subprocess.run(cmd, capture_output=True).returncode, 0)
+        self.assertTrue(os.path.exists(base + ".prt"))
+        _before, old = self._lumps(base + ".bsp")
+        # a light moved and named (a switchable style), a point entity added
+        open(base + ".vmf", "w").write(self._vmf(
+            (light % "300 256 128").replace('"light"', '"light" "targetname" "lamp"')
+            + '\nentity { "id" "4" "classname" "info_target" "targetname" "hl_target" "origin" "64 64 64" }'))
+        oe = [HLVBSP, "-onlyents", "-materials", os.path.join(work, "mat.txt"), base]
+        self.assertEqual(subprocess.run(oe, capture_output=True).returncode, 0)
+        self.assertFalse(os.path.exists(base + ".prt"))                # (vbsp deletes it too: vvis needs a new one)
+        data, new = self._lumps(base + ".bsp")
+        ents = new[0].decode("latin-1")
+        for text in ('"targetname" "hl_target"', '"origin" "300 256 128"', '"style" "32"', '"world_mins"'):
+            self.assertIn(text, ents)
+        self.assertEqual(struct.unpack_from("<i", data, 8 + 64 * 16)[0], 3)       # the .vmf's map version
+        for i in range(1, 64):            # geometry kept; the entities, props, pakfile, ambient lighting made again
+            if i not in (35, 40, 51, 52, 55, 56):
+                self.assertEqual(new[i], old[i], i)
+        leaves = len(new[10]) // 32
+        self.assertEqual(new[52], b"".join(struct.pack("<HH", 1, k) for k in range(leaves)))   # (never lit: made)
+        self.assertEqual(new[56], bytes(28 * leaves))
+        ids = [new[35][4 + 16 * k:8 + 16 * k] for k in range(struct.unpack_from("<i", new[35])[0])]
+        self.assertEqual(ids, [b"prpd", b"prps"])                     # the static props made again, last
+        pak = zipfile.ZipFile(io.BytesIO(new[40]))
+        self.assertEqual(pak.namelist()[-1], "stale.txt")
+        # the add-on takes stale.txt out (Python rewrites the zip); the next -onlyents writes it vbsp's way again
+        first = data
+        self.assertTrue(strip_stale(base + ".bsp"))
+        self.assertEqual(subprocess.run(oe, capture_output=True).returncode, 0)
+        self.assertEqual(open(base + ".bsp", "rb").read(), first)
+        shutil.rmtree(work, ignore_errors=True)
+
+    def test_smart_build_uses_hlvbsp(self):
+        import tempfile
+        from dataclasses import replace
+        from hammerless.core import compile as cc
+        if not os.path.exists(cc.HLVBSP):
+            self.skipTest("hlvbsp.exe not built")
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "left4dead2", "maps"))
+        work = tempfile.mkdtemp()
+        vmf = os.path.join(work, "m.vmf")
+        open(vmf, "w").write("world { }")
+        tools = cc.Tools(root)
+        for tool in ("HAMMERLESS", "VALVE"):
+            opts = replace(cc.PRESETS["NORMAL"], map_tool=tool)
+            open(os.path.join(work, "m.bsp"), "wb").write(b"VBSP" + bytes(1100))
+            open(os.path.join(work, "m.built.vmf"), "w").write("world { }")
+            open(os.path.join(work, "m.built.opts"), "w").write(repr(opts))
+            job = cc.CompileJob(tools, vmf, opts, skip_if_unchanged=True)
+            job._vmf_bytes = b'world { } entity { "classname" "info_target" }'
+            name, cmd = job._choose_steps()[0]
+            self.assertEqual(name, "vbsp (entities only)")
+            self.assertIn("-onlyents", cmd)
+            if tool == "HAMMERLESS":
+                self.assertEqual(cmd[0], cc.HLVBSP)
+                self.assertIn("-materials", cmd)                       # (the tables the run loop writes first)
+                self.assertEqual(job._valve_onlyents[:2], [tools.exe("vbsp"), "-onlyents"])   # the fallback
+                self.assertNotIn("-onlyents", job._valve_vbsp)        # (a full compile's stays the full one)
+            else:
+                self.assertEqual(cmd[0], tools.exe("vbsp"))
+                self.assertIsNone(job._valve_onlyents)
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -218,10 +218,13 @@ def use_hlvbsp(opts: "CompileOptions") -> bool:
     return opts.map_tool == "HAMMERLESS" and os.path.exists(HLVBSP) and not opts.extra_vbsp.split()
 
 
-def hlvbsp_command(tools: "Tools", base: str) -> list[str]:
+def hlvbsp_command(tools: "Tools", base: str, onlyents: bool = False) -> list[str]:
+    """onlyents: the smart builds' entity-only step (the new entities put into the map compiled before), which
+    reads the same tables (the static props' models, the materials water and cubemaps are found by)."""
     mat, surf, props, detail, cubemaps, fgd = (base + ext for ext in HLVBSP_TABLES)
-    return [HLVBSP, "-game", tools.gamedir, "-materials", mat, "-surfaceprops", surf, "-props", props,
-            "-detail", detail, "-cubemaps", cubemaps, "-fgd", fgd, base]
+    return [HLVBSP] + (["-onlyents"] if onlyents else []) + [
+        "-game", tools.gamedir, "-materials", mat, "-surfaceprops", surf, "-props", props,
+        "-detail", detail, "-cubemaps", cubemaps, "-fgd", fgd, base]
 
 
 _CONTENT: dict = {}
@@ -651,6 +654,7 @@ class CompileJob:
                                "doesn't know some extra vvis options (" + opts.extra_vvis + ")")
                                + ": running Valve's vvis")
         self._valve_vbsp = None             # Valve's vbsp, run instead when ours can't (or fails)
+        self._valve_onlyents = None         # (and its -onlyents, for a smart build's entity-only step)
         if use_hlvbsp(opts):
             self.steps: list[tuple[str, list[str]]] = [("vbsp", hlvbsp_command(tools, self.base))]
             self._valve_vbsp = valve_vbsp
@@ -975,7 +979,8 @@ class CompileJob:
                     for msg, _loc, _obj in self.lighting:
                         self._q.put(f"!! {msg}")
                     continue
-                if name == "vbsp" and cmd[0] == HLVBSP:
+                valve_vbsp = self._valve_onlyents if name == "vbsp (entities only)" else self._valve_vbsp
+                if name.split()[0] == "vbsp" and cmd[0] == HLVBSP:
                     why = []
                     try:
                         why = prepare_hlvbsp(self.tools, self.vmf, self.base)
@@ -984,7 +989,7 @@ class CompileJob:
                     if why:
                         self._fallback("Hammerless map compiler doesn't do " + ", ".join(why) + " yet: running Valve's vbsp",
                                        any(w.startswith("couldn't read") for w in why))
-                        cmd = self._valve_vbsp
+                        cmd = valve_vbsp
                 self.prepared.set()
                 if name == "vrad" and cmd[0] == HLVRAD and self._opts.sky_key:
                     try:
@@ -1018,9 +1023,10 @@ class CompileJob:
                     self._fallback(f"!! Hammerless light compiler failed (exit code {code}): running Valve's vrad instead", True)
                     self._drop_layers()
                     code, out = self._exec(self._valve_vrad)
-                if code != 0 and name == "vbsp" and cmd[0] == HLVBSP and self._valve_vbsp and not self._stopping:
+                if code != 0 and name.split()[0] == "vbsp" and cmd[0] == HLVBSP and valve_vbsp and not self._stopping:
+                    # (ours replaces the map only once it has written it all: -onlyents starts from the same map)
                     self._fallback(f"!! Hammerless map compiler failed (exit code {code}): running Valve's vbsp instead", True)
-                    code, out = self._exec(self._valve_vbsp)
+                    code, out = self._exec(valve_vbsp)
                 if code != 0 and name == "vvis" and cmd[0] == HLVVIS and self._valve_vvis and not self._stopping:
                     # ours only replaces the map at the very end, so the map and portals are untouched
                     self._fallback(f"!! Hammerless vis failed (exit code {code}): running Valve's vvis instead", True)
@@ -1154,6 +1160,15 @@ class CompileJob:
             return False
         return os.path.exists(layers) and os.path.exists(layers + ".base")
 
+    def _onlyents_step(self) -> tuple[str, list[str]]:
+        """A smart build's entity-only step: our map compiler's -onlyents (Valve's vbsp -onlyents only as the
+        fallback if ours fails, or when Valve's map compiler is chosen)."""
+        valve = [self.tools.exe("vbsp"), "-onlyents"] + self._opts.vbsp_args() + ["-game", self.tools.gamedir, self.base]
+        if self._valve_vbsp is None:          # (ours isn't used for this build: see use_hlvbsp)
+            return ("vbsp (entities only)", valve)
+        self._valve_onlyents = valve
+        return ("vbsp (entities only)", hlvbsp_command(self.tools, self.base, onlyents=True))
+
     def _choose_steps(self) -> list[tuple[str, list[str]]]:
         """Smart build: the least work that gives the same map as a full compile, judged against
         the VMF the current BSP was compiled from (buildplan.plan). A doubt means a full compile."""
@@ -1202,10 +1217,8 @@ class CompileJob:
             self._built_vis = built_vis
             self._built_rad = built_rad.split("|")[0]
             self._built_light = self._built_opts()          # (still the bake's: its options and fingerprint)
-            game = ["-game", self.tools.gamedir]
             self._q.put(f"Smart build: {why}: keeping geometry, mixing the lighting from its layers")
-            return [("vbsp (entities only)", [self.tools.exe("vbsp"), "-onlyents"] + self._opts.vbsp_args() + game
-                     + [self.base]), ("vrad", self._hlvrad_remix)]
+            return [self._onlyents_step(), ("vrad", self._hlvrad_remix)]
         lights_changed = kind in ("lighting", "remix")   # lights or static props moved: the bake is out of date
         if add_vis and not lights_changed:
             vis_cmd = next((c for n, c in self.steps if n == "vvis"), [])
@@ -1227,9 +1240,7 @@ class CompileJob:
             self._built_rad = built_rad.split("|")[0]
             self._built_light = built
         self.plan = "lighting" if add_rad else "entities"
-        game = ["-game", self.tools.gamedir]
-        steps = [("vbsp (entities only)", [self.tools.exe("vbsp"), "-onlyents"] + self._opts.vbsp_args() + game
-                  + [self.base])]
+        steps = [self._onlyents_step()]
         keep = "keeping geometry" + ("" if add_rad or lights_changed else " and the baked lighting")
         self._q.put(f"Smart build: {why}: {keep}")
         if add_vis:          # e.g. after a lighting bake (fast vis): the full vis leaves the lighting alone

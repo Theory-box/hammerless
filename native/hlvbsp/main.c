@@ -3,6 +3,7 @@
  * (the game's surface property scripts, for the physics).
  *
  *   hlvbsp [-game <dir>] -materials <file> <map>     (reads <map>.vmf, writes <map>.bsp and <map>.prt)
+ *   hlvbsp -onlyents ... <map>      (puts <map>.vmf's entities into the <map>.bsp compiled before: onlyents.c)
  */
 #include "hlvbsp.h"
 #include "disp.h"
@@ -153,7 +154,7 @@ static void ProcessSubModel(void) {
 
 int main(int argc, char **argv) {
     const char *matfile = NULL;
-    int i;
+    int i, onlyents = 0;
     setvbuf(stdout, NULL, _IONBF, 0);
     Msg("Hammerless hlvbsp\n");
     for (i = 1; i < argc; i++) {
@@ -175,6 +176,7 @@ int main(int argc, char **argv) {
         }
         else if (!_stricmp(argv[i], "-materials") && i + 1 < argc) matfile = argv[++i];
         else if (!_stricmp(argv[i], "-fgd") && i + 1 < argc) g_fgd_file = argv[++i];     /* (for instances) */
+        else if (!_stricmp(argv[i], "-onlyents")) onlyents = 1;
         else if (!_stricmp(argv[i], "-v") || !_stricmp(argv[i], "-verbose")) verbose = 1;
         else if (!_stricmp(argv[i], "-threads") && i + 1 < argc) i++;
         else if (argv[i][0] == '-') {
@@ -196,6 +198,16 @@ int main(int argc, char **argv) {
         static char base[64];
         strncpy(base, b, sizeof(base) - 1);
         g_mapbase = base;
+    }
+    if (onlyents) {
+        /* (vbsp deletes the portal and leak files whatever it does: vvis would otherwise use a stale .prt) */
+        sprintf(path, "%s.prt", source);
+        remove(path);
+        sprintf(path, "%s.lin", source);
+        remove(path);
+        extern void OnlyEnts(const char *source);
+        OnlyEnts(source);
+        return 0;
     }
     sprintf(path, "%s.vmf", source);
     LoadMapFile(path);

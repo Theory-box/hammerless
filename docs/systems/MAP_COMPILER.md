@@ -155,7 +155,7 @@ By design, any time Valve's vbsp runs instead of hlvbsp is treated as a bug to f
 
 - No map feature sends a map to vbsp. The list of unsupported features is empty since instances and water overlays were added.
 - If hlvbsp fails (non-zero exit), the build runs Valve's vbsp, says so in the log and in *Problems*, and the next build compiles everything again instead of trusting the result.
-- Entities-only smart builds use Valve's `vbsp -onlyents` (see below).
+- Entities-only smart builds run hlvbsp's `-onlyents` (see below); Valve's `vbsp -onlyents` runs only if it fails.
 
 The setting is under *Settings > Map & Model Compilers*. Valve's vbsp can still be chosen there.
 
@@ -168,6 +168,7 @@ All in `tests/compile/`. They need the game and the Authoring Tools.
 | `bspdump.py` | Dumps an L4D2 .bsp (version 21) as text, one record per line, every lump named. `--diff a.bsp b.bsp` prints the first differing record per lump. Masks the bytes vbsp leaves uninitialised. |
 | `compare_vbsp.py` | Compiles .vmf files with both compilers and compares them. `--dir <sdk_content>` runs every .vmf in a folder. |
 | `mapcompiler_suite.py` | The 23 generated feature maps, compiled by both and compared lump by lump and by portal file. Run it after changing hlvbsp. Valve's reference is reused while a map's .vmf is unchanged. |
+| `onlyents_suite.py` | `-onlyents` against Valve's `vbsp -onlyents`, whole files byte for byte: each map (the generated ones, `--vmf` / `--dir` .vmf files, or `--built` a map the add-on built; `--lit` lights it first) edited step by step: a light moved and named, point entities added and removed, a static prop moved and its model changed, an env_cubemap, an info_overlay, a brush entity key, a new named light. |
 | `decompile_roundtrip.py` | The decompiler's test (below). |
 | `decompile_brushdiff.py`, `decompile_faces.py` | What a decompile round trip changed: missing brushes and their nearest match, face area per material. |
 
@@ -184,7 +185,7 @@ A full compile runs the map compiler, vis and lighting. Most edits don't need al
 | Plan | When | What runs |
 |---|---|---|
 | same | Nothing that reaches the map changed | No compile |
-| entities | Only entity keyvalues, outputs or point entities changed | `vbsp -onlyents` rewrites the entity lump; geometry, vis and lighting kept |
+| entities | Only entity keyvalues, outputs or point entities changed | `hlvbsp -onlyents` rewrites the entity lump; geometry, vis and lighting kept |
 | remix | Only the colour or brightness of lights with their own bake layer changed | `-onlyents`, then the lighting mixed from its layers (no bake) |
 | lighting | Lights or static props changed, geometry didn't | `-onlyents`, then the light compiler |
 | full | Geometry changed | Map compiler, vis, lighting |
@@ -202,7 +203,17 @@ Extra checks force a full compile:
 - the last build fell back to a Valve tool after a failure;
 - no portal file was kept from the last compile.
 
-`vbsp -onlyents` leaves a `stale.txt` in the map's pak, which makes the engine treat the map as not final. Hammerless removes it, since the result is equivalent to a full compile.
+### -onlyents
+
+`hlvbsp -onlyents` does what `vbsp -onlyents` does, and writes the same file (checked byte for byte by `onlyents_suite.py`; only the bytes vbsp leaves uninitialised in static prop records differ, as in a full compile). It reads the .bsp compiled before and the edited .vmf, and makes again only what depends on the entities: the entity lump (model numbers, light styles, world bounds, the added `water_lod_control`, occluder numbers), the static props, and the cubemap list. Every other lump is copied and written in vbsp's order. Like vbsp it:
+
+- keeps the overlays, detail props and lighting as they were: a new `info_overlay` needs a full compile, and a new `env_cubemap` is listed but no surface uses it until one (the smart build plan treats both as geometry anyway);
+- measures the world bounds with the 3D skybox included, since it doesn't know the sky areas without the tree;
+- writes empty leaf ambient lighting (one dark sample per leaf) into a map that was never lit;
+- moves the static props to the end of the game lumps, and rewrites the pakfile its own way (stored files, no dates, its comment), whoever wrote it;
+- deletes the old portal and leak files.
+
+It leaves a `stale.txt` in the map's pak, as vbsp does, which makes the engine treat the map as not final. Hammerless removes it, since the result is equivalent to a full compile.
 
 ## Importing maps
 
@@ -256,9 +267,8 @@ Publishing a remix of Valve's maps is up to you and Valve's terms.
 
 - **Two sample maps** still differ from vbsp in a few bytes (`styleguide_urban`, `styleguide_semiurban`, above).
 - **Speed:** hlvbsp isn't faster than vbsp yet.
-- **Entities-only builds** still run Valve's `vbsp -onlyents`.
 - **Terrain** is a heightfield: no overhangs or caves in one terrain object.
 - **Non-convex meshes** need splitting or the convex hull option; there is no automatic decomposition.
 - **Imported maps:** displacements can't be edited yet; no texture lock on moved faces; copies of brush entities aren't built.
 - **Decompiled maps:** a handful of brushes on some campaign maps come back with slightly different planes; instances, visgroups and hint/skip brushes can't be recovered.
-- **The Authoring Tools** are still needed: Valve's vbsp as the safety net and for `-onlyents`, and the sample instances such as the Car Alarm.
+- **The Authoring Tools** are still needed: Valve's vbsp as the safety net, and the sample instances such as the Car Alarm.

@@ -2,8 +2,8 @@
 the least work that gives the same map as a full compile.
 
   same      nothing that reaches the BSP changed
-  entities  only entity keyvalues / outputs / point entities changed: vbsp -onlyents rewrites the
-            entity lump (and static props) and keeps geometry, visibility and lighting
+  entities  only entity keyvalues / outputs / point entities changed: -onlyents (hlvbsp's, the same as vbsp's)
+            rewrites the entity lump (and static props) and keeps geometry, visibility and lighting
   lighting  lights or static props changed too (they're baked by vrad): -onlyents, then vrad
   remix     only the colour or brightness of lights baked into layers of their own (Live Light Mixing) changed:
             -onlyents, then hlvrad -remix (the layers added in at their new weights, no bake)
@@ -237,7 +237,7 @@ PAK_LUMP = 40
 
 
 def strip_stale(bsp_path: str) -> bool:
-    """vbsp -onlyents leaves 'stale.txt' in the BSP's pakfile, which makes the engine call the map
+    """-onlyents (hlvbsp's, as vbsp's) leaves 'stale.txt' in the BSP's pakfile, which makes the engine call the map
     not final. A smart build's map is equivalent to a full compile, so take it out again (the
     pakfile is rewritten in place, uncompressed like vbsp's). Returns whether it was there."""
     import io
