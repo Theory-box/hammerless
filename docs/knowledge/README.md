@@ -119,4 +119,10 @@ Every page follows these rules so the facts stay traceable and checkable:
 |---|---|
 | [game-facts/README.md](game-facts/README.md) | BSP version 21 facts, `vphysics.dll` calling conventions and vtable slots, VPK and binary sources, the decompiler's findings and round-trip results, the Hammer-map importer, a table of engine behaviours with the area each belongs to, the limits met, the reference maps, the testing rules that cost data |
 
+### Known issues
+
+| Page | What it covers |
+|---|---|
+| [known-issues.md](known-issues.md) | Open behaviour problems from the October 2026 audits, re-checked in the code: what happens, where, the suggested fix; and what's been fixed since |
+
 Last checked: 2026-10-13 against branch light-layers, commit 46f75ac.
