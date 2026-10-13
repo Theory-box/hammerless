@@ -385,6 +385,113 @@ def check(run: Run, n: int, b: Bench):
         assert after[3] == 40, f"health {after[3]}, not topped up to 40"
         return f"speed {boosted[0]:.1f}, glow {boosted[1]} colour {boosted[2]}; after: speed {after[0]:.1f}, " \
                f"glow {after[1]}, health 25 -> {after[3]}"
+    if n == 56:
+        # commons near the sonar and far from it: only the near ones glow (through walls), for 5 s
+        sonar = run.obj(56, "sonar")
+        b.console("sb_stop 1", wait=0.2)
+        b.run('local e = null; while (e = Entities.FindByClassname(e, "infected")) e.Kill();')
+        b.run(f'local c = T.center("{sonar}"); T.commons(4, c + Vector(0, 0, 20), 150); '
+              'T.commons(3, c + Vector(1400, 0, 20), 100);'); time.sleep(1)
+        glows = ('(function() { local a = [], e = null, c = T.center("' + sonar + '"); '
+                 'while (e = Entities.FindByClassname(e, "infected")) if (e.GetHealth() > 0) '
+                 'a.append([(e.GetOrigin() - c).Length(), NetProps.GetPropInt(e, "m_Glow.m_iGlowType"), '
+                 'NetProps.GetPropInt(e, "m_Glow.m_glowColorOverride")]); return a; })()')
+        mk = m(); b.console(f"ent_fire {run.obj(56, 'button')} Press", wait=0.5)
+        run.expect(56, mk, "button.pressed -> each.run", "if_near.true -> glow.run", "glow.then -> blue.run")
+        got = b.value(glows)
+        near = [g for g in got if g[0] < 780]
+        far = [g for g in got if g[0] > 820]
+        assert near and far, f"commons (distance, glow, colour): {got}"
+        assert all(g[1] == 3 and g[2] == 16760832 for g in near), f"near ones not glowing blue: {near}"
+        assert all(g[1] == 0 for g in far), f"far ones glow: {far}"
+        time.sleep(5.5)
+        after = b.value(glows)
+        b.console("sb_stop 0", wait=0.1)
+        assert all(g[1] == 0 for g in after), f"still glowing after 5 s: {after}"
+        return f"{len(near)} near commons glowed blue, {len(far)} far ones didn't; all off after 5 s"
+    if n == 57:
+        # firing with the power-up on doesn't use up the clip; without it, it does
+        clip = 'NetProps.GetPropInt(NetProps.GetPropEntity(T.host(), "m_hActiveWeapon"), "m_iClip1")'
+        def fire():
+            b.run(f'NetProps.SetPropInt(NetProps.GetPropEntity(T.host(), "m_hActiveWeapon"), "m_iClip1", 20);')
+            b.console("+attack", wait=0.8)
+            b.console("-attack", wait=0.5)
+            return b.value(clip)
+        b.console("give rifle", wait=1.0)
+        cls = b.value('NetProps.GetPropEntity(T.host(), "m_hActiveWeapon").GetClassname()')
+        assert cls == "weapon_rifle", f"holding {cls}"
+        b.console("+reload", wait=0.1); b.console("-reload", wait=3.0)     # (a fresh gun: let it finish anything)
+        mk = m(); b.console(f"ent_fire {run.obj(57, 'button')} Press", wait=0.5)
+        on = fire()
+        run.expect(57, mk, "button.pressed -> on.run", "if_on.true -> refill.run")
+        time.sleep(10)
+        off = fire()
+        assert on == 20, f"clip 20 -> {on} while bottomless"
+        assert off < 20, f"clip 20 -> {off} after the power-up (didn't fire?)"
+        return f"firing: clip 20 -> {on} with the power-up, 20 -> {off} after"
+    if n == 58:
+        # every survivor's progress bar runs 5 s, then the gate opens and the bar goes
+        gate = run.obj(58, "gate")
+        z0 = b.value(f'T.ent("{gate}").GetOrigin().z')
+        mk = m(); b.console(f"ent_fire {run.obj(58, 'button')} Press", wait=1.5)
+        run.expect(58, mk, "button.pressed -> each.run", "start.then -> length.run")
+        bar = b.value('[Time() - NetProps.GetPropFloat(T.host(), "m_flProgressBarStartTime"), '
+                      'NetProps.GetPropFloat(T.host(), "m_flProgressBarDuration")]')
+        assert 1.0 < bar[0] < 3.0 and bar[1] == 5.0, f"bar (seconds running, duration) {bar}"
+        shot = b.screenshot("58_progress_bar", hud=True, out_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "shots"))
+        time.sleep(6)
+        after = b.value('NetProps.GetPropFloat(T.host(), "m_flProgressBarDuration")')
+        z1 = b.value(f'T.ent("{gate}").GetOrigin().z')
+        assert after == 0.0, f"bar duration {after} afterwards"
+        assert z1 > z0 + 50, f"gate z {z0} -> {z1}"
+        return f"bar ran (duration {bar[1]}), gate rose {z1 - z0:.0f}; look: {shot}"
+    if n == 59:
+        # inside, the attack button does nothing (firing leaves the clip as it was); outside it works again
+        flag = 'NetProps.GetPropInt(T.host(), "m_afButtonDisabled")'
+        clip = 'NetProps.GetPropInt(NetProps.GetPropEntity(T.host(), "m_hActiveWeapon"), "m_iClip1")'
+        b.console("give rifle", wait=1.0)
+        b.console("+reload", wait=0.1); b.console("-reload", wait=3.0)
+        middle = b.value(f'T.center("{run.obj(59, "middle")}")')
+        mk = m(); b.run(f"T.to(T.host(), Vector({middle[0]}, {middle[1]}, {middle[2] + 5}));"); time.sleep(1)
+        run.expect(59, mk, "room.enter -> msg.show")
+        inside = b.value(flag)
+        before = b.value(clip)
+        b.console("+attack", wait=0.8); b.console("-attack", wait=0.5)
+        shot_inside = b.value(clip)
+        b.run("T.to(T.host(), T.host().GetOrigin() + Vector(0, 400, 0));"); time.sleep(1)
+        outside = b.value(flag)
+        b.console("+attack", wait=0.8); b.console("-attack", wait=0.5)
+        shot_outside = b.value(clip)
+        assert inside == 1 and outside == 0, f"disabled buttons inside {inside}, outside {outside}"
+        assert shot_inside == before, f"fired inside: clip {before} -> {shot_inside}"
+        assert shot_outside < shot_inside, f"couldn't fire outside: clip {shot_inside} -> {shot_outside}"
+        return f"inside: attack disabled (clip stayed {before}); outside: fired ({shot_inside} -> {shot_outside})"
+    if n == 60:
+        # every survivor drawn faint for 10 s (a bot in front of the host for the picture), then solid
+        looks = ('(function() { local a = []; foreach (s in T.survivors()) a.append([NetProps.GetPropInt(s, "m_nRenderMode"), '
+                 'NetProps.GetPropInt(s, "m_clrRender")]); return a; })()')
+        b.run('local h = T.host(); h.SnapEyeAngles(QAngle(10, 0, 0)); '
+              'foreach (s in T.survivors()) { if (s != h) { T.to(s, h.GetOrigin() + Vector(90, 0, 0)); break; } }')
+        mk = m(); b.console(f"ent_fire {run.obj(60, 'button')} Press", wait=1)
+        run.expect(60, mk, "button.pressed -> each.run", "mode.then -> faint.run")
+        ghost = b.value(looks)
+        shot = b.screenshot("60_ghost", out_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "shots"))
+        assert all(g == [1, 1191182208] for g in ghost), f"(render mode, colour) {ghost}"
+        time.sleep(10)
+        solid = b.value(looks)
+        assert all(g == [0, -1] for g in solid), f"not solid again: {solid}"
+        return f"all {len(ghost)} survivors faint (alpha 70), solid after 10 s; look: {shot}"
+    if n == 61:
+        fov = 'NetProps.GetPropInt(T.host(), "m_iFOV")'
+        b.run("T.host().SetHealth(50);"); time.sleep(1.2)
+        hurt = b.value(fov)
+        shot = b.screenshot("61_tunnel_50", out_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "shots"))
+        b.run("T.host().SetHealth(10);"); time.sleep(1.2)
+        worse = b.value(fov)
+        b.run("T.host().SetHealth(100);"); time.sleep(1.2)
+        full = b.value(fov)
+        assert (hurt, worse, full) == (72, 58, 0), f"FOV at health 50, 10, 100: {hurt}, {worse}, {full}"
+        return f"FOV at health 50: {hurt}, at 10: {worse}, at 100: {full} (own setting); look: {shot}"
     if n == 38:
         # the question the game asks about each special the Director spawns, asked here the same way
         got = b.value("[" + ", ".join(f"::HL_Hook_ConvertZombieClass.call(::HL_Scope, {t})" for t in (1, 3, 6, 8)) + "]")

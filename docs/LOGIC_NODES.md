@@ -33,13 +33,13 @@ The Add menu has one place per purpose:
 | **Overrides** | Override, Answer |
 | **Groups** | Make Group (Ctrl+G), Ungroup (Ctrl+Alt+G), Group Input / Output (inside a group), and every node group in the file |
 | **Script** | Script and Script Value (your own Squirrel code; the examples don't use them: everything they do is built from nodes) |
-| **Examples**, **Examples 2**, **Examples 3** | 55 ready-made graphs to learn from (below) |
+| **Examples**, **Examples 2**, **Examples 3** | 61 ready-made graphs to learn from (below) |
 
 ### Entity properties
 
 **Get Entity Property** and **Set Entity Property** read and change what the game keeps on an entity: a player's health, speed (`m_flLaggedMovementValue`), gravity, field of view, revive count; any entity's outline glow, colour and see-through amount, model scale, skin, animation frame, collision; a weapon's clip and upgrades; and much more. The search button lists all 2,631 properties the game has (taken from the game itself), the ones worth knowing first as *Common*, with a description; set **For** to a class (player, prop_dynamic, infected...) to list only what it has. The node's sockets follow the property: a number, text, a vector or an entity, with an **Index** for the ones that hold a list (a player's `m_iAmmo`, one slot per ammo type). An entity without the property is left alone (Get gives 0 or nothing).
 
-A few properties are put back by the game itself every moment, so a Set doesn't last: `m_Local.m_iHideHUD` (hiding HUD parts) is one. Set those again on a Timer. Example 55 (Speed Boost) uses both nodes.
+A few properties are put back by the game itself every moment, so a Set doesn't last: `m_Local.m_iHideHUD` (hiding HUD parts) is one. Set those again on a Timer. Example 55 (Speed Boost) uses both nodes; examples 56 to 61 each do something the game has no other way to do (glowing commons, a bottomless clip, the progress bar, no firing in a room, see-through survivors, tunnel vision).
 
 Game functions that only work something out (Get Health, Find By Name...) just give a Result; actions (Give Item, Stagger...) run when an event wire arrives and then fire *Then*. Wire colours for script values: teal **text**, purple **vector**, pink **entity / player / nav area**, dark grey **any value**.
 
@@ -131,6 +131,12 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | 53 | Power Goes Out | Switchable baked lights (Light panel) driven from Entity Events: SetPattern to stutter, TurnOff with a horde, SetPattern m to bring the power back; lights sharing a name switch together |
 | 54 | Lights Flicker While a Tank Lives | Game events tank_spawn / tank_killed, SetPattern on lights sharing a name, Director.IsTankInPlay with Not and If (steady only when no Tank is left) |
 | 55 | Speed Boost | Set Entity Property on every survivor (speed, outline glow and its colour) for 10 s; Get Entity Property reads their health to top up anyone under 40 (For Each, Compare, If) |
+| 56 | Sonar Pulse | Commons near a spot glow through walls for 5 s (they have no glow input): For Each common, Get Origin, Vector Math distance, Set Entity Property m_Glow.m_iGlowType / m_Glow.m_glowColorOverride |
+| 57 | Bottomless Clip | For 10 s each shot puts its round back: game event weapon_fire, Get Entity Property m_hActiveWeapon then m_iClip1, Math, Set Entity Property; a true/false variable for the power-up |
+| 58 | Progress Bar Gate | The game's own progress bar on every survivor for 5 s without holding Use (m_flProgressBarStartTime from Time, m_flProgressBarDuration), then a gate opens |
+| 59 | No Guns in Here | Survivors near the room's middle can't fire (m_afButtonDisabled, the attack bit), set four times a second with Pick Value; a Volume shows a message on entering |
+| 60 | Ghost Survivors | Every survivor see-through for 10 s (players have no colour input): m_nRenderMode 1 and m_clrRender with a low alpha, then back to normal |
+| 61 | Tunnel Vision | Each survivor's field of view narrows as their health drops: m_iHealth through Math to m_iFOV (0 = their own setting at full health) |
 | 48 | Flashlight Battery | The 'Flashlight Battery' group (with 'Flashlight Is On' / 'Flashlight Off' inside it), per-player variables, Math bit operations, text built up in a For Each, HUD Text |
 
 `demo/hl_test_nuke.blend` (made by `tests/fixtures/nuke_test.py`) is the demo level with it, set so the first kill drops it, and 40 commons on the field.
