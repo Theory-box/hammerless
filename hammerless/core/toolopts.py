@@ -45,7 +45,8 @@ VVIS = dict(_COMMON, **{
 VRAD = dict(_COMMON, **{
     "-bounce": (1, OURS), "-chop": (1, OURS), "-maxchop": (1, OURS), "-dispchop": (1, OURS),
     "-extrasky": (1, OURS), "-final": (0, OURS), "-noextra": (0, OURS), "-smooth": (1, OURS), "-lights": (1, OURS),
-    "-staticproplighting": (0, OURS), "-staticproppolys": (0, OURS), "-fast": (0, OURS), "-hdr": (0, NO_EFFECT),
+    "-staticproplighting": (0, OURS), "-staticproppolys": (0, OURS), "-hdr": (0, NO_EFFECT),
+    "-fast": (0, NOT_DONE),               # (vrad's rough preview: Hammerless's Fast quality is its own, quality.py)
     "-ldr": (0, NO_EFFECT), "-both": (0, NO_EFFECT),      # (always HDR: L4D2 only uses HDR lighting)
     "-stoponexit": (0, NO_EFFECT), "-rederrors": (0, NO_EFFECT), "-dump": (0, NO_EFFECT),
     "-dumpnormals": (0, NO_EFFECT), "-dumptrace": (0, NO_EFFECT), "-dumppropmaps": (0, NO_EFFECT),

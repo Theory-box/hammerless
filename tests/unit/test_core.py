@@ -2673,6 +2673,22 @@ class TestSettingsAndScripts(unittest.TestCase):
         self.assertEqual(sort_options("vvis", "-FAST -radius_override 2000")[0], ["-FAST", "-radius_override", "2000"])
         self.assertEqual(sort_options("vbsp", ""), ([], []))
 
+    def test_extra_options_never_switch_to_valve(self):
+        """Extra Options typed for Valve's tools: ours still runs, with what it does; Valve's gets them all."""
+        from hammerless.core.compile import CompileOptions, use_hlvbsp, use_hlvrad, use_hlvvis
+        o = CompileOptions(extra_vbsp="-nodetail -threads 4", extra_vvis="-nosort -fast",
+                           extra_vrad="-bounce 5 -threads 3 -fast")
+        self.assertTrue(use_hlvbsp(o) and use_hlvvis(o) and use_hlvrad(o))
+        self.assertEqual(o.vvis_args(True), ["-fast"])
+        ours, valve = o.vrad_args(True), o.vrad_args()
+        self.assertEqual(ours[-2:], ["-bounce", "5"])
+        self.assertNotIn("-threads", ours)
+        self.assertEqual(valve[-5:], ["-bounce", "5", "-threads", "3", "-fast"])
+        notes = " | ".join(o.extra_notes())
+        self.assertIn("-nodetail", notes)
+        self.assertIn("-nosort", notes)
+        self.assertIn("-fast", notes)            # (vrad's rough preview isn't Hammerless's)
+
     def test_patch_vmt(self):
         from hammerless.core.surfaces import patch_vmt
         vmt = patch_vmt("concrete/concrete_floor_01", "ice")

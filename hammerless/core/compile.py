@@ -57,12 +57,31 @@ class CompileOptions:
     def vbsp_args(self) -> list[str]:
         return self.extra_vbsp.split()
 
-    def vvis_args(self) -> list[str] | None:
+    def extra(self, tool: str, ours: bool) -> list[str]:
+        """The Extra Options typed for Valve's tool: all of them for Valve's; for ours, the ones it does
+        (toolopts.py: the rest are left out, with a note in the build log)."""
+        text = getattr(self, "extra_" + tool)
+        if not ours:
+            return text.split()
+        from .toolopts import sort_options
+        return sort_options(tool, text)[0]
+
+    def extra_notes(self) -> list[str]:
+        """What the build log says about Extra Options our compilers leave out."""
+        from .toolopts import sort_options
+        notes = []
+        for tool, ours in (("vbsp", use_hlvbsp(self)), ("vvis", use_hlvvis(self) and self.vis != "SKIP"),
+                           ("vrad", use_hlvrad(self))):
+            if ours:
+                notes += sort_options(tool, getattr(self, "extra_" + tool))[1]
+        return notes
+
+    def vvis_args(self, ours: bool = False) -> list[str] | None:
         if self.vis == "SKIP":
             return None
-        return (["-fast"] if self.vis == "FAST" else []) + self.extra_vvis.split()
+        return (["-fast"] if self.vis == "FAST" else []) + self.extra("vvis", ours)
 
-    def vrad_args(self) -> list[str] | None:
+    def vrad_args(self, ours: bool = False) -> list[str] | None:
         if self.rad == "SKIP":
             return None
         args = ["-hdr"]
@@ -83,7 +102,7 @@ class CompileOptions:
             args.append("-StaticPropLighting")
         if self.prop_polys or self.rad == "FINAL":
             args.append("-StaticPropPolys")
-        return args + self.extra_vrad.split()
+        return args + self.extra("vrad", ours)
 
     def hlvrad_args(self) -> list[str]:
         """The Hammerless light compiler's own options (after vrad_args)."""
@@ -145,22 +164,9 @@ def _opts_rest(text: str) -> str:
 HLVVIS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvvis.exe")
 
 
-HLVVIS_OPTIONS = {"-fast": 0, "-threads": 1, "-radius_override": 1, "-exact": 0}   # vvis options ours knows: arguments each
-
-
-def _hlvvis_knows(args: list[str]) -> bool:
-    i = 0
-    while i < len(args):
-        n = HLVVIS_OPTIONS.get(args[i].lower())
-        if n is None or i + n >= len(args):
-            return False
-        i += 1 + n
-    return True
-
-
 def use_hlvvis(opts: "CompileOptions") -> bool:
-    """Our vis compiler runs when chosen, present, and not given vvis options it doesn't know."""
-    return opts.vis_tool == "HAMMERLESS" and os.path.exists(HLVVIS) and _hlvvis_knows(opts.extra_vvis.split())
+    """Our vis compiler runs when chosen and present (Extra vvis Options: see CompileOptions.extra)."""
+    return opts.vis_tool == "HAMMERLESS" and os.path.exists(HLVVIS)
 
 
 HLVRAD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvrad.exe")
@@ -172,8 +178,6 @@ def hlvrad_unsupported(opts: "CompileOptions") -> list[str]:
     why = []
     if opts.rad == "FAST":
         why.append("fast lighting")
-    if opts.extra_vrad.split():
-        why.append("extra vrad options")
     if not os.path.exists(HLVRAD):
         why.append("(hlvrad.exe is missing)")
     if not os.path.exists(HLPHYS):
@@ -214,8 +218,8 @@ HLVBSP_TABLES = (".hlvbsp_materials.txt", ".hlvbsp_surfaceprops.txt", ".hlvbsp_p
 
 
 def use_hlvbsp(opts: "CompileOptions") -> bool:
-    """Our map compiler runs when chosen, present, and not given vbsp options it doesn't know."""
-    return opts.map_tool == "HAMMERLESS" and os.path.exists(HLVBSP) and not opts.extra_vbsp.split()
+    """Our map compiler runs when chosen and present (Extra vbsp Options: see CompileOptions.extra)."""
+    return opts.map_tool == "HAMMERLESS" and os.path.exists(HLVBSP)
 
 
 def hlvbsp_command(tools: "Tools", base: str, onlyents: bool = False) -> list[str]:
@@ -647,12 +651,10 @@ class CompileJob:
         self._shaky = False                 # a failure made us fall back: don't count this build as up to date
         self._notes: list[str] = []          # (said when the build starts)
         if opts.map_tool == "HAMMERLESS" and not use_hlvbsp(opts):
-            self._notes.append("Hammerless map compiler " + ("isn't installed" if not os.path.exists(HLVBSP) else
-                               "doesn't take extra vbsp options") + ": running Valve's vbsp")
+            self._notes.append("Hammerless map compiler isn't installed: running Valve's vbsp")
         if opts.vis_tool == "HAMMERLESS" and opts.vvis_args() is not None and not use_hlvvis(opts):
-            self._notes.append("Hammerless vis " + ("isn't installed" if not os.path.exists(HLVVIS) else
-                               "doesn't know some extra vvis options (" + opts.extra_vvis + ")")
-                               + ": running Valve's vvis")
+            self._notes.append("Hammerless vis isn't installed: running Valve's vvis")
+        self._notes += opts.extra_notes()          # (Extra Options ours leaves out: never a reason to run Valve's)
         self._valve_vbsp = None             # Valve's vbsp, run instead when ours can't (or fails)
         self._valve_onlyents = None         # (and its -onlyents, for a smart build's entity-only step)
         if use_hlvbsp(opts):
@@ -665,8 +667,8 @@ class CompileJob:
         if vvis is not None:
             valve = [tools.exe("vvis")] + vvis + game + [self.base]
             if use_hlvvis(opts):
-                self.steps.append(("vvis", [HLVVIS] + (["-exact"] if opts.vis_exact else []) + vvis + game
-                                   + [self.base]))
+                self.steps.append(("vvis", [HLVVIS] + (["-exact"] if opts.vis_exact else []) + opts.vvis_args(True)
+                                   + game + [self.base]))
                 self._valve_vvis = valve
             else:
                 self.steps.append(("vvis", valve))
@@ -675,6 +677,7 @@ class CompileJob:
         if vrad is not None:
             valve = [tools.exe("vrad")] + vrad + game + [self.base]
             if use_hlvrad(opts):
+                vrad = opts.vrad_args(True)             # (ours: the Extra vrad Options it does)
                 sky = ["-skymap", self.base + ".hlsky"] if opts.sky_key else []
                 if opts.no_bake:
                     with open(self.base + ".hlnobake", "w", encoding="utf-8") as f:

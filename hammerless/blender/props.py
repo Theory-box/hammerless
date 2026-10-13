@@ -721,8 +721,8 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("VALVE", "Valve vrad", "L4D2's own lighting compiler (vrad.exe)"),
         ("HAMMERLESS", "Hammerless",
          "Hammerless's lighting compiler: the same lighting as vrad (a few shadow-edge pixels differ very "
-         "slightly), about 2 to 3 times faster. Fast quality, LDR, extra vrad options and any failure use "
-         "Valve's vrad instead"),
+         "slightly), several times faster (on the GPU), with sky light from the sky, ray-traced bounce and "
+         "Live Light Mixing. If it ever fails, Valve's vrad runs (and the build says so)"),
         ("CYCLES", "Cycles",
          "vrad lays out the lighting, then Blender's Cycles bakes the lightmaps with the same lights (its GPU "
          "if it has one). Prop lighting and switchable lights stay vrad's")])
