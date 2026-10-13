@@ -19,7 +19,7 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 | `compilers/` | The map, vis and light compilers (hlvbsp, hlvvis, hlvrad) against Valve's vbsp, vvis, vrad: options, fallbacks, what ours do | written |
 | `lighting/` | hlvrad beyond vrad: GPU path and ray-traced bounce, light styles and Live Light Mixing, partial bakes and keep light, sky light, Cycles, the lighting view | written |
 | `vis/` | hlvvis in depth: what decides vvis's bits, nondeterminism, radial vis decoded, speed history and dropped ideas, merged windows with its safety proof and tools | written |
-| `nav/` | Nav mesh format, the generator and analysis ports, the game's rules measured | to write |
+| `nav/` | The .nav format decoded, the generator port and its L4D2 constants, the analysis matched to the game, speed work, the in-game flow check, the real-time nav plan | written |
 | `director/` | AI Director: flow, wanderers vs mobs, item placement densities, spawn rules | to write |
 | `logic/` | Logic nodes to VScript: the game's script API, events, NetProps, hooks | to write |
 | `models/` | Model writer (SMD/QC, skeletal), game skeletons, mesh reading | to write |
@@ -75,6 +75,14 @@ Every page follows these rules so the facts stay traceable and checkable:
 | [vis/README.md](vis/README.md) | What vvis writes, the exact search's bit-deciding details, vvis nondeterminism, radial vis as decoded from `vvis_dll.dll`, speeds, ideas tried and dropped, views, limits |
 | [vis/merged-windows.md](vis/merged-windows.md) | The merged-window method, the corrected safety argument, the audit's two bugs, the exact 0.01-unit claim, the proof tools and release gate |
 
+### nav/
+
+| Page | What it covers |
+|---|---|
+| [nav/README.md](nav/README.md) | The .nav v16/14 format as decoded, the generator port (constants, measured L4D2 differences, native code, marks, extras), how close it is |
+| [nav/analysis.md](nav/analysis.md) | The game's nav_analyze reproduced: sight-blocking rules, matching method and results, speed work, the in-game flow check, test tips |
+| [nav/realtime-plan.md](nav/realtime-plan.md) | Real-time incremental nav (not built): the bar, what exists, the order-dependence analysis, the chunked design |
+
 Other areas: to write (see the table above).
 
-Last checked: 2026-10-13 against branch light-layers, commit 41dc861.
+Last checked: 2026-10-13 against branch light-layers, commit 46f75ac.
