@@ -1812,6 +1812,37 @@ def test_node_headers_show_type():
     assert ev.label == "" and ev.draw_label() == "Override: AllowTakeDamage", ev.draw_label()
 
 
+def test_example_groups_dont_pile_up():
+    # adding an example, deleting its nodes and adding it again leaves one copy of each group, no '.001's, and
+    # Remove Unused Groups clears groups nothing uses (a group you made and kept goes only with that button)
+    from hammerless.blender.logic_examples import all_examples, build_example, main_tree
+    from hammerless.blender.logicgroups import new_group_tree, remove_unused_groups
+    reset_scene()
+    i = next(k for k, e in enumerate(all_examples()) if e["title"] == "Swelling Pod")
+    probs = []
+    build_example(bpy.context, i, probs)
+    assert not probs, probs
+    names = sorted(g.name for g in bpy.data.node_groups if getattr(g, "is_group", False))
+    tree = main_tree(bpy.context)
+    for n in list(tree.nodes):
+        tree.nodes.remove(n)
+    build_example(bpy.context, i, probs)
+    again = sorted(g.name for g in bpy.data.node_groups if getattr(g, "is_group", False))
+    assert again == names and not any(".0" in n for n in again), (names, again)
+    for t in [t for t in bpy.data.node_groups if t.bl_idname == "HL_LogicTree" and not t.is_group]:
+        for n in list(t.nodes):
+            t.nodes.remove(n)
+    mine = new_group_tree("My Group")                  # (kept: a fake user)
+    remove_unused_groups(examples_only=True)
+    left = sorted(g.name for g in bpy.data.node_groups if getattr(g, "is_group", False))
+    assert left == ["My Group"], left
+    stale = new_group_tree("Explosion", keep=False)
+    stale["hl_example_group"] = "x"
+    remove_unused_groups()
+    assert not [g for g in bpy.data.node_groups if getattr(g, "is_group", False)], "unused groups left"
+    del mine
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

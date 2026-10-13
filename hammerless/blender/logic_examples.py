@@ -602,7 +602,8 @@ def _group_state(tree) -> str:
         for p in n.bl_rna.properties:
             if p.identifier in ("rna_type", "location", "location_absolute", "width", "height", "dimensions", "select",
                                 "parent", "inputs", "outputs", "internal_links", "show_options", "show_preview",
-                                "hide", "show_texture", "color", "use_custom_color", "width_hidden"):
+                                "hide", "show_texture", "color", "use_custom_color", "width_hidden", "label",
+                                "note", "auto_title"):
                 continue
             try:
                 v = getattr(n, p.identifier)
@@ -621,7 +622,8 @@ def _group_state(tree) -> str:
 def _groups(ex, objects, problems) -> dict:
     """The example's node groups (in order: a group may use the ones before it). One already in the file from the same
     example (unchanged) is used again rather than copied."""
-    from .logicgroups import new_group_tree, new_item, sync
+    from .logicgroups import new_group_tree, new_item, remove_unused_groups, sync
+    remove_unused_groups(examples_only=True)       # (stale copies of examples' groups nothing uses any more)
     made = {}
     for name, spec in (ex.get("groups") or {}).items():
         sig = _group_signature(name, spec)
@@ -634,7 +636,7 @@ def _groups(ex, objects, problems) -> dict:
         if found is not None:          # (an example group someone edited since isn't used: a fresh copy is made)
             made[name] = found
             continue
-        tree = new_group_tree(name)
+        tree = new_group_tree(name, keep=False)
         tree["hl_example_group"] = sig
         tree["hl_example_name"] = name
         for ident, label, kind in spec.get("inputs", []):

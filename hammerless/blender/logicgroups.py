@@ -112,8 +112,8 @@ def _poll_group(self, tree):
 
 def _group_changed(self, context):
     from .logic import _rebuild
-    if self.group is not None:
-        self.group.use_fake_user = True          # (kept on save even while no Group node uses it)
+    if self.group is not None and not self.group.get("hl_example_group"):
+        self.group.use_fake_user = True          # (yours: kept on save even while no Group node uses it)
     _rebuild(self)
 
 
@@ -324,11 +324,59 @@ class _InLogic:
         return t is not None and t.bl_idname == "HL_LogicTree"
 
 
-def new_group_tree(name: str):
+def new_group_tree(name: str, keep: bool = True):
+    """A new logic group. keep: kept in the file even while no Group node uses it (a group you made); an example's
+    groups aren't (the example's nodes use them: deleting those lets them go)."""
     tree = bpy.data.node_groups.new(name, "HL_LogicTree")
     tree.is_group = True
-    tree.use_fake_user = True
+    tree.use_fake_user = keep
     return tree
+
+
+def used_groups() -> set:
+    """The groups a logic graph uses: through its Group nodes, and the groups those use (Blender's own count of a
+    group's users only drops when the file is saved, so it's worked out here)."""
+    from .logic import logic_trees
+    used, todo = set(), [t for t in logic_trees()]
+    while todo:
+        t = todo.pop()
+        for n in t.nodes:
+            g = getattr(n, "group", None) if n.bl_idname == "HL_NodeGroup" else None
+            if g is not None and g.name not in used:
+                used.add(g.name)
+                todo.append(g)
+    return used
+
+
+def remove_unused_groups(examples_only: bool = False) -> int:
+    """Logic groups nothing uses, deleted (again until none is left: a group only an unused one used goes too); then
+    a group named 'X.001' takes back 'X' when that's free. examples_only: only the examples' own (the ones made by
+    Add > Examples). Returns how many went."""
+    import re
+    gone = 0
+    used = used_groups()
+    for g in [g for g in bpy.data.node_groups if is_group(g) and g.name not in used
+              and (not examples_only or g.get("hl_example_group"))]:
+        bpy.data.node_groups.remove(g)
+        gone += 1
+    for g in list(bpy.data.node_groups):
+        m = re.fullmatch(r"(.+)\.\d{3}", g.name)
+        if is_group(g) and m and bpy.data.node_groups.get(m.group(1)) is None:
+            g.name = m.group(1)
+    return gone
+
+
+class HL_OT_logic_groups_cleanup(bpy.types.Operator):
+    bl_idname = "hammerless.logic_groups_cleanup"
+    bl_label = "Remove Unused Groups"
+    bl_description = ("Delete the logic groups no Group node uses (also ones you made and kept), and give back their "
+                      "plain names to copies called '.001'")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        n = remove_unused_groups()
+        self.report({"INFO"}, f"Removed {n} unused group(s)" if n else "No unused groups")
+        return {"FINISHED"}
 
 
 class HL_OT_logic_group_new(bpy.types.Operator):
@@ -644,6 +692,7 @@ class HL_MT_logic_groups(bpy.types.Menu):
                 op = layout.operator("node.add_node", text=cls.bl_label, icon=cls.bl_icon)
                 op.type, op.use_transform = idname, True
         groups = [g for g in bpy.data.node_groups if is_group(g) and g != tree]
+        layout.operator("hammerless.logic_groups_cleanup", icon="TRASH")
         if groups:
             layout.separator()
         for g in sorted(groups, key=lambda g: g.name):
@@ -652,7 +701,7 @@ class HL_MT_logic_groups(bpy.types.Menu):
 
 CLASSES = (HL_GroupItem, HL_NodeGroup, HL_NodeGroupInput, HL_NodeGroupOutput, HL_OT_logic_group_new,
            HL_OT_logic_group_edit, HL_OT_logic_group_make, HL_OT_logic_group_ungroup, HL_OT_logic_group_item,
-           HL_OT_logic_group_add, HL_PT_logic_group, HL_MT_logic_groups)
+           HL_OT_logic_group_add, HL_OT_logic_groups_cleanup, HL_PT_logic_group, HL_MT_logic_groups)
 _keymaps = []
 
 
