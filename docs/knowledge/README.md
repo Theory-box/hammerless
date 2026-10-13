@@ -17,7 +17,7 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 | Folder | Area | Status |
 |---|---|---|
 | `compilers/` | The map, vis and light compilers (hlvbsp, hlvvis, hlvrad) against Valve's vbsp, vvis, vrad: options, fallbacks, what ours do | written |
-| `lighting/` | hlvrad internals: GPU mode, light layers, sky light, partial bakes, Cycles; vrad's quirks | to write |
+| `lighting/` | hlvrad beyond vrad: GPU path and ray-traced bounce, light styles and Live Light Mixing, partial bakes and keep light, sky light, Cycles, the lighting view | written |
 | `vis/` | hlvvis internals: exact mode, merged windows, radial vis, the certifying tools | to write |
 | `nav/` | Nav mesh format, the generator and analysis ports, the game's rules measured | to write |
 | `director/` | AI Director: flow, wanderers vs mobs, item placement densities, spawn rules | to write |
@@ -58,6 +58,15 @@ Every page follows these rules so the facts stay traceable and checkable:
 | [compilers/valve-options.md](compilers/valve-options.md) | Every command-line option of Valve's vbsp, vvis and vrad: what it does (from Valve's source), how many values it takes, what Hammerless's compiler does with it; the L4D2-only options |
 | [compilers/valve-fallbacks.md](compilers/valve-fallbacks.md) | Every case where Valve's tools still run instead of ours, with the decision and plan for each, and a Status column kept current |
 | [compilers/what-ours-do.md](compilers/what-ours-do.md) | For each of our three compilers: what is byte-identical to Valve's (with the evidence), what differs or is better, what isn't done, known issues |
+
+### lighting/
+
+| Page | What it covers |
+|---|---|
+| [lighting/README.md](lighting/README.md) | What a light compiler writes (lumps), quality presets and what they set, settings-to-options map, every measured number in one table |
+| [lighting/gpu-and-bounce.md](lighting/gpu-and-bounce.md) | The GPU path (Vulkan ray queries, record/replay rounds, vrad's walk in a shader), ray-traced bounce `-gi`, bounce links on the GPU, lighting alongside vis |
+| [lighting/layers-and-styles.md](lighting/layers-and-styles.md) | Light styles and switchable/flickering lights, Live Light Mixing (`-layers`, the `.hllayers` file), the remix (`-remix`), accuracy and cost |
+| [lighting/bakes-sky-cycles-view.md](lighting/bakes-sky-cycles-view.md) | Partial bakes (`-nobake`), keep light (`-keeplight`), sky light from the skybox/HDRI (`-skymap`), the Cycles bake and its units, the Baked Lighting view |
 
 Other areas: to write (see the table above).
 
