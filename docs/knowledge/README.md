@@ -23,7 +23,7 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 | `director/` | AI Director: the flow, wanderer placement read from `server.dll` and fitted in game, the special/mob filter, the budget limit, the spawn preview check, options/scopes/hooks, item densities, quirks | written |
 | `logic/` | Graph -> VScript compiler and the facts it is built on, the script API dump method, scripted mode and hooks, the NetProps catalogue method and what sticks, the test bench, examples and what each measured, enemies on bot bodies | written |
 | `models/` | The own model writer matched to studiomdl, animated models through SMD/QC and what studiomdl was measured to do, the game's `.mdl`/`.ani` format decoded (frame-anims), game skeletons and placed characters, VTF/VMT, alpha, materials, parallax | written |
-| `sound/` | Sound control, new sounds in addon VPKs, sound.cache, mix layers | to write |
+| `sound/` | What a map can control of the sound engine (measured), new sounds through an addon VPK with its own `sound.cache` (format decoded), DSP presets, the automatic soundscapes, the shelved impulse-response work | written |
 | `loading/` | Boot and map-load times, prestart, stringtable dictionary, sv_lan | to write |
 | `game-facts/` | BSP format facts (version 21 lumps, write order), game limits, engine behaviours | to write |
 
@@ -100,6 +100,12 @@ Every page follows these rules so the facts stay traceable and checkable:
 | Page | What it covers |
 |---|---|
 | [models/README.md](models/README.md) | The own `.mdl`/`.vvd`/`.vtx`/`.phy` writer and its verification against studiomdl, the SMD/QC path and studiomdl's measured behaviour (the 90-degree turn, events, hitboxes, limits), the game's model files decoded (frame-anims, skeletons, libraries), game skeletons and placed characters proven in game, textures, alpha, material resolution, the loose-material fix, parallax |
+
+### sound/
+
+| Page | What it covers |
+|---|---|
+| [sound/README.md](sound/README.md) | The automatic soundscapes and their trace, per-map `level_sounds`, per-player DSP through `point_clientcommand`, mix layers, the retail DSP cvars and the measured distance dulling, why new sounds failed and the addon `sound.cache` that fixes it (format), addon `dsp_presets.txt`, the shelved gunfire acoustics v1/v2, limits |
 
 Other areas: to write (see the table above).
 
