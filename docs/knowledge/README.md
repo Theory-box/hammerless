@@ -22,7 +22,7 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 | `nav/` | The .nav format decoded, the generator port and its L4D2 constants, the analysis matched to the game, speed work, the in-game flow check, the real-time nav plan | written |
 | `director/` | AI Director: the flow, wanderer placement read from `server.dll` and fitted in game, the special/mob filter, the budget limit, the spawn preview check, options/scopes/hooks, item densities, quirks | written |
 | `logic/` | Graph -> VScript compiler and the facts it is built on, the script API dump method, scripted mode and hooks, the NetProps catalogue method and what sticks, the test bench, examples and what each measured, enemies on bot bodies | written |
-| `models/` | Model writer (SMD/QC, skeletal), game skeletons, mesh reading | to write |
+| `models/` | The own model writer matched to studiomdl, animated models through SMD/QC and what studiomdl was measured to do, the game's `.mdl`/`.ani` format decoded (frame-anims), game skeletons and placed characters, VTF/VMT, alpha, materials, parallax | written |
 | `sound/` | Sound control, new sounds in addon VPKs, sound.cache, mix layers | to write |
 | `loading/` | Boot and map-load times, prestart, stringtable dictionary, sv_lan | to write |
 | `game-facts/` | BSP format facts (version 21 lumps, write order), game limits, engine behaviours | to write |
@@ -94,6 +94,12 @@ Every page follows these rules so the facts stay traceable and checkable:
 | Page | What it covers |
 |---|---|
 | [logic/README.md](logic/README.md) | The compiler and the measured game facts it depends on (entity order, root table, Gate timing, precision), how the script API, Director options and hooks were dumped, scripted mode and the mode add-on, the NetProps catalogue method (demo SendTables layout, harvest) and what sticks, the test bench, the examples and what each measured, custom enemies on bot bodies |
+
+### models/
+
+| Page | What it covers |
+|---|---|
+| [models/README.md](models/README.md) | The own `.mdl`/`.vvd`/`.vtx`/`.phy` writer and its verification against studiomdl, the SMD/QC path and studiomdl's measured behaviour (the 90-degree turn, events, hitboxes, limits), the game's model files decoded (frame-anims, skeletons, libraries), game skeletons and placed characters proven in game, textures, alpha, material resolution, the loose-material fix, parallax |
 
 Other areas: to write (see the table above).
 
