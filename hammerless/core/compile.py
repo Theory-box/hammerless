@@ -19,7 +19,8 @@ DEFAULT_GAME_ROOTS = [
 @dataclass
 class CompileOptions:
     vis: str = "FULL"           # SKIP / FAST / FULL
-    rad: str = "NORMAL"         # SKIP / FAST (vrad -fast) / NORMAL (with the lighting settings below) / FINAL (older
+    rad: str = "NORMAL"         # SKIP / FAST (quick: no supersampling, 2 bounces) / NORMAL (with the lighting settings
+                                # below) / FINAL (older
                                 # builds: -final and prop lighting with full-model shadows)
     hdr: str = "HDR"            # always HDR: L4D2 only uses HDR lighting (Valve's maps have none in LDR)
     static_prop_lighting: bool = False
@@ -85,8 +86,10 @@ class CompileOptions:
         if self.rad == "SKIP":
             return None
         args = ["-hdr"]
-        if self.rad == "FAST":
+        if self.rad == "FAST" and not ours:     # (Valve's vrad: its own rough -fast mode)
             args.append("-fast")
+        elif self.rad == "FAST":                # (ours: normal lighting, cheaper; not vrad's -fast, which it doesn't do)
+            args += ["-noextra", "-bounce", "2"]
         elif self.rad == "FINAL":
             args += ["-final"]
         else:
@@ -176,8 +179,6 @@ HLPHYS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlphys.exe") 
 def hlvrad_unsupported(opts: "CompileOptions") -> list[str]:
     """What our light compiler doesn't do yet (then Valve's vrad lights the map)."""
     why = []
-    if opts.rad == "FAST":
-        why.append("fast lighting")
     if not os.path.exists(HLVRAD):
         why.append("(hlvrad.exe is missing)")
     if not os.path.exists(HLPHYS):
@@ -305,7 +306,7 @@ def _serves(built: str, opts: "CompileOptions") -> bool:
 
 PRESETS = {
     "QUICK": CompileOptions(vis="SKIP", rad="SKIP"),   # geometry only; map is fullbright
-    "FAST": CompileOptions(vis="FAST", rad="FAST"),
+    "FAST": CompileOptions(vis="FAST", rad="FAST"),       # (lighting: quick, see vrad_args)
     # (props lit per vertex in the build: the game would otherwise do it at every map load)
     "NORMAL": CompileOptions(vis="FULL", rad="NORMAL", static_prop_lighting=True, prop_polys=True),
     "FINAL": CompileOptions(vis="FULL", rad="NORMAL", static_prop_lighting=True, prop_polys=True, sky_rays=16),
