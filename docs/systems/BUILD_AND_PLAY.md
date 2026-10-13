@@ -91,7 +91,6 @@ What was learned making the build parallel:
 
 - **Contention is the real limit.** Total CPU work is fixed. Giving the light compiler fewer threads during vis made the build slower, not faster. Vis (about 6.5 s on all cores on a large user map) is the critical path.
 - **Python steps in Blender share one lock.** The map compiler's preparation went from 0.3 s to 3.8 s when it ran next to nav generation in the same process. Nav generation now waits for that preparation, and the nav mesh and its analysis now run in their own process.
-- **The light compiler's CPU rays** can use Embree (when its library sits next to the light compiler; the release doesn't ship it yet, so the light compiler uses vrad's own tracer for these rays). Measured with it: its tree builds in 0.2 s instead of 2.6 s while sharing the CPU with vis.
 
 On a large user map (Final quality, full vis, from nothing to survivors in game): **29.0 s before these changes, 26.6 s after** (35.3 s that morning, before the stringtable dictionary fix too). What was left at the time: about 0.9 s idle before vis, about a 4 s tail (prop lighting against nav analysis), and the game load, 9.6 s (2.8 s to the map starting, then about 6.8 s inside the game until survivors appear).
 

@@ -87,9 +87,8 @@ class CompileOptions:
 
     def hlvrad_args(self) -> list[str]:
         """The Hammerless light compiler's own options (after vrad_args)."""
-        # (no capable GPU: hlvrad warns and uses the CPU. On the GPU its few CPU rays go through Embree, whose tree
-        # builds far quicker than vrad's: the same map, measured)
-        args = [] if self.light_exact else ["-gpu", "-embree"]
+        # (no capable GPU: hlvrad warns and uses the CPU. Not -embree: Hammerless doesn't ship Embree)
+        args = [] if self.light_exact else ["-gpu"]
         if self.ss_points != 4:
             args += ["-sspoints", str(self.ss_points)]
         if self.ss_passes != 4:

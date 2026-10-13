@@ -72,7 +72,7 @@ On the GPU, direct light uses the ray tracing cores (`gather.comp`). The CPU sti
 
 Leaf ambient and prop bounce do not use the ray tracing cores. Ray-traced surfaces did not match vrad: vrad's tree walk hits a face's lightmap rectangle, not the face, and tests displacements against the whole ray from any leaf their box touches. So vrad's own BSP walk was ported to a shader (`walk.glsl`) and finds the same surfaces, quirks included.
 
-Work goes to the GPU in chunks, so Windows never resets a busy card. The few rays still traced on the CPU can go through Embree (when its library sits next to the light compiler; the release doesn't ship it yet, so the light compiler uses vrad's own tracer for these rays). Embree's tree builds much faster than vrad's (0.2 s against 2.6 s while sharing the CPU with vis).
+Work goes to the GPU in chunks, so Windows never resets a busy card.
 
 GPU mode is not bit-exact. On the large user map, against Exact:
 

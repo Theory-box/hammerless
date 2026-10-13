@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The light compiler no longer asks for Embree, which Hammerless doesn't ship: no more "can't load embree4.dll" warning in the build log. The lighting is unchanged (it already used its own tracer).
+
 ## 0.16.0 (test release, 2026-10-12)
 
 - Logic groups no longer pile up: re-adding an example reuses its groups (no '.001' copies) and clears stale example groups nothing uses; examples' groups aren't kept once their nodes are deleted. **Remove Unused Groups** (Add > Groups) deletes every logic group no graph uses and gives '.001' copies their plain names back.
