@@ -1848,6 +1848,19 @@ class TestNoBake(unittest.TestCase):
 class TestPropLighting(unittest.TestCase):
     """Static props' baked vertex light read back for the lighting view."""
 
+    def test_loose_materials_count(self):
+        """A material that's a loose file in the game folder (a Custom Model's, one installed by hand) is found."""
+        import tempfile
+        from hammerless.core.vpk import GameContent
+        with tempfile.TemporaryDirectory() as root:
+            folder = os.path.join(root, "left4dead2", "materials", "models", "hammerless", "m")
+            os.makedirs(folder)
+            open(os.path.join(folder, "skin_ab12.vmt"), "w").write('"VertexLitGeneric" {}')
+            c = GameContent(root)
+            self.assertTrue(c.has_material("models/hammerless/m/skin_ab12"))
+            self.assertTrue(c.has_material("Models\\Hammerless\\M\\SKIN_AB12"))
+            self.assertFalse(c.has_material("models/hammerless/m/other"))
+
     def test_vertex_light_gamma(self):
         import struct
         from hammerless.core.proplight import _vhv_colors

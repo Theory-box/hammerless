@@ -130,7 +130,10 @@ class GameContent:
         return full if os.path.isfile(full) else None
 
     def has_material(self, name: str) -> bool:
-        return f"materials/{name.lower().replace(chr(92), '/')}.vmt" in self.files
+        """In the game's VPKs, or a loose file in its folder (Custom Models' materials, materials installed by hand:
+        the game loads those too)."""
+        path = f"materials/{name.lower().replace(chr(92), '/')}.vmt"
+        return path in self.files or self._loose(path) is not None
 
     def has_model(self, path: str) -> bool:
         path = path.lower().replace("\\", "/")
