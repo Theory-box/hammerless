@@ -28,14 +28,14 @@ def props() -> dict[str, dict]:
             data = {}
         _cache = data.get("props", {})
         every = data.get("every_class", [])
+        every_in = set(data.get("every_class_in", []))
         classes = data.get("classes", {})
         for p in _cache.values():
             p["classes"] = []
-        for cls in sorted(classes):                     # (stored as: the names every class has, then each one's own)
-            for name in every if cls in classes and not cls[:1].isupper() else ():
-                _cache[name]["classes"].append(cls)
-            for name in classes[cls]:
-                _cache[name]["classes"].append(cls)
+        for cls in sorted(classes):                     # (stored as: the names every checked class has, then each
+            for name in tuple(every if cls in every_in else ()) + tuple(classes[cls]):   # class's own)
+                if name in _cache:
+                    _cache[name]["classes"].append(cls)
     return _cache
 
 

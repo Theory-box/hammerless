@@ -1829,7 +1829,7 @@ def test_entity_property_nodes():
     put.key = "m_hViewEntity"
     assert put.inputs["value"].bl_idname == "HL_ThingSocket", put.inputs["value"].bl_idname
     put.key = "m_nNotInTheList"
-    put.type, put.list = "vector", True
+    put.prop_type, put.list = "vector", True
     assert [s.identifier for s in put.inputs] == ["run", "entity", "index", "value"], [s.identifier for s in put.inputs]
     assert put.inputs["value"].bl_idname == "HL_VectorSocket", put.inputs["value"].bl_idname
 

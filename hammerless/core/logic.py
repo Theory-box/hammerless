@@ -177,9 +177,19 @@ HELPERS = {
         "    try { return (key in t) ? t[key] : null; } catch (e) { return null; }\n}\n"
         "::HL_Count_ <- function(t) { return (t == null) ? 0.0 : t.len().tofloat(); }"),
     "HL_Prop": (
-        "::HL_GetProp <- function(e, name, t, i) {   // an entity property (t: i f v s e; i: list index or null)\n"
-        "    if (e == null || !e.IsValid() || !NetProps.HasProp(e, name))\n"
-        "        return (t == \"s\") ? \"\" : (t == \"v\") ? Vector(0, 0, 0) : (t == \"e\") ? null : 0;\n"
+        "::HL_PropOk <- function(e, name, i) {   // the entity has the property (and the list that slot)\n"
+        "    if (typeof e != \"instance\" || !e.IsValid() || !NetProps.HasProp(e, name)) return false;\n"
+        "    return i == null || (i >= 0 && i < NetProps.GetPropArraySize(e, name));\n}\n"
+        "::HL_PropValue <- function(t, v) {   // v as the property's type (i f v s e), or null when it can't be\n"
+        "    local ty = typeof v;\n"
+        "    if (t == \"e\") return (v == null || ty == \"instance\") ? [v] : null;\n"
+        "    if (t == \"v\") return (ty == \"Vector\") ? [v] : null;\n"
+        "    if (t == \"s\") return (v == null) ? null : [v.tostring()];\n"
+        "    if (ty != \"integer\" && ty != \"float\" && ty != \"bool\" && ty != \"string\") return null;\n"
+        "    try { return [t == \"f\" ? v.tofloat() : v.tointeger()]; } catch (err) { return null; }\n}\n"
+        "::HL_GetProp <- function(e, name, t, i) {   // an entity property (t: i f v s e; i: list slot or null)\n"
+        "    if (!::HL_PropOk(e, name, i))\n"
+        "        return (t == \"s\") ? \"\" : (t == \"v\") ? Vector(0, 0, 0) : (t == \"e\") ? null : (t == \"f\") ? 0.0 : 0;\n"
         "    switch (t) {\n"
         "        case \"f\": return (i == null) ? NetProps.GetPropFloat(e, name) : NetProps.GetPropFloatArray(e, name, i);\n"
         "        case \"v\": return (i == null) ? NetProps.GetPropVector(e, name) : NetProps.GetPropVectorArray(e, name, i);\n"
@@ -187,15 +197,18 @@ HELPERS = {
         "        case \"e\": return (i == null) ? NetProps.GetPropEntity(e, name) : NetProps.GetPropEntityArray(e, name, i);\n"
         "    }\n"
         "    return (i == null) ? NetProps.GetPropInt(e, name) : NetProps.GetPropIntArray(e, name, i);\n}\n"
-        "::HL_SetProp <- function(e, name, t, i, v) {\n"
-        "    if (e == null || !e.IsValid() || !NetProps.HasProp(e, name)) return;\n"
+        "::HL_SetProp <- function(e, name, t, i, v) {   // nothing happens when it can't be set (no entity, no such\n"
+        "    if (!::HL_PropOk(e, name, i)) return;       // property or slot, a value of the wrong kind)\n"
+        "    local w = ::HL_PropValue(t, v);\n"
+        "    if (w == null) return;\n"
+        "    w = w[0];\n"
         "    switch (t) {\n"
-        "        case \"f\": if (i == null) NetProps.SetPropFloat(e, name, v.tofloat()); else NetProps.SetPropFloatArray(e, name, v.tofloat(), i); return;\n"
-        "        case \"v\": if (i == null) NetProps.SetPropVector(e, name, v); else NetProps.SetPropVectorArray(e, name, v, i); return;\n"
-        "        case \"s\": if (i == null) NetProps.SetPropString(e, name, v.tostring()); else NetProps.SetPropStringArray(e, name, v.tostring(), i); return;\n"
-        "        case \"e\": if (i == null) NetProps.SetPropEntity(e, name, v); else NetProps.SetPropEntityArray(e, name, v, i); return;\n"
+        "        case \"f\": if (i == null) NetProps.SetPropFloat(e, name, w); else NetProps.SetPropFloatArray(e, name, w, i); return;\n"
+        "        case \"v\": if (i == null) NetProps.SetPropVector(e, name, w); else NetProps.SetPropVectorArray(e, name, w, i); return;\n"
+        "        case \"s\": if (i == null) NetProps.SetPropString(e, name, w); else NetProps.SetPropStringArray(e, name, w, i); return;\n"
+        "        case \"e\": if (i == null) NetProps.SetPropEntity(e, name, w); else NetProps.SetPropEntityArray(e, name, w, i); return;\n"
         "    }\n"
-        "    if (i == null) NetProps.SetPropInt(e, name, v.tointeger()); else NetProps.SetPropIntArray(e, name, v.tointeger(), i);\n}"),
+        "    if (i == null) NetProps.SetPropInt(e, name, w); else NetProps.SetPropIntArray(e, name, w, i);\n}"),
     "HL_Str": (
         "::HL_Str <- function(v) {   // any value as readable text\n"
         "    if (v == null) return \"\";\n"
@@ -1156,6 +1169,8 @@ class _Compiler:
             from . import netprops
             self.helper("HL_Prop", HELPERS["HL_Prop"])
             name = s.get("key") or ""
+            if not name:
+                self.problems.append(f"Logic node '{n.id}': pick a property")
             t, is_list = netprops.type_of(name, s.get("type", "int"), s.get("list", False))
             index = f"({self.typed_in(n, 'index', vs.NUM)}).tointeger()" if is_list else "null"
             return (f"HL_GetProp({self.typed_in(n, 'entity', vs.THING)}, {vs.literal(vs.TEXT, name)}, "

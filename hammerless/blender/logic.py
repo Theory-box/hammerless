@@ -1888,18 +1888,18 @@ def _prop_items(self, context):
     node's For class has when one is set."""
     from ..core import netprops
     node = _node_in_editor(context, getattr(self, "node_name", ""))
-    cls = (node.for_class.strip().lower() if node is not None else "")
+    cls = (node.for_class.strip().lower() if node is not None else "")       # (server classes are CamelCase)
     if _prop_items.cache.get("for") != cls or not _prop_items.cache.get("items"):
         items = []
         for name, p in sorted(netprops.props().items(), key=lambda kv: (not kv[1].get("desc"), kv[0].lower())):
-            if cls and cls not in p.get("classes", ()):
+            if cls and cls not in (c.lower() for c in p.get("classes", ())):
                 continue
             what = p["type"] + (f" list of {p['size']}" if p.get("size") else "")
             label = f"{'Common: ' if p.get('desc') else ''}{name} ({what})"
             tip = p.get("desc") or ("Has it: " + ", ".join(p.get("classes", [])[:8])
                                     + (" ..." if len(p.get("classes", [])) > 8 else ""))
             items.append((name, label, tip))
-        _prop_items.cache = {"for": cls, "items": items or [("", "Nothing for that class", "")]}
+        _prop_items.cache = {"for": cls, "items": items or [("_NONE_", "Nothing for that class", "")]}
     return _prop_items.cache["items"]
 
 
@@ -1915,7 +1915,7 @@ def _rebuild_prop(self, context=None):
     self.inputs.clear()
     self.outputs.clear()
     setter = self.kind == "SET_PROP"
-    t, is_list = netprops.type_of(self.key, self.type, self.list)
+    t, is_list = netprops.type_of(self.key, self.prop_type, self.list)
     kind = netprops.KINDS[t]
     if setter:
         self.ev_in("run", "Run")
@@ -1936,7 +1936,7 @@ class _PropNode(_Block):
     for_class: StringProperty(name="For", default="",
                               description="Only list the properties this entity class has (player, prop_dynamic, "
                                           "infected...). Empty: every property")
-    type: EnumProperty(name="Type", items=PROP_TYPES, default="int", update=_rebuild_prop,
+    prop_type: EnumProperty(name="Type", items=PROP_TYPES, default="int", update=_rebuild_prop,   # (Node has .type)
                        description="For a name the game's list doesn't have: what kind of value it holds")
     list: BoolProperty(name="List", default=False, update=_rebuild_prop,
                        description="For a name the game's list doesn't have: it holds several values (an Index picks one)")
@@ -1953,7 +1953,7 @@ class _PropNode(_Block):
         layout.prop(self, "for_class")
         if self.key and netprops.info(self.key) is None:
             row = layout.row(align=True)
-            row.prop(self, "type", text="")
+            row.prop(self, "prop_type", text="")
             row.prop(self, "list")
 
     def draw_buttons_ext(self, context, layout):
@@ -1970,7 +1970,7 @@ class _PropNode(_Block):
                 box.label(text=line)
 
     def settings(self):
-        return {"key": self.key, "type": self.type, "list": self.list}
+        return {"key": self.key, "type": self.prop_type, "list": self.list}
 
 
 class HL_NodeGetProperty(_PropNode, bpy.types.Node):
@@ -2003,7 +2003,7 @@ class HL_OT_logic_pick_property(bpy.types.Operator):
 
     def execute(self, context):
         node = _node_in_editor(context, self.node_name)
-        if node is not None and self.choice:
+        if node is not None and self.choice and self.choice != "_NONE_":
             node.key = self.choice
         return {"FINISHED"}
 

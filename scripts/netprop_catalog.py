@@ -177,9 +177,12 @@ GAME_TYPES = {"integer": "int", "float": "float", "Vector": "vector", "string": 
 
 def build() -> dict:
     """The catalogue: every name the game accepted on some class (the harvest), with its type (an integer that is
-    an entity handle in the networked tables, or named m_h..., is an entity), whether it's a list (more than one
-    slot), whether it's networked, and our description; plus networked names on classes the harvest couldn't make
-    (listed with their server class)."""
+    an entity handle in the networked tables, or named m_hName, is an entity), whether it's a list (more than one
+    slot; text only when the networked tables say so: a server-only text field reports its length), whether it's
+    networked, and our description; plus networked m_ names on classes the harvest couldn't make (listed with their
+    server class). Records the game version it came from."""
+    import re
+    import datetime
     tables = json.load(open(TABLES, encoding="utf-8"))["classes"]
     harvest = json.load(open(HARVEST, encoding="utf-8"))["classes"]
     networked = {}
@@ -199,18 +202,20 @@ def build() -> dict:
             t = GAME_TYPES.get(gtype)
             if t is None:
                 continue
+            if t == "string":                      # (a server-only text field reports its length as its size)
+                size = networked.get(name, {}).get("size", 0)
             p = props.setdefault(name, {"type": t, "size": size if size > 1 else 0, "classes": []})
             p["classes"].append(cls)
     for name, p in props.items():
         net = networked.get(name)
         p["networked"] = net is not None
-        if p["type"] == "int" and ((net and net["type"] == "entity") or (net is None and name.startswith("m_h"))):
+        if p["type"] == "int" and ((net and net["type"] == "entity") or (net is None and re.match(r"m_h[A-Z]", name))):
             p["type"] = "entity"
     tried = {cls for cls, v in harvest.items() if isinstance(v, list)}
     for cls, c in tables.items():                       # (classes the harvest couldn't make: from the tables)
         for name, net in c["props"].items():
-            if name in props:
-                continue
+            if name in props or not name.startswith("m_"):         # (nested names merged without a prefix:
+                continue                                           # not usable as written, and never checked)
             t = {"vectorxy": "vector", "int64": "int"}.get(net["type"], net["type"])
             if t not in GAME_TYPES.values() and t != "entity":
                 continue
@@ -229,8 +234,28 @@ def build() -> dict:
             by_class.setdefault(cls, []).append(name)
     every = set.intersection(*(set(v) for cls, v in by_class.items() if cls in tried)) if tried else set()
     return {"source": "the game itself: a recorded demo's property tables, and NetProps asked on every class",
-            "classes_checked": len(tried), "props": props, "every_class": sorted(every),
-            "classes": {cls: sorted(set(v) - every) for cls, v in sorted(by_class.items())}}
+            "game": game_version(), "built": datetime.date.today().isoformat(),
+            "classes_checked": len(tried), "props": props,
+            "every_class": sorted(every), "every_class_in": sorted(tried),
+            "classes": {cls: sorted(set(v) - (every if cls in tried else set())) for cls, v in sorted(by_class.items())}}
+
+
+def game_version() -> dict:
+    """Which build of the game the catalogue came from (steam.inf; the demo's protocols): an update may change it."""
+    out = {}
+    try:
+        for line in open(os.path.join(game_dir(), "steam.inf"), encoding="latin-1"):
+            k, _, v = line.strip().partition("=")
+            if k in ("PatchVersion", "NetworkVersion"):
+                out[k] = v
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(game_dir(), DEMO + ".dem"), "rb") as f:
+            out["demo_protocol"], out["network_protocol"] = struct.unpack("<ii", f.read(16)[8:16])
+    except (OSError, struct.error):
+        pass
+    return out
 
 
 def game_dir() -> str:
@@ -272,7 +297,8 @@ HARVEST = os.path.join(ROOT, "scripts", "netprop_harvest.json")      # harvest o
 # live instead)
 SKIP = {"worldspawn", "player", "info_player_start", "info_survivor_position", "terror_gamerules", "terror_player_manager",
         "info_director", "info_changelevel", "env_fog_controller", "env_tonemap_controller", "sky_camera", "light_environment",
-        "shadow_control", "env_sun", "info_game_event_proxy", "cs_team_manager"}
+        "shadow_control", "env_sun", "info_game_event_proxy", "cs_team_manager",
+        "func_areaportal", "func_areaportalwindow", "trigger_finale"}   # (measured: crash or hang the game)
 
 
 def _candidates() -> list[str]:
@@ -283,7 +309,7 @@ def _candidates() -> list[str]:
     for c in json.load(open(TABLES, encoding="utf-8"))["classes"].values():
         names |= set(c["props"])
     data = open(os.path.join(game_dir(), "bin", "server.dll"), "rb").read()
-    names |= {m.group(1).decode() for m in re.finditer(rb"\x00(m_[A-Za-z0-9_.\[\]]{2,60})\x00", data)}
+    names |= {m.group(1).decode() for m in re.finditer(rb"\x00(m_[A-Za-z0-9_.\[\]]{2,60})(?=\x00)", data)}
     return sorted(names)
 
 
