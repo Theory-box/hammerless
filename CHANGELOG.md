@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fast lighting is Hammerless's own**: the Fast quality is Normal's lighting with cheaper settings (no supersampling, 2 bounces, no prop lighting), no longer Valve's vrad in its rough `-fast` mode. The Fast Lighting checkbox is gone.
 - **No more LDR lighting setting**: L4D2 only uses HDR lighting (Valve's own maps have none in LDR), and choosing LDR made Valve's vrad light the map. Every build is HDR.
 - **Get / Set Entity Property** (logic nodes): read and change anything the game keeps on an entity: a player's health, speed, gravity, field of view, revive count; any entity's outline glow and its colour, colour and see-through amount, model scale, skin, animation frame, collision; a weapon's clip and upgrades. The search button lists all 2,631 properties L4D2 has, taken from the game itself (the networked ones from a recorded demo's tables, the rest by asking the running game on each of 335 entity classes), the useful ones first with a description; **For** narrows it to one class. Sockets follow the property's type, with an Index for list properties. Checked in game: the described properties stick when set, except HUD hiding, which the game puts back (set it on a timer). **Example 55: Speed Boost** uses both.
 - The build log no longer shows a harmless "can't load ... dll" warning from the light compiler. The lighting is unchanged.
