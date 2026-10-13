@@ -127,7 +127,7 @@ Node groups work like Blender's shader and Geometry Nodes groups (`hammerless/bl
 
 ## Worked examples
 
-*Shift+A > Examples*, *Examples 2* and *Examples 3* add **54** ready-made graphs (`hammerless/blender/logic_examples.py`, `_2.py`, `_3.py`), from a hello message to Director tricks. Each comes with notes, numbered frames in the order things happen, and any objects it needs. Between them every node and every Override is used somewhere. The full list is in [Logic Nodes](../LOGIC_NODES.md#examples). A few of the more involved ones:
+*Shift+A > Examples*, *Examples 2* and *Examples 3* add **61** ready-made graphs (`hammerless/blender/logic_examples.py`, `_2.py`, `_3.py`), from a hello message to Director tricks. Each comes with notes, numbered frames in the order things happen, and any objects it needs. Between them every node and every Override is used somewhere. The full list is in [Logic Nodes](../LOGIC_NODES.md#examples). A few of the more involved ones:
 
 **Swelling Pod (49).** An animated Custom Model (a pod with `idle` and `swell` actions) and one Swelling Pods node. A survivor close by, or a shot, provokes a pod: a per-entity charge rises while it is provoked and falls when it is left alone. The swell animation is held at that charge (playback rate 0, its cycle set through NetProps) and the size follows. Full, it bursts: an explosion, damage and a green flash for survivors in range. A shot pod always bursts. Inside are the groups Swelling Pods, Swelling Pod, Show Swelling and Explosion. Tested in game: walk-up (swell, burst, 20 damage) and shooting.
 
@@ -159,7 +159,7 @@ Random rolls are printed too. This is what you read when a graph doesn't do what
 
 ### Every example, checked in the game
 
-`tests/ingame/test_examples.py` builds the demo level with every example on its field as one test map, with the debug log on. Then for each example it acts as a player would: pressing buttons, holding Use, moving players into volumes, killing infected, typing chat and console commands. It checks the wires that fired and the game's state, and prints PASS / FAIL / SKIP per example along with every script error of the run. A few need real play and are skipped (headshot kills, the Director getting furious, the Director's own mob timer); a few camera examples are checked by screenshot. The latest full run recorded in the changelog (0.14.1) has all 42 automated examples passing.
+`tests/ingame/test_examples.py` builds the demo level with every example on its field as one test map, with the debug log on. Then for each example it acts as a player would: pressing buttons, holding Use, moving players into volumes, killing infected, typing chat and console commands. It checks the wires that fired and the game's state, and prints PASS / FAIL / SKIP per example along with every script error of the run. A few need real play and are skipped (headshot kills, the Director getting furious, the Director's own mob timer); a few camera examples are checked by screenshot. Examples 53 to 61 were each checked this way when added (October 2026); the last full run recorded in the changelog (0.14.1) had all 42 automated examples of the time passing.
 
 The run has found real bugs: overrides answered before the logic existed, Keep Across Maps saving junk, and an example that fired at map load.
 

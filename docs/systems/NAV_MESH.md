@@ -185,7 +185,7 @@ The Hammerless path: the generator runs during the compile, in its own process, 
 
 Collision building moved to C on Valve's `styleguide_urban` sample map took generation from 12.7 s to 2.8 s and the analysis from 11.4 s to 3.4 s; reading the map once for generation brought generation to 1.7 s. Earlier, fixing the native position hash took the flood fill from 4.4 s to 0.6 s with the same nodes.
 
-## Real-time nav (in progress)
+## Real-time nav (planned, not started)
 
 The goal is a nav that updates in about a second after an edit, and that **is** the nav shipped to the game, not a preview. The bar is strict:
 
