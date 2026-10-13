@@ -18,7 +18,7 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 |---|---|---|
 | `compilers/` | The map, vis and light compilers (hlvbsp, hlvvis, hlvrad) against Valve's vbsp, vvis, vrad: options, fallbacks, what ours do | written |
 | `lighting/` | hlvrad beyond vrad: GPU path and ray-traced bounce, light styles and Live Light Mixing, partial bakes and keep light, sky light, Cycles, the lighting view | written |
-| `vis/` | hlvvis internals: exact mode, merged windows, radial vis, the certifying tools | to write |
+| `vis/` | hlvvis in depth: what decides vvis's bits, nondeterminism, radial vis decoded, speed history and dropped ideas, merged windows with its safety proof and tools | written |
 | `nav/` | Nav mesh format, the generator and analysis ports, the game's rules measured | to write |
 | `director/` | AI Director: flow, wanderers vs mobs, item placement densities, spawn rules | to write |
 | `logic/` | Logic nodes to VScript: the game's script API, events, NetProps, hooks | to write |
@@ -67,6 +67,13 @@ Every page follows these rules so the facts stay traceable and checkable:
 | [lighting/gpu-and-bounce.md](lighting/gpu-and-bounce.md) | The GPU path (Vulkan ray queries, record/replay rounds, vrad's walk in a shader), ray-traced bounce `-gi`, bounce links on the GPU, lighting alongside vis |
 | [lighting/layers-and-styles.md](lighting/layers-and-styles.md) | Light styles and switchable/flickering lights, Live Light Mixing (`-layers`, the `.hllayers` file), the remix (`-remix`), accuracy and cost |
 | [lighting/bakes-sky-cycles-view.md](lighting/bakes-sky-cycles-view.md) | Partial bakes (`-nobake`), keep light (`-keeplight`), sky light from the skybox/HDRI (`-skymap`), the Cycles bake and its units, the Baked Lighting view |
+
+### vis/
+
+| Page | What it covers |
+|---|---|
+| [vis/README.md](vis/README.md) | What vvis writes, the exact search's bit-deciding details, vvis nondeterminism, radial vis as decoded from `vvis_dll.dll`, speeds, ideas tried and dropped, views, limits |
+| [vis/merged-windows.md](vis/merged-windows.md) | The merged-window method, the corrected safety argument, the audit's two bugs, the exact 0.01-unit claim, the proof tools and release gate |
 
 Other areas: to write (see the table above).
 
