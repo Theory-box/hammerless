@@ -35,7 +35,7 @@ DETAIL_CHOICES = [
 
 COMPILE_PRESETS = [   # (stored by position: new ones go last)
     ("QUICK", "Quick", "Geometry only (Visibility and Lighting off). Fastest; the map is fullbright"),
-    ("FAST", "Fast", "Fast Visibility and Lighting. Terrain shows lighting seams between patches"),
+    ("FAST", "Fast", "Fast Visibility and quick Lighting (rougher shadow edges, less bounced light)"),
     ("NORMAL", "Normal", "Full Visibility, Normal Lighting. Small maps still compile in seconds"),
     ("FINAL", "Final", "Full Visibility, Final Lighting (16 times the sky rays)"),
     ("CUSTOM", "Mixed", "Visibility and Lighting are set to different levels in their own panels"),
@@ -45,7 +45,8 @@ COMPILE_PRESETS = [   # (stored by position: new ones go last)
 
 LIGHT_QUALITY = [
     ("OFF", "Off", "No lighting: the map is fullbright"),
-    ("FAST", "Fast", "vrad's quick lighting (Valve's vrad runs it); terrain may show seams"),
+    ("FAST", "Fast", "Quick lighting for testing: no supersampling (rougher shadow edges), 2 bounces, no prop "
+                     "lighting"),
     ("NORMAL", "Normal", "vrad's normal lighting"),
     ("FINAL", "Final", "16 times the sky rays: smoother sky light and shadows"),
     ("ULTRA", "Ultra", "Final, plus finer supersampling and vrad's oddities fixed (Hammerless light compiler)"),
@@ -758,9 +759,6 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                                    "map load")
     # --- lighting quality: its presets fill these in (quality.py)
     light_quality: EnumProperty(name="Quality", items=LIGHT_QUALITY, default="NORMAL", update=_q("on_light_quality"))
-    light_fast: BoolProperty(name="Fast Lighting", default=False, update=_q("on_light_setting"),
-                             description="vrad's quick, rough lighting (-fast; always Valve's vrad): fewer rays "
-                                         "everywhere, the settings below mostly don't apply")
     light_sky_rays: FloatProperty(name="Sky Rays", default=1.0, min=0.25, max=64.0, soft_max=32.0, step=100,
                                   update=_q("on_light_setting"),
                                   description="Times vrad's number of sky rays per luxel (-extrasky): more is smoother "

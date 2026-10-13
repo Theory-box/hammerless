@@ -4,11 +4,13 @@ Mixed (stored as CUSTOM) when they're on different levels."""
 import bpy
 
 # the settings each Lighting preset fills in (Off only switches lighting off: the settings stay)
-_NORMAL = dict(light_fast=False, light_sky_rays=1.0, light_supersample=True, light_ss_points=4, light_ss_passes=4,
+_NORMAL = dict(light_sky_rays=1.0, light_supersample=True, light_ss_points=4, light_ss_passes=4,
                light_ss_threshold=0.0625, light_bounces=100, static_prop_lighting=True, light_prop_polys=True,
                light_patch_size=4.0, light_fix_quirks=False)
 LIGHT_PRESETS = {
-    "FAST": dict(_NORMAL, light_fast=True, static_prop_lighting=False, light_prop_polys=False),
+    # (not vrad's -fast, a rough preview mode Valve's vrad alone has: the same lighting as Normal, cheaper settings)
+    "FAST": dict(_NORMAL, light_supersample=False, light_bounces=2, static_prop_lighting=False,
+                 light_prop_polys=False),
     "NORMAL": _NORMAL,
     "FINAL": dict(_NORMAL, light_sky_rays=16.0),
     "ULTRA": dict(_NORMAL, light_sky_rays=16.0, light_ss_points=8, light_ss_passes=8, light_ss_threshold=0.03,

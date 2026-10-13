@@ -587,7 +587,7 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
             on.prop(s, "lightmap_scale_imported")
         on.prop(s, "static_prop_lighting")
         bm = on.column()
-        bm.enabled = ours and not s.light_exact and not s.light_fast
+        bm.enabled = ours and not s.light_exact
         bm.prop(s, "light_bounce_method", text="Bounce")
         mx = on.column()
         mx.enabled = ours and not s.light_exact
@@ -616,8 +616,6 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
             if partial and not ours:
                 _hint(layout, "Baking part of the map needs the", "Hammerless light compiler (Advanced)",
                       icon="ERROR")
-            if s.light_fast and ours:
-                _hint(layout, "Fast Lighting always uses Valve's vrad", icon="ERROR")
             if s.vis_mode == "SKIP" and not (ours and s.light_bounce_method == "GI"):
                 _hint(layout, "Visibility is Off: no bounced light", icon="ERROR")
 
@@ -740,9 +738,7 @@ class HL_PT_light_quality(_Sub, bpy.types.Panel):
         ours = s.light_tool == "HAMMERLESS"
         col = _settings(self.layout)
         col.enabled = s.light_quality != "OFF"
-        col.prop(s, "light_fast")
         full = col.column()
-        full.enabled = not s.light_fast
         full.prop(s, "light_sky_rays_pick")
         if s.light_sky_rays_pick == "OTHER":
             full.prop(s, "light_sky_rays", text="Times")

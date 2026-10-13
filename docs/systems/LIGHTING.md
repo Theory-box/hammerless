@@ -92,7 +92,7 @@ The differing lightmap pixels are near-black pixels and single pixels on shadow 
 | Quality | What it sets |
 |---|---|
 | Off | No lighting: the map is fullbright. |
-| Fast | vrad's `-fast` mode. hlvrad hasn't ported it, so Valve's vrad runs (see Limits). No prop lighting. |
+| Fast | Quick lighting for testing: Normal's lighting with cheaper settings (no supersampling, 2 bounces, no prop lighting). Not vrad's `-fast`, a rough preview mode Hammerless doesn't copy. |
 | Normal | vrad's normal lighting. On the GPU, 4 times vrad's sky rays; with Exact or Valve's vrad, 1 time. |
 | Final | 16 times the sky rays. |
 | Ultra | Final, plus 8 x 8 supersampling points, 8 passes, edge threshold 0.03, and *Fix vrad's Quirks*. Hammerless only. |
@@ -103,7 +103,6 @@ Normal's 4x sky rays on the GPU was measured against a 64x reference on the larg
 
 | Setting | What it does |
 |---|---|
-| Fast Lighting | vrad's quick lighting. Always Valve's vrad. |
 | Sky Rays | Times vrad's sky rays per luxel (`-extrasky`). More is smoother sky light and sun spread. Nearly free on the GPU; on the CPU each doubling about doubles its time. |
 | Supersampling | Re-lights luxels where light changes sharply (shadow edges) at several points. Off is vrad's `-noextra`. |
 | Points | Points across a luxel when supersampling: 4 is vrad's 4 x 4, Ultra uses 8 x 8. Hammerless only. |
@@ -285,16 +284,12 @@ Prop lighting and switchable lights stay vrad's. It predates hlvrad and still ne
 
 Any case where Valve's vrad lights a map instead of hlvrad is treated as a bug to fix. When it happens, the build log says why and the build's Problems list it. Today vrad still runs for:
 
-- Fast quality (`-fast` is a separate code path in vrad, not ported);
 - Extra vrad Options;
 - hlvrad failing, or not being able to read the game's models.
-
-The Lighting panel warns ahead of time for Fast.
 
 ## Limits and what's not done
 
 - `-textureshadows` (alpha-textured foliage shadows from `lights.rad`) is not supported.
-- Fast quality uses Valve's vrad.
 - Exact mode with supersampling on matched 94% of luxels on the large user map, not 100%: fully emulating vrad's uninitialised stack value would mean copying its tracer's stack layout.
 - A ray that passes exactly through a kd-tree split corner can still differ (a handful of luxels).
 - Ray-traced bounce is GPU only and experimental.

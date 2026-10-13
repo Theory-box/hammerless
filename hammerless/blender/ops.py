@@ -47,7 +47,7 @@ BUILD_PROGRESS = {"vis": ""}      # the running build's latest "vis 42%, about 3
 def compile_options(s) -> "cc.CompileOptions":
     """The build's options from the scene: Visibility's and Lighting's own settings (their Quality presets fill
     them in), the compilers chosen."""
-    rad = "SKIP" if s.light_quality == "OFF" else ("FAST" if s.light_fast else "NORMAL")
+    rad = "SKIP" if s.light_quality == "OFF" else "NORMAL"     # (Fast: Normal with cheaper settings, quality.py)
     return cc.CompileOptions(vis=s.vis_mode, rad=rad, hdr="HDR", static_prop_lighting=s.static_prop_lighting,
                              sky_rays=s.light_sky_rays, supersample=s.light_supersample, bounces=s.light_bounces,
                              prop_polys=s.light_prop_polys, patch_size=s.light_patch_size,
