@@ -710,8 +710,8 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                     "own 0.01-unit tolerance")
     map_tool: EnumProperty(name="Map Compiler", default="HAMMERLESS", items=[
         ("HAMMERLESS", "Hammerless",
-         "Hammerless's map compiler: the same map as vbsp. Maps with things it doesn't do (water overlays, "
-         "instances) and any failure use Valve's vbsp instead"),
+         "Hammerless's map compiler: the same map as vbsp, byte for byte on 132 of Valve's 134 sample maps. "
+         "If it ever fails, Valve's vbsp runs (and the build says so)"),
         ("VALVE", "Valve vbsp", "L4D2's own map compiler (vbsp.exe)")])
     model_compiler: EnumProperty(name="Model Compiler", default="HAMMERLESS", items=[
         ("HAMMERLESS", "Hammerless", "Hammerless writes Custom Models' game files itself (no extra tools needed)"),
@@ -900,7 +900,8 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         name="Nav Mesh", default="BLENDER",
         description="Who builds the nav mesh (how bots and zombies find their way)",
         items=[("BLENDER", "Made in Blender", "Hammerless builds it while the map compiles (a copy of the game's "
-                                             "generator), then the game only adds its visibility data: one reload"),
+                                             "generator) and analyzes it (visibility, hiding spots): the game "
+                                             "loads the map once"),
                ("GAME", "Made by the game", "The game generates it after loading: slower (two extra reloads), "
                                            "kept as a fallback")])
     nav_analysis: EnumProperty(
