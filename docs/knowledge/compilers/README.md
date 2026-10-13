@@ -40,20 +40,21 @@ Three methods turn the options into Valve-style argument lists, which both Valve
 
 | Method | Produces |
 |---|---|
-| `CompileOptions.vbsp_args()` | just `extra_vbsp.split()` (Hammerless never adds vbsp options of its own) |
-| `CompileOptions.vvis_args()` | `None` when vis is SKIP; `["-fast"]` for FAST; plus `extra_vvis` |
-| `CompileOptions.vrad_args()` | `None` when rad is SKIP; always `-hdr`; `-fast` for FAST; `-final` for FINAL; else `-extrasky N`, `-noextra`, `-bounce N`, `-chop N -maxchop N` when they differ from vrad's defaults; `-StaticPropLighting`, `-StaticPropPolys`; plus `extra_vrad` |
+| `CompileOptions.extra(tool, ours)` | The Extra Options typed for that tool: all of them for Valve's tool; for ours only the ones it does (`toolopts.sort_options(tool, text)[0]`). `extra_notes()` returns the build-log lines about the options left out (since 2026-10-13, commit 1d2d8fd). |
+| `CompileOptions.vbsp_args()` | just `extra_vbsp.split()` (Valve's vbsp; `hlvbsp_command` builds ours and takes `extra("vbsp", True)`) |
+| `CompileOptions.vvis_args(ours)` | `None` when vis is SKIP; `["-fast"]` for FAST; plus `extra("vvis", ours)` |
+| `CompileOptions.vrad_args(ours)` | `None` when rad is SKIP; always `-hdr`; for FAST: `-fast` for Valve's vrad but `-noextra -bounce 2` for ours (commit 31a33e5; vrad's `-fast` is not ported); `-final` for FINAL; else `-extrasky N`, `-noextra`, `-bounce N`, `-chop N -maxchop N` when they differ from vrad's defaults; `-StaticPropLighting`, `-StaticPropPolys`; plus `extra("vrad", ours)` |
 | `CompileOptions.hlvrad_args()` | Hammerless-only options appended after the above: `-gpu` (unless `light_exact`), `-sspoints`, `-sspasses`, `-ssthreshold`, `-fixquirks`, `-gi N -girays N` |
 
 ### Which tool runs: the `use_*` functions
 
 | Function | Returns true when | Notes |
 |---|---|---|
-| `use_hlvbsp(opts)` | `map_tool == "HAMMERLESS"` and `hlvbsp.exe` exists and `extra_vbsp` is empty | Any extra vbsp option sends the whole compile to Valve's vbsp today (being changed: see valve-fallbacks.md, case d) |
-| `use_hlvvis(opts)` | `vis_tool == "HAMMERLESS"` and `hlvvis.exe` exists and every word of `extra_vvis` is in `HLVVIS_OPTIONS` | `HLVVIS_OPTIONS = {"-fast": 0, "-threads": 1, "-radius_override": 1, "-exact": 0}` (option -> number of values). An unknown option sends vis to Valve's vvis (being changed, same case d) |
-| `hlvrad_unsupported(opts)` | returns the list of reasons ours can't run: `rad == "FAST"` ("fast lighting"), any `extra_vrad` ("extra vrad options"), `hlvrad.exe` or `hlphys.exe` missing | `use_hlvrad(opts)` is `light_tool == "HAMMERLESS" and rad != "SKIP" and not hlvrad_unsupported(opts)` |
+| `use_hlvbsp(opts)` | `map_tool == "HAMMERLESS"` and `hlvbsp.exe` exists | Extra vbsp options no longer matter here (before 1d2d8fd any extra option sent the compile to Valve's vbsp) |
+| `use_hlvvis(opts)` | `vis_tool == "HAMMERLESS"` and `hlvvis.exe` exists | The old `HLVVIS_OPTIONS` / `_hlvvis_knows` check is gone (1d2d8fd) |
+| `hlvrad_unsupported(opts)` | returns the list of reasons ours can't run: `hlvrad.exe` or `hlphys.exe` missing (nothing else since 31a33e5; "fast lighting" and "extra vrad options" were reasons until 2026-10-13) | `use_hlvrad(opts)` is `light_tool == "HAMMERLESS" and rad != "SKIP" and not hlvrad_unsupported(opts)` |
 
-`hammerless/core/toolopts.py` (added 2026-10-13, commit f7c0d44) is the replacement for the "any extra option means Valve's tool" rule. It holds one table per tool of every option Valve's binary knows, with how many values it takes and one of three kinds: `ours` (pass it to our compiler), `no effect` (leave it out; it doesn't change the map), `not done` (leave it out; it would change the map but ours doesn't do it yet). `sort_options(tool, text)` returns the options to keep and the build-log notes for the rest. As of 2026-10-13 it is written and unit-tested but **not yet wired into `compile.py`**: `use_hlvbsp`, `use_hlvvis` and `hlvrad_unsupported` still use the old rules above. The full option tables are in [valve-options.md](valve-options.md).
+`hammerless/core/toolopts.py` (added 2026-10-13, commit f7c0d44; wired into the build in commit 1d2d8fd the same day) replaced the "any extra option means Valve's tool" rule. It holds one table per tool of every option Valve's binary knows, with how many values it takes and one of three kinds: `ours` (pass it to our compiler), `no effect` (leave it out; it doesn't change the map), `not done` (leave it out; it would change the map but ours doesn't do it yet). `sort_options(tool, text)` returns the options to keep and the build-log notes for the rest; `CompileOptions.extra()` / `extra_notes()` call it. The full option tables are in [valve-options.md](valve-options.md).
 
 ### `CompileJob`: the steps and the fallbacks
 
@@ -65,7 +66,7 @@ Three methods turn the options into Valve-style argument lists, which both Valve
 
 `hlvbsp_command` passes the tables Python prepares from the game's VPKs (hlvbsp doesn't read VPKs): `-materials`, `-surfaceprops`, `-props`, `-detail`, `-cubemaps`, `-fgd` (`HLVBSP_TABLES`), written by `prepare_hlvbsp` (`core/mapcompiler.py`, `core/cubemappatch.py`). `prepare_hlvrad` copies the map's prop models out of the game into `<map>.hlvrad_models` (`core/radprep.py`).
 
-`CompileJob._run_steps` runs them. It calls `_choose_steps()` first when `skip_if_unchanged` (Build / Build & Play), which is the smart build: `core/buildplan.plan()` compares the new .vmf with `<map>.built.vmf` and returns `same` / `entities` / `remix` / `lighting` / `full`. For anything but `full` the first step is replaced by `_onlyents_step()`: `hlvbsp -onlyents` (in the working tree as of 2026-10-13; the committed branch still runs Valve's `vbsp -onlyents` there), with the vis and/or light steps appended as needed.
+`CompileJob._run_steps` runs them. It calls `_choose_steps()` first when `skip_if_unchanged` (Build / Build & Play), which is the smart build: `core/buildplan.plan()` compares the new .vmf with `<map>.built.vmf` and returns `same` / `entities` / `remix` / `lighting` / `full`. For anything but `full` the first step is replaced by `_onlyents_step()`: `hlvbsp -onlyents` (since 2026-10-13, commit 42f40b9), with Valve's `vbsp -onlyents` kept in `self._valve_onlyents` as the crash fallback only, and the vis and/or light steps appended as needed.
 
 `CompileJob._fallback(msg, failure)` is the one place a switch to Valve's tool is recorded: the message goes to the log and to `self.fallbacks` (shown in the Problems list after the build); with `failure=True` the build is marked `_shaky`, which makes the next build compile everything instead of building on this result. Every call site is listed in [valve-fallbacks.md](valve-fallbacks.md).
 
@@ -77,9 +78,8 @@ When ours lights on the GPU with ray-traced bounce (`-gi`) and the map has no ra
 
 After a successful build the job writes `<map>.built.vmf`, `<map>.built.opts` (the `CompileOptions` repr, used by `_opts_rest` / `_opts_vis` / `_opts_rad` to decide what a later smart build may keep), `<map>.built.prt` (the portals, so a later vis upgrade needn't recompile) and `<map>.built.inst` (hash of instance files). A build that fell back after a failure writes none of these.
 
-## Contradictions found (2026-10-13)
+## Contradictions found
 
-- `compile.py` still defines `PRESETS["FAST"] = CompileOptions(vis="FAST", rad="FAST")` and `hlvrad_unsupported` still lists `rad == "FAST"` as a reason to run Valve's vrad, while the Blender side (`blender/quality.py`, commit 6a17d74) no longer produces `rad="FAST"` at all: Fast quality is now `rad="NORMAL"` with cheaper settings. The `rad="FAST"` path is reachable only from code that uses the preset directly (tests, scripts). Harmless but misleading; worth removing with the rest of the `-fast` handling.
-- `docs/systems/VISIBILITY.md` ("Extra vvis Options") and `docs/systems/LIGHTING.md` ("Valve's vrad is not a silent fallback") still say extra options make the build use Valve's tool. True for the committed code, but the decision of 2026-10-13 (toolopts.py) reverses it; both pages need updating when toolopts is wired in.
+None open as of 2026-10-13 (commit 31a33e5). Resolved the same day: the `rad="FAST"` preset path that still sent lighting to Valve's vrad (31a33e5: ours gets `-noextra -bounce 2`); the system docs' "extra options run Valve's tool" sentences (updated with 1d2d8fd's rule).
 
-Last checked: 2026-10-13 against branch light-layers (commit 6a17d74 plus the uncommitted hlvbsp -onlyents change in `compile.py`).
+Last checked: 2026-10-13 against branch light-layers, commit 31a33e5.

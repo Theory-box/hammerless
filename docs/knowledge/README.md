@@ -61,4 +61,4 @@ Every page follows these rules so the facts stay traceable and checkable:
 
 Other areas: to write (see the table above).
 
-Last checked: 2026-10-13 against branch light-layers (commit 6a17d74 plus uncommitted hlvbsp -onlyents work).
+Last checked: 2026-10-13 against branch light-layers, commit 31a33e5.

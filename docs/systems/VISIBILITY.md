@@ -149,7 +149,7 @@ Total CPU work is fixed, so contention is the real limit. Giving the light compi
 | **Quality** | *Off*: no vis; everything always renders (slow in game on big maps). *Fast*: the rough pass only (`-fast`). *Full*: the full pass, best in-game performance. The Map panel's Quality sets it too: Quick is Off, Fast is Fast, Normal and up are Full. |
 | **Vis Compiler** | *Hammerless (faster)*, the default, or *Valve vvis*. |
 | **Match vvis Exactly** | Hammerless only. Runs the exact mode (`-exact`): vvis's result byte for byte, about 3 times faster than vvis but several times slower than merged windows. |
-| **Extra vvis Options** | Passed to the compiler. hlvvis knows `-fast`, `-threads`, `-radius_override` and `-exact`; other options make the build use Valve's vvis, with a note in the log. |
+| **Extra vvis Options** | Passed to the compiler. With Hammerless's vis, the options it does (`-fast`, `-radius_override`) are passed on; the rest are left out with a note in the build log (those that make no difference to the map, such as `-threads` or `-v`, and those it doesn't do). The build never switches to Valve's vvis over an option. With Valve's vvis, everything is passed as typed. |
 | **Compute Visibility** | Compiles the map and its visibility only, without lighting or the nav mesh. Build and Build & Play reuse it. |
 
 Bake Lighting uses vis in Fast mode; the next Build adds the full vis and keeps the lighting.
@@ -172,7 +172,7 @@ Brushes that don't need to block sight should be `func_detail`. A brush's **Deta
 
 ## Valve's vvis
 
-Valve's vvis is not a fallback by design. If hlvvis exits with an error, the build runs Valve's vvis (hlvvis only replaces the map at the very end, so the map and portals are untouched) and puts a `!!` line in the log. That is treated as a bug to fix, not a normal path. Valve's vvis also runs when hlvvis isn't installed or is given an option it doesn't know; the log says so.
+Valve's vvis is not a fallback by design. If hlvvis exits with an error, the build runs Valve's vvis (hlvvis only replaces the map at the very end, so the map and portals are untouched) and puts a `!!` line in the log. That is treated as a bug to fix, not a normal path. Valve's vvis also runs when hlvvis isn't installed; the log says so. Extra options it doesn't do are left out with a note, never a reason to run Valve's.
 
 ## Limits and what's left
 

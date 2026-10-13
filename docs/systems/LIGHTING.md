@@ -284,8 +284,9 @@ Prop lighting and switchable lights stay vrad's. It predates hlvrad and still ne
 
 Any case where Valve's vrad lights a map instead of hlvrad is treated as a bug to fix. When it happens, the build log says why and the build's Problems list it. Today vrad still runs for:
 
-- Extra vrad Options;
 - hlvrad failing, or not being able to read the game's models.
+
+Extra vrad Options never make Valve's vrad run: the ones hlvrad does (`-bounce`, `-chop`, `-maxchop`, `-dispchop`, `-extrasky`, `-final`, `-noextra`, `-smooth`, `-lights`, `-StaticPropLighting`, `-StaticPropPolys`) are passed on, and the rest are left out with a note in the build log (those that make no difference to the map, and those it doesn't do yet, such as `-textureshadows`, `-softsun`, `-scale`, `-ambient`).
 
 ## Limits and what's not done
 
