@@ -2660,6 +2660,19 @@ class TestSettingsAndScripts(unittest.TestCase):
         self.assertIsNone(o.vvis_args())
         self.assertEqual(o.vrad_args(), ["-hdr", "-final", "-StaticPropLighting", "-StaticPropPolys", "-bounce", "50"])
 
+    def test_extra_tool_options_sorted(self):
+        """Extra Valve options: ours takes the ones it does, the rest are left out with a note (never Valve's tool)."""
+        from hammerless.core.toolopts import sort_options
+        keep, notes = sort_options("vrad", "-bounce 50 -threads 8 -textureshadows -softsun 3 -bogus 1 2 -final -sky")
+        self.assertEqual(keep, ["-bounce", "50", "-final"])
+        text = " | ".join(notes)
+        self.assertIn("no difference to the map): -threads 8", text)
+        self.assertIn("doesn't do them yet): -textureshadows, -softsun 3", text)
+        self.assertIn("not options vrad has): -bogus 1 2", text)
+        self.assertIn("a value is missing after them): -sky", text)
+        self.assertEqual(sort_options("vvis", "-FAST -radius_override 2000")[0], ["-FAST", "-radius_override", "2000"])
+        self.assertEqual(sort_options("vbsp", ""), ([], []))
+
     def test_patch_vmt(self):
         from hammerless.core.surfaces import patch_vmt
         vmt = patch_vmt("concrete/concrete_floor_01", "ice")
