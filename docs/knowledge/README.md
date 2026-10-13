@@ -21,7 +21,7 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 | `vis/` | hlvvis in depth: what decides vvis's bits, nondeterminism, radial vis decoded, speed history and dropped ideas, merged windows with its safety proof and tools | written |
 | `nav/` | The .nav format decoded, the generator port and its L4D2 constants, the analysis matched to the game, speed work, the in-game flow check, the real-time nav plan | written |
 | `director/` | AI Director: the flow, wanderer placement read from `server.dll` and fitted in game, the special/mob filter, the budget limit, the spawn preview check, options/scopes/hooks, item densities, quirks | written |
-| `logic/` | Logic nodes to VScript: the game's script API, events, NetProps, hooks | to write |
+| `logic/` | Graph -> VScript compiler and the facts it is built on, the script API dump method, scripted mode and hooks, the NetProps catalogue method and what sticks, the test bench, examples and what each measured, enemies on bot bodies | written |
 | `models/` | Model writer (SMD/QC, skeletal), game skeletons, mesh reading | to write |
 | `sound/` | Sound control, new sounds in addon VPKs, sound.cache, mix layers | to write |
 | `loading/` | Boot and map-load times, prestart, stringtable dictionary, sv_lan | to write |
@@ -88,6 +88,12 @@ Every page follows these rules so the facts stay traceable and checkable:
 | Page | What it covers |
 |---|---|
 | [director/README.md](director/README.md) | The flow rules, nav blockers, wanderer placement as read from `server.dll` and fitted in game, the "few zombies" investigation and the budget limit, the special/mob filter (EMPTY is commons-only), the spawn preview check, Director option scopes and hooks, item densities and Valve's measured choices, quirks and test method |
+
+### logic/
+
+| Page | What it covers |
+|---|---|
+| [logic/README.md](logic/README.md) | The compiler and the measured game facts it depends on (entity order, root table, Gate timing, precision), how the script API, Director options and hooks were dumped, scripted mode and the mode add-on, the NetProps catalogue method (demo SendTables layout, harvest) and what sticks, the test bench, the examples and what each measured, custom enemies on bot bodies |
 
 Other areas: to write (see the table above).
 
