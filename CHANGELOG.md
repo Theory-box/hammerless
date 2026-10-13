@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.0 (test release, 2026-10-12)
 
 - Logic groups no longer pile up: re-adding an example reuses its groups (no '.001' copies) and clears stale example groups nothing uses; examples' groups aren't kept once their nodes are deleted. **Remove Unused Groups** (Add > Groups) deletes every logic group no graph uses and gives '.001' copies their plain names back.
 - **Swelling Pod (Example 49) is one node** with its settings on it: Burst When Near, Radius, Swell Time (Near), Shrink Time, Shooting Sets It Off, Shot: Swell First, Swell Time (Shot), Grow To, Burst Radius, Damage. Pods now swell while you're near and **shrink back when you leave**; the swell animation and size follow how far they've got (the animation always matches Swell Time). A shot pod keeps swelling to its burst, or bursts at once. Tested in game.
