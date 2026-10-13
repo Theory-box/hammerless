@@ -129,81 +129,171 @@ EXPLODE_COMMON = dict(
            ("in.common", "kill.target"), ("in.attacker", "kill.p2"), ("kill.then", "out.then")])
 
 
+SHOW_SWELLING = dict(
+    about="Shows how far a pod has swollen (Charge: 0 normal, 1 about to burst): its 'swell' animation held at that "
+          "point (playback rate 0, its cycle set to Charge: as Charge falls it plays backwards) and its size Grow To "
+          "times bigger at 1. Back at 0 (Was above 0): its idle again, normal size.",
+    inputs=[("run", "Run", "event"), ("pod", "Pod", "thing"), ("charge", "Charge", "num"), ("was", "Was", "num"),
+            ("grow", "Grow To", "num")],
+    outputs=[("then", "Then", "event")],
+    nodes=[N("swelling", "HL_NodeCompare", 0, 3, label="Swollen at all?", op="GREATER", sockets={"b": 0.0}),
+           N("if_swelling", "HL_NodeIf", 0, 0),
+           N("was_flat", "HL_NodeCompare", 1, 3, label="Was it flat?", op="LESS_EQUAL", sockets={"b": 0.0}),
+           N("if_start", "HL_NodeIf", 1, 0),
+           N("start", "HL_NodeFireInput", 2, 0, label="Its swell animation", sockets={"input": "SetAnimation",
+                                                                                      "value": "swell"}),
+           N("hold", "HL_NodeFireInput", 3, 0, label="Held (rate 0)", sockets={"input": "SetPlaybackRate",
+                                                                               "value": "0"}),
+           fn("cycle", "NetProps.SetPropFloat", 4, 0, {"p1": "m_flCycle"}),
+           N("bigger", "HL_NodeMath", 4, 4, label="Grow To - 1", op="SUBTRACT", sockets={"b": 1.0}),
+           N("part", "HL_NodeMath", 5, 4, label="x Charge", op="MULTIPLY"),
+           N("size", "HL_NodeMath", 6, 4, label="1 + that", op="ADD", sockets={"b": 1.0}),
+           fn("scale", "entity:SetModelScale", 5, 0, {"p1": 0.25}),
+           N("was_up", "HL_NodeCompare", 1, 6, label="Was it swollen?", op="GREATER", sockets={"b": 0.0}),
+           N("if_back", "HL_NodeIf", 1, 2),
+           N("idle", "HL_NodeFireInput", 2, 2, label="Idle again", sockets={"input": "SetAnimation", "value": "idle"}),
+           N("play", "HL_NodeFireInput", 3, 2, label="Playing (rate 1)", sockets={"input": "SetPlaybackRate",
+                                                                                  "value": "1"}),
+           fn("normal", "entity:SetModelScale", 4, 2, {"p0": 1.0, "p1": 0.25})],
+    links=[("in.charge", "swelling.a"), ("in.run", "if_swelling.in"), ("swelling.result", "if_swelling.condition"),
+           ("if_swelling.true", "if_start.in"), ("in.was", "was_flat.a"), ("was_flat.result", "if_start.condition"),
+           ("if_start.true", "start.run"), ("in.pod", "start.entity"), ("start.then", "hold.run"),
+           ("if_start.false", "hold.run"), ("in.pod", "hold.entity"),
+           ("hold.then", "cycle.run"), ("in.pod", "cycle.p0"), ("in.charge", "cycle.p2"),
+           ("in.grow", "bigger.a"), ("bigger.value", "part.a"), ("in.charge", "part.b"), ("part.value", "size.a"),
+           ("cycle.then", "scale.run"), ("in.pod", "scale.target"), ("size.value", "scale.p0"), ("scale.then", "out.then"),
+           ("if_swelling.false", "if_back.in"), ("in.was", "was_up.a"), ("was_up.result", "if_back.condition"),
+           ("if_back.true", "idle.run"), ("in.pod", "idle.entity"), ("idle.then", "play.run"), ("in.pod", "play.entity"),
+           ("play.then", "normal.run"), ("in.pod", "normal.target"), ("normal.then", "out.then"),
+           ("if_back.false", "out.then")],
+    steps=[("Swollen: the swell animation held at Charge, the size to match",
+            ["swelling", "if_swelling", "was_flat", "if_start", "start", "hold", "cycle", "bigger", "part", "size",
+             "scale"]),
+           ("Back to flat: idle, normal size", ["was_up", "if_back", "idle", "play", "normal"])])
+
 SWELLING_POD = dict(
-    about="One pod's behaviour, run for it every tick. Its per-entity variable 'pod_burst_at' is 0 while it waits, "
-          "then the game time it bursts. Waiting: a survivor within Radius sets it off: it plays its 'swell' "
-          "animation, grows to 1.5 times its size over Swell Time, and bursts that much later. Bursting: an "
-          "Explosion (the group), every survivor within Burst Radius takes Damage and gets a green flash of spores, "
-          "and the pod is removed.",
+    about="One pod, every tick (Run fires every 0.2 seconds). Its per-entity variable 'pod_charge' (0 to 1) is how far "
+          "it has swollen. It rises while it's provoked (with Burst When Near on, a survivor within Radius; or it was "
+          "shot: 'pod_shot') and falls back as slowly when it's left alone: Swell Time from 0 to 1, and back. Show "
+          "Swelling shows it. At 1 it bursts: an Explosion (the group), every survivor within Burst Radius takes "
+          "Damage and gets a green flash of spores, and the pod is removed.",
     inputs=[("run", "Run", "event"), ("pod", "Pod", "thing"), ("name_has", "Model Name Has", "text"),
-            ("radius", "Radius", "num"), ("swell_time", "Swell Time", "num"), ("burst_radius", "Burst Radius", "num"),
-            ("damage", "Damage", "num")],
+            ("near_on", "Burst When Near", "bool"), ("radius", "Radius", "num"), ("swell_time", "Swell Time", "num"),
+            ("grow", "Grow To", "num"), ("burst_radius", "Burst Radius", "num"), ("damage", "Damage", "num")],
     outputs=[("then", "Then", "event")],
     nodes=[fn("model", "entity:GetModelName", 0, 5),
            N("is_pod", "HL_NodeTextCheck", 1, 5, label="A pod?", op="CONTAINS"),
            N("if_pod", "HL_NodeIf", 1, 0),
-           fn("now", "Time", 0, 6),
-           N("burst_at", "HL_NodeGetVariable", 0, 7, label="Bursts at", var_name="pod_burst_at", scope="PLAYER"),
-           N("started", "HL_NodeCompare", 1, 7, label="Set off?", op="GREATER", sockets={"b": 0.0}),
-           N("if_started", "HL_NodeIf", 2, 0),
-           # waiting: a survivor near?
-           fn("at", "entity:GetOrigin", 2, 5),
-           fn("near", "Entities.FindByClassnameWithin", 3, 5, {"p1": "player"}),
-           N("survivor", "HL_NodeGroup", 4, 5, label="A survivor?", group="Is a Survivor"),
-           N("if_near", "HL_NodeIf", 3, 2),
-           N("when", "HL_NodeMath", 4, 6, label="Now + Swell Time", op="ADD"),
-           N("set_off", "HL_NodeSetVariable", 4, 2, label="Set off", var_name="pod_burst_at", scope="PLAYER"),
-           N("swell", "HL_NodeFireInput", 5, 2, label="Swell animation",
-             sockets={"input": "SetAnimation", "value": "swell"}),
-           fn("grow", "entity:SetModelScale", 6, 2, {"p0": 1.5}),
-           # set off: burst when it's time
-           N("due", "HL_NodeCompare", 3, 7, label="Time to burst?", op="GREATER_EQUAL"),
-           N("if_due", "HL_NodeIf", 3, 0),
-           N("up", "HL_NodeVectorMath", 3, 8, label="Its middle", op="ADD", sockets={"b": (0.0, 0.0, 20.0)}),
-           N("boom", "HL_NodeGroup", 4, 0, group="Explosion", sockets={"sound": True}),
-           N("each", "HL_NodeForEach", 5, 0, what="SURVIVORS"),
-           fn("them", "entity:GetOrigin", 5, 8),
-           N("dist", "HL_NodeVectorMath", 6, 8, op="DISTANCE"),
-           N("close", "HL_NodeCompare", 7, 8, label="Within Burst Radius?", op="LESS_EQUAL"),
-           N("if_close", "HL_NodeIf", 6, 1),
-           fn("hurt", "entity:TakeDamage", 7, 1, {"p1": 0.0}),
-           fn("spores", "ScreenFade", 8, 1, {"p1": 70.0, "p2": 150.0, "p3": 40.0, "p4": 230.0, "p5": 1.5,
+           # provoked?
+           fn("at", "entity:GetOrigin", 0, 6),
+           fn("near", "Entities.FindByClassnameWithin", 1, 6, {"p1": "player"}),
+           N("survivor", "HL_NodeGroup", 2, 6, label="A survivor?", group="Is a Survivor"),
+           N("near_and_on", "HL_NodeBoolMath", 3, 6, label="And Burst When Near", op="AND"),
+           N("shot", "HL_NodeGetVariable", 2, 7, label="Shot?", var_name="pod_shot", scope="PLAYER", value_kind="bool"),
+           N("provoked", "HL_NodeBoolMath", 4, 6, label="Provoked?", op="OR"),
+           # the charge, one tick on
+           N("charge", "HL_NodeGetVariable", 2, 8, label="Charge", var_name="pod_charge", scope="PLAYER"),
+           N("at_least", "HL_NodeMath", 3, 9, label="Swell Time (never 0)", op="MAXIMUM", sockets={"b": 0.1}),
+           N("step", "HL_NodeMath", 4, 9, label="0.2 s of it", op="DIVIDE", sockets={"a": 0.2}),
+           N("down", "HL_NodeMath", 5, 9, label="Falling", op="MULTIPLY", sockets={"b": -1.0}),
+           N("signed", "HL_NodePickValue", 5, 7, label="Up or down"),
+           N("sum", "HL_NodeMath", 6, 7, label="Charge + step", op="ADD"),
+           N("low", "HL_NodeMath", 6, 8, label="At least 0", op="MAXIMUM", sockets={"b": 0.0}),
+           N("new", "HL_NodeMath", 7, 8, label="At most 1", op="MINIMUM", sockets={"b": 1.0}),
+           N("full", "HL_NodeCompare", 7, 6, label="Full?", op="GREATER_EQUAL", sockets={"b": 1.0}),
+           N("if_full", "HL_NodeIf", 2, 0),
+           # not yet: show it, then keep it
+           N("show", "HL_NodeGroup", 3, 2, group="Show Swelling"),
+           N("keep", "HL_NodeSetVariable", 4, 2, label="Charge", var_name="pod_charge", scope="PLAYER"),
+           # full: it bursts
+           N("up", "HL_NodeVectorMath", 3, 10, label="Its middle", op="ADD", sockets={"b": (0.0, 0.0, 20.0)}),
+           N("boom", "HL_NodeGroup", 3, 0, group="Explosion", sockets={"sound": True}),
+           N("each", "HL_NodeForEach", 4, 0, what="SURVIVORS"),
+           fn("them", "entity:GetOrigin", 5, 10),
+           N("dist", "HL_NodeVectorMath", 6, 10, op="DISTANCE"),
+           N("close", "HL_NodeCompare", 7, 10, label="Within Burst Radius?", op="LESS_EQUAL"),
+           N("if_close", "HL_NodeIf", 5, 1),
+           fn("hurt", "entity:TakeDamage", 6, 1, {"p1": 0.0}),
+           fn("spores", "ScreenFade", 7, 1, {"p1": 70.0, "p2": 150.0, "p3": 40.0, "p4": 230.0, "p5": 1.5,
                                              "p6": 0.4, "p7": 1.0}),
-           N("forget", "HL_NodeSetVariable", 6, 0, label="Forget it (entity numbers are used again)",
-             var_name="pod_burst_at", scope="PLAYER", sockets={"value": 0.0}),
+           N("forget", "HL_NodeSetVariable", 5, 0, label="Forget its charge (entity numbers are used again)",
+             var_name="pod_charge", scope="PLAYER", sockets={"value": 0.0}),
+           N("forget_shot", "HL_NodeSetVariable", 6, 0, label="And that it was shot", var_name="pod_shot",
+             scope="PLAYER", value_kind="bool", sockets={"value": False}),
            N("gone", "HL_NodeFireInput", 7, 0, label="Remove the pod", sockets={"input": "Kill"})],
     links=[("in.run", "if_pod.in"), ("in.pod", "model.target"), ("model.result", "is_pod.a"),
            ("in.name_has", "is_pod.b"), ("is_pod.result", "if_pod.condition"),
-           ("in.pod", "burst_at.player"), ("burst_at.result", "started.a"),
-           ("if_pod.true", "if_started.in"), ("started.result", "if_started.condition"),
-           # waiting
            ("in.pod", "at.target"), ("at.result", "near.p2"), ("in.radius", "near.p3"),
-           ("near.result", "survivor.entity"), ("survivor.result", "if_near.condition"),
-           ("if_started.false", "if_near.in"),
-           ("now.result", "when.a"), ("in.swell_time", "when.b"),
-           ("if_near.true", "set_off.run"), ("in.pod", "set_off.player"), ("when.value", "set_off.value"),
-           ("set_off.then", "swell.run"), ("in.pod", "swell.entity"), ("swell.then", "grow.run"),
-           ("in.pod", "grow.target"), ("in.swell_time", "grow.p1"),
-           ("grow.then", "out.then"), ("if_near.false", "out.then"),
-           # bursting
-           ("now.result", "due.a"), ("burst_at.result", "due.b"),
-           ("if_started.true", "if_due.in"), ("due.result", "if_due.condition"),
-           ("at.result", "up.a"), ("if_due.true", "boom.run"), ("up.vector", "boom.position"),
+           ("near.result", "survivor.entity"), ("survivor.result", "near_and_on.a"), ("in.near_on", "near_and_on.b"),
+           ("in.pod", "shot.player"), ("near_and_on.result", "provoked.a"), ("shot.result", "provoked.b"),
+           ("in.pod", "charge.player"), ("in.swell_time", "at_least.a"), ("at_least.value", "step.b"),
+           ("step.value", "down.a"), ("provoked.result", "signed.condition"), ("step.value", "signed.a"),
+           ("down.value", "signed.b"), ("charge.result", "sum.a"), ("signed.value", "sum.b"),
+           ("sum.value", "low.a"), ("low.value", "new.a"), ("new.value", "full.a"),
+           ("if_pod.true", "if_full.in"), ("full.result", "if_full.condition"),
+           # not yet
+           ("if_full.false", "show.run"), ("in.pod", "show.pod"), ("new.value", "show.charge"),
+           ("charge.result", "show.was"), ("in.grow", "show.grow"),
+           ("show.then", "keep.run"), ("in.pod", "keep.player"), ("new.value", "keep.value"), ("keep.then", "out.then"),
+           # full
+           ("at.result", "up.a"), ("if_full.true", "boom.run"), ("up.vector", "boom.position"),
            ("boom.then", "each.run"), ("each.each", "if_close.in"), ("each.item", "them.target"),
            ("them.result", "dist.a"), ("at.result", "dist.b"), ("dist.value", "close.a"),
            ("in.burst_radius", "close.b"), ("close.result", "if_close.condition"),
            ("if_close.true", "hurt.run"), ("each.item", "hurt.target"), ("in.damage", "hurt.p0"),
            ("in.pod", "hurt.p2"), ("hurt.then", "spores.run"), ("each.item", "spores.p0"),
-           ("each.done", "forget.run"), ("in.pod", "forget.player"), ("forget.then", "gone.run"),
-           ("in.pod", "gone.entity"), ("gone.then", "out.then"),
-           ("if_due.false", "out.then")],
-    steps=[("A pod? Set off yet?", ["model", "is_pod", "if_pod", "now", "burst_at", "started", "if_started"]),
-           ("Waiting: a survivor near sets it off (swell, grow)",
-            ["at", "near", "survivor", "if_near", "when", "set_off", "swell", "grow"]),
-           ("Set off: at its time it bursts (explosion, damage and spores close by, removed)",
-            ["due", "if_due", "up", "boom", "each", "them", "dist", "close", "if_close", "hurt", "spores", "forget",
+           ("each.done", "forget.run"), ("in.pod", "forget.player"), ("forget.then", "forget_shot.run"),
+           ("in.pod", "forget_shot.player"), ("forget_shot.then", "gone.run"),
+           ("in.pod", "gone.entity"), ("gone.then", "out.then")],
+    steps=[("A pod?", ["model", "is_pod", "if_pod"]),
+           ("Provoked: a survivor near (Burst When Near on), or shot",
+            ["at", "near", "survivor", "near_and_on", "shot", "provoked"]),
+           ("Its charge, a tick on: up while provoked, down when left alone (Swell Time each way)",
+            ["charge", "at_least", "step", "down", "signed", "sum", "low", "new", "full", "if_full"]),
+           ("Not full yet: show it, keep it", ["show", "keep"]),
+           ("Full: it bursts (explosion, damage and spores close by, removed)",
+            ["up", "boom", "each", "them", "dist", "close", "if_close", "hurt", "spores", "forget", "forget_shot",
              "gone"])])
 
+SWELLING_PODS = dict(
+    about="Every pod in the map (the prop_dynamic entities whose model name has Model Name Has in it) behaves: five "
+          "times a second each runs 'Swelling Pod'. It swells while provoked (with Burst When Near on, a survivor "
+          "within Radius; with Shooting Sets It Off on, being shot) and shrinks back as slowly when left alone: Swell "
+          "Time to swell fully, when it bursts. A shot pod keeps swelling (Shot: Swell First) or bursts at once. A "
+          "burst: an explosion, Damage and a green flash of spores for survivors within Burst Radius, and the pod is "
+          "gone.",
+    inputs=[("name_has", "Model Name Has", "text"), ("near_on", "Burst When Near", "bool"), ("radius", "Radius", "num"),
+            ("shot_on", "Shooting Sets It Off", "bool"), ("shot_swells", "Shot: Swell First", "bool"),
+            ("swell_time", "Swell Time", "num"), ("grow", "Grow To", "num"), ("burst_radius", "Burst Radius", "num"),
+            ("damage", "Damage", "num")],
+    outputs=[],
+    nodes=[N("timer", "HL_NodeTimer", 0, 0, seconds=0.2),
+           N("each", "HL_NodeForEach", 1, 0, what="CLASS", sockets={"match": "prop_dynamic"}),
+           N("pod", "HL_NodeGroup", 2, 0, group="Swelling Pod"),
+           # shot
+           N("ask", "HL_NodeOverride", 0, 3, hook="AllowTakeDamage"),
+           fn("model", "entity:GetModelName", 1, 4),
+           N("is_pod", "HL_NodeTextCheck", 2, 4, label="A pod?", op="CONTAINS"),
+           N("and_on", "HL_NodeBoolMath", 3, 4, label="And Shooting Sets It Off", op="AND"),
+           N("if_hit", "HL_NodeIf", 3, 3),
+           N("mark", "HL_NodeSetVariable", 4, 3, label="It was shot", var_name="pod_shot", scope="PLAYER",
+             value_kind="bool", sockets={"value": True}),
+           N("if_swell", "HL_NodeIf", 5, 3, label="Shot: Swell First?"),
+           N("burst_now", "HL_NodeSetVariable", 6, 4, label="Full now (bursts next tick)", var_name="pod_charge",
+             scope="PLAYER", sockets={"value": 1.0})],
+    links=[("timer.tick", "each.run"), ("each.each", "pod.run"), ("each.item", "pod.pod"),
+           ("in.name_has", "pod.name_has"), ("in.near_on", "pod.near_on"), ("in.radius", "pod.radius"),
+           ("in.swell_time", "pod.swell_time"), ("in.grow", "pod.grow"), ("in.burst_radius", "pod.burst_radius"),
+           ("in.damage", "pod.damage"),
+           ("ask.asked", "if_hit.in"), ("ask.victim", "model.target"), ("model.result", "is_pod.a"),
+           ("in.name_has", "is_pod.b"), ("is_pod.result", "and_on.a"), ("in.shot_on", "and_on.b"),
+           ("and_on.result", "if_hit.condition"),
+           ("if_hit.true", "mark.run"), ("ask.victim", "mark.player"),
+           ("mark.then", "if_swell.in"), ("in.shot_swells", "if_swell.condition"),
+           ("if_swell.false", "burst_now.run"), ("ask.victim", "burst_now.player")],
+    steps=[("Five times a second, every prop_dynamic: the pods behave", ["timer", "each", "pod"]),
+           ("Shot (if Shooting Sets It Off): it keeps swelling, or bursts at once (Shot: Swell First off)",
+            ["ask", "model", "is_pod", "and_on", "if_hit", "mark", "if_swell", "burst_now"])])
 
 REPLACE_WITH_COMMON = dict(
     about="Swaps a placed character for a real common infected where it is: same model, same body variant, facing "
@@ -676,42 +766,24 @@ EXAMPLES_3 = [
                 ("All done: show it", ["text", "publish"])]),
     dict(title="Swelling Pod", level="Animated Models",
          objects={"pod": ("POD", (0.0, 0.0, 0.0))},
-         about="An animated model with its own behaviour. The pod (in the example's collection) is an ordinary Custom "
-               "Model with an armature: its two actions, 'idle' (a slow pulse, looping: Cyclic Animation is on) and "
-               "'swell', become its animations in the game, and it plays 'idle' on its own. Five times a second, For "
-               "Each goes through the map's prop_dynamic entities and runs the 'Swelling Pod' group (Tab goes in) for "
-               "each: the ones whose model name has 'pod' in it are pods. A survivor who comes within Radius sets one "
-               "off: it swells and grows, then bursts (an explosion, Damage and a green flash of spores for survivors "
-               "within Burst Radius). Shooting a pod sets it off at once (Override Allow Take Damage: a pod hit by "
-               "anything bursts on the next tick). Duplicate the pod (Shift+D) for more. "
-               "(The Override needs Hammerless's own game mode: Build & Play starts the map in it.)",
-         groups={"Explosion": EXPLOSION, "Is a Survivor": IS_A_SURVIVOR, "Swelling Pod": SWELLING_POD},
-         nodes=[N("timer", "HL_NodeTimer", 0, 0, seconds=0.2),
-                N("each", "HL_NodeForEach", 1, 0, what="CLASS", sockets={"match": "prop_dynamic"}),
-                N("pod", "HL_NodeGroup", 2, 0, group="Swelling Pod",
-                  sockets={"name_has": "pod", "radius": 150.0, "swell_time": 2.5, "burst_radius": 220.0,
-                           "damage": 20.0}),
-                # shot: set off at once
-                N("ask", "HL_NodeOverride", 0, 4, hook="AllowTakeDamage"),
-                fn("model", "entity:GetModelName", 1, 5),
-                N("is_pod", "HL_NodeTextCheck", 2, 5, label="A pod?", op="CONTAINS", sockets={"b": "pod"}),
-                N("burst_at", "HL_NodeGetVariable", 1, 6, label="Bursts at", var_name="pod_burst_at",
-                  scope="PLAYER"),
-                N("waiting", "HL_NodeCompare", 2, 6, label="Still waiting?", op="LESS_EQUAL", sockets={"b": 0.0}),
-                N("both", "HL_NodeBoolMath", 3, 5, op="AND"),
-                N("if_hit", "HL_NodeIf", 3, 4),
-                fn("now", "Time", 3, 7),
-                N("set_off", "HL_NodeSetVariable", 4, 4, label="Burst now", var_name="pod_burst_at",
-                  scope="PLAYER")],
-         links=[("timer.tick", "each.run"), ("each.each", "pod.run"), ("each.item", "pod.pod"),
-                ("ask.asked", "if_hit.in"), ("ask.victim", "model.target"), ("model.result", "is_pod.a"),
-                ("ask.victim", "burst_at.player"), ("burst_at.result", "waiting.a"), ("is_pod.result", "both.a"),
-                ("waiting.result", "both.b"), ("both.result", "if_hit.condition"),
-                ("if_hit.true", "set_off.run"), ("ask.victim", "set_off.player"), ("now.result", "set_off.value")],
-         steps=[("Five times a second, every prop_dynamic: the pods behave (Tab into the group)",
-                 ["timer", "each", "pod"]),
-                ("Shot: a pod bursts at once", ["ask", "model", "is_pod", "burst_at", "waiting", "both", "if_hit",
-                                                "now", "set_off"])]),
+         about="An animated model with its own behaviour, all in one node: Swelling Pods (Tab goes in; its settings are "
+               "on the node). The pod (in the example's collection) is an ordinary Custom Model with an armature: its "
+               "two actions, 'idle' (a slow pulse, looping: Cyclic Animation is on) and 'swell', become its "
+               "animations in the game, and it plays 'idle' on its own. A pod is any prop_dynamic whose model name has "
+               "Model Name Has ('pod') in it. It swells while provoked (with Burst When Near on, a survivor within "
+               "Radius; with Shooting Sets It Off on, a shot) and shrinks back as slowly when left alone: its 'swell' "
+               "animation and size follow how far it has got. Swell Time to swell fully, when it bursts: an "
+               "explosion, Damage and a green flash of spores for survivors within Burst Radius. A shot pod keeps "
+               "swelling (Shot: Swell First) or bursts at once. Duplicate the pod "
+               "and its armature together (Shift+D) for more; keep 'pod' in their names. "
+               "(The shot needs Hammerless's own game mode: Build & Play starts the map in it.)",
+         groups={"Explosion": EXPLOSION, "Is a Survivor": IS_A_SURVIVOR, "Show Swelling": SHOW_SWELLING,
+                 "Swelling Pod": SWELLING_POD, "Swelling Pods": SWELLING_PODS},
+         nodes=[N("pods", "HL_NodeGroup", 0, 0, group="Swelling Pods",
+                  sockets={"name_has": "pod", "near_on": True, "radius": 150.0, "shot_on": True, "shot_swells": True,
+                           "swell_time": 2.5, "grow": 1.5, "burst_radius": 220.0, "damage": 20.0})],
+         links=[],
+         steps=[("Every pod behaves (Tab in to see how; settings on the node)", ["pods"])]),
     dict(title="Reskinned Commons", level="Animated Models",
          objects={"mannequin": ("MANNEQUIN:COMMON_MALE", (0.0, 0.0, 0.0))},
          about="Your own model on the common infected. The example adds the game's common-infected skeleton (Add > Game "

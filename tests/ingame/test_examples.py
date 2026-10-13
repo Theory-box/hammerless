@@ -331,6 +331,35 @@ def check(run: Run, n: int, b: Bench):
         run.expect(53, mk, "button.pressed -> stutter.SetPattern", "button.pressed -> wait.in",
                    "wait.out -> off.TurnOff", "wait.out -> horde.start")
         return "both lamps are named lights: stutter, then out with a horde"
+    if n == 49:
+        # pods swell while a survivor is near and shrink back when left alone (the swell animation held at the charge);
+        # a shot pod keeps swelling with nobody near, then bursts and is gone
+        find = ('(function() { for (local e = null; e = Entities.FindByClassname(e, "prop_dynamic");) '
+                'if (e.GetModelName().find("pod") != null) return e; return null; })()')
+        state = (f'(function() {{ local p = {find}; if (p == null) return "gone"; '
+                 'return [::HL_PVarGet(p, "pod_charge", 0.0), p.GetSequence() == p.LookupSequence("swell"), '
+                 'NetProps.GetPropFloat(p, "m_flPlaybackRate"), NetProps.GetPropFloat(p, "m_flCycle")]; })()')
+        assert b.value(f"{find} != null"), "no pod in the map"
+        b.console("sb_stop 1", wait=0.2)
+        away = ('for (local p = null; p = Entities.FindByClassname(p, "player");) if (p.IsSurvivor()) '
+                'p.SetOrigin(Vector(0, 0, 40)); return true;')
+        b.run(away); time.sleep(0.6)
+        b.run(f'local pod = {find}; GetListenServerHost().SetOrigin(pod.GetOrigin() + Vector(-90, 0, 0)); return true;')
+        time.sleep(1.2)
+        near = b.value(state)
+        assert near != "gone" and near[0] > 0.2, f"charge {near} after 1.2 s next to it"
+        assert near[1] and abs(near[2]) < 1e-3 and abs(near[3] - near[0]) < 0.12, f"swell not held at the charge: {near}"
+        b.run(away); time.sleep(0.8)
+        left = b.value(state)
+        assert left != "gone" and left[0] < near[0] - 0.15, f"charge {near[0]:.2f} -> {left} after leaving"
+        b.run(f'local pod = {find}; pod.TakeDamage(10.0, 2, GetListenServerHost()); return true;')   # (a shot)
+        time.sleep(1.0)
+        shot = b.value(state)
+        assert shot != "gone" and shot[0] > left[0], f"charge {left[0]:.2f} -> {shot} after the shot"
+        time.sleep(3.0)
+        assert b.value(f"{find} == null"), f"still there after the shot: {b.value(state)}"
+        return (f"near: charge {near[0]:.2f} (swell held at {near[3]:.2f}); left alone: {left[0]:.2f}; "
+                f"shot: kept swelling ({shot[0]:.2f}), burst and gone")
     if n == 54:
         lights = b.value('(function() { local n = 0; for (local e = null; e = Entities.FindByName(e, "tank_lights");) '
                          'if (e.GetClassname() == "light") n++; return n; })()')
