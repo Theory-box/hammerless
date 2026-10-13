@@ -173,13 +173,16 @@ SHOW_SWELLING = dict(
 
 SWELLING_POD = dict(
     about="One pod, every tick (Run fires every 0.2 seconds). Its per-entity variable 'pod_charge' (0 to 1) is how far "
-          "it has swollen. It rises while it's provoked (with Burst When Near on, a survivor within Radius; or it was "
-          "shot: 'pod_shot') and falls back as slowly when it's left alone: Swell Time from 0 to 1, and back. Show "
+          "it has swollen. Shot ('pod_shot'), it rises to 1 in Swell Time (Shot) and keeps rising; else with Burst "
+          "When Near on and a survivor within Radius, it rises in Swell Time (Near); left alone, it falls back to 0 "
+          "in Shrink Time. Show "
           "Swelling shows it. At 1 it bursts: an Explosion (the group), every survivor within Burst Radius takes "
           "Damage and gets a green flash of spores, and the pod is removed.",
     inputs=[("run", "Run", "event"), ("pod", "Pod", "thing"), ("name_has", "Model Name Has", "text"),
-            ("near_on", "Burst When Near", "bool"), ("radius", "Radius", "num"), ("swell_time", "Swell Time", "num"),
-            ("grow", "Grow To", "num"), ("burst_radius", "Burst Radius", "num"), ("damage", "Damage", "num")],
+            ("near_on", "Burst When Near", "bool"), ("radius", "Radius", "num"),
+            ("near_time", "Swell Time (Near)", "num"), ("shrink_time", "Shrink Time", "num"),
+            ("shot_time", "Swell Time (Shot)", "num"), ("grow", "Grow To", "num"),
+            ("burst_radius", "Burst Radius", "num"), ("damage", "Damage", "num")],
     outputs=[("then", "Then", "event")],
     nodes=[fn("model", "entity:GetModelName", 0, 5),
            N("is_pod", "HL_NodeTextCheck", 1, 5, label="A pod?", op="CONTAINS"),
@@ -190,13 +193,17 @@ SWELLING_POD = dict(
            N("survivor", "HL_NodeGroup", 2, 6, label="A survivor?", group="Is a Survivor"),
            N("near_and_on", "HL_NodeBoolMath", 3, 6, label="And Burst When Near", op="AND"),
            N("shot", "HL_NodeGetVariable", 2, 7, label="Shot?", var_name="pod_shot", scope="PLAYER", value_kind="bool"),
-           N("provoked", "HL_NodeBoolMath", 4, 6, label="Provoked?", op="OR"),
            # the charge, one tick on
            N("charge", "HL_NodeGetVariable", 2, 8, label="Charge", var_name="pod_charge", scope="PLAYER"),
-           N("at_least", "HL_NodeMath", 3, 9, label="Swell Time (never 0)", op="MAXIMUM", sockets={"b": 0.1}),
-           N("step", "HL_NodeMath", 4, 9, label="0.2 s of it", op="DIVIDE", sockets={"a": 0.2}),
-           N("down", "HL_NodeMath", 5, 9, label="Falling", op="MULTIPLY", sockets={"b": -1.0}),
-           N("signed", "HL_NodePickValue", 5, 7, label="Up or down"),
+           N("near_min", "HL_NodeMath", 3, 9, label="Swell Time (Near), never 0", op="MAXIMUM", sockets={"b": 0.1}),
+           N("near_up", "HL_NodeMath", 4, 9, label="0.2 s of it", op="DIVIDE", sockets={"a": 0.2}),
+           N("shot_min", "HL_NodeMath", 3, 10, label="Swell Time (Shot), never 0", op="MAXIMUM", sockets={"b": 0.1}),
+           N("shot_up", "HL_NodeMath", 4, 10, label="0.2 s of it", op="DIVIDE", sockets={"a": 0.2}),
+           N("shrink_min", "HL_NodeMath", 3, 11, label="Shrink Time, never 0", op="MAXIMUM", sockets={"b": 0.1}),
+           N("shrink_step", "HL_NodeMath", 4, 11, label="0.2 s of it", op="DIVIDE", sockets={"a": 0.2}),
+           N("down", "HL_NodeMath", 5, 11, label="Falling", op="MULTIPLY", sockets={"b": -1.0}),
+           N("near_rate", "HL_NodePickValue", 5, 9, label="Near: up, else down"),
+           N("signed", "HL_NodePickValue", 5, 7, label="Shot: up its own speed"),
            N("sum", "HL_NodeMath", 6, 7, label="Charge + step", op="ADD"),
            N("low", "HL_NodeMath", 6, 8, label="At least 0", op="MAXIMUM", sockets={"b": 0.0}),
            N("new", "HL_NodeMath", 7, 8, label="At most 1", op="MINIMUM", sockets={"b": 1.0}),
@@ -225,10 +232,13 @@ SWELLING_POD = dict(
            ("in.name_has", "is_pod.b"), ("is_pod.result", "if_pod.condition"),
            ("in.pod", "at.target"), ("at.result", "near.p2"), ("in.radius", "near.p3"),
            ("near.result", "survivor.entity"), ("survivor.result", "near_and_on.a"), ("in.near_on", "near_and_on.b"),
-           ("in.pod", "shot.player"), ("near_and_on.result", "provoked.a"), ("shot.result", "provoked.b"),
-           ("in.pod", "charge.player"), ("in.swell_time", "at_least.a"), ("at_least.value", "step.b"),
-           ("step.value", "down.a"), ("provoked.result", "signed.condition"), ("step.value", "signed.a"),
-           ("down.value", "signed.b"), ("charge.result", "sum.a"), ("signed.value", "sum.b"),
+           ("in.pod", "shot.player"), ("in.pod", "charge.player"),
+           ("in.near_time", "near_min.a"), ("near_min.value", "near_up.b"),
+           ("in.shot_time", "shot_min.a"), ("shot_min.value", "shot_up.b"),
+           ("in.shrink_time", "shrink_min.a"), ("shrink_min.value", "shrink_step.b"), ("shrink_step.value", "down.a"),
+           ("near_and_on.result", "near_rate.condition"), ("near_up.value", "near_rate.a"), ("down.value", "near_rate.b"),
+           ("shot.result", "signed.condition"), ("shot_up.value", "signed.a"), ("near_rate.value", "signed.b"),
+           ("charge.result", "sum.a"), ("signed.value", "sum.b"),
            ("sum.value", "low.a"), ("low.value", "new.a"), ("new.value", "full.a"),
            ("if_pod.true", "if_full.in"), ("full.result", "if_full.condition"),
            # not yet
@@ -247,9 +257,11 @@ SWELLING_POD = dict(
            ("in.pod", "gone.entity"), ("gone.then", "out.then")],
     steps=[("A pod?", ["model", "is_pod", "if_pod"]),
            ("Provoked: a survivor near (Burst When Near on), or shot",
-            ["at", "near", "survivor", "near_and_on", "shot", "provoked"]),
-           ("Its charge, a tick on: up while provoked, down when left alone (Swell Time each way)",
-            ["charge", "at_least", "step", "down", "signed", "sum", "low", "new", "full", "if_full"]),
+            ["at", "near", "survivor", "near_and_on", "shot"]),
+           ("Its charge, a tick on: shot, up at Swell Time (Shot); else near, up at Swell Time (Near); else down "
+            "at Shrink Time",
+            ["charge", "near_min", "near_up", "shot_min", "shot_up", "shrink_min", "shrink_step", "down", "near_rate",
+             "signed", "sum", "low", "new", "full", "if_full"]),
            ("Not full yet: show it, keep it", ["show", "keep"]),
            ("Full: it bursts (explosion, damage and spores close by, removed)",
             ["up", "boom", "each", "them", "dist", "close", "if_close", "hurt", "spores", "forget", "forget_shot",
@@ -257,15 +269,17 @@ SWELLING_POD = dict(
 
 SWELLING_PODS = dict(
     about="Every pod in the map (the prop_dynamic entities whose model name has Model Name Has in it) behaves: five "
-          "times a second each runs 'Swelling Pod'. It swells while provoked (with Burst When Near on, a survivor "
-          "within Radius; with Shooting Sets It Off on, being shot) and shrinks back as slowly when left alone: Swell "
-          "Time to swell fully, when it bursts. A shot pod keeps swelling (Shot: Swell First) or bursts at once. A "
+          "times a second each runs 'Swelling Pod'. With Burst When Near on, it swells while a survivor is within "
+          "Radius (Swell Time (Near) to swell fully, when it bursts) and shrinks back when left alone (Shrink Time). "
+          "With Shooting Sets It Off on, a shot pod always bursts: it swells (Swell Time (Shot), Shot: Swell First) or "
+          "bursts at once. A "
           "burst: an explosion, Damage and a green flash of spores for survivors within Burst Radius, and the pod is "
           "gone.",
     inputs=[("name_has", "Model Name Has", "text"), ("near_on", "Burst When Near", "bool"), ("radius", "Radius", "num"),
+            ("near_time", "Swell Time (Near)", "num"), ("shrink_time", "Shrink Time", "num"),
             ("shot_on", "Shooting Sets It Off", "bool"), ("shot_swells", "Shot: Swell First", "bool"),
-            ("swell_time", "Swell Time", "num"), ("grow", "Grow To", "num"), ("burst_radius", "Burst Radius", "num"),
-            ("damage", "Damage", "num")],
+            ("shot_time", "Swell Time (Shot)", "num"), ("grow", "Grow To", "num"),
+            ("burst_radius", "Burst Radius", "num"), ("damage", "Damage", "num")],
     outputs=[],
     nodes=[N("timer", "HL_NodeTimer", 0, 0, seconds=0.2),
            N("each", "HL_NodeForEach", 1, 0, what="CLASS", sockets={"match": "prop_dynamic"}),
@@ -283,7 +297,8 @@ SWELLING_PODS = dict(
              scope="PLAYER", sockets={"value": 1.0})],
     links=[("timer.tick", "each.run"), ("each.each", "pod.run"), ("each.item", "pod.pod"),
            ("in.name_has", "pod.name_has"), ("in.near_on", "pod.near_on"), ("in.radius", "pod.radius"),
-           ("in.swell_time", "pod.swell_time"), ("in.grow", "pod.grow"), ("in.burst_radius", "pod.burst_radius"),
+           ("in.near_time", "pod.near_time"), ("in.shrink_time", "pod.shrink_time"),
+           ("in.shot_time", "pod.shot_time"), ("in.grow", "pod.grow"), ("in.burst_radius", "pod.burst_radius"),
            ("in.damage", "pod.damage"),
            ("ask.asked", "if_hit.in"), ("ask.victim", "model.target"), ("model.result", "is_pod.a"),
            ("in.name_has", "is_pod.b"), ("is_pod.result", "and_on.a"), ("in.shot_on", "and_on.b"),
@@ -771,17 +786,19 @@ EXAMPLES_3 = [
                "two actions, 'idle' (a slow pulse, looping: Cyclic Animation is on) and 'swell', become its "
                "animations in the game, and it plays 'idle' on its own. A pod is any prop_dynamic whose model name has "
                "Model Name Has ('pod') in it. It swells while provoked (with Burst When Near on, a survivor within "
-               "Radius; with Shooting Sets It Off on, a shot) and shrinks back as slowly when left alone: its 'swell' "
-               "animation and size follow how far it has got. Swell Time to swell fully, when it bursts: an "
-               "explosion, Damage and a green flash of spores for survivors within Burst Radius. A shot pod keeps "
-               "swelling (Shot: Swell First) or bursts at once. Duplicate the pod "
+               "Radius, Swell Time (Near) to swell fully; with Shooting Sets It Off on, a shot, Swell Time (Shot)) and, "
+               "unless it was shot, shrinks back when left alone (Shrink Time): its 'swell' animation and size follow "
+               "how far it has got. Full, it bursts: an explosion, Damage and a green flash of spores for survivors "
+               "within Burst Radius. A shot pod always bursts: it swells first (Shot: Swell First) or bursts at once. "
+               "Duplicate the pod "
                "and its armature together (Shift+D) for more; keep 'pod' in their names. "
                "(The shot needs Hammerless's own game mode: Build & Play starts the map in it.)",
          groups={"Explosion": EXPLOSION, "Is a Survivor": IS_A_SURVIVOR, "Show Swelling": SHOW_SWELLING,
                  "Swelling Pod": SWELLING_POD, "Swelling Pods": SWELLING_PODS},
          nodes=[N("pods", "HL_NodeGroup", 0, 0, group="Swelling Pods",
-                  sockets={"name_has": "pod", "near_on": True, "radius": 150.0, "shot_on": True, "shot_swells": True,
-                           "swell_time": 2.5, "grow": 1.5, "burst_radius": 220.0, "damage": 20.0})],
+                  sockets={"name_has": "pod", "near_on": True, "radius": 150.0, "near_time": 2.5, "shrink_time": 2.5,
+                           "shot_on": True, "shot_swells": True, "shot_time": 2.5, "grow": 1.5,
+                           "burst_radius": 220.0, "damage": 20.0})],
          links=[],
          steps=[("Every pod behaves (Tab in to see how; settings on the node)", ["pods"])]),
     dict(title="Reskinned Commons", level="Animated Models",
