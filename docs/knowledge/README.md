@@ -20,7 +20,7 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 | `lighting/` | hlvrad beyond vrad: GPU path and ray-traced bounce, light styles and Live Light Mixing, partial bakes and keep light, sky light, Cycles, the lighting view | written |
 | `vis/` | hlvvis in depth: what decides vvis's bits, nondeterminism, radial vis decoded, speed history and dropped ideas, merged windows with its safety proof and tools | written |
 | `nav/` | The .nav format decoded, the generator port and its L4D2 constants, the analysis matched to the game, speed work, the in-game flow check, the real-time nav plan | written |
-| `director/` | AI Director: flow, wanderers vs mobs, item placement densities, spawn rules | to write |
+| `director/` | AI Director: the flow, wanderer placement read from `server.dll` and fitted in game, the special/mob filter, the budget limit, the spawn preview check, options/scopes/hooks, item densities, quirks | written |
 | `logic/` | Logic nodes to VScript: the game's script API, events, NetProps, hooks | to write |
 | `models/` | Model writer (SMD/QC, skeletal), game skeletons, mesh reading | to write |
 | `sound/` | Sound control, new sounds in addon VPKs, sound.cache, mix layers | to write |
@@ -82,6 +82,12 @@ Every page follows these rules so the facts stay traceable and checkable:
 | [nav/README.md](nav/README.md) | The .nav v16/14 format as decoded, the generator port (constants, measured L4D2 differences, native code, marks, extras), how close it is |
 | [nav/analysis.md](nav/analysis.md) | The game's nav_analyze reproduced: sight-blocking rules, matching method and results, speed work, the in-game flow check, test tips |
 | [nav/realtime-plan.md](nav/realtime-plan.md) | Real-time incremental nav (not built): the bar, what exists, the order-dependence analysis, the chunked design |
+
+### director/
+
+| Page | What it covers |
+|---|---|
+| [director/README.md](director/README.md) | The flow rules, nav blockers, wanderer placement as read from `server.dll` and fitted in game, the "few zombies" investigation and the budget limit, the special/mob filter (EMPTY is commons-only), the spawn preview check, Director option scopes and hooks, item densities and Valve's measured choices, quirks and test method |
 
 Other areas: to write (see the table above).
 
