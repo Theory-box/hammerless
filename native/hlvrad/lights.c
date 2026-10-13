@@ -21,6 +21,7 @@
 directlight_t *activelights, *gSkyLight, *gAmbient;
 int numdlights;
 float lightscale = 1.0f;
+vec3_t g_ambientTerm;
 
 /* ------------------------------------------------------------------ where a point is */
 static int PointInLeaf(int node, const vec3_t p) {

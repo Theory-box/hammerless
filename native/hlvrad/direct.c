@@ -1245,6 +1245,10 @@ void BuildFacelights(int facenum) {
     if (k0 >= MAXLIGHTMAPS) return;
     for (int i = 0; i < fl->numsamples; i++) AddSampleToPatch(facenum, fl->sample[i].pos, fl->sample[i].area, fl->light[k0][0][i]);
     FinishPatchLights(facenum);
+    /* vrad's ambient term (-ambient, or 0.1 without vis): onto the samples after the patches have theirs */
+    if (g_ambientTerm[0] || g_ambientTerm[1] || g_ambientTerm[2])
+        for (int i = 0; i < fl->numsamples; i++)
+            for (int b = 0; b < normalCount; b++) VectorAdd(fl->light[k0][b][i], g_ambientTerm, fl->light[k0][b][i]);
 }
 
 /* ------------------------------------------------------------------ luxels from samples (radial) */

@@ -1,6 +1,6 @@
 /* Light-emitting textures (vrad's texlights): lights.rad from the game folder, then a -lights file, then
  * <map>.rad next to the map; each line "texture r g b brightness" (optionally "hdr:" or "ldr:" first; a
- * later file overrides an earlier one). "noshadow" and "forcetextureshadow" lines are read elsewhere. */
+ * later file overrides an earlier one). "noshadow" lines are kept for the props, "forcetextureshadow" ones for texshadows.c. */
 #include <ctype.h>
 #include "hlvrad.h"
 
@@ -37,7 +37,10 @@ static void ReadLightFile(const char *path) {
             g_noshadow[g_numnoshadow++] = _strdup(word);
             continue;
         }
-        if (sscanf(scan, "forcetextureshadow %1023s", word) == 1) continue;     /* (only with -textureshadows) */
+        if (sscanf(scan, "forcetextureshadow %1023s", word) == 1) {     /* (models casting -textureshadows) */
+            TS_ForceModel(word);
+            continue;
+        }
         char name[256];
         if (sscanf(scan, "%255s ", name) != 1) continue;
         vec3_t value;

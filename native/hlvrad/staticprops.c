@@ -14,6 +14,7 @@
 #define PROP_RECORD 72
 
 const char *g_modeldir;
+int g_bTextureShadows;
 const char *g_gamedir;
 unsigned char *ReadModelFile(const char *model, const char *ext, int *len);
 
@@ -161,6 +162,9 @@ static int AddPropPolys(int id, const char *name, const vec3_t origin, const vec
     if (ok) {
         float m[3][4];
         MatrixAngles(angles, origin, m);
+        /* -textureshadows: the model's alpha textures, when it casts them (its flag, or lights.rad's list) */
+        int *shadowtex = NULL, ntex = 0, flags = I32(mdl + 0x98);
+        if (g_bTextureShadows && ((flags & 0x40000) || TS_ModelForced(name))) shadowtex = TS_ModelTextures(mdl, mlen, &ntex);
         int vstart = I32(vvd + 56), numbp = I32(mdl + 232), bpindex = I32(mdl + 236), vtxbp = I32(vtx + 32);
         for (int b = 0; b < numbp; b++) {
             int bp = bpindex + 16 * b, nmodels = I32(mdl + bp + 4), modelindex = I32(mdl + bp + 12);
@@ -173,6 +177,7 @@ static int AddPropPolys(int id, const char *name, const vec3_t origin, const vec
                 for (int mm = 0; mm < nm; mm++) {
                     int mesh = sub + meshindex + 116 * mm, vofs = I32(mdl + mesh + 12);
                     if (MeshCastsNoShadow(mdl, mlen, I32(mdl + mesh))) continue;
+                    int material = I32(mdl + mesh), stex = shadowtex && material >= 0 && material < ntex ? shadowtex[material] : -1;
                     int xmesh = xlod + I32(vtx + xlod + 4) + 9 * mm;
                     int ngroups = I32(vtx + xmesh);
                     for (int g = 0; g < ngroups; g++) {
@@ -183,13 +188,20 @@ static int AddPropPolys(int id, const char *name, const vec3_t origin, const vec
                             int strip = xs + 27 * st, nidx = I32(vtx + strip), iofs = I32(vtx + strip + 4);
                             for (int i = 0; i < nidx; i += 3) {
                                 vec3_t w[3];
+                                const float *uv[3];
                                 for (int k = 0; k < 3; k++) {
                                     int index = U16(vtx + xi + 2 * (iofs + i + k));
                                     int vert = U16(vtx + xv + 9 * index + 4);
                                     const float *pos = (const float *)(vvd + vstart + 48 * (first + vofs + vert) + 16);
                                     TransformPoint(pos, m, w[k]);
+                                    uv[k] = pos + 6;                /* (mstudiovertex_t texcoord) */
                                 }
-                                RT_AddTriangle(id, w[0], w[1], w[2]);
+                                int mat = -1, see;
+                                if (stex >= 0) {
+                                    TS_TriangleCoverage(stex, uv[0], uv[1], uv[2], &see);
+                                    if (see) mat = TS_AddMaterial(stex, uv[0], uv[1], uv[2]);
+                                }
+                                RT_AddTriangleMat(id, w[0], w[1], w[2], mat);
                             }
                         }
                     }

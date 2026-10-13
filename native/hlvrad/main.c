@@ -1,6 +1,13 @@
 /* hlvrad command line (vrad's): hlvrad [options] -game <dir> <map>
  *
- * Done so far: the HDR faces, the smoothed vertex normals, the lightmap layout (values still zero). */
+ * Hammerless's light compiler: L4D2's vrad (HDR) rebuilt, writing the same lumps: lightmaps with direct light
+ * (point, spot, sun, sky ambient, texture lights, displacements, static prop shadows), supersampling and radiosity
+ * bounce, vertex normals, world lights, leaf ambient, detail prop and static prop vertex lighting. The CPU
+ * ("Exact") is vrad's to the byte on the test maps with -noextra (bounce on); -gpu traces on the GPU (Vulkan): the
+ * same look, faster, not to the byte. vrad's options it does: -bounce -chop -maxchop -dispchop -extrasky -final
+ * -noextra -extra -smooth -lights -fast -StaticPropLighting -StaticPropPolys -softsun -textureshadows (texshadows.c)
+ * and Valve's source's debug options -scale -ambient -sky. Hammerless's own: -gpu -gi -layers -remix -onlylights
+ * -visfrom -skymap -nobake -keeplight -sspoints -sspasses -ssthreshold -fixquirks -timing (each below). */
 #include <float.h>
 #include <windows.h>
 #include "hlvrad.h"
@@ -151,7 +158,26 @@ int main(int argc, char **argv) {
         } else if (!_stricmp(a, "-StaticPropPolys")) {
             g_bStaticPropPolys = 1;
         } else if (!_stricmp(a, "-textureshadows")) {
-            Error("-textureshadows isn't supported yet");
+            g_bTextureShadows = 1;
+        } else if (!_stricmp(a, "-softsun")) {
+            /* the sun as a disc this many degrees across (a light_environment's SunSpreadAngle overrides it) */
+            if (++i >= argc) Error("expected an angular extent value (0..180) '-softsun'");
+            float deg = (float)atof(argv[i]);
+            g_SunAngularExtent = (float)sin((3.14159265358979323846 / 180.0) * deg);
+            Msg("sun extent=%f\n", g_SunAngularExtent);
+        }
+        /* -scale, -ambient, -sky: vrad's debug options (Valve's source has them; L4D2's vrad.exe was built without
+         * them and refuses them). Done as that source does them: -scale times every light's brightness; -ambient
+         * r g b (x128) added to every luxel's own light (style 0, not bounced); -sky sets a value nothing reads. */
+        else if (!_stricmp(a, "-scale")) {
+            if (++i >= argc) Error("expected a value after '-scale'");
+            lightscale = (float)atof(argv[i]);
+        } else if (!_stricmp(a, "-ambient")) {
+            if (i + 3 >= argc) Error("expected three color values after '-ambient'");
+            for (int k = 0; k < 3; k++) g_ambientTerm[k] = (float)atof(argv[++i]) * 128;
+        } else if (!_stricmp(a, "-sky")) {
+            if (++i >= argc) Error("expected a value after '-sky'");
+            Msg("-sky: no effect (vrad's indirect_sun: nothing uses it)\n");
         } else if (!_stricmp(a, "-StaticPropLighting")) {
             g_bStaticPropLighting = 1;
         } else if (!_stricmp(a, "-layers") && i + 2 < argc) {
@@ -215,9 +241,24 @@ int main(int argc, char **argv) {
     }
     Stage("load");
     MapVis();
-    if (!HaveVis() && g_numbounce > 0 && !g_visFrom) {         /* (as vrad: without vis, every patch would see every other) */
+    /* no LDR leaf ambient yet (vis writes it; a map without vis has none): vrad's loader makes one sample a leaf,
+     * black (or the old-style lump's cubes), and writes it */
+    if (!lumps[LUMP_LEAF_AMBIENT_INDEX].len && lumps[LUMP_LEAFS].version == 1 && numleafs > 0) {
+        unsigned short *index = xalloc(4 * numleafs);
+        unsigned char *light = xalloc(28 * numleafs);
+        memset(light, 0, 28 * numleafs);
+        int old = lumps[LUMP_LEAF_AMBIENT_LIGHTING].len >= 24 * numleafs;
+        for (int i = 0; i < numleafs; i++) {
+            index[2 * i] = 1, index[2 * i + 1] = (unsigned short)i;
+            if (old) memcpy(light + 28 * i, lumps[LUMP_LEAF_AMBIENT_LIGHTING].data + 24 * i, 24);
+        }
+        SetLump(LUMP_LEAF_AMBIENT_INDEX, index, 4 * numleafs, 0);
+        SetLump(LUMP_LEAF_AMBIENT_LIGHTING, light, 28 * numleafs, 1);
+    }
+    if (!HaveVis() && !g_visFrom) {         /* (as vrad: without vis, every patch would see every other) */
         Msg("No vis information, direct lighting only.\n");
         g_numbounce = 0;
+        g_ambientTerm[0] = g_ambientTerm[1] = g_ambientTerm[2] = 0.1f;   /* (vrad's: a little light everywhere) */
     }
     ParseEntities();
     if (nobake_path) LoadNoBake(nobake_path);
@@ -273,6 +314,19 @@ int main(int argc, char **argv) {
         GPU_ShadowScene();
         GPU_Lights();
         Stage("gpu: setup");
+    }
+    if (getenv("TLTEST")) {       /* (debugging: TestLine / TestLine_DoesHitSky on packets, as the hook tlhook does with vrad's) */
+        FILE *rf = fopen(getenv("TLTEST"), "rb"), *of = fopen("tlout_ours.bin", "wb");
+        float s[3][4], e[3][4], out[4];
+        int skip, kind;
+        while (fread(s, 4, 12, rf) == 12 && fread(e, 4, 12, rf) == 12 && fread(&skip, 4, 1, rf) == 1 &&
+               fread(&kind, 4, 1, rf) == 1) {
+            if (kind == 0) TestLine4((const float(*)[4])s, (const float(*)[4])e, skip, out);
+            else TestLine_DoesHitSky4((const float(*)[4])s, (const float(*)[4])e, skip, out);
+            fwrite(out, 4, 4, of);
+        }
+        fclose(of), fclose(rf);
+        return 0;
     }
     if (getenv("RTTEST")) {       /* (debugging: trace packets of 4 rays, as vradhook does with vrad's tracer) */
         FILE *rf = fopen(getenv("RTTEST"), "rb"), *of = fopen("raysout_ours.bin", "wb");

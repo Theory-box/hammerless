@@ -31,11 +31,18 @@ layout(set = 0, binding = 4, std430) readonly buffer SkyDirs { vec4 skydir[]; };
 layout(set = 0, binding = 5, std430) readonly buffer SkyMap { float skymap[]; };
 layout(set = 0, binding = 6, std430) readonly buffer PropIds { int propid[]; };
 layout(set = 0, binding = 7, std430) writeonly buffer Out { float outv[]; };
+// -textureshadows: the see-through triangles (instance 3, mask 2): per triangle its texture entry and prop (-1 the
+// world); the entries (texture, then its 3 corners' texture coordinates); the alpha textures (start in bytes,
+// width, height) and their texels (4 a word)
+layout(set = 0, binding = 8, std430) readonly buffer SeeTris { ivec2 seetri[]; };
+layout(set = 0, binding = 9, std430) readonly buffer SeeMats { vec4 seemat[]; };      // 2 a entry
+layout(set = 0, binding = 10, std430) readonly buffer SeeTex { ivec4 seetex[]; };
+layout(set = 0, binding = 11, std430) readonly buffer SeeAlpha { uint seealpha[]; };
 layout(push_constant) uniform PC {
     int ngroups, slot, nlights, fast;
     int nskyFull, skymapW, skymapH, haveSkyMap;
     float sunExtent;
-    int nslots, nlayers;
+    int nslots, nlayers, seeThrough;
 } pc;
 
 #include "skymap.glsl"
@@ -55,31 +62,73 @@ layout(push_constant) uniform PC {
 #define EQUAL_EPSILON 0.001
 const float MAX_TRACE_LENGTH = 56755.84;
 
-// instances: 0 the world, 1 the sky, 2 the static props (not opaque: one prop's own triangles can be skipped)
-bool Blocked(vec3 o, vec3 e, int skip) {       // anything (sky too) between o and e
-    vec3 d = e - o;
-    float len = length(d);
-    if (!(len > 0.0)) return false;
-    d /= len;
-    rayQueryEXT q;
-    uint flags = gl_RayFlagsTerminateOnFirstHitEXT | (skip < 0 ? gl_RayFlagsOpaqueEXT : 0u);
-    rayQueryInitializeEXT(q, scene, flags, 0xFF, o, 0.0, d, len);
-    while (rayQueryProceedEXT(q))
-        if (propid[rayQueryGetIntersectionPrimitiveIndexEXT(q, false)] != skip) rayQueryConfirmIntersectionEXT(q);
-    return rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+// instances: 0 the world, 1 the sky, 2 the static props (not opaque: one prop's own triangles can be skipped), all
+// mask 1; 3 the see-through triangles (-textureshadows), mask 2
+uint Alpha(int t, int x, int y) {
+    int at = seetex[t].x + y * seetex[t].y + x;
+    return (seealpha[at >> 2] >> (8 * (at & 3))) & 255u;
 }
 
-float ReachesSky(vec3 o, vec3 e, int skip) {   // 1 when the first thing met is sky (or nothing)
+// the texture's alpha where the ray meets a see-through triangle (L4D2's vrad: bilinear, in integer steps)
+float Coverage(int tri, vec2 bc) {
+    int m = seetri[tri].x;
+    vec4 a = seemat[2 * m], b = seemat[2 * m + 1];
+    int t = floatBitsToInt(a.x);
+    float w0 = 1.0 - bc.x - bc.y;
+    float u = (a.y * w0 + a.w * bc.x) + b.y * bc.y, v = (a.z * w0 + b.x * bc.x) + b.z * bc.y;
+    int w = seetex[t].y, h = seetex[t].z;
+    float U = float(w) * u, V = float(h) * v;
+    int iu = int(floor(U)), iv = int(floor(V));
+    int u0 = iu & (w - 1), u1 = (iu + 1) & (w - 1), v0 = iv & (h - 1), v1 = (iv + 1) & (h - 1);
+    float fu = U - float(u0), fv = V - float(v0);
+    int top = int(float(Alpha(t, u1, v0)) * fu + float(Alpha(t, u0, v0)) * (1.0 - fu));
+    int bot = int(float(Alpha(t, u1, v1)) * fu + float(Alpha(t, u0, v1)) * (1.0 - fu));
+    return float(int(float(top) * (1.0 - fv) + float(bot) * fv)) * (1.0 / 255.0);
+}
+
+// how much of the see-through triangles' texture lies between o and o + d * len (summed, at most 1)
+float SeeThroughCover(vec3 o, vec3 d, float len, int skip) {
+    if (pc.seeThrough == 0 || !(len > 0.0)) return 0.0;
+    float cov = 0.0;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, scene, 0u, 0x02, o, 0.0, d, len);
+    while (rayQueryProceedEXT(q)) {
+        int tri = rayQueryGetIntersectionPrimitiveIndexEXT(q, false);
+        if (skip >= 0 && seetri[tri].y == skip) continue;
+        cov = min(cov + Coverage(tri, rayQueryGetIntersectionBarycentricsEXT(q, false)), 1.0);
+    }
+    return cov;
+}
+
+float Visible(vec3 o, vec3 e, int skip) {       // 0 when anything (sky too) is between o and e, else 1 - the see-through cover
     vec3 d = e - o;
     float len = length(d);
     if (!(len > 0.0)) return 1.0;
     d /= len;
     rayQueryEXT q;
-    rayQueryInitializeEXT(q, scene, skip < 0 ? gl_RayFlagsOpaqueEXT : 0u, 0xFF, o, 0.0, d, len);
+    uint flags = gl_RayFlagsTerminateOnFirstHitEXT | (skip < 0 ? gl_RayFlagsOpaqueEXT : 0u);
+    rayQueryInitializeEXT(q, scene, flags, 0x01, o, 0.0, d, len);
     while (rayQueryProceedEXT(q))
         if (propid[rayQueryGetIntersectionPrimitiveIndexEXT(q, false)] != skip) rayQueryConfirmIntersectionEXT(q);
-    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) return 1.0;
-    return rayQueryGetIntersectionInstanceCustomIndexEXT(q, true) == 1 ? 1.0 : 0.0;
+    if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT) return 0.0;
+    return min(1.0 - SeeThroughCover(o, d, len, skip), 1.0);     // (a texture's sample can be negative: vrad's)
+}
+
+float ReachesSky(vec3 o, vec3 e, int skip) {   // 1 when the first thing met is sky (or nothing), less what's see-through
+    vec3 d = e - o;
+    float len = length(d);
+    if (!(len > 0.0)) return 1.0;
+    d /= len;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, scene, skip < 0 ? gl_RayFlagsOpaqueEXT : 0u, 0x01, o, 0.0, d, len);
+    while (rayQueryProceedEXT(q))
+        if (propid[rayQueryGetIntersectionPrimitiveIndexEXT(q, false)] != skip) rayQueryConfirmIntersectionEXT(q);
+    float upto = len;
+    if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
+        if (rayQueryGetIntersectionInstanceCustomIndexEXT(q, true) != 1) return 0.0;
+        upto = rayQueryGetIntersectionTEXT(q, true);
+    }
+    return 1.0 - clamp(SeeThroughCover(o, d, upto, skip), 0.0, 1.0);
 }
 
 float PowFixedPoint(float x, int exponent) {
@@ -145,7 +194,7 @@ void Standard(Light L, vec3 pos, vec3 n[4], int nc, int gflags, int skip) {
         falloff = (t * ((t * t) * ((6.0 * t - 15.0) * t + 10.0))) * falloff;
     }
     if (dt == 0.0 || falloff == 0.0) return;
-    dots[0] = Blocked(pos, src, skip) ? 0.0 : dt;
+    dots[0] = Visible(pos, src, skip) * dt;
     for (int k = 1; k < nc; k++) dots[k] = max((gflags & IGNORE_NORMALS) != 0 ? CONSTANT_DOT : dot(n[k], delta), 0.0);
 }
 

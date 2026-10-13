@@ -286,11 +286,11 @@ Any case where Valve's vrad lights a map instead of hlvrad is treated as a bug t
 
 - hlvrad failing, or not being able to read the game's models.
 
-Extra vrad Options never make Valve's vrad run: the ones hlvrad does (`-bounce`, `-chop`, `-maxchop`, `-dispchop`, `-extrasky`, `-final`, `-noextra`, `-smooth`, `-lights`, `-StaticPropLighting`, `-StaticPropPolys`) are passed on, and the rest are left out with a note in the build log (those that make no difference to the map, and those it doesn't do yet, such as `-textureshadows`, `-softsun`, `-scale`, `-ambient`).
+Extra vrad Options never make Valve's vrad run: the ones hlvrad does (`-bounce`, `-chop`, `-maxchop`, `-dispchop`, `-extrasky`, `-final`, `-noextra`, `-smooth`, `-lights`, `-StaticPropLighting`, `-StaticPropPolys`, `-softsun`, `-textureshadows`, and `-scale` and `-ambient`, debug options of Valve's source that L4D2's vrad refuses) are passed on, and the rest are left out with a note in the build log (those that make no difference to the map, such as `-sky`, and those it doesn't do yet).
 
 ## Limits and what's not done
 
-- `-textureshadows` (alpha-textured foliage shadows from `lights.rad`) is not supported.
+- `-textureshadows` (alpha-tested textures casting partial shadows: `lights.rad` "forcetextureshadow" props, which only count with `-StaticPropPolys`, and grate brushes) matches vrad to the byte in Exact mode without supersampling; with supersampling, and on the GPU, it is close, not exact.
 - Exact mode with supersampling on matched 94% of luxels on the large user map, not 100%: fully emulating vrad's uninitialised stack value would mean copying its tracer's stack layout.
 - A ray that passes exactly through a kd-tree split corner can still differ (a handful of luxels).
 - Ray-traced bounce is GPU only and experimental.

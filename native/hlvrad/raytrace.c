@@ -19,6 +19,7 @@ typedef struct {
 
 static rttri_t *tris;
 static float (*tri_verts)[9];
+static int *tri_mat;                   /* (-textureshadows: the see-through triangles' texture entry, else -1) */
 static int numtris, maxtris;
 /* (-embree: the triangles in Embree instead of the kd-tree: all of them; the solid ones and the sky's apart, with
  * each one's number in tris) */
@@ -36,12 +37,17 @@ static void *SceneOf(int sky, int **map) {
     return EM_NewScene(v[0], n);
 }
 
-void RT_AddTriangle(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2) {
+void RT_AddTriangle(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2) { RT_AddTriangleMat(id, v0, v1, v2, -1); }
+
+/* (material >= 0: see-through, -textureshadows' texture entry) */
+void RT_AddTriangleMat(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2, int material) {
     if (numtris == maxtris) {
         maxtris = maxtris ? maxtris * 2 : 4096;
         tris = realloc(tris, sizeof(rttri_t) * maxtris);
         tri_verts = realloc(tri_verts, sizeof(float[9]) * maxtris);
+        tri_mat = realloc(tri_mat, sizeof(int) * maxtris);
     }
+    tri_mat[numtris] = material;
     memcpy(tri_verts[numtris], v0, 12);
     memcpy(tri_verts[numtris] + 3, v1, 12);
     memcpy(tri_verts[numtris] + 6, v2, 12);
@@ -421,7 +427,7 @@ typedef struct {
 } kdvisit_t;
 
 static void Trace4Masked(const float o[3][4], const float d[3][4], __m128 TMin, __m128 TMax, int mask, int hit[4],
-                         float hitdist[4], int skip_id) {
+                         float hitdist[4], int skip_id, float *cov) {
     for (int i = 0; i < 4; i++) hit[i] = -1, hitdist[i] = 1.0e23f;
     if (!numtris) return;
     __m128 org[3], dir[3], inv[3];
@@ -504,6 +510,20 @@ static void Trace4Masked(const float o[3][4], const float d[3][4], __m128 TMin, 
                 did = _mm_and_ps(did, _mm_cmpge_ps(b1, eps));
                 did = _mm_and_ps(did, _mm_cmple_ps(_mm_add_ps(b1, b0), ones));
                 if (!_mm_movemask_ps(did)) continue;
+                if (cov && tri_mat[tnum] >= 0) {
+                    /* see-through (-textureshadows, vrad's coverage callback): the texture's alpha where each ray
+                     * meets it adds to its coverage; it never stops a ray (vrad's test of whether the rays are
+                     * fully covered compares the hit masks as floats, so it always says go on) */
+                    int m = _mm_movemask_ps(did);
+                    float B0[4], B1[4], S[4];
+                    _mm_storeu_ps(B0, b0), _mm_storeu_ps(B1, b1), _mm_storeu_ps(S, _mm_add_ps(b1, b0));
+                    for (int s = 0; s < 4; s++) {
+                        float added = (m >> s) & 1 ? TS_SampleCoverage(tri_mat[tnum], B1[s], 1.0f - S[s], B0[s]) : 0.0f;
+                        float c = cov[s] + added;
+                        cov[s] = c < 1.0f ? c : 1.0f;
+                    }
+                    continue;
+                }
                 __m128i didi = _mm_castps_si128(did);
                 hid = _mm_or_si128(_mm_and_si128(_mm_set1_epi32(tnum), didi), _mm_andnot_si128(didi, hid));
                 hd = _mm_or_ps(_mm_and_ps(isect, did), _mm_andnot_ps(did, hd));
@@ -536,8 +556,16 @@ static void EmbreeTrace4(const float o[3][4], const float d[3][4], const float t
 }
 
 /* 4 rays: same-signed directions are traced together; mixed ones in groups, as Valve's tracer does */
+static void Trace4Cov(const float o[3][4], const float d[3][4], const float tmin[4], const float tmax[4], int skip_id,
+                      int hit[4], float hitdist[4], float *cov);
 void RT_Trace4(const float o[3][4], const float d[3][4], const float tmin[4], const float tmax[4], int skip_id, int hit[4],
                float hitdist[4]) {
+    Trace4Cov(o, d, tmin, tmax, skip_id, hit, hitdist, NULL);
+}
+
+/* (cov: -textureshadows' coverage per ray, added to; the mixed-direction groups add to every lane, as vrad's) */
+static void Trace4Cov(const float o[3][4], const float d[3][4], const float tmin[4], const float tmax[4], int skip_id,
+                      int hit[4], float hitdist[4], float *cov) {
     if (em_scene) {
         EmbreeTrace4(o, d, tmin, tmax, skip_id, hit, hitdist);
         return;
@@ -545,7 +573,7 @@ void RT_Trace4(const float o[3][4], const float d[3][4], const float tmin[4], co
     int mask = DirectionSignMask(d);
     __m128 TMin = _mm_loadu_ps(tmin), TMax = _mm_loadu_ps(tmax);
     if (mask != -1) {
-        Trace4Masked(o, d, TMin, TMax, mask, hit, hitdist, skip_id);
+        Trace4Masked(o, d, TMin, TMax, mask, hit, hitdist, skip_id, cov);
         return;
     }
     unsigned char need[4] = {1, 1, 1, 1};
@@ -564,7 +592,7 @@ void RT_Trace4(const float o[3][4], const float d[3][4], const float tmin[4], co
         }
         int th[4];
         float tdist[4];
-        Trace4Masked(o, (const float(*)[4])td, TMin, TMax, DirectionSignMask((const float(*)[4])td), th, tdist, skip_id);
+        Trace4Masked(o, (const float(*)[4])td, TMin, TMax, DirectionSignMask((const float(*)[4])td), th, tdist, skip_id, cov);
         for (int j = 0; j < 4; j++)
             if (need[j] == 2) {
                 need[j] = 0;
@@ -581,10 +609,11 @@ void RT_Trace4Mask(const float o[3][4], const float d[3][4], const float tmax[4]
         EmbreeTrace4(o, d, zero, tmax, -1, hit, hitdist);
         return;
     }
-    Trace4Masked(o, d, _mm_setzero_ps(), _mm_loadu_ps(tmax), mask, hit, hitdist, -1);
+    Trace4Masked(o, d, _mm_setzero_ps(), _mm_loadu_ps(tmax), mask, hit, hitdist, -1, NULL);
 }
 
 int RT_TriangleID(int tri) { return tris[tri].id; }
+int RT_TriangleMaterial(int tri) { return tri_mat[tri]; }
 
 /* (for the GPU: every triangle's corners, 9 floats each) */
 const float *RT_Triangles(int *n) {
@@ -611,6 +640,16 @@ static void RaysFromSegments(const float start[3][4], const float stop[3][4], fl
     }
 }
 
+/* (debugging, TLLOG=<file>: every TestLine / TestLine_DoesHitSky call (start[3][4], stop[3][4], int skip, int kind 0/1,
+ * float out[4]); run with -threads 1 and compare with the hook tllog's log of vrad's own calls) */
+static void TLLog(const float start[3][4], const float stop[3][4], int skip, int kind, const float out[4]) {
+    static FILE *f;
+    static int init;
+    if (!init) init = 1, f = getenv("TLLOG") ? fopen(getenv("TLLOG"), "wb") : NULL;
+    if (!f) return;
+    fwrite(start, 4, 12, f), fwrite(stop, 4, 12, f), fwrite(&skip, 4, 1, f), fwrite(&kind, 4, 1, f), fwrite(out, 4, 4, f);
+}
+
 /* visibility of 4 segments (1 = nothing in the way), skipping the triangles of one static prop */
 void TestLine4(const float start[3][4], const float stop[3][4], int static_prop_to_skip, float vis[4]) {
     float d[3][4], len[4], tmin[4] = {0, 0, 0, 0}, dist[4];
@@ -624,8 +663,16 @@ void TestLine4(const float start[3][4], const float stop[3][4], int static_prop_
         for (int i = 0; i < 4; i++) vis[i] = blocked[i] ? 0.0f : 1.0f;
         return;
     }
-    RT_Trace4(start, (const float(*)[4])d, tmin, len, TRACE_ID_STATICPROP | static_prop_to_skip, hit, dist);
+    float cov[4] = {0, 0, 0, 0};
+    Trace4Cov(start, (const float(*)[4])d, tmin, len, TRACE_ID_STATICPROP | static_prop_to_skip, hit, dist,
+              g_bTextureShadows ? cov : NULL);
     for (int i = 0; i < 4; i++) vis[i] = hit[i] != -1 && dist[i] < len[i] ? 0.0f : 1.0f;
+    if (g_bTextureShadows)
+        for (int i = 0; i < 4; i++) {
+            float see = 1.0f - cov[i];
+            vis[i] = vis[i] < see ? vis[i] : see;
+        }
+    TLLog(start, stop, static_prop_to_skip, 0, vis);
 }
 
 /* how much of each segment reaches the sky: 0 when the first thing met is not sky
@@ -646,13 +693,17 @@ void TestLine_DoesHitSky4(const float start[3][4], const float stop[3][4], int s
         for (int i = 0; i < 4; i++) frac[i] = blocked[i] ? 0.0f : 1.0f;
         return;
     }
-    RT_Trace4(start, (const float(*)[4])d, tmin, len, TRACE_ID_STATICPROP | static_prop_to_skip, hit, dist);
+    float cov[4] = {0, 0, 0, 0};
+    Trace4Cov(start, (const float(*)[4])d, tmin, len, TRACE_ID_STATICPROP | static_prop_to_skip, hit, dist,
+              g_bTextureShadows ? cov : NULL);
     for (int i = 0; i < 4; i++) {
         float occl = hit[i] != -1 && dist[i] < len[i] && !(tris[hit[i]].id & TRACE_ID_SKY) ? 1.0f : 0.0f;
+        if (g_bTextureShadows) occl = occl > cov[i] ? occl : cov[i];
         occl = occl > 0 ? occl : 0;
         occl = occl < 1 ? occl : 1;
         frac[i] = 1.0f - occl;
     }
+    TLLog(start, stop, static_prop_to_skip, 1, frac);
     /* (debugging, RAYDUMP=file: every 40th call's rays (start, stop, frac: 7 floats each), to replay elsewhere) */
     static FILE *dump;
     static int dumpchecked;
@@ -689,9 +740,19 @@ float TestLine_DoesHitSky(const vec3_t start, const vec3_t stop, int static_prop
 /* A brush's sides as triangles: each side's plane as a huge square, cut by every other (non-bevel) side.
  * L4D2 does this around a point inside the brush (the origin pushed onto any side it is behind, up to 4
  * passes) for precision, then moves the result back. */
+#define CONTENTS_GRATE 0x8
 static void AddBrush(int b) {
     const dbrush_t *brush = &dbrushes[b];
-    if (!(brush->contents & MASK_OPAQUE)) return;
+    /* -textureshadows: grates too (L4D2's vrad), their sides with alpha textures see-through */
+    int grate = g_bTextureShadows && (brush->contents & CONTENTS_GRATE);
+    if (!(brush->contents & MASK_OPAQUE) && !grate) return;
+    int sidetex[256], anytex = 0;
+    if (grate && brush->numsides < 256)
+        for (int i = 0; i < brush->numsides; i++) {
+            const dbrushside_t *side = &dbrushsides[brush->firstside + i];
+            sidetex[i] = side->texinfo >= 0 && side->texinfo < numtexinfo ? TS_MaterialTexture(TexDataName(texinfo[side->texinfo].texdata)) : -1;
+            if (sidetex[i] >= 0) anytex = 1;
+        }
     vec3_t c = {0, 0, 0};
     for (int pass = 0, done = 0; pass < 4 && !done; pass++) {
         done = 1;
@@ -723,7 +784,29 @@ static void AddBrush(int b) {
         if (!w) continue;
         for (int j = 0; j < w->numpoints; j++)
             for (int k = 0; k < 3; k++) w->p[j][k] = (w->p[j][k] + c[k]) + 0.0f;    /* (+0.0f: vrad's transform turns -0 into 0) */
-        for (int j = 2; j < w->numpoints; j++) RT_AddTriangle(TRACE_ID_OPAQUE, w->p[0], w->p[j - 1], w->p[j]);
+        float (*uv)[2] = NULL;
+        int tex = anytex ? sidetex[i] : -1;
+        if (tex >= 0) {        /* (the side's texture coordinates at its corners, in texels / the alpha texture's size) */
+            int tw, th;
+            TS_TextureSize(tex, &tw, &th);
+            float iw = 1.0f / (float)tw, ih = 1.0f / (float)th;
+            const float(*sv)[4] = texinfo[side->texinfo].textureVecsTexelsPerWorldUnits;
+            uv = xalloc(sizeof(float[2]) * w->numpoints);
+            for (int j = 0; j < w->numpoints; j++) {
+                const float *q = w->p[j];
+                uv[j][0] = (((sv[0][0] * q[0] + sv[0][1] * q[1]) + sv[0][2] * q[2]) + sv[0][3]) * iw;
+                uv[j][1] = (((sv[1][0] * q[0] + sv[1][1] * q[1]) + sv[1][2] * q[2]) + sv[1][3]) * ih;
+            }
+        }
+        for (int j = 2; j < w->numpoints; j++) {
+            int mat = -1, see;
+            if (uv) {
+                TS_TriangleCoverage(tex, uv[0], uv[j - 1], uv[j], &see);
+                if (see) mat = TS_AddMaterial(tex, uv[0], uv[j - 1], uv[j]);
+            }
+            RT_AddTriangleMat(TRACE_ID_OPAQUE, w->p[0], w->p[j - 1], w->p[j], mat);
+        }
+        free(uv);
         FreeWinding(w);
     }
 }

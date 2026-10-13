@@ -51,11 +51,14 @@ VRAD = dict(_COMMON, **{
     "-stoponexit": (0, NO_EFFECT), "-rederrors": (0, NO_EFFECT), "-dump": (0, NO_EFFECT),
     "-dumpnormals": (0, NO_EFFECT), "-dumptrace": (0, NO_EFFECT), "-dumppropmaps": (0, NO_EFFECT),
     "-debugextra": (0, NO_EFFECT), "-loghash": (0, NO_EFFECT), "-mpi_listparams": (0, NO_EFFECT),
-    "-textureshadows": (0, NOT_DONE), "-softsun": (1, NOT_DONE), "-fastambient": (0, NOT_DONE),
+    "-textureshadows": (0, OURS), "-softsun": (1, OURS), "-fastambient": (0, NOT_DONE),
     "-noskyboxrecurse": (0, NOT_DONE), "-nodetaillight": (0, NOT_DONE), "-onlystaticprops": (0, NOT_DONE),
     "-onlydetail": (0, NOT_DONE), "-staticproplighting3": (0, NOT_DONE), "-staticpropnormals": (0, NOT_DONE),
     "-luxeldensity": (1, NOT_DONE), "-finitefalloff": (0, NOT_DONE), "-disppatchradius": (1, NOT_DONE),
-    "-coring": (1, NOT_DONE), "-scale": (1, NOT_DONE), "-ambient": (3, NOT_DONE), "-sky": (1, NOT_DONE),
+    "-coring": (1, NOT_DONE),
+    # (debug options of Valve's source that L4D2's vrad.exe refuses; hlvrad does them as that source does; -sky's
+    # value is read by nothing there)
+    "-scale": (1, OURS), "-ambient": (3, OURS), "-sky": (1, NO_EFFECT),
     "-dlight": (1, NOT_DONE), "-dlightmap": (0, NOT_DONE), "-centersamples": (0, NOT_DONE),
     "-largedispsampleradius": (0, NOT_DONE), "-maxdispsamplesize": (1, NOT_DONE), "-notexscale": (0, NOT_DONE),
     "-nossprops": (0, NOT_DONE),

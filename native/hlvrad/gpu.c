@@ -180,16 +180,17 @@ static accel_t TriangleBLAS(const float *verts, uint32_t ntris, int opaque, gbuf
     return Build(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, &g, ntris);
 }
 
-/* a top level structure of up to 3 instances (custom index = their number, all masks 0xff) */
+/* a top level structure of up to 4 instances (custom index = their number; masks 1, the 4th's 2: -textureshadows'
+ * see-through triangles) */
 static accel_t TopLevel(accel_t *const *blas, int n, gbuf_t *ib) {
-    VkAccelerationStructureInstanceKHR inst[3];
+    VkAccelerationStructureInstanceKHR inst[4];
     memset(inst, 0, sizeof(inst));
     int k = 0;
     for (int i = 0; i < n; i++) {
         if (!blas[i]) continue;
         inst[k].transform.matrix[0][0] = inst[k].transform.matrix[1][1] = inst[k].transform.matrix[2][2] = 1;
         inst[k].instanceCustomIndex = (uint32_t)i;
-        inst[k].mask = 0xff;
+        inst[k].mask = i == 3 ? 0x02 : 0x01;
         inst[k].accelerationStructureReference = blas[i]->addr;
         k++;
     }
@@ -446,7 +447,7 @@ static int StartGPU(void) {
         Msg("Warning: the graphics card didn't start for ray tracing: lighting on the CPU\n");
         return 0;
     }
-    prog_gather = Program(spv_gather, sizeof(spv_gather), 8, 44);
+    prog_gather = Program(spv_gather, sizeof(spv_gather), 12, 48);
     prog_ambient = Program(spv_ambient, sizeof(spv_ambient), 19, 36);
     prog_propind = Program(spv_propind, sizeof(spv_propind), 19, 16);
     prog_vis = Program(spv_vis, sizeof(spv_vis), 4, 4);
@@ -486,26 +487,49 @@ static int slotstyle[256], nslots, styleslot[256];
 
 /* the ray tracer's triangles: the world's (brushes, displacements), the sky's, and the props' (their numbers kept, so
  * a prop can skip its own) */
+/* -textureshadows' see-through triangles (gather.comp bindings 8-11; placeholders without them) */
+static accel_t shadow_see;
+static gbuf_t seetris, seemats, seetex, seealpha;
+static int have_see;
+
 void GPU_ShadowScene(void) {
     int n;
     const float *v = RT_Triangles(&n);
     float *world = xalloc(36 * (size_t)(n + 1)), *sky = xalloc(36 * (size_t)(n + 1)), *props = xalloc(36 * (size_t)(n + 1));
-    int *ids = xalloc(sizeof(int) * (n + 1)), nw = 0, ns = 0, np = 0;
+    float *see = xalloc(36 * (size_t)(n + 1));
+    int *ids = xalloc(sizeof(int) * (n + 1)), nw = 0, ns = 0, np = 0, nsee = 0;
+    int *seeinfo = xalloc(8 * (size_t)(n + 1));
     for (int i = 0; i < n; i++) {
-        int id = RT_TriangleID(i);
-        if (id & TRACE_ID_SKY) memcpy(sky + 9 * ns++, v + 9 * i, 36);
+        int id = RT_TriangleID(i), mat = RT_TriangleMaterial(i);
+        if (mat >= 0) {          /* (see-through: its texture entry, and its prop for the one skipped) */
+            seeinfo[2 * nsee] = mat, seeinfo[2 * nsee + 1] = id & TRACE_ID_STATICPROP ? id & ~TRACE_ID_STATICPROP : -1;
+            memcpy(see + 9 * nsee++, v + 9 * i, 36);
+        } else if (id & TRACE_ID_SKY) memcpy(sky + 9 * ns++, v + 9 * i, 36);
         else if (id & TRACE_ID_STATICPROP) ids[np] = id & ~TRACE_ID_STATICPROP, memcpy(props + 9 * np++, v + 9 * i, 36);
         else memcpy(world + 9 * nw++, v + 9 * i, 36);
     }
     static accel_t bw, bs;
-    static gbuf_t vw, vs, vp, ib;
-    accel_t *blas[3] = {NULL, NULL, NULL};
+    static gbuf_t vw, vs, vp, ib, vsee;
+    accel_t *blas[4] = {NULL, NULL, NULL, NULL};
     if (nw) bw = TriangleBLAS(world, (uint32_t)nw, 1, &vw), blas[0] = &bw;
     if (ns) bs = TriangleBLAS(sky, (uint32_t)ns, 1, &vs), blas[1] = &bs;
     if (np) shadow_props = TriangleBLAS(props, (uint32_t)np, 0, &vp), blas[2] = &shadow_props, have_props = 1;
-    shadow_tlas = TopLevel(blas, 3, &ib);
+    if (nsee) shadow_see = TriangleBLAS(see, (uint32_t)nsee, 0, &vsee), blas[3] = &shadow_see, have_see = 1;
+    shadow_tlas = TopLevel(blas, 4, &ib);
     propids = Upload(ids, sizeof(int) * (np ? np : 1));
-    free(world), free(sky), free(props), free(ids);
+    seetris = Upload(seeinfo, 8 * (size_t)(nsee ? nsee : 1));
+    {
+        float *mats;
+        int *texs, nmat = 0, ntex = 0;
+        unsigned char *texels;
+        size_t ntexels = 0;
+        TS_GPUData(&mats, &nmat, &texs, &ntex, &texels, &ntexels);
+        seemats = Upload(mats, 32 * (size_t)(nmat ? nmat : 1));
+        seetex = Upload(texs, 16 * (size_t)(ntex ? ntex : 1));
+        seealpha = Upload(texels, (ntexels + 3) & ~(size_t)3 ? (ntexels + 3) & ~(size_t)3 : 4);
+        free(mats), free(texs), free(texels);
+    }
+    free(world), free(sky), free(props), free(see), free(ids), free(seeinfo);
 }
 
 /* (gather.comp's Light) */
@@ -591,7 +615,8 @@ static gbuf_t in_buf, out_buf;
 void GPU_Gather(const gpugroup_t *groups, int n, int slot, float *out) {
     int w = 0, h = 0;
     SkyMapData(&w, &h);
-    struct { int ngroups, slot, nlights, fast, nskyFull, skymapW, skymapH, haveSkyMap; float sunExtent; int nslots, nlayers; } pc;
+    struct { int ngroups, slot, nlights, fast, nskyFull, skymapW, skymapH, haveSkyMap; float sunExtent; int nslots, nlayers, seeThrough; } pc;
+    pc.seeThrough = have_see;
     pc.slot = slot, pc.nlights = nlights, pc.fast = g_bFast, pc.nskyFull = (int)(g_flSkySampleScale * 162.0f);
     pc.nslots = nslots, pc.nlayers = slot < 0 && g_gpuLayers ? g_numLayers : 0;
     size_t per = slot < 0 ? (size_t)GPU_GroupFloats() : 64;     /* (out floats a group: slot -1, every slot's and layer's) */
@@ -603,7 +628,7 @@ void GPU_Gather(const gpugroup_t *groups, int n, int slot, float *out) {
         Ensure(&out_buf, per * 4 * (size_t)k);
         memcpy(in_buf.map, groups + at, sizeof(gpugroup_t) * (size_t)k);
         pc.ngroups = k;
-        gbuf_t *bufs[8] = {NULL, &in_buf, &lightbuf, &pvsbuf, &skydirs, &skymapbuf, &propids, &out_buf};
+        gbuf_t *bufs[12] = {NULL, &in_buf, &lightbuf, &pvsbuf, &skydirs, &skymapbuf, &propids, &out_buf, &seetris, &seemats, &seetex, &seealpha};
         int outs[1] = {7};
         VkDeviceSize sizes[1] = {per * 4 * (VkDeviceSize)k};
         RunOut(&prog_gather, &shadow_tlas, bufs, &pc, sizeof(pc), 4 * (uint32_t)k, outs, sizes, 1);

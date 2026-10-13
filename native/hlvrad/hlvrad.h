@@ -275,6 +275,19 @@ const vec3_t *SkyDirections(int *n);
 
 /* raytrace.c */
 void RT_AddTriangle(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2);
+void RT_AddTriangleMat(int id, const vec3_t v0, const vec3_t v1, const vec3_t v2, int material);
+/* -textureshadows (texshadows.c) */
+void TS_ForceModel(const char *name);
+int TS_ModelForced(const char *name);
+int *TS_ModelTextures(const unsigned char *mdl, int mlen, int *count);
+int TS_MaterialTexture(const char *name);
+void TS_TextureSize(int tex, int *w, int *h);
+float TS_TriangleCoverage(int tex, const float *t0, const float *t1, const float *t2, int *see_through);
+int TS_AddMaterial(int tex, const float *t0, const float *t1, const float *t2);
+float TS_SampleCoverage(int mat, float b0, float b1, float b2);
+int TS_HaveTextures(void);
+void TS_GPUData(float **mats, int *nmat, int **texs, int *ntex, unsigned char **texels, size_t *ntexels);
+int RT_TriangleMaterial(int tri);
 void RT_SetupAccelerationStructure(void);
 void RT_Trace4(const float o[3][4], const float d[3][4], const float tmin[4], const float tmax[4], int skip_id, int hit[4],
                float hitdist[4]);
@@ -376,6 +389,8 @@ void LoadTexLights(const char *gamedir, const char *bsppath, const char *designe
 void LightForTexture(const char *name, vec3_t result);
 const char *TexDataName(int texdata);
 extern float g_SunAngularExtent;
+extern float lightscale;                     /* (-scale: every light's brightness times it) */
+extern vec3_t g_ambientTerm;                 /* (-ambient r g b (x128), or 0.1 without vis: added to style 0's light) */
 extern int g_bFast, g_bExtra;
 extern int g_ssPoints, g_ssPasses, g_bFixQuirks;   /* (supersampling: points across a luxel, passes; beyond vrad) */
 extern float g_ssThreshold;
@@ -413,6 +428,7 @@ void RunThreadsOn(int count, void (*fn)(int item, int thread));
 void RunThreadsOnRange(int first, int count, void (*fn)(int item, int thread));
 double Seconds(void);
 extern int g_bStaticPropLighting, g_bStaticPropPolys;
+extern int g_bTextureShadows;               /* (-textureshadows: props' alpha-tested textures cast partial shadows) */
 extern float g_flSkySampleScale;            /* (-final: 16, -extrasky n: n) */
 extern char **g_noshadow;                    /* (lights.rad "noshadow" materials) */
 extern int g_numnoshadow;
