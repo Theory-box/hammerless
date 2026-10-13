@@ -25,7 +25,7 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 | `models/` | The own model writer matched to studiomdl, animated models through SMD/QC and what studiomdl was measured to do, the game's `.mdl`/`.ani` format decoded (frame-anims), game skeletons and placed characters, VTF/VMT, alpha, materials, parallax | written |
 | `sound/` | What a map can control of the sound engine (measured), new sounds through an addon VPK with its own `sound.cache` (format decoded), DSP presets, the automatic soundscapes, the shelved impulse-response work | written |
 | `loading/` | Build & Play step by step, the game prestart, the parallel build and its critical path, smart builds and `hlvbsp -onlyents`, the kept nav, Fast Map Loading (`sv_lan 1`), the stringtable dictionary, every load timing | written |
-| `game-facts/` | BSP format facts (version 21 lumps, write order), game limits, engine behaviours | to write |
+| `game-facts/` | The BSP as L4D2 writes it (lump order, game lump, pakfile, `stale.txt`), the game's physics DLL from our tools, reading the game's content, Valve's maps decompiled, the VMF importer's exact round trip, engine behaviours met in testing, limits hit, reference maps, testing rules | written |
 
 ## Conventions
 
@@ -113,6 +113,10 @@ Every page follows these rules so the facts stay traceable and checkable:
 |---|---|
 | [loading/README.md](loading/README.md) | The nine steps and where each runs, boot and load timings (`BinkOpen(`, the 6 s Steam wait), the stringtable dictionary findings and how it is carried over, the parallel build's lessons (contention, the GIL), smart build plans and when they fall back, the kept nav, audit items, the two-way link and cancel, limits |
 
-Other areas: to write (see the table above).
+### game-facts/
+
+| Page | What it covers |
+|---|---|
+| [game-facts/README.md](game-facts/README.md) | BSP version 21 facts, `vphysics.dll` calling conventions and vtable slots, VPK and binary sources, the decompiler's findings and round-trip results, the Hammer-map importer, a table of engine behaviours with the area each belongs to, the limits met, the reference maps, the testing rules that cost data |
 
 Last checked: 2026-10-13 against branch light-layers, commit 46f75ac.
