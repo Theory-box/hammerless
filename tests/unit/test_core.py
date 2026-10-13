@@ -1055,6 +1055,14 @@ class TestScriptNodes(unittest.TestCase):
         self.assertRegex(script, r'HL_SetProp\(.*"m_iHealth", "i", null, HL_GetProp\(.*"m_iAmmo", "i", \(3(\.0)?\)\.tointeger\(\)\)\);')
         self.assertRegex(script, r'HL_SetProp\(.*"m_nNotAProp", "s", null, "hi"\);')
 
+    def test_big_numbers_kept_whole(self):
+        """A number typed on a socket keeps every digit: a colour like 16711680 (blue) isn't rounded to 1.67117e+07."""
+        from hammerless.core import vscript as vs
+        self.assertEqual(vs.literal(vs.NUM, 16711680), "16711680.0")
+        self.assertEqual(vs.literal(vs.NUM, 0.35), "0.35")
+        self.assertEqual(vs.literal(vs.NUM, 2), "2.0")
+        self.assertEqual(vs.literal(vs.NUM, -3), "-3.0")
+
     def test_event_fields_by_key(self):
         """An event field named like a Squirrel keyword ("class") is read by key, not as .class."""
         from hammerless.core import vscript as vs

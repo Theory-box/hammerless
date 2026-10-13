@@ -122,14 +122,22 @@ def call_expr(f: dict, target: str | None, args: list[str]) -> str:
     return call
 
 
+def num_text(value) -> str:
+    """A number as Squirrel: short (0.35, not 0.3499999940395355), but whole numbers of 7 digits or more in full
+    ({:g} would round a colour like 16777215 to 1.67772e+07)."""
+    v = float(value or 0.0)
+    if v == int(v) and 1e6 <= abs(v) < 1e15:
+        return f"{int(v)}.0"
+    text = f"{v:g}"
+    return text if any(c in text for c in ".e") or text in ("inf", "-inf", "nan") else text + ".0"
+
+
 def literal(kind: str, value) -> str:
     """A value typed on a socket, as Squirrel."""
     if kind == BOOL:
         return "true" if value else "false"
     if kind == NUM:
-        v = float(value or 0.0)
-        text = f"{v:g}"
-        return text if any(c in text for c in ".e") else text + ".0"
+        return num_text(value)
     if kind == TEXT:
         s = str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
         return f'"{s}"'

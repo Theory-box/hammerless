@@ -386,7 +386,7 @@ class _Compiler:
         v = n.consts.get(sock, default)
         if isinstance(v, bool):
             return "true" if v else "false"
-        return f"{float(v):g}" if "." in f"{float(v):g}" or "e" in f"{float(v):g}" else f"{float(v):g}.0"
+        return vs.num_text(v)
 
     def expr_out(self, nid: str, sock: str) -> str:
         key = (nid, sock)
