@@ -21,7 +21,7 @@ class CompileOptions:
     vis: str = "FULL"           # SKIP / FAST / FULL
     rad: str = "NORMAL"         # SKIP / FAST (vrad -fast) / NORMAL (with the lighting settings below) / FINAL (older
                                 # builds: -final and prop lighting with full-model shadows)
-    hdr: str = "HDR"            # LDR / HDR / BOTH (L4D2 only uses HDR: Valve's maps have no LDR lighting)
+    hdr: str = "HDR"            # always HDR: L4D2 only uses HDR lighting (Valve's maps have none in LDR)
     static_prop_lighting: bool = False
     # lighting settings (the Lighting panel's; its Quality presets fill them in)
     sky_rays: float = 1.0          # times vrad's sky rays (16: Final, -extrasky)
@@ -65,7 +65,7 @@ class CompileOptions:
     def vrad_args(self) -> list[str] | None:
         if self.rad == "SKIP":
             return None
-        args = {"LDR": ["-ldr"], "HDR": ["-hdr"], "BOTH": ["-both"]}[self.hdr]
+        args = ["-hdr"]
         if self.rad == "FAST":
             args.append("-fast")
         elif self.rad == "FINAL":
@@ -170,8 +170,6 @@ HLPHYS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlphys.exe") 
 def hlvrad_unsupported(opts: "CompileOptions") -> list[str]:
     """What our light compiler doesn't do yet (then Valve's vrad lights the map)."""
     why = []
-    if opts.hdr != "HDR":
-        why.append("LDR lighting")
     if opts.rad == "FAST":
         why.append("fast lighting")
     if opts.extra_vrad.split():

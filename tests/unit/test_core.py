@@ -2656,9 +2656,9 @@ class TestSettingsAndScripts(unittest.TestCase):
 
     def test_compile_options(self):
         from hammerless.core.compile import CompileOptions
-        o = CompileOptions(vis="SKIP", rad="FINAL", hdr="LDR", extra_vrad="-bounce 50")
+        o = CompileOptions(vis="SKIP", rad="FINAL", hdr="LDR", extra_vrad="-bounce 50")   # (LDR: gone, always HDR)
         self.assertIsNone(o.vvis_args())
-        self.assertEqual(o.vrad_args(), ["-ldr", "-final", "-StaticPropLighting", "-StaticPropPolys", "-bounce", "50"])
+        self.assertEqual(o.vrad_args(), ["-hdr", "-final", "-StaticPropLighting", "-StaticPropPolys", "-bounce", "50"])
 
     def test_patch_vmt(self):
         from hammerless.core.surfaces import patch_vmt

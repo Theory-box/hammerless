@@ -506,7 +506,7 @@ def test_custom_compile_options():
     s.light_bounces = 50                            # (a lighting setting by hand: Custom, and the build shows Mixed)
     assert s.light_quality == "CUSTOM" and s.compile_preset == "CUSTOM"
     assert "-bounce" in compile_options(s).vrad_args()
-    s.vis_mode, s.light_quality, s.hdr_mode = "FAST", "OFF", "LDR"
+    s.vis_mode, s.light_quality = "FAST", "OFF"
     o = compile_options(s)
     assert o.vvis_args() == ["-fast"] and o.vrad_args() is None
     s.window_width, s.window_height = 1280, 720

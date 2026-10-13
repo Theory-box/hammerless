@@ -171,7 +171,7 @@ The flow is only computed when the end room's changelevel names a different, rea
 
 ## Valve's tools are never a silent fallback
 
-Hammerless's map, vis and light compilers are the defaults. Valve's `vbsp`, `vvis` and `vrad` stay as a safety net: if one of ours fails or can't do something yet, Valve's runs instead. When that happens, the build says so in the log and lists it as a warning in Problems. After a fallback caused by a failure, the next build compiles everything again rather than building on that result. Any fallback is treated as a bug to fix, not an accepted outcome. Valve's tools still run in a few known cases, each noted in the log and Problems: `vbsp -onlyents` in smart builds (it only rewrites the entity lump), Fast lighting, LDR or LDR + HDR lighting, and extra options only Valve's vrad or vvis understand.
+Hammerless's map, vis and light compilers are the defaults. Valve's `vbsp`, `vvis` and `vrad` stay as a safety net: if one of ours fails or can't do something yet, Valve's runs instead. When that happens, the build says so in the log and lists it as a warning in Problems. After a fallback caused by a failure, the next build compiles everything again rather than building on that result. Any fallback is treated as a bug to fix, not an accepted outcome. Valve's tools still run in a few known cases, each noted in the log and Problems: `vbsp -onlyents` in smart builds (it only rewrites the entity lump), Fast lighting, and extra options only Valve's vrad or vvis understand.
 
 ## Measured timings
 

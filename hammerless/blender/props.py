@@ -752,10 +752,6 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         ("FAST", "Fast", "Quick lighting; terrain may show seams"),
         ("NORMAL", "Normal", "Normal lighting"),
         ("FINAL", "Final", "Highest quality lighting; slow")])
-    hdr_mode: EnumProperty(name="HDR", default="HDR", items=[
-        ("HDR", "HDR only", "What L4D2 uses (Valve's own maps only have HDR lighting)"),
-        ("BOTH", "LDR + HDR", "Also bakes an LDR copy, which L4D2 doesn't use: twice the lighting time"),
-        ("LDR", "LDR only", "Not used by L4D2: the game shows flat lighting")])
     static_prop_lighting: BoolProperty(name="Prop Lighting", default=True, update=_q("on_light_setting"),
                                        description="Light static props per vertex in the build (-StaticPropLighting): "
                                                    "better prop lighting, and the game doesn't have to do it at every "

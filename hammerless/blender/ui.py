@@ -618,9 +618,6 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
                       icon="ERROR")
             if s.light_fast and ours:
                 _hint(layout, "Fast Lighting always uses Valve's vrad", icon="ERROR")
-            elif ours and s.hdr_mode != "HDR":
-                _hint(layout, "HDR (Advanced) isn't HDR only: Valve's", "vrad lights the map (much slower)",
-                      icon="ERROR")
             if s.vis_mode == "SKIP" and not (ours and s.light_bounce_method == "GI"):
                 _hint(layout, "Visibility is Off: no bounced light", icon="ERROR")
 
@@ -781,7 +778,6 @@ class HL_PT_light_advanced(_Sub, bpy.types.Panel):
             col.prop(s, "cycles_stitch")
             col.prop(s, "cycles_denoise")
         col.separator()
-        col.prop(s, "hdr_mode")
         q = col.column()
         q.enabled = s.light_tool == "HAMMERLESS"
         q.prop(s, "light_fix_quirks")

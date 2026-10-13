@@ -18,7 +18,7 @@ vrad (and hlvrad) fill these parts of the compiled map:
 | Detail prop lighting (game lump) | Light for grass and other detail props. |
 | Static prop lighting (`.vhv` files in the map's pak) | Per-vertex colour for each static prop, with `-StaticPropLighting`. |
 
-Hammerless bakes **HDR only**, which is what L4D2 uses: Valve's own maps have no LDR lighting.
+Hammerless bakes **HDR only**, which is what L4D2 uses: Valve's own maps have no LDR lighting, so there's no LDR setting.
 
 ## hlvrad: how it was built
 
@@ -123,7 +123,7 @@ Normal's 4x sky rays on the GPU was measured against a 64x reference on the larg
 | Bounce | *vrad's Patches* or *Ray Traced (GPU)*. See below. |
 | Live Light Mixing | Bakes each light into a layer of its own. See below. |
 
-**Advanced:** Light Compiler (Hammerless, Valve vrad, Cycles), Exact Lighting, HDR (keep *HDR only*), Fix vrad's Quirks, and Extra vrad Options.
+**Advanced:** Light Compiler (Hammerless, Valve vrad, Cycles), Exact Lighting, Fix vrad's Quirks, and Extra vrad Options.
 
 ### Fix vrad's Quirks
 
@@ -286,16 +286,15 @@ Prop lighting and switchable lights stay vrad's. It predates hlvrad and still ne
 Any case where Valve's vrad lights a map instead of hlvrad is treated as a bug to fix. When it happens, the build log says why and the build's Problems list it. Today vrad still runs for:
 
 - Fast quality (`-fast` is a separate code path in vrad, not ported);
-- LDR or LDR + HDR lighting;
 - Extra vrad Options;
 - hlvrad failing, or not being able to read the game's models.
 
-The Lighting panel warns ahead of time for Fast and for HDR settings other than *HDR only*.
+The Lighting panel warns ahead of time for Fast.
 
 ## Limits and what's not done
 
 - `-textureshadows` (alpha-textured foliage shadows from `lights.rad`) is not supported.
-- Fast quality and LDR use Valve's vrad.
+- Fast quality uses Valve's vrad.
 - Exact mode with supersampling on matched 94% of luxels on the large user map, not 100%: fully emulating vrad's uninitialised stack value would mean copying its tracer's stack layout.
 - A ray that passes exactly through a kd-tree split corner can still differ (a handful of luxels).
 - Ray-traced bounce is GPU only and experimental.
