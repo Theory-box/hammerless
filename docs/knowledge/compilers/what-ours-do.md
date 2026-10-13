@@ -151,7 +151,11 @@ Source `native/hlvrad/*.c` (main, lights, direct, raytrace, bounce, disp, leafam
 | The ray tracer | the same rays fed to vrad's own `Trace4Rays` through the in-process hook and compared: exact (`hlvrad RTTEST=file`) | 2026-10-08 (commit a1ac1bd) |
 | Patches and transfers (bounce) | `g_Patches` and `MakeScales` transfers dumped from vrad through the hook, compared with hlvrad's `HLPATCHES` / `HLTRANSFERS` dumps: all patches identical | 2026-10-08 (commit b1caac9 / a5725a2) |
 | Large user map with supersampling on | 94% of luxels identical (the rest: vrad's uninitialised supersampling mask, only partly emulated, below) | 2026-10-08 (commit 2d8d7a9) |
-| Normal bakes unchanged by later features | byte-identical after layer support (user map and light-styles map), after sky light support (without a sky picture) | 2026-10-12, 2026-10-08 |
+| Normal bakes unchanged by later features | byte-identical after layer support (user map and light-styles map), after sky light support (without a sky picture); after the vrad options work, 19 existing test maps still identical except the large user map and its no-prop variant (an older, unchanged small mismatch: sample positions a few float steps off) | 2026-10-12, 2026-10-08, 2026-10-13 |
+| `-softsun` | sun, sunspread and lights maps at 0.5, 5, 13.7, 45 degrees, byte-identical (Exact, `-noextra`) | 2026-10-13 (commit 41dc861) |
+| `-textureshadows` (with `-StaticPropPolys`, both, and with `-StaticPropLighting`) | a foliage map and a fence/grate map byte-identical; the shadow tests checked against vrad's own `TestLine` on 4.3 million ray packets with no differences. On the large user map 298 luxels differ with the option against 250 without, all one rounding step (the pre-existing mismatch) | 2026-10-13 (commit 41dc861) |
+| Maps without vis | vrad's 0.1 ambient term and its LDR leaf ambient placeholders added: byte-identical | 2026-10-13 (commit 41dc861) |
+| `-scale` (L4D2's vrad refuses it) | against vrad on a copy with every light's brightness times s: every lump but the entity lump identical for s = 2 and 0.5 | 2026-10-13 (commit 41dc861) |
 
 **vrad's determinism** (measured 2026-10-08, L4D2's vrad): two runs on a large user map differ in 0.34% of luxels (median 0.6%, 38 luxels over 5%); leaf ambient (lump 55) differs slightly run to run and almost completely with `-threads 1`. With bounce on and supersampling off (`-noextra`) vrad is deterministic, so that is the configuration for byte comparisons. `-extra` itself is deterministic too, except the uninitialised slot below.
 
@@ -166,7 +170,7 @@ Quirks and arithmetic copied (each found by a diff, confirmed in the disassembly
 - Leaf ambient: `MakeParents` only from node 0 (brush-entity leaves keep parent 0, so every sample fails and the leaf centre is used); ray length `(z² + y²) + x²`; displacement boxes ±1.
 - Static props: indirect light has **no distance falloff**; full 162 rays (bad vertices forced fast); the `CLightSurface` is kept across a vertex's rays (stale hitfrac); `PointLeafnum` is a plain walk; Halton inverse `*= 1/base`; `lineartovertex = min(1, (i/1024)^(1/2.2) * 0.5)`; map flags lump 59 bit 2. Prop collision: the `.phy`'s first solid through `vphysics` (`UnserializeCollide`, `CreateQueryModel`); with no `.phy`, L4D2 builds a convex hull per mesh from the `.vvd` vertices as stored (`ConvexFromVerts`, `ConvertConvexToCollide`); a box only if the model is unreadable. Matrix per `VMatrix::SetupMatrixOrgAngles` (`(sr*sp)*cy`).
 - Radial filter: `SampleRadial` weight 0 gives **black** in L4D2 (red only for out-of-range u/v). Displacements: `CalcNormalFromEdges` + `BlendTJuncs/Corners/Edges`, 64-unit sample hash cells; scalar `GetPhongNormal` (first fan triangle wins, 0.99999988 normals); sub-edge order `{p1-p0, p2-p0, p2-p1}`; `AddBouncedToRadial * 1/distt`.
-- `-StaticPropPolys` = LOD0 vtx strip triangles; `lights.rad` `noshadow` honoured; `forcetextureshadow` only matters with `-textureshadows` (unsupported).
+- `-StaticPropPolys` = LOD0 vtx strip triangles; `lights.rad` `noshadow` honoured; `forcetextureshadow` only matters with `-textureshadows` (done 2026-10-13, `texshadows.c`: see-through triangles add the texture's alpha, bilinear, to a ray's coverage and never stop it; only `TestLine` / `TestLine_DoesHitSky` see through them, the bounce treats them as solid; vrad also counts see-through triangles slightly past a ray's end, whatever is in the last kd cell visited, and the CPU path reproduces this).
 
 ### GPU mode (default: `-gpu`, Vulkan ray queries; NVIDIA RTX, AMD RX 6000+, Intel Arc)
 
@@ -180,6 +184,8 @@ Not bit-exact by design; "visually identical, several times faster". Direct ligh
 | Leaf ambient | about 98.8% within 1% (the same spread as two vrad runs) |
 
 The differing pixels are near-black and single pixels on shadow edges.
+
+The GPU path honours every vrad option hlvrad does (checked 2026-10-13, `vrad_options_suite.py --gpu`): `-softsun`, `-scale`, `-ambient`, `-sky` add nothing beyond the usual GPU differences (the sun map identical to Exact). `-textureshadows` on the GPU is close but not exact: the large user map 1.7% of luxels differ, 0.19% by more than 1%, same mean; the foliage and fence maps 3 to 6% differ, 0.5 to 0.9% by more than 1%. Reason: vrad also counts see-through triangles slightly past a ray's end (whatever is in the last kd-tree cell visited), which the GPU's traversal can't reproduce.
 
 ### Speed
 
@@ -206,8 +212,7 @@ History: the first wired-in version was single-threaded, 81 s (2026-10-08, commi
 
 ### Not done yet
 
-- `-textureshadows` (alpha-tested foliage shadows, `forcetextureshadow` in `lights.rad`): hard error in hlvrad. Planned 2026-10-13.
-- vrad options listed `not done` in [valve-options.md](valve-options.md): `-softsun` (command-line form), `-scale`, `-ambient`, `-sky` (planned), `-fastambient`, `-centersamples`, `-luxeldensity`, `-dlightmap`, `-disppatchradius`, `-maxdispsamplesize`, `-largedispsampleradius`, `-noskyboxrecurse`, `-nodetaillight`, `-onlydetail`, `-onlystaticprops`, `-staticpropnormals`, `-nossprops`, `-dlight`, `-notexscale`, `-coring`, `-finitefalloff`, `-staticproplighting3`.
+- vrad options listed `not done` in [valve-options.md](valve-options.md): `-fastambient`, `-centersamples`, `-luxeldensity`, `-dlightmap`, `-disppatchradius`, `-maxdispsamplesize`, `-largedispsampleradius`, `-noskyboxrecurse`, `-nodetaillight`, `-onlydetail`, `-onlystaticprops`, `-staticpropnormals`, `-nossprops`, `-dlight`, `-notexscale`, `-coring`, `-finitefalloff`, `-staticproplighting3`. (`-textureshadows`, `-softsun`, `-scale`, `-ambient` done 2026-10-13, commit 41dc861; `-sky` accepted, no effect.)
 - vrad's `-fast` path: decided not to port (2026-10-13); the build never passes it to ours (Fast quality = `-noextra -bounce 2`, commit 31a33e5); hlvrad's own `-fast` flag only cuts ray counts.
 - Live Light Mixing gaps: no layers for vrad's patch bounce (mixing forces GPU ray-traced bounce); static props' vertex light not mixed live in the Blender view (the build's remix does remake it); a wider radial than 4 channels would cut the per-light cost.
 - Sky light from an image doesn't change the visible sky (no skybox texture writer); its absolute orientation not checked in game.
@@ -221,6 +226,8 @@ History: the first wired-in version was single-threaded, 81 s (2026-10-08, commi
 | Exact mode with supersampling: 94% of luxels on a large user map | vrad's uninitialised stack value only partly emulated | open since 2026-10-08; full emulation parked |
 | Rays exactly through a kd split corner | a handful of luxels can differ (vrad's x87-reordered `CalculateCostsOfSplit` ported, remaining ties) | open, time-boxed |
 | Ray-traced bounce is GPU only and marked experimental | 1.04 to 1.08x vrad's brightness | by design |
+| `-textureshadows` on the GPU is not exact | vrad counts see-through triangles slightly past a ray's end (the last kd cell visited); large user map 1.7% of luxels differ, 0.19% by over 1% | open since 2026-10-13, by the GPU traversal's nature |
+| Supersampling plus the new options | with `-extra` hlvrad already differed from vrad; with `-textureshadows` on foliage no more luxels are over 1% off than before; at `-final` 2.9% of luxels differ by one step against 0.6% without | open, inherent to the stale-mask emulation |
 | Very big maps | stop with a clear message rather than overflowing hlvrad's tables | by design |
 | `vrad -dump` / `-dumptrace` write into the game folder | a vrad trap (not ours), recorded so test runs move the files out | n/a |
 
@@ -240,10 +247,11 @@ History: the first wired-in version was single-threaded, 81 s (2026-10-08, commi
 | `vis_certify.c` | hlvvis | proves a pair hidden (vvis's path search in doubles, tolerances on the keeping side, no done-portal shortcut); `-all` enumerates every surviving chain |
 | `vis_inflate_test.c` | hlvvis | the retired 2D hull inflation (8M points, worst 0.0019 out at 16k) |
 | `compare_vrad.py` | hlvrad | hlvrad vs vrad on .vmf files or `--dir sdk_content`, optionally after vis (`--vis`) |
+| `vrad_options_suite.py` | hlvrad | `-softsun`, `-textureshadows` (with/without `-StaticPropPolys`, `-StaticPropLighting`), `-scale`, `-ambient`, no-vis maps against vrad; `--gpu` runs the GPU path |
 | `light_mixing.py`, `light_layers_sum.py` | hlvrad layers | live mix vs a real rebake; `-onlylights` layer sums |
 | `tests/unit/test_core.py` | hlvvis, toolopts, buildplan | fixtures `tests/fixtures/vis/rooms_portal.zip`, `rooms_fog.zip` |
 | `tests/ingame/test_mapcompiler.py`, `test_lightstyles.py`, `test_light_mixing.py` | all | in-game checks through the test bench |
 
 The release gate for the vis compiler is the suite plus `vis_certify -all` on every pair merged hides and exact shows, plus a sight-line search over each of those chains.
 
-Last checked: 2026-10-13 against branch light-layers, commit 31a33e5.
+Last checked: 2026-10-13 against branch light-layers, commit 41dc861.

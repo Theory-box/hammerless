@@ -82,4 +82,4 @@ After a successful build the job writes `<map>.built.vmf`, `<map>.built.opts` (t
 
 None open as of 2026-10-13 (commit 31a33e5). Resolved the same day: the `rad="FAST"` preset path that still sent lighting to Valve's vrad (31a33e5: ours gets `-noextra -bounce 2`); the system docs' "extra options run Valve's tool" sentences (updated with 1d2d8fd's rule).
 
-Last checked: 2026-10-13 against branch light-layers, commit 31a33e5.
+Last checked: 2026-10-13 against branch light-layers, commit 41dc861.
