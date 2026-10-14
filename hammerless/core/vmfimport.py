@@ -106,8 +106,13 @@ def _dedupe(w: list[Vec3], eps: float = 1e-4) -> list[Vec3]:
 
 def solid_faces(solid: Block) -> list[tuple[Block, list[Vec3]]]:
     """Each side with its polygon (Hammer units, counter-clockwise seen from outside, as Blender's faces).
-    Sides that end up with no area (bevels, duplicates) are left out."""
+    Sides that end up with no area (bevels, duplicates) are left out. Worked out once per brush while its
+    sides and planes stay the same (an imported map's brushes are kept between builds)."""
     sides = solid.blocks("side")
+    key = tuple((id(s), s.get("plane", "")) for s in sides)
+    memo = solid.__dict__.get("_hl_faces")
+    if memo is not None and memo[0] == key:
+        return list(memo[1])
     planes = [plane_of(*parse_plane(s.get("plane", ""))) for s in sides]
     out = []
     for i, (side, (n, d)) in enumerate(zip(sides, planes)):
@@ -122,7 +127,8 @@ def solid_faces(solid: Block) -> list[tuple[Block, list[Vec3]]]:
         if _dot(_newell(w), n) < 0:
             w.reverse()
         out.append((side, w))
-    return out
+    solid.__dict__["_hl_faces"] = (key, out)
+    return list(out)
 
 
 def _newell(w: list[Vec3]) -> Vec3:
@@ -338,7 +344,8 @@ def set_lightmap_scale(solid: Block, scale_of) -> int:
     """Every side's lightmap scale from scale_of(material) (an int, or None: keep the side's own). A displacement
     gets at least the scale its lightmap fits at. Returns how many displacement sides were raised for that."""
     raised = 0
-    disp = {id(s): w for s, w in solid_faces(solid) if s.blocks("dispinfo")}
+    disp = ({id(s): w for s, w in solid_faces(solid) if s.blocks("dispinfo")}
+            if any(s.blocks("dispinfo") for s in solid.blocks("side")) else {})   # (faces only for displacements)
     for side in solid.blocks("side"):
         v = scale_of(side.get("material", ""))
         if not v:

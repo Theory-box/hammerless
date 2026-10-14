@@ -1281,7 +1281,11 @@ class HL_OT_build(bpy.types.Operator):
             return {"CANCELLED"}
         if self.vis_only:
             self.play = self.bake = False
-        if self.play and not self.bake:      # the game boots while the map exports and compiles
+        path, root, rep = export_vmf(self, context, defer_scripts=True)
+        self._pending_scripts = getattr(rep, "pending_scripts", None)
+        self._export_s = time.time() - self._t0
+        if path and self.play and not self.bake:
+            # the game boots while the map compiles (after the export: its start-up doesn't slow the part Blender waits on)
             early_root = game_root(context)
             if early_root:
                 gamedir = cc.Tools(early_root).gamedir
@@ -1290,9 +1294,6 @@ class HL_OT_build(bpy.types.Operator):
                     # (an installed game mode the add-on has changed: updated before the game reads it)
                     _write_mode_addon(gamedir, Report())
                 cc.prestart_game(cc.Tools(early_root), launch_options(context.scene.hammerless))
-        path, root, rep = export_vmf(self, context, defer_scripts=True)
-        self._pending_scripts = getattr(rep, "pending_scripts", None)
-        self._export_s = time.time() - self._t0
         from .problems import store
         store(context, rep, new_build=True)
         surface_report(self, rep)

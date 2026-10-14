@@ -539,18 +539,25 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
     if arm is not None:
         kind = "DYNAMIC"                 # (an animated model: the game plays animations on a prop_dynamic)
     collide = hs.model_collision if kind != "PHYSICS" else "HULLS"
-    # the model is the mesh with modifiers applied: with any on, objects sharing the mesh can differ
-    modified = any(m.show_viewport for m in obj.modifiers)
+    # the model is the mesh with modifiers applied: with any on, objects sharing the mesh can differ (an Armature
+    # modifier only poses it: the model is taken at rest, its animations from the bones)
+    modified = any(m.show_viewport and not (arm is not None and m.type == "ARMATURE") for m in obj.modifiers)
     shape = f"{obj.data.name}@{obj.name}" if modified else obj.data.name
     rig = ""
-    if arm is not None:              # (copies of a rigged model share one model: the same rig data, actions and place
-        rel = arm.matrix_world.inverted() @ obj.matrix_world      # on the rig; each prop still plays its own copy)
+    if arm is not None:              # (copies of a rigged model share one model: the same rig, actions and place on
+        rel = arm.matrix_world.inverted() @ obj.matrix_world      # the rig; each prop still plays its own copy)
         own = any(len(pb.constraints) for pb in arm.pose.bones) or (
             arm.animation_data is not None and len(arm.animation_data.drivers))
-        rig = (arm.data.name, tuple(a.name for a in _armature_actions(arm)),
-               tuple(round(v, 4) for row in rel for v in row), arm.data.pose_position,
-               arm.name if own else "",            # (constraints / drivers: this rig moves its own way)
+        scene = bpy.context.scene
+        actions = _armature_actions(arm)
+        rig_print = None if own else _rig_fingerprint(arm, actions, scene.render.fps / (scene.render.fps_base or 1.0))
+        rig = (rig_print or arm.data.name, tuple(a.get("hl_name") or a.name for a in actions) if rig_print else
+               tuple(a.name for a in actions), tuple(round(v, 4) for row in rel for v in row),
+               arm.data.pose_position, arm.name if own else "",   # (constraints / drivers: this rig moves its own way)
                _rig_attachments(ir, arm))
+        if rig_print and not modified:
+            # (by content, not by name: duplicated props each have their own mesh and rig data, the same model)
+            shape = _mesh_fingerprint(ir, obj)
     key = (shape, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class_name or hs.physics_class, round(hs.model_mass, 3),
            tuple(slot.material.name if slot.material else "" for slot in obj.material_slots), rig)
     name = getattr(ir, "_model_keys", {}).get(key)
@@ -901,6 +908,40 @@ def _rig_fingerprint(arm, actions, fps) -> str | None:
                                  round(k.handle_right.x, 4), round(k.handle_right.y, 6))
                                 for k in fc.keyframe_points)))
     return hashlib.sha1(repr(parts).encode()).hexdigest()
+
+
+def _mesh_fingerprint(ir, obj) -> str:
+    """A rigged mesh's content (its points, faces, UVs, materials and bone weights), worked out once per mesh per
+    build: copies with their own mesh data still share one model."""
+    import hashlib
+    import numpy as np
+    me = obj.data
+    cache = ir.__dict__.setdefault("_mesh_prints", {})
+    key = (me.name, tuple(obj.vertex_groups.keys()))
+    if key in cache:
+        return cache[key]
+    if me.shape_keys is not None or me.has_custom_normals:   # (shape keys, custom normals: kept per mesh, as before)
+        cache[key] = me.name
+        return me.name
+    h = hashlib.sha1()
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    h.update(np.round(co, 4).tobytes())
+    for coll, attr, kind, n in ((me.loops, "vertex_index", np.int32, 1), (me.polygons, "loop_total", np.int32, 1),
+                                (me.edges, "vertices", np.int32, 2), (me.edges, "use_edge_sharp", np.bool_, 1),
+                                (me.polygons, "material_index", np.int32, 1), (me.polygons, "use_smooth", np.bool_, 1)):
+        a = np.empty(len(coll) * n, kind)
+        coll.foreach_get(attr, a)
+        h.update(a.tobytes())
+    for layer in me.uv_layers:
+        uv = np.empty(len(me.loops) * 2, np.float32)
+        layer.data.foreach_get("uv", uv)
+        h.update(layer.name.encode() + np.round(uv, 5).tobytes())
+    names = [g.name for g in obj.vertex_groups]
+    h.update(repr([[(names[g.group] if g.group < len(names) else g.group, round(g.weight, 4)) for g in v.groups]
+                   for v in me.vertices]).encode())
+    cache[key] = "mesh:" + h.hexdigest()
+    return cache[key]
 
 
 def _rig_attachments(ir, arm) -> tuple:

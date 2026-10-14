@@ -377,6 +377,23 @@ def _instance_path(main_vmf: str, file: str) -> str | None:
     return None
 
 
+_INSTANCE_FILES: dict = {}     # a map file's text (its fingerprint) -> its func_instances' "file" keys, in order
+
+
+def _instance_files(text: str) -> list[str]:
+    """The "file" key of each func_instance entity in a map's text, in order (the text is parsed once: a 4.6 MB map
+    takes 0.4 s, and every build asks)."""
+    import hashlib
+    key = hashlib.sha1(text.encode("utf-8", "surrogatepass")).hexdigest()
+    if key not in _INSTANCE_FILES:
+        from .vmf import parse
+        if len(_INSTANCE_FILES) > 32:
+            _INSTANCE_FILES.clear()
+        _INSTANCE_FILES[key] = [b.get("file") or "" for b in parse(text) if b.name.lower() == "entity"
+                                and (b.get("classname") or "") == "func_instance"]
+    return _INSTANCE_FILES[key]
+
+
 def fetch_game_instances(main_vmf: str, game_root: str | None) -> tuple[list[str], list[str]]:
     """Instance files the map names that aren't beside it (e.g. Valve's instance/prop_car_alarm.vmf): copied from the
     game's sdk_content/mapsrc next to the map, where the compilers look, and the instances those name too.
@@ -391,10 +408,9 @@ def fetch_game_instances(main_vmf: str, game_root: str | None) -> tuple[list[str
             text = f.read()
         if "func_instance" not in text:
             continue
-        for b in parse(text):
-            if b.name.lower() != "entity" or (b.get("classname") or "") != "func_instance" or not b.get("file"):
+        for file in _instance_files(text):
+            if not file:
                 continue
-            file = b.get("file")
             if file.lower() in seen:
                 continue
             seen.add(file.lower())
@@ -428,10 +444,7 @@ def vmf_instances(main_vmf: str) -> list[tuple[str, str]]:
             text = f.read()
         if "func_instance" not in text:
             continue
-        for b in parse(text):
-            if b.name.lower() != "entity" or (b.get("classname") or "") != "func_instance":
-                continue
-            file = b.get("file") or ""
+        for file in _instance_files(text):
             path = _instance_path(main_vmf, file) if file else None
             key = os.path.normcase(os.path.abspath(path)) if path else None
             if key and (file, key) not in listed:      # (each name once; each file read once)

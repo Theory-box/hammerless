@@ -471,12 +471,27 @@ def written_back(objs) -> set:
     return out
 
 
+_DOC: dict = {"key": None, "doc": None}    # the imported file, parsed: kept while its text is the same
+
+
+def _document(text, lightmap_scale_imported: bool) -> vi.Document:
+    """The imported file parsed (4.6 MB takes 1.5 s): again only when its text changed. Rebuilding never changes the
+    parsed blocks, except Imported Brushes Too's lightmap scales, which every build then sets again (so it's part of
+    the key: turned off, the file's own scales come back)."""
+    import hashlib
+    raw = text.as_string()
+    key = (text.name, len(raw), hashlib.sha1(raw.encode("utf-8", "surrogatepass")).hexdigest(), lightmap_scale_imported)
+    if _DOC["key"] != key:
+        _DOC.update(key=key, doc=vi.Document(raw))
+    return _DOC["doc"]
+
+
 def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, list]:
     """The imported file with the scene's changes: (document, world block, entity blocks (None: deleted))."""
     from .extract import mesh_to_brushes, object_keyvalues
     s = context.scene.hammerless
     upm = s.units_per_meter
-    doc = vi.Document(bpy.data.texts[context.scene[SOURCE_KEY]].as_string())
+    doc = _document(bpy.data.texts[context.scene[SOURCE_KEY]], s.lightmap_scale_imported)
     writer._next_id = max(writer._next_id, doc.max_id() + 1)
     from .mapcollection import map_objects
     inside = map_objects(context.scene)
@@ -515,10 +530,15 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
             return block
         return vi.solid_block(block, _faces(obj, upm, materials), writer.new_id, default_side)
 
+    children: dict = {}                 # (each object's children in the map, listed once: not per entity)
+    for o in objs:
+        if o.parent is not None:
+            children.setdefault(o.parent.name, []).append(o)
+
     def new_solids(parent):
         out = []
-        for o in objs:
-            if (o.parent is parent and o.type == "MESH" and o.name not in back and o.get(KIND) != "disp"
+        for o in children.get(parent.name, ()):
+            if (o.type == "MESH" and o.name not in back and o.get(KIND) != "disp"
                     and o.visible_get()):          # (new meshes, and copies of its imported brushes)
                 for b in mesh_to_brushes(o, depsgraph, upm, materials):
                     out.append(writer.solid(b))
@@ -536,6 +556,7 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
         keep = {it[0]: it[1] for it in world.items if isinstance(it, tuple) and it[0].lower() != "id"}
         world = vi.set_entity_values(world, {**keep, "skyname": sky}, None)
     world = vi.with_solids(world, [b for b in (solid(x) for x in doc.world.blocks("solid")) if b is not None])
+    world = Block(world.name, list(world.items))    # (the build adds its new brushes to it: not to the kept file's)
     out_ents = []
     for k, e in enumerate(doc.entities):
         obj = entities.get(k)
