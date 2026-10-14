@@ -100,16 +100,6 @@ traps), re-checked in the current code.
   freeze recorder, `blender/watchdog.py`) first for any freeze report. Details in
   [loading/README.md](loading/README.md).
 
-### 13. Long map names: the game fails to connect to its own listen server (2026-10-14, being measured)
-
-- **What happens:** in the whole-build benchmark a 33-character `hl_test_...` map name made the game fail to join
-  its own listen server after loading the map: `console.log` shows "Netchannel: failed reading message
-  net_SignonState from loopback" and the map never reaches HAMMERLESS_READY. Shorter names work.
-- **Status:** the limit isn't known yet; a test of 31- and 32-character names is running. Don't assume a number
-  until it's written here.
-- **Suggested fix:** once the limit is measured, refuse or warn about a Map Name past it in `export_vmf` (next to
-  the path-length warning, 283c44a).
-
 ### 14. Our map compiler is slower than vbsp on the user's map (2026-10-14)
 
 - **What happens:** in the whole-build benchmark ([loading/README.md](loading/README.md)) hlvbsp took 5.4 s (median
@@ -171,5 +161,6 @@ traps), re-checked in the current code.
 | studiomdl runs one after another (32 pods: 10 s of waiting) | 5865e70 | up to 8 at once |
 | Build & Play froze 9.2 s on a first build and 4.9 s on a rebuild of the user's map (32 pods) with 0.17.0 as released | 5d40ae4 (2026-10-14) | 4.6 s / 1.2 s: copies of a rigged model share one model by content (32 pods = 1 model), the imported file's parsed Document and each brush's faces are kept between builds, instance lookups from a memo, the prestart after the export; VMF text identical to before (see [loading/](loading/README.md)) |
 | A build folder past Windows' 260-character path limit made the light compiler fall back to Valve's vrad silently (its model copies couldn't be written) | 283c44a (2026-10-14) | the export warns when the path would pass the limit (the fall back itself stays the net; [compilers/valve-fallbacks.md](compilers/valve-fallbacks.md) case i) |
+| Map names of 32+ characters: the game loaded the map but never joined its own listen server (`console.log`: "Netchannel: failed reading message net_SignonState from loopback", no HAMMERLESS_READY; was item 13). Measured 2026-10-14 on `demo_level`: 31 characters loads and the survivors spawn, 32 and 33 don't | 78892b4 (2026-10-14) | `props.MAP_NAME_MAX = 31`: `clean_map_name` trims a typed name to 31 characters, and `build_map_text` refuses a longer stored Map Name with a message |
 
-Last checked: 2026-10-14 against branch light-layers, commit e16ef85.
+Last checked: 2026-10-14 against branch light-layers, commit 78892b4.

@@ -154,7 +154,7 @@ The first end-to-end comparison of all of Valve's tools against all of ours on t
 
 The three Hammerless runs agreed within 1.5 s. Pilot on `demo_level`: 14 s against 48 s.
 
-**Pitfalls found on the way** (each cost a run): a 33-character map name broke the game's connect to its own listen server (open, being measured; see known-issues); a deep scratch folder (a 261-character path) made our light compiler fall back to Valve's vrad (now warned about at export, 283c44a; see [../compilers/valve-fallbacks.md](../compilers/valve-fallbacks.md) case i); two drivers running at once mixed their results; a harness without a stall check waited 20 minutes on a stuck game.
+**Pitfalls found on the way** (each cost a run): a 33-character map name broke the game's connect to its own listen server (measured since: the limit is 31 characters, enforced in 78892b4; see the limits table); a deep scratch folder (a 261-character path) made our light compiler fall back to Valve's vrad (now warned about at export, 283c44a; see [../compilers/valve-fallbacks.md](../compilers/valve-fallbacks.md) case i); two drivers running at once mixed their results; a harness without a stall check waited 20 minutes on a stuck game.
 
 ## The two-way link and cancel
 
@@ -175,7 +175,7 @@ Commands go in through `-hijack` (or the bench's file channel, logic/); results 
 | A failed or cancelled build isn't announced in the game (only in Blender, behind the game window) | known issue (audit 2 item 5); the old map keeps its scripts since 0.17.0 |
 | Build & Play freeze: 4.6 s on a fresh Blender's first build, 1.2 s on a rebuild (the user's imported map with 32 pods, after 5d40ae4); the first press pays the map parse, the shared model compile and cold caches | known issue, reduced (see the freeze section above and [../known-issues.md](../known-issues.md) item 12) |
 | A build folder past Windows' 260-character path limit makes the light compiler fall back to Valve's vrad | warned at export since 283c44a (see [../compilers/valve-fallbacks.md](../compilers/valve-fallbacks.md)) |
-| Map names of about 33+ characters: the game failed to connect to its own listen server | open, being measured ([../known-issues.md](../known-issues.md) item 13) |
+| Map names of 32+ characters: the game loads the map but never joins its own listen server (31 works; measured on `demo_level` 2026-10-14) | fixed in 78892b4: names are trimmed to 31 characters as typed (`props.MAP_NAME_MAX`), and a build with a longer stored name refuses with a message ([../known-issues.md](../known-issues.md) Fixed table) |
 | Our map compiler slower than vbsp on the user's map (5.4 s against 4.5 s) | open ([../known-issues.md](../known-issues.md) item 14) |
 
-Last checked: 2026-10-14 against branch light-layers, commit e16ef85.
+Last checked: 2026-10-14 against branch light-layers, commit 78892b4.
