@@ -1243,7 +1243,8 @@ class HL_AnySocket(bpy.types.NodeSocket):
         return ANY_COLOR
 
 
-SOCKET_OF_KIND = {"num": "HL_FloatSocket", "bool": "HL_BoolSocket", "text": "HL_TextSocket", "vec": "HL_VectorSocket",
+SOCKET_OF_KIND = {"num": "HL_FloatSocket", "int": "HL_IntSocket", "bool": "HL_BoolSocket", "text": "HL_TextSocket",
+                  "vec": "HL_VectorSocket",
                   "thing": "HL_ThingSocket", "any": "HL_AnySocket"}
 
 
@@ -1600,7 +1601,7 @@ class HL_NodeMakeTable(_Block, bpy.types.Node):
     def make_sockets(self):
         from ..core.logic import parse_fields
         for name, kind in parse_fields(self.fields):
-            self.data_in("num" if kind == "int" else kind, "f_" + name, name)
+            self.data_in(kind, "f_" + name, name)       # (int: a whole-number input, every digit kept: masks, flags)
         self.data_out("any", "table", "Table")
 
     def draw_buttons(self, context, layout):

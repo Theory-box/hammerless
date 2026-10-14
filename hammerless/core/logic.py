@@ -1192,6 +1192,10 @@ class _Compiler:
             rows = [(name, kind) for name, kind in parse_fields(s.get("fields", ""))]
             def field(name, kind):
                 if kind == "int":                  # a whole number (the game wants one for e.g. ZSpawn's type)
+                    typed = n.consts.get("f_" + name)
+                    if ((n.id, "f_" + name) not in self.data_links and isinstance(typed, int)
+                            and not isinstance(typed, bool)):
+                        return str(typed)          # (typed in: every digit, e.g. a trace mask 1174421515)
                     return f'({self.typed_in(n, "f_" + name, vs.NUM)}).tointeger()'
                 return self.typed_in(n, "f_" + name, kind)
             body = ", ".join(f'["{name}"] = {field(name, kind)}' for name, kind in rows)

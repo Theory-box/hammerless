@@ -697,95 +697,111 @@ TOP_DOWN_MOVE = dict(
            ("That way at Move Speed", ["w_up", "w_left", "wish", "len", "moving", "if_moving", "dirn", "spd", "cur",
                                        "cb", "sb", "final", "go"])])
 
-TOP_DOWN_LASER = dict(
-    about="A laser sight seen from any camera (the game's own laser and flashlight are drawn from the player's eyes, "
-          "so a top-down camera doesn't show them): one human survivor, one tick. Made the first time: two "
-          "info_targets, the start (hl_laser_<player number>) attached to them at gun height and the end "
-          "(hl_laser_end_<player number>), and an env_beam between them (hl_laser_beam_<player number>: red, the game's "
-          "sprites/laserbeam; the game draws a beam from where its two ends are every frame, so it moves smoothly). "
-          "Each tick the end goes where their aim hits: it's turned the way they aim (their eye angles, level) so its "
-          "forward direction is their aim, and a Trace Line from their eyes, Reach units that way, finds the hit. "
-          "Bots have none.",
+TOP_DOWN_HIGHLIGHT = dict(
+    about="Aim Highlight for a top-down camera (the game's own laser sight and flashlight don't show through it): the "
+          "zombie on one human survivor's aim line glows red, one tick. Their aim: a helper info_target "
+          "(hl_aim_<player number>, made the first time) is turned the way they aim (their eye angles, level) and its "
+          "forward direction is their aim; a Trace Line from their eyes, Reach units that way (mask 1174421515: what "
+          "bullets hit), says what it hit (enthit). A common, a Witch or a special infected (a player not a survivor) "
+          "gets the outline every glowing thing has (m_Glow.m_iGlowType 3: always; m_Glow.m_glowColorOverride: red) "
+          "and is remembered (player variable 'top_down_aimed'); when the aim leaves it, its outline goes off. Bots "
+          "have none.",
     inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("reach", "Reach", "num")],
     outputs=[("then", "Then", "event")],
     nodes=[fn("bot", "IsPlayerABot", 0, 2, label="A bot?"),
            N("if_human", "HL_NodeIf", 1, 0, label="Bots have none"),
            fn("idx", "entity:GetEntityIndex", 0, 4),
-           N("sname", "HL_NodeFormatText", 1, 4, label="Its start", template="hl_laser_{a}"),
-           N("ename", "HL_NodeFormatText", 1, 5, label="Its end", template="hl_laser_end_{a}"),
-           N("bname", "HL_NodeFormatText", 1, 6, label="The beam", template="hl_laser_beam_{a}"),
-           fn("found", "Entities.FindByName", 2, 4, label="Their laser's end"),
+           N("hname", "HL_NodeFormatText", 1, 4, label="Their aim helper", template="hl_aim_{a}"),
+           fn("found", "Entities.FindByName", 2, 4, label="Their aim helper"),
            N("missing", "HL_NodeCheck", 3, 4, label="Not made yet?", op="NOT_SET"),
            N("if_new", "HL_NodeIf", 2, 0, label="Made the first time"),
-           fn("eye", "player:EyePosition", 2, 8, label="Their eyes"),
-           fn("feet", "entity:GetOrigin", 2, 9, label="Their feet"),
-           N("gun_up", "HL_NodeMakeVector", 3, 10, label="Gun height", sockets={"x": 0.0, "y": 0.0, "z": 48.0}),
-           N("gun_at", "HL_NodeVectorMath", 4, 9, label="At gun height", op="ADD"),
-           N("kv_start", "HL_NodeMakeTable", 3, 7, label="The start", fields="targetname: text, origin: vec"),
-           N("kv_end", "HL_NodeMakeTable", 4, 7, label="The end", fields="targetname: text, origin: vec"),
-           N("kv_beam", "HL_NodeMakeTable", 5, 7, label="The beam (1: on; red; 0: lasts for ever)",
-             fields="targetname: text, origin: vec, LightningStart: text, LightningEnd: text, texture: text, "
-                    "BoltWidth: num, rendercolor: text, renderamt: int, life: num, NoiseAmplitude: num, "
-                    "damage: num, spawnflags: int",
-             sockets={"f_texture": "sprites/laserbeam.vmt", "f_BoltWidth": 1.5, "f_rendercolor": "255 20 20",
-                      "f_renderamt": 230, "f_life": 0.0, "f_NoiseAmplitude": 0.0, "f_damage": 0.0,
-                      "f_spawnflags": 1}),
-           fn("spawn_start", "SpawnEntityFromTable", 3, 0, {"p0": "info_target"}),
-           fn("attach", "EntFire", 4, 0, {"p1": "SetParent", "p2": "!activator"}, label="The start on them"),
-           fn("spawn_end", "SpawnEntityFromTable", 5, 0, {"p0": "info_target"}),
-           fn("spawn_beam", "SpawnEntityFromTable", 6, 0, {"p0": "env_beam"}),
-           # the end where their aim hits
-           fn("end_ent", "Entities.FindByName", 6, 4, label="Their laser's end"),
-           fn("aim", "player:EyeAngles", 6, 11, label="Where they aim"),
-           N("ap", "HL_NodeBreakVector", 7, 11),
-           N("level", "HL_NodeMakeVector", 8, 11, label="Level, the way they aim", sockets={"x": 0.0, "z": 0.0}),
-           fn("turn_end", "entity:SetAngles", 7, 1, label="The end turned the way they aim"),
-           fn("dir", "entity:GetForwardVector", 8, 9, label="So its forward is their aim"),
-           N("far", "HL_NodeVectorMath", 9, 9, label="x Reach", op="SCALE"),
-           N("to", "HL_NodeVectorMath", 10, 9, label="From their eyes", op="ADD"),
-           N("kv_trace", "HL_NodeMakeTable", 10, 10, label="The trace", fields="start: vec, end: vec, ignore: thing"),
-           _var("trace", "top_down_laser_trace", 8, 1, get=False, kind="any",
+           fn("eye", "player:EyePosition", 2, 6, label="Their eyes"),
+           N("kv_helper", "HL_NodeMakeTable", 3, 6, label="The helper", fields="targetname: text, origin: vec"),
+           fn("spawn_helper", "SpawnEntityFromTable", 3, 0, {"p0": "info_target"}),
+           # their aim direction
+           fn("helper", "Entities.FindByName", 4, 4, label="Their aim helper"),
+           fn("aim", "player:EyeAngles", 4, 8, label="Where they aim"),
+           N("ap", "HL_NodeBreakVector", 5, 8),
+           N("level", "HL_NodeMakeVector", 6, 8, label="Level, the way they aim", sockets={"x": 0.0, "z": 0.0}),
+           fn("turn", "entity:SetAngles", 4, 0, label="The helper turned the way they aim"),
+           fn("dir", "entity:GetForwardVector", 6, 6, label="So its forward is their aim"),
+           N("far", "HL_NodeVectorMath", 7, 6, label="x Reach", op="SCALE"),
+           N("to", "HL_NodeVectorMath", 8, 6, label="From their eyes", op="ADD"),
+           N("kv_trace", "HL_NodeMakeTable", 8, 7, label="The trace (what bullets hit)",
+             fields="start: vec, end: vec, ignore: thing, mask: int", sockets={"f_mask": 1174421515}),
+           _var("trace", "top_down_aim_trace", 5, 0, get=False, kind="any",
                 label="The trace (kept: Trace Line fills it in)"),
-           _var("traced", "top_down_laser_trace", 11, 11, kind="any", label="The trace"),
-           fn("cast", "TraceLine", 11, 3, label="Trace it"),
-           N("if_cast", "HL_NodeIf", 9, 1, label="Traced (hit or not: Pos is filled in either way)"),
-           N("hit", "HL_NodeGetField", 12, 11, label="Where it hit", sockets={"key": "pos"}),
-           fn("move_end", "entity:SetOrigin", 10, 1, label="The end there")],
+           _var("traced", "top_down_aim_trace", 9, 9, kind="any", label="The trace"),
+           fn("cast", "TraceLine", 9, 8, label="Trace it"),
+           N("if_cast", "HL_NodeIf", 6, 0, label="Traced"),
+           N("hit", "HL_NodeGetField", 10, 9, label="What it hit", sockets={"key": "enthit"}),
+           # a zombie?
+           fn("cls", "entity:GetClassname", 10, 10, label="Its class"),
+           N("is_common", "HL_NodeTextCheck", 11, 10, label="A common?", op="EQUAL", sockets={"b": "infected"}),
+           N("is_witch", "HL_NodeTextCheck", 11, 11, label="A Witch?", op="EQUAL", sockets={"b": "witch"}),
+           N("is_player", "HL_NodeTextCheck", 11, 12, label="A player?", op="EQUAL", sockets={"b": "player"}),
+           fn("surv", "player:IsSurvivor", 10, 13, label="A survivor?"),
+           N("not_surv", "HL_NodeBoolMath", 12, 13, label="Not a survivor", op="NOT"),
+           N("special", "HL_NodeBoolMath", 13, 12, label="A special infected", op="AND"),
+           N("either", "HL_NodeBoolMath", 12, 10, label="Common or Witch", op="OR"),
+           N("zombie", "HL_NodeBoolMath", 14, 11, label="A zombie?", op="OR"),
+           # still the same one?
+           _var("was", "top_down_aimed", 7, 11, kind="thing", label="The one lit up"),
+           N("same", "HL_NodeCheck", 8, 11, label="Still that one?", op="EQUAL"),
+           N("if_same", "HL_NodeIf", 7, 0, label="Another (or none)?"),
+           N("had", "HL_NodeCheck", 9, 12, label="One lit up?", op="IS_SET"),
+           N("if_had", "HL_NodeIf", 8, 0),
+           N("glow_off", "HL_NodeSetProperty", 9, 0, label="Its outline off", key="m_Glow.m_iGlowType",
+             sockets={"value": 0}),
+           N("if_zombie", "HL_NodeIf", 10, 0, label="A zombie on the aim?"),
+           N("glow_on", "HL_NodeSetProperty", 11, 0, label="Outline always", key="m_Glow.m_iGlowType",
+             sockets={"value": 3}),
+           N("red", "HL_NodeSetProperty", 12, 0, label="Red", key="m_Glow.m_glowColorOverride",
+             sockets={"value": 255}),
+           _var("keep", "top_down_aimed", 13, 0, get=False, kind="thing", label="The one lit up"),
+           _var("none", "top_down_aimed", 11, 2, get=False, kind="thing", label="None lit up (empty)")],
     links=[("in.player", "bot.p0"), ("bot.result", "if_human.condition"), ("in.run", "if_human.in"),
            ("if_human.true", "out.then"),
-           ("in.player", "idx.target"), ("idx.result", "sname.a"), ("idx.result", "ename.a"), ("idx.result", "bname.a"),
-           ("ename.result", "found.p1"), ("found.result", "missing.a"),
-           ("if_human.false", "if_new.in"), ("missing.result", "if_new.condition"),
-           # made the first time: start (on them), end, beam between
-           ("in.player", "eye.target"), ("in.player", "feet.target"), ("feet.result", "gun_at.a"),
-           ("gun_up.result", "gun_at.b"),
-           ("sname.result", "kv_start.f_targetname"), ("gun_at.vector", "kv_start.f_origin"),
-           ("ename.result", "kv_end.f_targetname"), ("eye.result", "kv_end.f_origin"),
-           ("bname.result", "kv_beam.f_targetname"), ("gun_at.vector", "kv_beam.f_origin"),
-           ("sname.result", "kv_beam.f_LightningStart"), ("ename.result", "kv_beam.f_LightningEnd"),
-           ("if_new.true", "spawn_start.run"), ("kv_start.table", "spawn_start.p1"),
-           ("spawn_start.then", "attach.run"), ("sname.result", "attach.p0"), ("in.player", "attach.p4"),
-           ("attach.then", "spawn_end.run"), ("kv_end.table", "spawn_end.p1"),
-           ("spawn_end.then", "spawn_beam.run"), ("kv_beam.table", "spawn_beam.p1"),
-           # each tick: the end turned the way they aim, then traced that way
-           ("spawn_beam.then", "turn_end.run"), ("if_new.false", "turn_end.run"),
-           ("ename.result", "end_ent.p1"), ("end_ent.result", "turn_end.target"),
-           ("in.player", "aim.target"), ("aim.result", "ap.vector"), ("ap.y", "level.y"), ("level.result", "turn_end.p0"),
-           ("end_ent.result", "dir.target"), ("dir.result", "far.a"), ("in.reach", "far.scale"),
+           ("in.player", "idx.target"), ("idx.result", "hname.a"), ("hname.result", "found.p1"),
+           ("found.result", "missing.a"), ("if_human.false", "if_new.in"), ("missing.result", "if_new.condition"),
+           ("in.player", "eye.target"), ("hname.result", "kv_helper.f_targetname"), ("eye.result", "kv_helper.f_origin"),
+           ("if_new.true", "spawn_helper.run"), ("kv_helper.table", "spawn_helper.p1"),
+           # the helper turned the way they aim; trace from their eyes that way
+           ("spawn_helper.then", "turn.run"), ("if_new.false", "turn.run"),
+           ("hname.result", "helper.p1"), ("helper.result", "turn.target"),
+           ("in.player", "aim.target"), ("aim.result", "ap.vector"), ("ap.y", "level.y"), ("level.result", "turn.p0"),
+           ("helper.result", "dir.target"), ("dir.result", "far.a"), ("in.reach", "far.scale"),
            ("eye.result", "to.a"), ("far.vector", "to.b"),
            ("eye.result", "kv_trace.f_start"), ("to.vector", "kv_trace.f_end"), ("in.player", "kv_trace.f_ignore"),
-           ("turn_end.then", "trace.run"), ("in.player", "trace.player"), ("kv_trace.table", "trace.value"),
+           ("turn.then", "trace.run"), ("in.player", "trace.player"), ("kv_trace.table", "trace.value"),
            ("trace.then", "if_cast.in"), ("in.player", "traced.player"), ("traced.result", "cast.p0"),
            ("cast.result", "if_cast.condition"), ("traced.result", "hit.table"),
-           ("if_cast.true", "move_end.run"), ("if_cast.false", "move_end.run"),
-           ("end_ent.result", "move_end.target"), ("hit.value", "move_end.p0"), ("move_end.then", "out.then")],
-    steps=[("Humans only", ["bot", "if_human"]),
-           ("Made the first time: the start (on them, gun height), the end, the beam between",
-            ["idx", "sname", "ename", "bname", "found", "missing", "if_new", "eye", "feet", "gun_up", "gun_at",
-             "kv_start", "kv_end", "kv_beam", "spawn_start", "attach", "spawn_end", "spawn_beam"]),
-           ("Each tick: the end turned the way they aim, then where that hits",
-            ["end_ent", "aim", "ap", "level", "turn_end", "dir", "far", "to", "kv_trace", "trace", "traced", "cast",
-             "if_cast", "hit", "move_end"])])
+           # a zombie?
+           ("hit.value", "cls.target"), ("cls.result", "is_common.a"), ("cls.result", "is_witch.a"),
+           ("cls.result", "is_player.a"), ("hit.value", "surv.target"), ("surv.result", "not_surv.a"),
+           ("is_player.result", "special.a"), ("not_surv.result", "special.b"),
+           ("is_common.result", "either.a"), ("is_witch.result", "either.b"),
+           ("either.result", "zombie.a"), ("special.result", "zombie.b"),
+           # another one than before: the old one's outline off, the new one's on (and remembered)
+           ("in.player", "was.player"), ("was.result", "same.a"), ("hit.value", "same.b"),
+           ("if_cast.true", "if_same.in"), ("if_cast.false", "if_same.in"), ("same.result", "if_same.condition"),
+           ("if_same.true", "out.then"),
+           ("if_same.false", "if_had.in"), ("was.result", "had.a"), ("had.result", "if_had.condition"),
+           ("if_had.true", "glow_off.run"), ("was.result", "glow_off.entity"),
+           ("glow_off.then", "if_zombie.in"), ("if_had.false", "if_zombie.in"), ("zombie.result", "if_zombie.condition"),
+           ("if_zombie.true", "glow_on.run"), ("hit.value", "glow_on.entity"),
+           ("glow_on.then", "red.run"), ("hit.value", "red.entity"),
+           ("red.then", "keep.run"), ("in.player", "keep.player"), ("hit.value", "keep.value"), ("keep.then", "out.then"),
+           ("if_zombie.false", "none.run"), ("in.player", "none.player"), ("none.then", "out.then")],
+    steps=[("Humans only; their aim helper made the first time", ["bot", "if_human", "idx", "hname", "found", "missing",
+                                                                 "if_new", "eye", "kv_helper", "spawn_helper"]),
+           ("What's on their aim line", ["helper", "aim", "ap", "level", "turn", "dir", "far", "to", "kv_trace",
+                                         "trace", "traced", "cast", "if_cast", "hit"]),
+           ("A zombie? (common, Witch, special infected)", ["cls", "is_common", "is_witch", "is_player", "surv",
+                                                           "not_surv", "special", "either", "zombie"]),
+           ("Another one than before: old outline off, new one red", ["was", "same", "if_same", "had", "if_had",
+                                                                      "glow_off", "if_zombie", "glow_on", "red",
+                                                                      "keep", "none"])])
 
 TOP_DOWN_CAMERA = dict(
     about="Turn On: every survivor (bots too) sees the game from above, through a camera of their own that follows "
@@ -799,7 +815,7 @@ TOP_DOWN_CAMERA = dict(
             ("smoothing", "Smoothing", "num"), ("facing", "Facing (yaw)", "num"),
             ("turn", "Turns With Player", "bool"), ("level", "Level Aim", "bool"),
             ("move", "Screen Movement", "bool"), ("speed", "Move Speed", "num"),
-            ("laser", "Laser Sight", "bool")],
+            ("highlight", "Aim Highlight", "bool")],
     outputs=[("is_on", "Is On", "bool")],
     nodes=[N("set_on", "HL_NodeSetVariable", 0, 0, label="On", var_name="top_down_on", scope="GROUP",
              value_kind="bool", sockets={"value": True}),
@@ -827,15 +843,12 @@ TOP_DOWN_CAMERA = dict(
            N("if_move", "HL_NodeIf", 3, 8, label="Screen Movement?"),
            N("each3", "HL_NodeForEach", 4, 8, what="SURVIVORS"),
            N("mover", "HL_NodeGroup", 5, 8, group="Top-Down Movement"),
-           N("if_laser", "HL_NodeIf", 6, 8, label="Laser Sight?"),
-           N("laser", "HL_NodeGroup", 7, 8, group="Top-Down Laser", sockets={"reach": 3000.0}),
-           N("lname_off", "HL_NodeFormatText", 7, 10, label="Their laser's start", template="hl_laser_{a}"),
-           N("ename_off", "HL_NodeFormatText", 7, 11, label="Its end", template="hl_laser_end_{a}"),
-           N("bname_off", "HL_NodeFormatText", 7, 12, label="The beam", template="hl_laser_beam_{a}"),
-           fn("idx_off", "entity:GetEntityIndex", 6, 10),
-           fn("kill_laser", "EntFire", 8, 4, {"p1": "Kill"}, label="Its start removed"),
-           fn("kill_end", "EntFire", 9, 4, {"p1": "Kill"}, label="Its end removed"),
-           fn("kill_beam", "EntFire", 10, 4, {"p1": "Kill"}, label="The beam removed"),
+           N("if_laser", "HL_NodeIf", 6, 8, label="Aim Highlight?"),
+           N("laser", "HL_NodeGroup", 7, 8, group="Top-Down Aim Highlight", sockets={"reach": 3000.0}),
+           _var("aimed_off", "top_down_aimed", 7, 10, kind="thing", label="The one lit up"),
+           N("glow_off", "HL_NodeSetProperty", 8, 4, label="Its outline off", key="m_Glow.m_iGlowType",
+             sockets={"value": 0}),
+           _var("forget_aimed", "top_down_aimed", 9, 4, get=False, kind="thing", label="None lit up (empty)"),
            # off: their own walking back
            N("flags_off", "HL_NodeGetProperty", 6, 6, label="Their flags", key="m_fFlags"),
            N("walk_back", "HL_NodeMath", 7, 6, label="- FL_ATCONTROLS (64)", op="BIT_CLEAR", sockets={"b": 64.0}),
@@ -844,15 +857,13 @@ TOP_DOWN_CAMERA = dict(
            ("tick.tick", "if_on2.in"), ("state2.result", "if_on2.condition"), ("if_on2.true", "each3.run"),
            ("each3.each", "if_move.in"), ("in.move", "if_move.condition"), ("if_move.true", "mover.run"),
            ("each3.item", "mover.player"), ("in.speed", "mover.speed"),
-           ("mover.then", "if_laser.in"), ("if_move.false", "if_laser.in"), ("in.laser", "if_laser.condition"),
+           ("mover.then", "if_laser.in"), ("if_move.false", "if_laser.in"), ("in.highlight", "if_laser.condition"),
            ("if_laser.true", "laser.run"), ("each3.item", "laser.player"), ("set_off.then", "tick.stop"),
            ("forget.then", "walk.run"), ("each2.item", "walk.entity"), ("each2.item", "flags_off.entity"),
            ("flags_off.value", "walk_back.a"), ("walk_back.value", "walk.value"),
-           # off: their laser and its end point removed
-           ("walk.then", "kill_laser.run"), ("each2.item", "idx_off.target"), ("idx_off.result", "lname_off.a"),
-           ("idx_off.result", "ename_off.a"), ("lname_off.result", "kill_laser.p0"),
-           ("kill_laser.then", "kill_end.run"), ("ename_off.result", "kill_end.p0"),
-           ("kill_end.then", "kill_beam.run"), ("idx_off.result", "bname_off.a"), ("bname_off.result", "kill_beam.p0"),
+           # off: the zombie they lit up goes dark
+           ("walk.then", "glow_off.run"), ("each2.item", "aimed_off.player"), ("aimed_off.result", "glow_off.entity"),
+           ("glow_off.then", "forget_aimed.run"), ("each2.item", "forget_aimed.player"),
            ("timer.tick", "if_on.in"), ("state.result", "if_on.condition"), ("if_on.true", "each.run"),
            ("each.each", "follow.run"), ("each.item", "follow.player"), ("in.height", "follow.height"),
            ("in.smoothing", "follow.smoothing"), ("in.facing", "follow.facing"), ("in.turn", "follow.turn"),
@@ -866,7 +877,7 @@ TOP_DOWN_CAMERA = dict(
             ["set_on", "timer", "state", "if_on", "each", "follow"]),
            ("Off: their own eyes again, the cameras removed",
             ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk",
-             "idx_off", "lname_off", "ename_off", "bname_off", "kill_laser", "kill_end", "kill_beam"]),
+             "aimed_off", "glow_off", "forget_aimed"]),
            ("Screen Movement: every tick, each human survivor moves relative to the screen",
             ["tick", "state2", "if_on2", "if_move", "each3", "mover", "if_laser", "laser"])])
 
@@ -1508,8 +1519,8 @@ EXAMPLES_3 = [
                "straight above, like a top-down shooter. All in one node, Top-Down Camera (Tab goes in; its settings "
                "are on the node): Height (units above the player); Screen Movement (on: W, A, S, D move human "
                "players up, left, down and right on the screen whichever way they face, at Move Speed; bots walk as "
-               "usual); Laser Sight (on: a red laser from each human player's gun to where they aim, seen from the "
-               "top-down camera, which doesn't show the game's own laser sights); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
+               "usual); Aim Highlight (on: the zombie on each human player's aim line glows red, as the top-down "
+               "camera doesn't show the game's own laser sights); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
                "down, shots go flat across the ground); Smoothing (0: the camera stays locked on the player; "
                "higher, up to 0.95: it lags behind, and turns behind, and catches up) and Facing (the camera's yaw "
                "with Turns With Player off: 90 puts north at the top of the screen). Turn Off and Turn On switch it "
@@ -1520,11 +1531,11 @@ EXAMPLES_3 = [
                "in the open: under a ceiling a camera Height above ends up inside the floor above or the solid map, "
                "and shows that (lower Height indoors). Don't mix it with third person.",
          groups={"Top-Down Follow": TOP_DOWN_FOLLOW, "Top-Down Movement": TOP_DOWN_MOVE,
-                 "Top-Down Laser": TOP_DOWN_LASER, "Top-Down Camera": TOP_DOWN_CAMERA},
+                 "Top-Down Aim Highlight": TOP_DOWN_HIGHLIGHT, "Top-Down Camera": TOP_DOWN_CAMERA},
          nodes=[N("start", "HL_NodeMapStart", 0, 0),
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
                   sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": False, "level": True,
-                           "move": True, "speed": 220.0, "laser": True})],
+                           "move": True, "speed": 220.0, "highlight": True})],
          links=[("start.start", "cam.on")],
          steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node)",
                  ["start", "cam"])]),
