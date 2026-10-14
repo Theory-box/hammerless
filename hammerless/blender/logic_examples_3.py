@@ -513,10 +513,12 @@ TOP_DOWN_FOLLOW = dict(
           "(hurt normally). Each update gives it a speed (Set Velocity: the game moves it every tick, smoothly; "
           "moving it by Set Origin ten times a second jumps): their own speed plus closing the gap to Height units "
           "above them within the update (10 a second), times 1 - Smoothing. Smoothing 0 keeps it locked above "
-          "them; higher, it lags behind and catches up. Turns With Player: the camera is attached to them instead "
-          "(its SetParent input, !activator: them) and kept looking straight down relative to them (Set Local Angles "
-          "89 0 0), so it turns with them every frame and the keys move them up, down, left and right on screen; "
-          "Smoothing and Facing don't apply then. Level Aim: their aim is put level each update (Snap Eye Angles: "
+          "them; higher, it lags behind and catches up. Turns With Player: it also gets a turning speed each update "
+          "(about the up axis only: their looking up and down never tilts it) that closes the gap between its yaw "
+          "and theirs within the update, times 1 - Smoothing; the game turns it by that every tick, so it turns "
+          "smoothly with them and the keys move them up, down, left and right on screen (an entity's turning speed "
+          "is set by a push: Apply Local Angular Velocity Impulse of what's wanted minus what it has; the push's "
+          "third value is the turn about the up axis). Facing is only where it starts then. Level Aim: their aim is put level each update (Snap Eye Angles: "
           "pitch 0, their yaw kept), so shots go flat across the ground; the camera shows nothing of their own view, "
           "so the reset doesn't show.",
     inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("height", "Height", "num"),
@@ -552,13 +554,21 @@ TOP_DOWN_FOLLOW = dict(
            N("part", "HL_NodeMath", 4, 7, label="1 - Smoothing", op="SUBTRACT", sockets={"a": 1.0}),
            N("vel", "HL_NodeVectorMath", 7, 4, label="x (1 - Smoothing)", op="SCALE"),
            fn("move", "entity:SetVelocity", 6, 1, label="Its speed until the next update"),
-           N("if_attach", "HL_NodeIf", 3, 1, label="Turns with them?"),
-           N("attach", "HL_NodeFireInput", 4, 2, label="Attached to them",
-             sockets={"input": "SetParent", "value": "!activator"}),
-           N("if_turns", "HL_NodeIf", 6, 2, label="Turns with them?"),
-           N("look_down", "HL_NodeMakeVector", 7, 3, label="Straight down, relative to them",
-             sockets={"x": 89.0, "y": 0.0, "z": 0.0}),
-           fn("keep_down", "entity:SetLocalAngles", 7, 2, label="Looking straight down at them"),
+           N("if_turns", "HL_NodeIf", 7, 1, label="Turns with them?"),
+           fn("cam_ang", "entity:GetAngles", 6, 6, label="Its angles"),
+           N("cam_parts", "HL_NodeBreakVector", 7, 6),
+           N("gap", "HL_NodeMath", 8, 6, label="Their yaw - its yaw", op="SUBTRACT"),
+           N("wrap1", "HL_NodeMath", 9, 6, label="+ 540", op="ADD", sockets={"b": 540.0}),
+           N("wrap2", "HL_NodeMath", 10, 6, label="Modulo 360", op="MODULO", sockets={"b": 360.0}),
+           N("wrap3", "HL_NodeMath", 11, 6, label="- 180: the short way round", op="SUBTRACT", sockets={"b": 180.0}),
+           N("rate", "HL_NodeMath", 9, 7, label="Closed within an update (x 10)", op="MULTIPLY",
+             sockets={"b": 10.0}),
+           N("rate_s", "HL_NodeMath", 10, 7, label="x (1 - Smoothing)", op="MULTIPLY"),
+           fn("spin_now", "entity:GetLocalAngularVelocity", 8, 8, label="How fast it turns now"),
+           N("spin_parts", "HL_NodeBreakVector", 9, 8),
+           N("push_by", "HL_NodeMath", 11, 7, label="Wanted - now", op="SUBTRACT"),
+           N("push_vec", "HL_NodeMakeVector", 12, 7, label="About the up axis only", sockets={"x": 0.0, "y": 0.0}),
+           fn("spin", "entity:ApplyLocalAngularVelocityImpulse", 8, 1, label="Its turning speed until the next update"),
            N("if_level", "HL_NodeIf", 8, 1, label="Level aim?"),
            fn("eye", "player:EyeAngles", 8, 3, label="Where they aim"),
            N("parts", "HL_NodeBreakVector", 9, 3),
@@ -571,10 +581,7 @@ TOP_DOWN_FOLLOW = dict(
            ("in.facing", "down.y"), ("target.vector", "kv.f_origin"), ("down.result", "kv.f_angles"),
            ("if_none.true", "spawn.run"), ("kv.table", "spawn.p1"), ("spawn.then", "keep.run"),
            ("in.player", "keep.player"), ("spawn.result", "keep.value"),
-           ("keep.then", "if_attach.in"), ("in.turn", "if_attach.condition"),
-           ("if_attach.true", "attach.run"), ("spawn.result", "attach.entity"), ("in.player", "attach.activator"),
-           ("attach.then", "enable.run"), ("if_attach.false", "enable.run"),
-           ("spawn.result", "enable.entity"), ("in.player", "enable.activator"),
+           ("keep.then", "enable.run"), ("spawn.result", "enable.entity"), ("in.player", "enable.activator"),
            # Enable left them unhurtable: back to normal
            ("enable.then", "if_never.in"), ("if_none.false", "if_never.in"), ("in.player", "hurt.entity"),
            ("hurt.value", "never.a"), ("never.result", "if_never.condition"),
@@ -585,23 +592,30 @@ TOP_DOWN_FOLLOW = dict(
            ("per_s.vector", "want.b"),
            ("in.smoothing", "s_max.a"), ("s_max.value", "s_min.a"), ("s_min.value", "part.b"),
            ("want.vector", "vel.a"), ("part.value", "vel.scale"),
-           ("hurtable.then", "if_turns.in"), ("if_never.false", "if_turns.in"), ("in.turn", "if_turns.condition"),
-           ("if_turns.false", "move.run"), ("cam.result", "move.target"), ("vel.vector", "move.p0"),
-           ("if_turns.true", "keep_down.run"), ("cam.result", "keep_down.target"), ("look_down.result", "keep_down.p0"),
+           ("hurtable.then", "move.run"), ("if_never.false", "move.run"),
+           ("cam.result", "move.target"), ("vel.vector", "move.p0"),
+           # turning with them: a turning speed about the up axis, closing the yaw gap within the update
+           ("move.then", "if_turns.in"), ("in.turn", "if_turns.condition"),
+           ("in.player", "eye.target"), ("eye.result", "parts.vector"),
+           ("cam.result", "cam_ang.target"), ("cam_ang.result", "cam_parts.vector"),
+           ("parts.y", "gap.a"), ("cam_parts.y", "gap.b"), ("gap.value", "wrap1.a"), ("wrap1.value", "wrap2.a"),
+           ("wrap2.value", "wrap3.a"), ("wrap3.value", "rate.a"), ("rate.value", "rate_s.a"), ("part.value", "rate_s.b"),
+           ("cam.result", "spin_now.target"), ("spin_now.result", "spin_parts.vector"),
+           ("rate_s.value", "push_by.a"), ("spin_parts.y", "push_by.b"), ("push_by.value", "push_vec.z"),
+           ("if_turns.true", "spin.run"), ("cam.result", "spin.target"), ("push_vec.result", "spin.p0"),
            # their aim level
-           ("move.then", "if_level.in"), ("keep_down.then", "if_level.in"), ("in.level", "if_level.condition"),
-           ("in.player", "eye.target"), ("eye.result", "parts.vector"), ("parts.y", "flat.y"),
+           ("spin.then", "if_level.in"), ("if_turns.false", "if_level.in"), ("in.level", "if_level.condition"),
+           ("parts.y", "flat.y"),
            ("if_level.true", "level_aim.run"), ("in.player", "level_aim.target"), ("flat.result", "level_aim.p0"),
            ("level_aim.then", "out.then"), ("if_level.false", "out.then")],
-    steps=[("Their camera: made the first time, above them looking straight down, attached to them if it turns "
-            "with them, switched on for them",
-            ["cam", "none", "if_none", "at", "up", "target", "down", "kv", "spawn", "keep", "if_attach", "attach",
-             "enable"]),
+    steps=[("Their camera: made the first time, above them looking straight down, switched on for them",
+            ["cam", "none", "if_none", "at", "up", "target", "down", "kv", "spawn", "keep", "enable"]),
            ("Enable makes them unhurtable: hurt normally again", ["hurt", "never", "if_never", "hurtable"]),
-           ("Turning with them: kept looking straight down. Otherwise its speed: theirs, plus closing the gap to "
-            "Height above them, times 1 - Smoothing",
-            ["if_turns", "look_down", "keep_down", "now_at", "diff", "per_s", "their_v", "want", "s_max", "s_min",
-             "part", "vel", "move"]),
+           ("Its speed: theirs, plus closing the gap to Height above them, times 1 - Smoothing",
+            ["now_at", "diff", "per_s", "their_v", "want", "s_max", "s_min", "part", "vel", "move"]),
+           ("Turns With Player: a turning speed about the up axis closing the yaw gap, times 1 - Smoothing",
+            ["if_turns", "cam_ang", "cam_parts", "gap", "wrap1", "wrap2", "wrap3", "rate", "rate_s", "spin_now",
+             "spin_parts", "push_by", "push_vec", "spin"]),
            ("Level Aim: their aim put level (their yaw kept)", ["if_level", "eye", "parts", "flat", "level_aim"])])
 
 TOP_DOWN_CAMERA = dict(
@@ -1286,9 +1300,9 @@ EXAMPLES_3 = [
                "straight above, like a top-down shooter. All in one node, Top-Down Camera (Tab goes in; its settings "
                "are on the node): Height (units above the player); Turns With Player (on: the camera turns as they "
                "turn, so the keys move them up, down, left and right on screen); Level Aim (on: they can't aim up or "
-               "down, shots go flat across the ground); with Turns With Player off, Smoothing (0: the camera stays "
-               "locked on the player; higher, up to 0.95: it lags behind and catches up) and Facing (the camera's "
-               "fixed yaw: 90 puts north at the top of the screen). Turn Off and Turn On switch it "
+               "down, shots go flat across the ground); Smoothing (0: the camera stays locked on the player; "
+               "higher, up to 0.95: it lags behind, and turns behind, and catches up) and Facing (the camera's yaw "
+               "with Turns With Player off: 90 puts north at the top of the screen). Turn Off and Turn On switch it "
                "during play (wire any event to them). Each survivor gets a point_viewcontrol of their own (kept in a "
                "player variable), switched on with its Enable input (setting their m_hViewEntity alone doesn't "
                "change what they see; Enable also makes them unhurtable, which the group puts back). Players still "
@@ -1298,7 +1312,7 @@ EXAMPLES_3 = [
          groups={"Top-Down Follow": TOP_DOWN_FOLLOW, "Top-Down Camera": TOP_DOWN_CAMERA},
          nodes=[N("start", "HL_NodeMapStart", 0, 0),
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
-                  sockets={"height": 500.0, "smoothing": 0.5, "facing": 90.0, "turn": True, "level": True})],
+                  sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": True, "level": True})],
          links=[("start.start", "cam.on")],
          steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node)",
                  ["start", "cam"])]),

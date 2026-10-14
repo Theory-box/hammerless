@@ -519,7 +519,6 @@ def check(run: Run, n: int, b: Bench):
         b.run('getroottable()[' + TOPDOWN_FN + '("cam_set_on")].call(::HL_Scope);'); time.sleep(1.5)
         got = b.value(views)
         assert got and all(v is not None and v[0] == "point_viewcontrol" for v in got), f"views: {got}"
-        assert all(v[4] for v in got), f"cameras not attached to their survivors: {got}"
         assert all(abs(v[1][0]) < 2 and abs(v[1][1]) < 2 and abs(v[1][2] - 500) < 2 for v in got), \
             f"cameras not 500 above their survivors: {got}"
         assert all(abs(v[2] - 89) < 0.5 for v in got), f"cameras not looking straight down: {got}"
@@ -532,14 +531,17 @@ def check(run: Run, n: int, b: Bench):
                'return [v.GetAngles().x, v.GetAngles().y, T.host().EyeAngles().y]; })()')
         turned = []
         for yaw in (0, 90, 200):
-            b.run(f"T.host().SnapEyeAngles(QAngle(0, {yaw}, 0));"); time.sleep(0.4)
+            b.run(f"T.host().SnapEyeAngles(QAngle(0, {yaw}, 0));"); time.sleep(1.0)
             turned.append(b.value(cam))
         assert all(abs(((c[1] - c[2]) + 180) % 360 - 180) < 2 and abs(c[0] - 89) < 0.5 for c in turned), \
             f"the camera didn't turn with the host (camera pitch, yaw, host yaw): {turned}"
         turned_shot = b.screenshot("62_turned", out_dir=shots)
-        # aim: looking down 60 is put level again within an update or two
-        b.run("T.host().SnapEyeAngles(QAngle(60, 30, 0));"); time.sleep(0.5)
+        # aim: looking down 60 is put level again within an update or two, and the camera never tilts
+        b.run("T.host().SnapEyeAngles(QAngle(60, 30, 0));"); time.sleep(0.05)
+        tilt = b.value(cam)
+        time.sleep(0.45)
         pitch = b.value("T.host().EyeAngles().x")
+        assert abs(tilt[0] - 89) < 0.5, f"the camera tilted when the host looked down: {tilt}"
         assert abs(pitch) < 1, f"aim not levelled: pitch {pitch} half a second after looking down 60"
         # walking: the camera stays above them
         b.run("T.host().SnapEyeAngles(QAngle(0, 0, 0));")
@@ -560,7 +562,7 @@ def check(run: Run, n: int, b: Bench):
         assert left == 0, f"{left} cameras left"
         assert all(d == 2 for d in b.value(hurt)), f"m_takedamage {b.value(hurt)} after turning it off"
         back = b.screenshot("62_off", out_dir=shots)
-        return (f"{len(got)} cameras attached 500 above, looking down, hurt normally; turned with the host "
+        return (f"{len(got)} cameras 500 above, looking down, hurt normally; turned with the host, no tilt "
                 f"(pitch, yaw, host yaw: {[[round(x) for x in c] for c in turned]}); aim levelled ({pitch:.1f}); walked "
                 f"{walked:.0f} with the camera above; off: views null, cameras removed; look: {still}, {turned_shot}, "
                 f"{back}")
