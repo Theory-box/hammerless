@@ -18,7 +18,7 @@ Status values: `done` / `partial` / `not done` / `known issue` / `removed` / `in
 | f | Cycles light tool (`light_tool == "CYCLES"`) | `use_hlvrad` is false for CYCLES; the vrad step is Valve's | vrad (for the lightmap layout, world lights, leaf ambient, prop light), then Cycles bakes the lightmaps | By design: Cycles predates hlvrad and needs vrad's layout | `done` as designed; replacing vrad's layout with hlvrad's is possible but not planned |
 | g | Our tool not installed | `use_hlvbsp` / `use_hlvvis` (`os.path.exists`), `hlvrad_unsupported` ("hlvrad.exe is missing", "hlphys.exe is missing") | the stage's Valve tool, with a note "isn't installed" | A packaging check, not a feature gap | `done` (release zips carry all four executables) |
 | h | hlvbsp's tables can't be prepared, or a map feature is unsupported | `prepare_hlvbsp` raises, or `mapcompiler.unsupported()` returns reasons | vbsp ("Hammerless map compiler doesn't do X yet" / "couldn't read the game's files") | The unsupported list is empty (`UNSUPPORTED_CLASSES = {}` since instances and water overlays landed 2026-10-10); the read-failure branch is a safety net | `done` (feature side); the table-read failure path is a `known issue` only if it fires |
-| i | hlvrad can't read the game's models | `prepare_hlvrad` raises | vrad ("couldn't read the game's models") | Safety net | `done` (net); a `known issue` if it fires |
+| i | hlvrad can't read the game's models, or can't write its copies of them | `prepare_hlvrad` raises | vrad ("couldn't read the game's models") | Safety net; it fired once for real (2026-10-14): a build folder past Windows' 260-character path limit, see below | `done` (net); the path case is warned about at export since 283c44a |
 | j | The user chooses Valve's tool in Settings | `map_tool` / `vis_tool` / `light_tool` == "VALVE" | the chosen tool | Allowed on purpose (comparison, debugging); not a fallback | n/a |
 
 Cases a to f are the ones named in the 2026-10-13 decisions; g to j are the remaining code paths, listed so the table is complete.
@@ -91,6 +91,8 @@ With `light_tool == "CYCLES"`, `use_hlvrad` is false and the vrad step is Valve'
 
 See the summary table. None of these is a feature gap: g is packaging, h and i are "couldn't read the game's files" nets (with `mapcompiler.UNSUPPORTED_CLASSES` empty since 2026-10-10 there is no map feature that sends a map to vbsp), j is the user's explicit choice in *Settings > Map & Model Compilers*, *Visibility*, *Lighting > Advanced*.
 
+**Case i seen for real: the 260-character path limit (2026-10-14).** During the whole-build benchmark ([../loading/](../loading/README.md)) a scratch build folder deep enough that the light compiler's model copies (`<build folder>\<map>.hlvrad_models\models\<folder>\<model>.dx90.vtx`, written by `prepare_hlvrad` / `core/radprep.py`) passed Windows' `MAX_PATH` (a 261-character path) made the copies fail, and the build fell back to Valve's vrad. Fix (283c44a, `blender/ops.py` `export_vmf`): the export warns when `len(vmf path) + len(map name) + 110 > 259` ("The build folder ... is deep: files the light compiler needs would pass Windows' 260-character path limit (then Valve's vrad lights the map). Save the .blend in a shorter folder, use a shorter Map Name, or set Settings > Game & Folders > Work Folder to a short path such as C:\hammerless"); the 110 is the allowance for the model subpath. The fall back itself stays the net: a warning, not a refusal.
+
 ## What a smart build does after a fallback
 
 `_choose_steps` returns the full step list ("full") when the last build has no `.built.*` record, which is the case after any `failure=True` fallback (`_shaky`). So a fallback never becomes the base of a later entities-only or lighting-only build: the next build recompiles everything with ours and leaves a clean record.
@@ -102,4 +104,4 @@ See the summary table. None of these is a feature gap: g is packaging, h and i a
 3. If it is a "doesn't do X yet" message: it is one of the rows above; update the row's status when fixed.
 4. Update this page in the same commit.
 
-Last checked: 2026-10-13 against branch light-layers, commit 41dc861.
+Last checked: 2026-10-14 against branch light-layers, commit e16ef85.

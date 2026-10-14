@@ -85,23 +85,38 @@ traps), re-checked in the current code.
 - **Status:** the vis knowledge page records this as by design (the outputs are meant to be equivalent); audit 2
   calls it a defect. Undecided. *Start Fresh* forces a full build in the meantime.
 
-### 12. Build & Play still freezes Blender for seconds on a big map (2026-10-13)
+### 12. Build & Play's first press in a fresh Blender still freezes about 5 s on a big map (2026-10-14)
 
 - **What happens:** the part of the button press that runs on Blender's main thread (`ops.export_vmf`: scene read,
-  Custom Model compiles, VMF write) freezes the window. On the user's imported map with 32 Swelling Pods and 0.17.0,
-  measured in a Blender window with the user's add-ons loaded: about 9 s on the first build after starting Blender,
-  about 5 s on a rebuild, plus whatever the game's prestart adds on Build & Play (unmeasured). The 20-30 s freezes
-  of 10-12/13 (`_sample_actions`) are fixed; see the fixed table.
-- **Where:** `vmfimport.rebuild` re-parses the 4.6 MB source and rebuilds 2,177 solids in pure Python on every
-  build (3.7 s); `extract._model_spec` runs per-triangle Python loops for each of the 32 identical pods (scene read
-  about 1.5 s); studiomdl, when a model's SMD/QC changed, 3.7 s even with 8 at a time (5865e70; a map rename or a
-  model-naming change recompiles all of them once).
-- **Suggested fix:** compile Custom Models in the background compile job instead of in `execute`; cache the imported
-  map's text and redo only the changed solids; share one `ModelSpec` across identical pods; start the game after the
-  export instead of before it. Target: under 1 s of freeze. Before calling it fixed, profile the whole button press
-  on the user's map (cProfile of `ops.export_vmf` plus a 0.1 s Blender timer measuring gaps over a whole windowed
-  build); and read `%TEMP%\hammerless_freeze.log` (the freeze recorder, `blender/watchdog.py`) first for any freeze
-  report. Details in [loading/README.md](loading/README.md).
+  Custom Model compiles, VMF write) freezes the window. On the user's imported map with 32 Swelling Pods, measured
+  in a Blender window: 4.6 s on the first build after starting Blender, 1.2 s on a rebuild, no hitch over 0.3 s
+  during the compile (5d40ae4; before it 9.2 s / 4.9 s, and 20-30 s before the pose cache; see the fixed table).
+- **Where:** the first press pays the imported map's parse (1.5 s, `vmfimport._document`, kept afterwards), the
+  shared pod model's compile (studiomdl on the main thread, `ops.py`), and cold caches.
+- **Suggested fix:** compile Custom Models in the background compile job instead of in `execute`; parse the
+  imported map in the background or keep the parsed Document with the file. Target: under 1 s on every press.
+  Before calling it fixed, profile the whole button press on the user's map (cProfile of `ops.export_vmf` plus a
+  0.1 s Blender timer measuring gaps over a whole windowed build); and read `%TEMP%\hammerless_freeze.log` (the
+  freeze recorder, `blender/watchdog.py`) first for any freeze report. Details in
+  [loading/README.md](loading/README.md).
+
+### 13. Long map names: the game fails to connect to its own listen server (2026-10-14, being measured)
+
+- **What happens:** in the whole-build benchmark a 33-character `hl_test_...` map name made the game fail to join
+  its own listen server after loading the map: `console.log` shows "Netchannel: failed reading message
+  net_SignonState from loopback" and the map never reaches HAMMERLESS_READY. Shorter names work.
+- **Status:** the limit isn't known yet; a test of 31- and 32-character names is running. Don't assume a number
+  until it's written here.
+- **Suggested fix:** once the limit is measured, refuse or warn about a Map Name past it in `export_vmf` (next to
+  the path-length warning, 283c44a).
+
+### 14. Our map compiler is slower than vbsp on the user's map (2026-10-14)
+
+- **What happens:** in the whole-build benchmark ([loading/README.md](loading/README.md)) hlvbsp took 5.4 s (median
+  of 3) against vbsp's 4.5 s on the imported 4.6 MB map; the other stages are many times faster than Valve's.
+- **Where:** `native/hlvbsp/`; not profiled yet.
+- **Suggested fix:** profile a full compile of this map (which phase is slower: the CSG, portals, the collision
+  writer, the Python-prepared tables), then match or beat vbsp.
 
 ## Defaults and settings
 
@@ -154,5 +169,7 @@ traps), re-checked in the current code.
 | Socket numbers lost digits (12345.67 -> 12345.7); `inf` / `nan` crashed the script | c29bd02 | `num_text`: shortest text that round-trips the single-precision value; 3.4e38 / 0.0 |
 | Build & Play froze Blender 20-30 s once 32 Swelling Pods were in the user's map (from 2026-10-12 19:02; `_sample_actions`: `frame_set` per frame of each pod's actions on a 3,134-object scene, ~150 ms depsgraph rebuild on the first frame of each action) | f57eadf, c29bd02 (0.17.0) | the pose cache: one sampling shared by all 32 pods (one rig fingerprint); traced with the freeze recorder (`watchdog.py`, 0df63c3); last user freeze in the log 10-12 20:29, before the fix was installed. Ruled out on the way: netprops catalogue, Example 62, Live Light Mixing's handler, other add-ons' handlers, quality migration, panel drawing, the Play path's waits |
 | studiomdl runs one after another (32 pods: 10 s of waiting) | 5865e70 | up to 8 at once |
+| Build & Play froze 9.2 s on a first build and 4.9 s on a rebuild of the user's map (32 pods) with 0.17.0 as released | 5d40ae4 (2026-10-14) | 4.6 s / 1.2 s: copies of a rigged model share one model by content (32 pods = 1 model), the imported file's parsed Document and each brush's faces are kept between builds, instance lookups from a memo, the prestart after the export; VMF text identical to before (see [loading/](loading/README.md)) |
+| A build folder past Windows' 260-character path limit made the light compiler fall back to Valve's vrad silently (its model copies couldn't be written) | 283c44a (2026-10-14) | the export warns when the path would pass the limit (the fall back itself stays the net; [compilers/valve-fallbacks.md](compilers/valve-fallbacks.md) case i) |
 
-Last checked: 2026-10-13 against branch light-layers, commit f834193 (0.17.0 + 5865e70).
+Last checked: 2026-10-14 against branch light-layers, commit e16ef85.
