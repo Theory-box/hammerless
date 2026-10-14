@@ -3,7 +3,7 @@
 ## 0.17.0 (test release, 2026-10-13)
 
 - **Self-lit model materials**: a Custom Model material with Emission turned on (Principled BSDF Emission Strength above 0, or an Emission shader) shows full bright in the game (UnlitGeneric), glowing in the dark.
-- **Top-Down Camera**: bots are never touched (no camera, their aim and walking as usual); the cursor is a glowing red ring (Example 62 adds it, hidden in the map, and reads its model) and glides after the mouse (Cursor Smoothing).
+- **Top-Down Camera**: bots are never touched (no camera, their aim and walking as usual); the cursor is a glowing red ring (Example 62 adds it, hidden in the map, and reads its model) and glides after the mouse (Cursor Smoothing). The ring is drawn smoothly between ticks, the camera follows every tick, and screen movement speeds up gradually (Move Acceleration) instead of jumping to full speed.
 
 - **Build & Play barely freezes Blender** on a big map (an imported map with 32 animated props, measured in a Blender window): 9 s to 4.6 s on a first build, 4.9 s to 1.2 s on later builds. Copies of an animated prop share one model (one to read and compile, not 32); an imported map's file is read once and kept; the game starts after the export instead of during it.
 - **Map Name: at most 31 characters.** With a longer name the game loads the map but can't join it (measured in game); longer names are trimmed as you type, and a build with one says so.
