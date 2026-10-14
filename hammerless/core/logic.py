@@ -176,6 +176,10 @@ HELPERS = {
         "    if (typeof t == \"array\") { local i = key.tointeger(); return (i >= 0 && i < t.len()) ? t[i] : null; }\n"
         "    try { return (key in t) ? t[key] : null; } catch (e) { return null; }\n}\n"
         "::HL_Count_ <- function(t) { return (t == null) ? 0.0 : t.len().tofloat(); }"),
+    "HL_Angle": (
+        "::HL_Angle <- function(v) {   // angles the game takes as a QAngle: a vector wire's (pitch, yaw, roll)\n"
+        "    if (typeof v == \"QAngle\") return v;\n"
+        "    return (v == null) ? QAngle(0, 0, 0) : QAngle(v.x, v.y, v.z);\n}\n"),
     "HL_Prop": (
         "::HL_PropOk <- function(e, name, i) {   // the entity has the property (and the list that slot)\n"
         "    if (typeof e != \"instance\" || !(\"IsValid\" in e) || !e.IsValid() || !NetProps.HasProp(e, name)) return false;\n"
@@ -434,6 +438,8 @@ class _Compiler:
             self.cheat_uses.append((n.id, used))
 
     def script_args(self, n: LNode, f: dict) -> tuple:
+        if "QAngle" in f.get("params", []):        # (angles on a vector wire: made a QAngle, see vs.cast)
+            self.helper("HL_Angle", HELPERS["HL_Angle"])
         socks = vs.param_sockets(f)
         target = self.typed_in(n, "target", vs.THING) if f.get("on") else None
         args = [self.typed_in(n, ident, kind) for ident, _label, kind in socks if ident != "target"]

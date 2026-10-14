@@ -104,6 +104,8 @@ def cast(expr: str, t: str) -> str:
         return f"({expr}).tointeger()"
     if t == "float":
         return f"({expr}).tofloat()"
+    if t == "QAngle":                   # (angles arrive on vector wires: Make Vector, a GetAngles...)
+        return f"::HL_Angle({expr})"
     return expr
 
 

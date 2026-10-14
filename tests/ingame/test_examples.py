@@ -35,6 +35,13 @@ for i, ex in enumerate(all_examples()):
     build_example(bpy.context, i)
 nuke = next(t for t in bpy.data.node_groups if t.name.endswith("Power-Up: Nuke"))
 nuke.nodes["chance"].inputs["value"].value = 1.0
+import os
+if os.environ.get("HL_TEST_MONITOR"):        # (e.g. "3440,0,1920x1080": the game on another screen, out of the way)
+    s.window_width, s.window_height = 1600, 900
+    try:
+        s.window_monitor = os.environ["HL_TEST_MONITOR"]
+    except TypeError:
+        pass
 '''
 
 
@@ -497,56 +504,53 @@ def check(run: Run, n: int, b: Bench):
         assert (hurt, worse, full) == (72, 58, 0), f"FOV at health 50, 10, 100: {hurt}, {worse}, {full}"
         return f"FOV at health 50: {hurt}, at 10: {worse}, at 100: {full} (own setting); look: {shot}"
     if n == 62:
-        # each survivor looks through a point_viewcontrol of their own, Height (500) above them, looking straight down
-        # at a fixed yaw (90); it follows the host with Smoothing 0.5 (lags, then catches up), doesn't turn with them;
-        # off: their own eyes again, the cameras gone
+        # each survivor looks through a point_viewcontrol of their own, attached to them (Turns With Player) Height
+        # (500) above, looking straight down and turning with them; Level Aim puts their aim level; off: their own
+        # eyes again, the cameras gone
         shots = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shots")
         views = ('(function() { local a = []; foreach (s in T.survivors()) { local v = NetProps.GetPropEntity(s, '
                  '"m_hViewEntity"); a.append(v == null ? null : [v.GetClassname(), v.GetOrigin() - s.GetOrigin(), '
-                 'v.GetAngles().x, v.GetAngles().y]); } return a; })()')
-        host = ('(function() { local v = NetProps.GetPropEntity(T.host(), "m_hViewEntity"); '
-                'return v == null ? null : v.GetOrigin() - T.host().GetOrigin(); })()')
+                 'v.GetAngles().x, v.GetAngles().y, v.GetMoveParent() == s, s.EyeAngles().y]); } return a; })()')
         # (example 45 puts everyone in third person, which keeps the player's own view angles: first person here)
-        b.console("sb_stop 1", "firstperson", wait=0.3)    # (bots standing still: cameras settle exactly above them)
+        b.console("sb_stop 1", "firstperson", wait=0.3)
         b.run("foreach (s in T.survivors()) s.SetVelocity(Vector(0, 0, 0));")
         # (it's on from map start; the run turned it off for the other examples: Turn On again, as a wire would)
         run.expect(62, run.load_mark, "start.start -> cam/set_on.run")
         b.run('getroottable()[' + TOPDOWN_FN + '("cam_set_on")].call(::HL_Scope);'); time.sleep(1.5)
         got = b.value(views)
         assert got and all(v is not None and v[0] == "point_viewcontrol" for v in got), f"views: {got}"
+        assert all(v[4] for v in got), f"cameras not attached to their survivors: {got}"
         assert all(abs(v[1][0]) < 2 and abs(v[1][1]) < 2 and abs(v[1][2] - 500) < 2 for v in got), \
             f"cameras not 500 above their survivors: {got}"
-        assert all(abs(v[2] - 89) < 0.5 and abs(v[3] - 90) < 0.5 for v in got), f"cameras' angles: {got}"
+        assert all(abs(v[2] - 89) < 0.5 for v in got), f"cameras not looking straight down: {got}"
         hurt = ('(function() { local a = []; foreach (s in T.survivors()) a.append(NetProps.GetPropInt(s, "m_takedamage")); '
                 'return a; })()')
         assert all(d == 2 for d in b.value(hurt)), f"m_takedamage {b.value(hurt)}: Enable's 'unhurtable' not undone"
         still = b.screenshot("62_top_down", out_dir=shots)
-        # the host jumps 300 units: a moment later the camera is part of the way there, then catches up
-        b.run("T.to(T.host(), T.host().GetOrigin() + Vector(300, 0, 0));"); time.sleep(0.12)
-        lag = b.value(host)
-        time.sleep(1.5)
-        caught = b.value(host)
-        assert lag is not None and 5 < -lag[0] < 295, f"no lag behind a 300-unit jump: offset {lag}"
-        assert abs(caught[0]) < 2 and abs(caught[1]) < 2 and abs(caught[2] - 500) < 2, f"didn't catch up: {caught}"
-        # walking: it keeps up (a little behind)
+        # turning: the host's camera turns with them (its yaw = theirs)
+        cam = ('(function() { local v = NetProps.GetPropEntity(T.host(), "m_hViewEntity"); '
+               'return [v.GetAngles().x, v.GetAngles().y, T.host().EyeAngles().y]; })()')
+        turned = []
+        for yaw in (0, 90, 200):
+            b.run(f"T.host().SnapEyeAngles(QAngle(0, {yaw}, 0));"); time.sleep(0.4)
+            turned.append(b.value(cam))
+        assert all(abs(((c[1] - c[2]) + 180) % 360 - 180) < 2 and abs(c[0] - 89) < 0.5 for c in turned), \
+            f"the camera didn't turn with the host (camera pitch, yaw, host yaw): {turned}"
+        turned_shot = b.screenshot("62_turned", out_dir=shots)
+        # aim: looking down 60 is put level again within an update or two
+        b.run("T.host().SnapEyeAngles(QAngle(60, 30, 0));"); time.sleep(0.5)
+        pitch = b.value("T.host().EyeAngles().x")
+        assert abs(pitch) < 1, f"aim not levelled: pitch {pitch} half a second after looking down 60"
+        # walking: the camera stays above them
         b.run("T.host().SnapEyeAngles(QAngle(0, 0, 0));")
         p0 = b.value("T.host().GetOrigin()")
         b.console("+forward", wait=0.6)
-        walking = b.screenshot("62_walking", out_dir=shots)
-        cam_speed = b.value('NetProps.GetPropEntity(T.host(), "m_hViewEntity").GetVelocity().Length()')
-        b.console("-forward", wait=0.1)
+        b.console("-forward", wait=0.3)
         p1 = b.value("T.host().GetOrigin()")
-        moving = b.value(host)
-        time.sleep(1.0)
-        settled = b.value(host)
+        after = b.value(views)
         walked = ((p1[0] - p0[0]) ** 2 + (p1[1] - p0[1]) ** 2) ** 0.5
         assert walked > 60, f"the host didn't walk ({walked:.0f} units): frozen?"
-        assert abs(settled[0]) < 2 and abs(settled[1]) < 2, f"not above the host after walking: {settled}"
-        assert cam_speed > 50, f"the camera's speed while walking: {cam_speed:.0f} (moved by speed, every tick)"
-        # turning: the camera doesn't
-        b.run("T.host().SnapEyeAngles(QAngle(0, 200, 0));"); time.sleep(0.5)
-        turned = b.value(views)
-        assert all(abs(v[3] - 90) < 0.5 for v in turned if v), f"a camera turned: {turned}"
+        assert all(abs(v[1][0]) < 2 and abs(v[1][1]) < 2 for v in after if v), f"not above them after walking: {after}"
         # off
         b.run('getroottable()[' + TOPDOWN_FN + '("cam_set_off")].call(::HL_Scope);'); time.sleep(1.0)
         off = b.value(views)
@@ -556,10 +560,10 @@ def check(run: Run, n: int, b: Bench):
         assert left == 0, f"{left} cameras left"
         assert all(d == 2 for d in b.value(hurt)), f"m_takedamage {b.value(hurt)} after turning it off"
         back = b.screenshot("62_off", out_dir=shots)
-        return (f"{len(got)} cameras 500 above, angles (89, 90), hurt normally (m_takedamage 2); 300-unit jump: {300 + lag[0]:.0f} covered after 0.12 s, "
-                f"caught up after 1.5 s; walked {walked:.0f} (camera moving at {cam_speed:.0f}/s, "
-                f"offset {moving[0]:.0f}, {moving[1]:.0f}); yaw fixed when turned; off: views null, cameras removed; look: {still}, "
-                f"{walking}, {back}")
+        return (f"{len(got)} cameras attached 500 above, looking down, hurt normally; turned with the host "
+                f"(pitch, yaw, host yaw: {[[round(x) for x in c] for c in turned]}); aim levelled ({pitch:.1f}); walked "
+                f"{walked:.0f} with the camera above; off: views null, cameras removed; look: {still}, {turned_shot}, "
+                f"{back}")
     if n == 38:
         # the question the game asks about each special the Director spawns, asked here the same way
         got = b.value("[" + ", ".join(f"::HL_Hook_ConvertZombieClass.call(::HL_Scope, {t})" for t in (1, 3, 6, 8)) + "]")

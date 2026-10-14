@@ -513,9 +513,15 @@ TOP_DOWN_FOLLOW = dict(
           "(hurt normally). Each update gives it a speed (Set Velocity: the game moves it every tick, smoothly; "
           "moving it by Set Origin ten times a second jumps): their own speed plus closing the gap to Height units "
           "above them within the update (10 a second), times 1 - Smoothing. Smoothing 0 keeps it locked above "
-          "them; higher, it lags behind and catches up. It isn't parented to them, so it never turns with them.",
+          "them; higher, it lags behind and catches up. Turns With Player: the camera is attached to them instead "
+          "(its SetParent input, !activator: them) and kept looking straight down relative to them (Set Local Angles "
+          "89 0 0), so it turns with them every frame and the keys move them up, down, left and right on screen; "
+          "Smoothing and Facing don't apply then. Level Aim: their aim is put level each update (Snap Eye Angles: "
+          "pitch 0, their yaw kept), so shots go flat across the ground; the camera shows nothing of their own view, "
+          "so the reset doesn't show.",
     inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("height", "Height", "num"),
-            ("smoothing", "Smoothing", "num"), ("facing", "Facing (yaw)", "num")],
+            ("smoothing", "Smoothing", "num"), ("facing", "Facing (yaw)", "num"),
+            ("turn", "Turns With Player", "bool"), ("level", "Level Aim", "bool")],
     outputs=[("then", "Then", "event")],
     nodes=[_var("cam", "top_down_camera", 0, 3, kind="thing", label="Their camera"),
            N("none", "HL_NodeCheck", 1, 3, label="None yet?", op="NOT_SET"),
@@ -545,7 +551,19 @@ TOP_DOWN_FOLLOW = dict(
            N("s_min", "HL_NodeMath", 3, 7, label="At least 0", op="MAXIMUM", sockets={"b": 0.0}),
            N("part", "HL_NodeMath", 4, 7, label="1 - Smoothing", op="SUBTRACT", sockets={"a": 1.0}),
            N("vel", "HL_NodeVectorMath", 7, 4, label="x (1 - Smoothing)", op="SCALE"),
-           fn("move", "entity:SetVelocity", 6, 1, label="Its speed until the next update")],
+           fn("move", "entity:SetVelocity", 6, 1, label="Its speed until the next update"),
+           N("if_attach", "HL_NodeIf", 3, 1, label="Turns with them?"),
+           N("attach", "HL_NodeFireInput", 4, 2, label="Attached to them",
+             sockets={"input": "SetParent", "value": "!activator"}),
+           N("if_turns", "HL_NodeIf", 6, 2, label="Turns with them?"),
+           N("look_down", "HL_NodeMakeVector", 7, 3, label="Straight down, relative to them",
+             sockets={"x": 89.0, "y": 0.0, "z": 0.0}),
+           fn("keep_down", "entity:SetLocalAngles", 7, 2, label="Looking straight down at them"),
+           N("if_level", "HL_NodeIf", 8, 1, label="Level aim?"),
+           fn("eye", "player:EyeAngles", 8, 3, label="Where they aim"),
+           N("parts", "HL_NodeBreakVector", 9, 3),
+           N("flat", "HL_NodeMakeVector", 10, 3, label="Level, same way", sockets={"x": 0.0, "z": 0.0}),
+           fn("level_aim", "player:SnapEyeAngles", 9, 1, label="Their aim level")],
     links=[("in.player", "cam.player"), ("cam.result", "none.a"), ("in.run", "if_none.in"),
            ("none.result", "if_none.condition"),
            # none yet: made above them, looking down, and switched on for them
@@ -553,7 +571,10 @@ TOP_DOWN_FOLLOW = dict(
            ("in.facing", "down.y"), ("target.vector", "kv.f_origin"), ("down.result", "kv.f_angles"),
            ("if_none.true", "spawn.run"), ("kv.table", "spawn.p1"), ("spawn.then", "keep.run"),
            ("in.player", "keep.player"), ("spawn.result", "keep.value"),
-           ("keep.then", "enable.run"), ("spawn.result", "enable.entity"), ("in.player", "enable.activator"),
+           ("keep.then", "if_attach.in"), ("in.turn", "if_attach.condition"),
+           ("if_attach.true", "attach.run"), ("spawn.result", "attach.entity"), ("in.player", "attach.activator"),
+           ("attach.then", "enable.run"), ("if_attach.false", "enable.run"),
+           ("spawn.result", "enable.entity"), ("in.player", "enable.activator"),
            # Enable left them unhurtable: back to normal
            ("enable.then", "if_never.in"), ("if_none.false", "if_never.in"), ("in.player", "hurt.entity"),
            ("hurt.value", "never.a"), ("never.result", "if_never.condition"),
@@ -564,13 +585,24 @@ TOP_DOWN_FOLLOW = dict(
            ("per_s.vector", "want.b"),
            ("in.smoothing", "s_max.a"), ("s_max.value", "s_min.a"), ("s_min.value", "part.b"),
            ("want.vector", "vel.a"), ("part.value", "vel.scale"),
-           ("hurtable.then", "move.run"), ("if_never.false", "move.run"),
-           ("cam.result", "move.target"), ("vel.vector", "move.p0"), ("move.then", "out.then")],
-    steps=[("Their camera: made the first time, above them looking straight down, switched on for them",
-            ["cam", "none", "if_none", "at", "up", "target", "down", "kv", "spawn", "keep", "enable"]),
+           ("hurtable.then", "if_turns.in"), ("if_never.false", "if_turns.in"), ("in.turn", "if_turns.condition"),
+           ("if_turns.false", "move.run"), ("cam.result", "move.target"), ("vel.vector", "move.p0"),
+           ("if_turns.true", "keep_down.run"), ("cam.result", "keep_down.target"), ("look_down.result", "keep_down.p0"),
+           # their aim level
+           ("move.then", "if_level.in"), ("keep_down.then", "if_level.in"), ("in.level", "if_level.condition"),
+           ("in.player", "eye.target"), ("eye.result", "parts.vector"), ("parts.y", "flat.y"),
+           ("if_level.true", "level_aim.run"), ("in.player", "level_aim.target"), ("flat.result", "level_aim.p0"),
+           ("level_aim.then", "out.then"), ("if_level.false", "out.then")],
+    steps=[("Their camera: made the first time, above them looking straight down, attached to them if it turns "
+            "with them, switched on for them",
+            ["cam", "none", "if_none", "at", "up", "target", "down", "kv", "spawn", "keep", "if_attach", "attach",
+             "enable"]),
            ("Enable makes them unhurtable: hurt normally again", ["hurt", "never", "if_never", "hurtable"]),
-           ("Its speed: theirs, plus closing the gap to Height above them, times 1 - Smoothing",
-            ["now_at", "diff", "per_s", "their_v", "want", "s_max", "s_min", "part", "vel", "move"])])
+           ("Turning with them: kept looking straight down. Otherwise its speed: theirs, plus closing the gap to "
+            "Height above them, times 1 - Smoothing",
+            ["if_turns", "look_down", "keep_down", "now_at", "diff", "per_s", "their_v", "want", "s_max", "s_min",
+             "part", "vel", "move"]),
+           ("Level Aim: their aim put level (their yaw kept)", ["if_level", "eye", "parts", "flat", "level_aim"])])
 
 TOP_DOWN_CAMERA = dict(
     about="Turn On: every survivor (bots too) sees the game from above, through a camera of their own that follows "
@@ -580,7 +612,8 @@ TOP_DOWN_CAMERA = dict(
           "the cameras are removed a moment later. Is On says which it is (the variable 'top_down_on', one per copy "
           "of this group).",
     inputs=[("on", "Turn On", "event"), ("off", "Turn Off", "event"), ("height", "Height", "num"),
-            ("smoothing", "Smoothing", "num"), ("facing", "Facing (yaw)", "num")],
+            ("smoothing", "Smoothing", "num"), ("facing", "Facing (yaw)", "num"),
+            ("turn", "Turns With Player", "bool"), ("level", "Level Aim", "bool")],
     outputs=[("is_on", "Is On", "bool")],
     nodes=[N("set_on", "HL_NodeSetVariable", 0, 0, label="On", var_name="top_down_on", scope="GROUP",
              value_kind="bool", sockets={"value": True}),
@@ -603,7 +636,8 @@ TOP_DOWN_CAMERA = dict(
     links=[("in.on", "set_on.run"), ("set_on.then", "timer.start"),
            ("timer.tick", "if_on.in"), ("state.result", "if_on.condition"), ("if_on.true", "each.run"),
            ("each.each", "follow.run"), ("each.item", "follow.player"), ("in.height", "follow.height"),
-           ("in.smoothing", "follow.smoothing"), ("in.facing", "follow.facing"),
+           ("in.smoothing", "follow.smoothing"), ("in.facing", "follow.facing"), ("in.turn", "follow.turn"),
+           ("in.level", "follow.level"),
            ("in.off", "set_off.run"), ("set_off.then", "timer.stop"), ("set_off.then", "each2.run"),
            ("each2.item", "cam.player"), ("each2.each", "disable.run"), ("cam.result", "disable.entity"),
            ("each2.item", "disable.activator"), ("disable.then", "back.run"), ("each2.item", "back.entity"),
@@ -1250,9 +1284,11 @@ EXAMPLES_3 = [
     dict(title="Top-Down Camera", level="Camera",
          about="A top-down mode, on from the start like a third-person mode: every survivor sees the game from "
                "straight above, like a top-down shooter. All in one node, Top-Down Camera (Tab goes in; its settings "
-               "are on the node): Height (units above the player), Smoothing (0: the camera stays locked on the "
-               "player; higher, up to 0.95: it lags behind and catches up) and Facing (the camera's yaw, fixed: 90 "
-               "puts north at the top of the screen; it never turns with the player). Turn Off and Turn On switch it "
+               "are on the node): Height (units above the player); Turns With Player (on: the camera turns as they "
+               "turn, so the keys move them up, down, left and right on screen); Level Aim (on: they can't aim up or "
+               "down, shots go flat across the ground); with Turns With Player off, Smoothing (0: the camera stays "
+               "locked on the player; higher, up to 0.95: it lags behind and catches up) and Facing (the camera's "
+               "fixed yaw: 90 puts north at the top of the screen). Turn Off and Turn On switch it "
                "during play (wire any event to them). Each survivor gets a point_viewcontrol of their own (kept in a "
                "player variable), switched on with its Enable input (setting their m_hViewEntity alone doesn't "
                "change what they see; Enable also makes them unhurtable, which the group puts back). Players still "
@@ -1262,7 +1298,7 @@ EXAMPLES_3 = [
          groups={"Top-Down Follow": TOP_DOWN_FOLLOW, "Top-Down Camera": TOP_DOWN_CAMERA},
          nodes=[N("start", "HL_NodeMapStart", 0, 0),
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
-                  sockets={"height": 500.0, "smoothing": 0.5, "facing": 90.0})],
+                  sockets={"height": 500.0, "smoothing": 0.5, "facing": 90.0, "turn": True, "level": True})],
          links=[("start.start", "cam.on")],
          steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node)",
                  ["start", "cam"])]),
