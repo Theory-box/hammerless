@@ -698,6 +698,81 @@ TOP_DOWN_MOVE = dict(
                                        "cb", "sb", "final", "go"])])
 
 
+TOP_DOWN_ASSIST = dict(
+    about="Aim Assist: while a human survivor holds fire (Get Button Mask bit 1), their aim snaps to the nearest "
+          "common infected within Radius of a point Radius units in front of them (Find By Classname Nearest: a "
+          "cheap 'near my aim' check, no loop over every zombie). The way to it becomes a yaw by turning a helper "
+          "info_target (hl_aim_<player number>, made the first time) to face it (Set Forward Vector) and reading its "
+          "angles; their aim is snapped to that yaw, level (Snap Eye Angles). Bots are left alone.",
+    inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("radius", "Radius", "num")],
+    outputs=[("then", "Then", "event")],
+    nodes=[fn("bot", "IsPlayerABot", 0, 2, label="A bot?"),
+           N("if_human", "HL_NodeIf", 1, 0, label="Bots aim as usual"),
+           fn("keys", "player:GetButtonMask", 1, 3, label="Keys held"),
+           N("fire_bit", "HL_NodeMath", 2, 3, label="Fire (1)", op="BIT_AND", sockets={"b": 1.0}),
+           N("firing", "HL_NodeCompare", 3, 3, label="Firing?", op="GREATER", sockets={"b": 0.0}),
+           N("if_firing", "HL_NodeIf", 2, 0, label="Only while firing"),
+           fn("idx", "entity:GetEntityIndex", 2, 5),
+           N("hname", "HL_NodeFormatText", 3, 5, label="Their aim helper", template="hl_aim_{a}"),
+           fn("found", "Entities.FindByName", 4, 5, label="Their aim helper"),
+           N("missing", "HL_NodeCheck", 5, 5, label="Not made yet?", op="NOT_SET"),
+           N("if_new", "HL_NodeIf", 3, 0, label="Made the first time"),
+           fn("eye", "player:EyePosition", 3, 7, label="Their eyes"),
+           N("kv_helper", "HL_NodeMakeTable", 4, 7, label="The helper", fields="targetname: text, origin: vec"),
+           fn("spawn_helper", "SpawnEntityFromTable", 4, 0, {"p0": "info_target"}),
+           # a point in front of them, along their aim
+           fn("helper", "Entities.FindByName", 5, 7, label="Their aim helper"),
+           fn("aim", "player:EyeAngles", 5, 9, label="Where they aim"),
+           N("ap", "HL_NodeBreakVector", 6, 9),
+           N("level", "HL_NodeMakeVector", 7, 9, label="Level, the way they aim", sockets={"x": 0.0, "z": 0.0}),
+           fn("turn", "entity:SetAngles", 5, 0, label="The helper turned the way they aim"),
+           fn("dir", "entity:GetForwardVector", 7, 7, label="So its forward is their aim"),
+           N("ahead", "HL_NodeVectorMath", 8, 7, label="x Radius", op="SCALE"),
+           N("centre", "HL_NodeVectorMath", 9, 7, label="In front of them", op="ADD"),
+           fn("near", "Entities.FindByClassnameNearest", 9, 8, {"p0": "infected"}, label="The nearest common there"),
+           N("has", "HL_NodeCheck", 10, 8, label="One?", op="IS_SET"),
+           N("if_has", "HL_NodeIf", 6, 0, label="A common near their aim?"),
+           # the way to it, as a yaw
+           fn("z_at", "entity:GetOrigin", 10, 9, label="Where it is"),
+           N("chest", "HL_NodeMakeVector", 10, 10, label="Chest height", sockets={"x": 0.0, "y": 0.0, "z": 40.0}),
+           N("z_chest", "HL_NodeVectorMath", 11, 9, label="Its chest", op="ADD"),
+           N("to_it", "HL_NodeVectorMath", 12, 9, label="The way to it", op="SUBTRACT"),
+           fn("face", "entity:SetForwardVector", 7, 0, label="The helper facing it"),
+           fn("h_ang", "entity:GetAngles", 12, 7, label="So its angles are the way"),
+           N("hp", "HL_NodeBreakVector", 13, 7),
+           N("snap_to", "HL_NodeMakeVector", 14, 7, label="Level, that way", sockets={"x": 0.0, "z": 0.0}),
+           fn("snap", "player:SnapEyeAngles", 8, 0, label="Their aim on it")],
+    links=[("in.player", "bot.p0"), ("bot.result", "if_human.condition"), ("in.run", "if_human.in"),
+           ("if_human.true", "out.then"),
+           ("in.player", "keys.target"), ("keys.result", "fire_bit.a"), ("fire_bit.value", "firing.a"),
+           ("if_human.false", "if_firing.in"), ("firing.result", "if_firing.condition"), ("if_firing.false", "out.then"),
+           ("in.player", "idx.target"), ("idx.result", "hname.a"), ("hname.result", "found.p1"),
+           ("found.result", "missing.a"), ("if_firing.true", "if_new.in"), ("missing.result", "if_new.condition"),
+           ("in.player", "eye.target"), ("hname.result", "kv_helper.f_targetname"), ("eye.result", "kv_helper.f_origin"),
+           ("if_new.true", "spawn_helper.run"), ("kv_helper.table", "spawn_helper.p1"),
+           # a point Radius in front of them
+           ("spawn_helper.then", "turn.run"), ("if_new.false", "turn.run"),
+           ("hname.result", "helper.p1"), ("helper.result", "turn.target"),
+           ("in.player", "aim.target"), ("aim.result", "ap.vector"), ("ap.y", "level.y"), ("level.result", "turn.p0"),
+           ("helper.result", "dir.target"), ("dir.result", "ahead.a"), ("in.radius", "ahead.scale"),
+           ("eye.result", "centre.a"), ("ahead.vector", "centre.b"),
+           ("centre.vector", "near.p1"), ("in.radius", "near.p2"), ("near.result", "has.a"),
+           ("turn.then", "if_has.in"), ("has.result", "if_has.condition"), ("if_has.false", "out.then"),
+           # face it, read the yaw, snap their aim there
+           ("near.result", "z_at.target"), ("z_at.result", "z_chest.a"), ("chest.result", "z_chest.b"),
+           ("z_chest.vector", "to_it.a"), ("eye.result", "to_it.b"),
+           ("if_has.true", "face.run"), ("helper.result", "face.target"), ("to_it.vector", "face.p0"),
+           ("helper.result", "h_ang.target"), ("h_ang.result", "hp.vector"), ("hp.y", "snap_to.y"),
+           ("face.then", "snap.run"), ("in.player", "snap.target"), ("snap_to.result", "snap.p0"),
+           ("snap.then", "out.then")],
+    steps=[("Humans, while firing", ["bot", "if_human", "keys", "fire_bit", "firing", "if_firing"]),
+           ("Their aim helper, made the first time", ["idx", "hname", "found", "missing", "if_new", "eye", "kv_helper",
+                                                      "spawn_helper"]),
+           ("The nearest common near their aim", ["helper", "aim", "ap", "level", "turn", "dir", "ahead", "centre",
+                                                   "near", "has", "if_has"]),
+           ("Their aim snapped to it", ["z_at", "chest", "z_chest", "to_it", "face", "h_ang", "hp", "snap_to",
+                                        "snap"])])
+
 TOP_DOWN_CAMERA = dict(
     about="Turn On: every survivor (bots too) sees the game from above, through a camera of their own that follows "
           "them without turning with them ('Top-Down Follow'): ten times a second (the Timer: 0.1 s is its fastest) "
@@ -709,7 +784,8 @@ TOP_DOWN_CAMERA = dict(
     inputs=[("on", "Turn On", "event"), ("off", "Turn Off", "event"), ("height", "Height", "num"),
             ("smoothing", "Smoothing", "num"), ("facing", "Facing (yaw)", "num"),
             ("turn", "Turns With Player", "bool"), ("level", "Level Aim", "bool"),
-            ("move", "Screen Movement", "bool"), ("speed", "Move Speed", "num")],
+            ("move", "Screen Movement", "bool"), ("speed", "Move Speed", "num"),
+            ("assist", "Aim Assist", "bool")],
     outputs=[("is_on", "Is On", "bool")],
     nodes=[N("set_on", "HL_NodeSetVariable", 0, 0, label="On", var_name="top_down_on", scope="GROUP",
              value_kind="bool", sockets={"value": True}),
@@ -737,6 +813,8 @@ TOP_DOWN_CAMERA = dict(
            N("if_move", "HL_NodeIf", 3, 8, label="Screen Movement?"),
            N("each3", "HL_NodeForEach", 4, 8, what="SURVIVORS"),
            N("mover", "HL_NodeGroup", 5, 8, group="Top-Down Movement"),
+           N("if_assist", "HL_NodeIf", 6, 8, label="Aim Assist?"),
+           N("assist", "HL_NodeGroup", 7, 8, group="Top-Down Aim Assist", sockets={"radius": 200.0}),
 
            # off: their own walking back
            N("flags_off", "HL_NodeGetProperty", 6, 6, label="Their flags", key="m_fFlags"),
@@ -746,7 +824,8 @@ TOP_DOWN_CAMERA = dict(
            ("tick.tick", "if_on2.in"), ("state2.result", "if_on2.condition"), ("if_on2.true", "each3.run"),
            ("each3.each", "if_move.in"), ("in.move", "if_move.condition"), ("if_move.true", "mover.run"),
            ("each3.item", "mover.player"), ("in.speed", "mover.speed"),
-           ("set_off.then", "tick.stop"),
+           ("mover.then", "if_assist.in"), ("if_move.false", "if_assist.in"), ("in.assist", "if_assist.condition"),
+           ("if_assist.true", "assist.run"), ("each3.item", "assist.player"), ("set_off.then", "tick.stop"),
            ("forget.then", "walk.run"), ("each2.item", "walk.entity"), ("each2.item", "flags_off.entity"),
            ("flags_off.value", "walk_back.a"), ("walk_back.value", "walk.value"),
 
@@ -764,7 +843,7 @@ TOP_DOWN_CAMERA = dict(
            ("Off: their own eyes again, the cameras removed",
             ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk"]),
            ("Screen Movement: every tick, each human survivor moves relative to the screen",
-            ["tick", "state2", "if_on2", "if_move", "each3", "mover"])])
+            ["tick", "state2", "if_on2", "if_move", "each3", "mover", "if_assist", "assist"])])
 
 EXAMPLES_3 = [
     dict(title="Power-Up: Nuke", level="Power-Ups",
@@ -1404,7 +1483,8 @@ EXAMPLES_3 = [
                "straight above, like a top-down shooter. All in one node, Top-Down Camera (Tab goes in; its settings "
                "are on the node): Height (units above the player); Screen Movement (on: W, A, S, D move human "
                "players up, left, down and right on the screen whichever way they face, at Move Speed; bots walk as "
-               "usual); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
+               "usual); Aim Assist (on: while a human player holds fire, their aim snaps to the nearest common in "
+               "front of them); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
                "down, shots go flat across the ground); Smoothing (0: the camera stays locked on the player; "
                "higher, up to 0.95: it lags behind, and turns behind, and catches up) and Facing (the camera's yaw "
                "with Turns With Player off: 90 puts north at the top of the screen). Turn Off and Turn On switch it "
@@ -1415,11 +1495,11 @@ EXAMPLES_3 = [
                "in the open: under a ceiling a camera Height above ends up inside the floor above or the solid map, "
                "and shows that (lower Height indoors). Don't mix it with third person.",
          groups={"Top-Down Follow": TOP_DOWN_FOLLOW, "Top-Down Movement": TOP_DOWN_MOVE,
-                 "Top-Down Camera": TOP_DOWN_CAMERA},
+                 "Top-Down Aim Assist": TOP_DOWN_ASSIST, "Top-Down Camera": TOP_DOWN_CAMERA},
          nodes=[N("start", "HL_NodeMapStart", 0, 0),
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
                   sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": False, "level": True,
-                           "move": True, "speed": 220.0})],
+                           "move": True, "speed": 220.0, "assist": True})],
          links=[("start.start", "cam.on")],
          steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node)",
                  ["start", "cam"])]),
