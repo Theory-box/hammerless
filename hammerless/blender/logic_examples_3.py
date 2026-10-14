@@ -808,8 +808,9 @@ TOP_DOWN_CURSOR = dict(
           "invisible mover (a point_viewcontrol hl_curm_<player number>, never switched on, given the cursor's model "
           "but not drawn: the game only smooths the movement of things with a model; it moves by its speed, "
           "Set Velocity, drawn smoothly between ticks; a model moved by Set Origin jumps, as Set "
-          "Origin is a teleport): each tick the mover gets the speed that closes the gap to the ground point within "
-          "the tick, times 1 - Smoothing (0 to 0.95: higher, the model glides after the cursor; the aim always goes "
+          "Origin is a teleport): each tick the mover gets the speed that closes the gap within the tick to where "
+          "the ground point will be (a tick ahead: this tick's cursor move and their own move in a tick, as the "
+          "speed only applies from the next tick), times 1 - Smoothing (0 to 0.95: higher, the model glides after the cursor; the aim always goes "
           "to the cursor itself). Light: a light_dynamic (hl_curl_<player number>, Light Colour 'R G B A', "
           "Light Brightness, Light Radius in units) made with the cursor, 40 units above it, riding the same mover. "
           "Screen directions come from their camera like Top-Down Movement. Bots are left alone.",
@@ -888,6 +889,8 @@ TOP_DOWN_CURSOR = dict(
            N("capped", "HL_NodeMath", 17, 15, label="At most Radius", op="MINIMUM"),
            N("ratio", "HL_NodeMath", 18, 14, label="Shrink by", op="DIVIDE"),
            N("kept", "HL_NodeVectorMath", 19, 13, label="Within Radius", op="SCALE"),
+           N("lead_now", "HL_NodeVectorMath", 19, 15, label="This tick's cursor move", op="SUBTRACT"),
+           _var("keep_lead", "top_down_cursor_lead", 7, 2, get=False, kind="vec", label="This tick's move (kept)"),
            _var("keep", "top_down_cursor", 8, 0, get=False, kind="vec", label="Cursor (from them)"),
            # their aim toward it, level
            fn("helper", "Entities.FindByName", 9, 6, label="Their aim helper"),
@@ -913,6 +916,14 @@ TOP_DOWN_CURSOR = dict(
            # the mover's speed: closing the gap to the ground point within the tick (30 a second)
            fn("mover", "Entities.FindByName", 14, 6, label="Their cursor's mover"),
            fn("m_at", "entity:GetOrigin", 15, 6, label="Where it is"),
+           _var("lead", "top_down_cursor_lead", 15, 12, kind="vec", label="This tick's cursor move"),
+           fn("p_vel", "entity:GetVelocity", 15, 13, label="Their speed"),
+           N("pv", "HL_NodeBreakVector", 16, 13),
+           N("pv_flat", "HL_NodeMakeVector", 17, 13, label="Along the ground", sockets={"z": 0.0}),
+           N("pv_tick", "HL_NodeVectorMath", 18, 13, label="Moved in a tick (/ 30)", op="SCALE",
+             sockets={"scale": 1.0 / 30.0}),
+           N("lead_sum", "HL_NodeVectorMath", 18, 12, label="Where it's going in a tick", op="ADD"),
+           N("ahead", "HL_NodeVectorMath", 16, 11, label="The ground point, a tick ahead", op="ADD"),
            N("m_gap", "HL_NodeVectorMath", 17, 10, label="The gap", op="SUBTRACT"),
            N("m_rate", "HL_NodeVectorMath", 18, 10, label="Closed within a tick (x 30)", op="SCALE",
              sockets={"scale": 30.0}),
@@ -964,7 +975,10 @@ TOP_DOWN_CURSOR = dict(
            ("sum1.vector", "sum2.a"), ("move_u.vector", "sum2.b"),
            ("sum2.vector", "len.a"), ("len.value", "len_ok.a"), ("len_ok.value", "capped.a"), ("in.radius", "capped.b"),
            ("capped.value", "ratio.a"), ("len_ok.value", "ratio.b"), ("sum2.vector", "kept.a"), ("ratio.value", "kept.scale"),
-           ("start_cursor.then", "keep.run"), ("if_new.false", "keep.run"), ("in.player", "keep.player"),
+           ("kept.vector", "lead_now.a"), ("cursor.result", "lead_now.b"),
+           ("start_cursor.then", "keep_lead.run"), ("if_new.false", "keep_lead.run"), ("in.player", "keep_lead.player"),
+           ("lead_now.vector", "keep_lead.value"),
+           ("keep_lead.then", "keep.run"), ("in.player", "keep.player"),
            ("kept.vector", "keep.value"),
            # their aim toward it, level
            ("hname.result", "helper.p1"), ("keep.then", "face.run"), ("helper.result", "face.target"),
@@ -979,7 +993,11 @@ TOP_DOWN_CURSOR = dict(
            ("trace.then", "if_cast.in"), ("in.player", "traced.player"), ("traced.result", "cast.p0"),
            ("cast.result", "if_cast.condition"), ("traced.result", "ground.table"),
            ("mname.result", "mover.p1"), ("mover.result", "m_at.target"),
-           ("ground.value", "m_gap.a"), ("m_at.result", "m_gap.b"), ("m_gap.vector", "m_rate.a"),
+           ("in.player", "lead.player"), ("in.player", "p_vel.target"), ("p_vel.result", "pv.vector"),
+           ("pv.x", "pv_flat.x"), ("pv.y", "pv_flat.y"), ("pv_flat.result", "pv_tick.a"),
+           ("lead.result", "lead_sum.a"), ("pv_tick.vector", "lead_sum.b"),
+           ("ground.value", "ahead.a"), ("lead_sum.vector", "ahead.b"),
+           ("ahead.vector", "m_gap.a"), ("m_at.result", "m_gap.b"), ("m_gap.vector", "m_rate.a"),
            ("in.smoothing", "g_max.a"), ("g_max.value", "g_min.a"), ("g_min.value", "g_part.b"),
            ("m_rate.vector", "m_vel.a"), ("g_part.value", "m_vel.scale"),
            ("if_cast.true", "place.run"), ("if_cast.false", "place.run"),
@@ -994,12 +1012,13 @@ TOP_DOWN_CURSOR = dict(
            ("The mouse's turn moves the cursor, within Radius", ["aim", "ap", "last_yaw", "dy", "w1", "w2", "w3",
                                                                 "dx_amt", "neg_sens", "dy_amt", "move_l", "move_u",
                                                                 "cursor", "sum1", "sum2", "len", "len_ok", "capped",
-                                                                "ratio", "kept", "keep"]),
+                                                                "ratio", "kept", "lead_now", "keep_lead", "keep"]),
            ("Their aim toward it, level", ["helper", "face", "h_ang", "hp", "level", "snap", "keep_yaw"]),
            ("The cursor model on the ground there", ["at", "above", "below", "from", "to", "kv_trace", "trace",
                                                       "traced", "cast", "if_cast", "ground"]),
            ("The mover's speed: the gap to there within the tick, times 1 - Smoothing",
-            ["mover", "m_at", "m_gap", "m_rate", "g_max", "g_min", "g_part", "m_vel", "place"])])
+            ["mover", "m_at", "lead", "p_vel", "pv", "pv_flat", "pv_tick", "lead_sum", "ahead", "m_gap", "m_rate",
+             "g_max", "g_min", "g_part", "m_vel", "place"])])
 
 TOP_DOWN_CAMERA = dict(
     about="Turn On: every human survivor sees the game from above, through a camera of their own that follows "
