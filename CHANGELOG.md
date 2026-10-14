@@ -3,6 +3,7 @@
 ## 0.17.0 (test release, 2026-10-13)
 
 - **Build & Play barely freezes Blender** on a big map (an imported map with 32 animated props, measured in a Blender window): 9 s to 4.6 s on a first build, 4.9 s to 1.2 s on later builds. Copies of an animated prop share one model (one to read and compile, not 32); an imported map's file is read once and kept; the game starts after the export instead of during it.
+- **Map Name: at most 31 characters.** With a longer name the game loads the map but can't join it (measured in game); longer names are trimmed as you type, and a build with one says so.
 - A build folder deep enough to pass Windows' 260-character path limit gets a warning (the light compiler's files couldn't be written there, so Valve's vrad lit the map).
 
 - **Build & Play doesn't freeze on animated models**: a rig's animation is sampled once and shared by its copies (32 animated pods: 21 s to about 1 s); Check the Map doesn't sample animations at all. Long Map Names no longer break Custom Model names (the game's 63-character limit).
