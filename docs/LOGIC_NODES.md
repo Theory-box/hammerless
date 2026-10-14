@@ -33,7 +33,7 @@ The Add menu has one place per purpose:
 | **Overrides** | Override, Answer |
 | **Groups** | Make Group (Ctrl+G), Ungroup (Ctrl+Alt+G), Group Input / Output (inside a group), and every node group in the file |
 | **Script** | Script and Script Value (your own Squirrel code; the examples don't use them: everything they do is built from nodes) |
-| **Examples**, **Examples 2**, **Examples 3** | 61 ready-made graphs to learn from (below) |
+| **Examples**, **Examples 2**, **Examples 3** | 62 ready-made graphs to learn from (below) |
 
 ### Entity properties
 
@@ -137,6 +137,7 @@ The game only asks the map before doing things (Override nodes) and only shows a
 | 59 | No Guns in Here | Survivors near the room's middle can't fire (m_afButtonDisabled, the attack bit), set four times a second with Pick Value; a Volume shows a message on entering |
 | 60 | Ghost Survivors | Every survivor see-through for 10 s (players have no colour input): m_nRenderMode 1 and m_clrRender with a low alpha, then back to normal |
 | 61 | Tunnel Vision | Each survivor's field of view narrows as their health drops: m_iHealth through Math to m_iFOV (0 = their own setting at full health) |
+| 62 | Top-Down Camera | One node, Top-Down Camera, with its settings on it (Height, Smoothing, Facing): a Button turns it on and off (If on its Is On). Inside: a Timer (0.1 s) runs 'Top-Down Follow' for each survivor: a point_viewcontrol of their own (Spawn Entity, kept in a per-player variable) looking straight down at a fixed yaw, switched on by Fire Input Enable with the player as activator (Set Entity Property m_takedamage 2 undoes the camera making them unhurtable), then Set Velocity each update (their speed plus closing the gap, times 1 - Smoothing: the game moves it smoothly every tick); off: Fire Input Disable, m_hViewEntity emptied, the cameras removed (groups: Top-Down Camera, Top-Down Follow) |
 | 48 | Flashlight Battery | The 'Flashlight Battery' group (with 'Flashlight Is On' / 'Flashlight Off' inside it), per-player variables, Math bit operations, text built up in a For Each, HUD Text |
 
 `demo/hl_test_nuke.blend` (made by `tests/fixtures/nuke_test.py`) is the demo level with it, set so the first kill drops it, and 40 commons on the field.

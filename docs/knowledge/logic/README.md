@@ -85,7 +85,7 @@ Lessons recorded in `tests/ingame/README.md`: test map names `hl_test_*` only; n
 
 ## Examples: what each one measured
 
-61 examples in three menus (`docs/LOGIC_NODES.md` lists them all). Facts they established, beyond the table above:
+62 examples in three menus (`docs/LOGIC_NODES.md` lists them all). Facts they established, beyond the table above:
 
 | Example | Measured |
 |---|---|
@@ -104,6 +104,7 @@ Lessons recorded in `tests/ingame/README.md`: test map names `hl_test_*` only; n
 | 59 No Guns in Here | `m_afButtonDisabled` attack bit, set four times a second |
 | 60 Ghost Survivors | `m_nRenderMode 1` + `m_clrRender` low alpha: see-through players keep solid held guns |
 | 61 Tunnel Vision | `m_iFOV` (0 = the player's own setting) |
+| 62 Top-Down Camera | setting `m_hViewEntity` alone doesn't change what the player sees (measured on the demo map, 2026-10-13): a `point_viewcontrol` needs its `Enable` input (activator = the player), which also sets the player's `m_takedamage` to 0 (set it back to 2; `Disable` restores it) and doesn't freeze them without spawnflag 4. A camera moved with `SetOrigin` jumps on screen at the rate it's moved (10 Hz from a Timer: frames still, then a jump); moved by `SetVelocity` (it is noclip) it moves every tick, evenly. Third person (`thirdpersonshoulder`) keeps the camera's position but the player's own view angles |
 | dropped: Tank Rage Meter | an AI Tank's `m_frustration` stays 0 in co-op (2026-10-13) |
 
 Each of 55-61 uses a property the game offers no other way; all checked in game.

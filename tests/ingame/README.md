@@ -58,7 +58,7 @@ Errors in the code raise `BenchError` with the game's message.
 ## The example regression: `test_examples.py`
 
 ```
-python tests/ingame/test_examples.py              # every example (61; about 8 minutes)
+python tests/ingame/test_examples.py              # every example (62; about 8 minutes)
 python tests/ingame/test_examples.py 21 22 42     # some
 python tests/ingame/test_examples.py --no-build   # reuse the map already built
 ```
