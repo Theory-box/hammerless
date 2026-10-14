@@ -618,16 +618,97 @@ TOP_DOWN_FOLLOW = dict(
              "spin_parts", "push_by", "push_vec", "spin"]),
            ("Level Aim: their aim put level (their yaw kept)", ["if_level", "eye", "parts", "flat", "level_aim"])])
 
+TOP_DOWN_MOVE = dict(
+    about="One human survivor's movement, one tick (bots are left alone), relative to the screen: W up, S down, A "
+          "left, D right, whichever way they face. Their own walking is switched off by FL_ATCONTROLS (bit 64 of "
+          "m_fFlags: the game's 'at the controls' flag, as on a mounted gun: the walk keys do nothing, while turning, "
+          "shooting, jumping and crouching work; the game still does gravity, stairs and collisions). Each tick: the "
+          "keys held (Get Button Mask: forward 8, back 16, left 512, right 1024) make a direction from their camera's "
+          "screen-up (its forward direction, flattened: it looks down at 89, so that points up the screen) and "
+          "screen-left (straight up x screen-up), and they get Move Speed that way (Set Velocity, keeping their "
+          "falling or jumping speed). No key: the game slows them down as usual.",
+    inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("speed", "Move Speed", "num")],
+    outputs=[("then", "Then", "event")],
+    nodes=[fn("bot", "IsPlayerABot", 0, 2, label="A bot?"),
+           N("if_human", "HL_NodeIf", 1, 0, label="Bots walk as usual"),
+           _var("cam", "top_down_camera", 0, 4, kind="thing", label="Their camera"),
+           N("no_cam", "HL_NodeCheck", 1, 4, label="No camera yet?", op="NOT_SET"),
+           N("if_cam", "HL_NodeIf", 2, 0, label="Camera there?"),
+           N("flags", "HL_NodeGetProperty", 2, 2, label="Their flags", key="m_fFlags"),
+           N("atc", "HL_NodeMath", 3, 2, label="+ FL_ATCONTROLS (64)", op="BIT_OR", sockets={"b": 64.0}),
+           N("no_walk", "HL_NodeSetProperty", 3, 0, label="Their own walking off", key="m_fFlags"),
+           fn("keys", "player:GetButtonMask", 2, 6, label="Keys held"),
+           N("k_f", "HL_NodeMath", 3, 5, label="W (8)", op="BIT_AND", sockets={"b": 8.0}),
+           N("k_b", "HL_NodeMath", 3, 6, label="S (16)", op="BIT_AND", sockets={"b": 16.0}),
+           N("k_l", "HL_NodeMath", 3, 7, label="A (512)", op="BIT_AND", sockets={"b": 512.0}),
+           N("k_r", "HL_NodeMath", 3, 8, label="D (1024)", op="BIT_AND", sockets={"b": 1024.0}),
+           N("f1", "HL_NodeMath", 4, 5, label="0 or 1", op="MINIMUM", sockets={"b": 1.0}),
+           N("b1", "HL_NodeMath", 4, 6, label="0 or 1", op="MINIMUM", sockets={"b": 1.0}),
+           N("l1", "HL_NodeMath", 4, 7, label="0 or 1", op="MINIMUM", sockets={"b": 1.0}),
+           N("r1", "HL_NodeMath", 4, 8, label="0 or 1", op="MINIMUM", sockets={"b": 1.0}),
+           N("ud", "HL_NodeMath", 5, 5, label="Up - down", op="SUBTRACT"),
+           N("lr", "HL_NodeMath", 5, 7, label="Left - right", op="SUBTRACT"),
+           fn("cam_fwd", "entity:GetForwardVector", 4, 3, label="Where the camera looks"),
+           N("cf", "HL_NodeBreakVector", 5, 3),
+           N("flat", "HL_NodeMakeVector", 6, 3, label="Flattened", sockets={"z": 0.0}),
+           N("up", "HL_NodeVectorMath", 7, 3, label="Screen-up", op="NORMALIZE"),
+           N("zaxis", "HL_NodeMakeVector", 7, 4, label="Straight up", sockets={"x": 0.0, "y": 0.0, "z": 1.0}),
+           N("left", "HL_NodeVectorMath", 8, 4, label="Screen-left (straight up x screen-up)", op="CROSS"),
+           N("w_up", "HL_NodeVectorMath", 8, 5, label="Screen-up x (up - down)", op="SCALE"),
+           N("w_left", "HL_NodeVectorMath", 9, 5, label="Screen-left x (left - right)", op="SCALE"),
+           N("wish", "HL_NodeVectorMath", 10, 5, label="The way they want to go", op="ADD"),
+           N("len", "HL_NodeVectorMath", 10, 6, label="Any?", op="LENGTH"),
+           N("moving", "HL_NodeCompare", 11, 6, label="A key held?", op="GREATER", sockets={"b": 0.0}),
+           N("if_moving", "HL_NodeIf", 4, 0),
+           N("dirn", "HL_NodeVectorMath", 11, 5, label="One unit long", op="NORMALIZE"),
+           N("spd", "HL_NodeVectorMath", 12, 5, label="x Move Speed", op="SCALE"),
+           fn("cur", "entity:GetVelocity", 11, 8, label="Their speed now"),
+           N("cb", "HL_NodeBreakVector", 12, 8),
+           N("sb", "HL_NodeBreakVector", 13, 5),
+           N("final", "HL_NodeMakeVector", 14, 6, label="That way, still falling or jumping as they were"),
+           fn("go", "entity:SetVelocity", 5, 0, label="Their speed this tick")],
+    links=[("in.player", "bot.p0"), ("bot.result", "if_human.condition"), ("in.run", "if_human.in"),
+           ("if_human.true", "out.then"),
+           ("in.player", "cam.player"), ("cam.result", "no_cam.a"), ("no_cam.result", "if_cam.condition"),
+           ("if_human.false", "if_cam.in"), ("if_cam.true", "out.then"),
+           # their own walking off
+           ("in.player", "flags.entity"), ("flags.value", "atc.a"),
+           ("if_cam.false", "no_walk.run"), ("in.player", "no_walk.entity"), ("atc.value", "no_walk.value"),
+           # the keys
+           ("in.player", "keys.target"), ("keys.result", "k_f.a"), ("keys.result", "k_b.a"), ("keys.result", "k_l.a"),
+           ("keys.result", "k_r.a"), ("k_f.value", "f1.a"), ("k_b.value", "b1.a"), ("k_l.value", "l1.a"),
+           ("k_r.value", "r1.a"), ("f1.value", "ud.a"), ("b1.value", "ud.b"), ("l1.value", "lr.a"), ("r1.value", "lr.b"),
+           # screen directions from the camera
+           ("cam.result", "cam_fwd.target"), ("cam_fwd.result", "cf.vector"), ("cf.x", "flat.x"), ("cf.y", "flat.y"),
+           ("flat.result", "up.a"), ("zaxis.result", "left.a"), ("up.vector", "left.b"),
+           ("up.vector", "w_up.a"), ("ud.value", "w_up.scale"), ("left.vector", "w_left.a"), ("lr.value", "w_left.scale"),
+           ("w_up.vector", "wish.a"), ("w_left.vector", "wish.b"), ("wish.vector", "len.a"), ("len.value", "moving.a"),
+           ("no_walk.then", "if_moving.in"), ("moving.result", "if_moving.condition"), ("if_moving.false", "out.then"),
+           # that way at Move Speed, keeping their up-and-down speed
+           ("wish.vector", "dirn.a"), ("dirn.vector", "spd.a"), ("in.speed", "spd.scale"), ("spd.vector", "sb.vector"),
+           ("in.player", "cur.target"), ("cur.result", "cb.vector"),
+           ("sb.x", "final.x"), ("sb.y", "final.y"), ("cb.z", "final.z"),
+           ("if_moving.true", "go.run"), ("in.player", "go.target"), ("final.result", "go.p0"), ("go.then", "out.then")],
+    steps=[("Humans with a camera only", ["bot", "if_human", "cam", "no_cam", "if_cam"]),
+           ("Their own walking off (FL_ATCONTROLS)", ["flags", "atc", "no_walk"]),
+           ("The keys held: up - down, left - right", ["keys", "k_f", "k_b", "k_l", "k_r", "f1", "b1", "l1", "r1",
+                                                       "ud", "lr"]),
+           ("Screen-up and screen-left from the camera", ["cam_fwd", "cf", "flat", "up", "zaxis", "left"]),
+           ("That way at Move Speed", ["w_up", "w_left", "wish", "len", "moving", "if_moving", "dirn", "spd", "cur",
+                                       "cb", "sb", "final", "go"])])
+
 TOP_DOWN_CAMERA = dict(
     about="Turn On: every survivor (bots too) sees the game from above, through a camera of their own that follows "
           "them without turning with them ('Top-Down Follow'): ten times a second (the Timer: 0.1 s is its fastest) "
           "it gets a new speed, and the game moves it by that speed every tick in between. "
           "Turn Off: each camera's Disable gives the player their own eyes back (m_hViewEntity emptied as well) and "
           "the cameras are removed a moment later. Is On says which it is (the variable 'top_down_on', one per copy "
-          "of this group).",
+          "of this group). Screen Movement: every tick (a Timer set to Every Tick), each human survivor moves "
+          "relative to the screen ('Top-Down Movement'); Turn Off gives them their own walking back.",
     inputs=[("on", "Turn On", "event"), ("off", "Turn Off", "event"), ("height", "Height", "num"),
             ("smoothing", "Smoothing", "num"), ("facing", "Facing (yaw)", "num"),
-            ("turn", "Turns With Player", "bool"), ("level", "Level Aim", "bool")],
+            ("turn", "Turns With Player", "bool"), ("level", "Level Aim", "bool"),
+            ("move", "Screen Movement", "bool"), ("speed", "Move Speed", "num")],
     outputs=[("is_on", "Is On", "bool")],
     nodes=[N("set_on", "HL_NodeSetVariable", 0, 0, label="On", var_name="top_down_on", scope="GROUP",
              value_kind="bool", sockets={"value": True}),
@@ -646,8 +727,25 @@ TOP_DOWN_CAMERA = dict(
            N("back", "HL_NodeSetProperty", 3, 4, label="Looking through nothing (empty)", key="m_hViewEntity"),
            N("gone", "HL_NodeFireInput", 4, 4, label="Remove it (after the Disable)",
              sockets={"input": "Kill", "delay": 0.1}),
-           _var("forget", "top_down_camera", 5, 4, get=False, kind="thing", label="No camera (empty)")],
-    links=[("in.on", "set_on.run"), ("set_on.then", "timer.start"),
+           _var("forget", "top_down_camera", 5, 4, get=False, kind="thing", label="No camera (empty)"),
+           # screen movement, every tick
+           N("tick", "HL_NodeTimer", 1, 8, label="Every tick", every_tick=True, running=False),
+           N("state2", "HL_NodeGetVariable", 2, 10, label="On?", var_name="top_down_on", scope="GROUP",
+             value_kind="bool"),
+           N("if_on2", "HL_NodeIf", 2, 8),
+           N("if_move", "HL_NodeIf", 3, 8, label="Screen Movement?"),
+           N("each3", "HL_NodeForEach", 4, 8, what="SURVIVORS"),
+           N("mover", "HL_NodeGroup", 5, 8, group="Top-Down Movement"),
+           # off: their own walking back
+           N("flags_off", "HL_NodeGetProperty", 6, 6, label="Their flags", key="m_fFlags"),
+           N("walk_back", "HL_NodeMath", 7, 6, label="- FL_ATCONTROLS (64)", op="BIT_CLEAR", sockets={"b": 64.0}),
+           N("walk", "HL_NodeSetProperty", 6, 4, label="Their own walking back", key="m_fFlags")],
+    links=[("in.on", "set_on.run"), ("set_on.then", "timer.start"), ("set_on.then", "tick.start"),
+           ("tick.tick", "if_on2.in"), ("state2.result", "if_on2.condition"), ("if_on2.true", "if_move.in"),
+           ("in.move", "if_move.condition"), ("if_move.true", "each3.run"), ("each3.each", "mover.run"),
+           ("each3.item", "mover.player"), ("in.speed", "mover.speed"), ("set_off.then", "tick.stop"),
+           ("forget.then", "walk.run"), ("each2.item", "walk.entity"), ("each2.item", "flags_off.entity"),
+           ("flags_off.value", "walk_back.a"), ("walk_back.value", "walk.value"),
            ("timer.tick", "if_on.in"), ("state.result", "if_on.condition"), ("if_on.true", "each.run"),
            ("each.each", "follow.run"), ("each.item", "follow.player"), ("in.height", "follow.height"),
            ("in.smoothing", "follow.smoothing"), ("in.facing", "follow.facing"), ("in.turn", "follow.turn"),
@@ -660,7 +758,9 @@ TOP_DOWN_CAMERA = dict(
     steps=[("On: ten times a second, each survivor's camera follows them",
             ["set_on", "timer", "state", "if_on", "each", "follow"]),
            ("Off: their own eyes again, the cameras removed",
-            ["set_off", "each2", "cam", "disable", "back", "gone", "forget"])])
+            ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk"]),
+           ("Screen Movement: every tick, each human survivor moves relative to the screen",
+            ["tick", "state2", "if_on2", "if_move", "each3", "mover"])])
 
 EXAMPLES_3 = [
     dict(title="Power-Up: Nuke", level="Power-Ups",
@@ -1298,8 +1398,9 @@ EXAMPLES_3 = [
     dict(title="Top-Down Camera", level="Camera",
          about="A top-down mode, on from the start like a third-person mode: every survivor sees the game from "
                "straight above, like a top-down shooter. All in one node, Top-Down Camera (Tab goes in; its settings "
-               "are on the node): Height (units above the player); Turns With Player (on: the camera turns as they "
-               "turn, so the keys move them up, down, left and right on screen); Level Aim (on: they can't aim up or "
+               "are on the node): Height (units above the player); Screen Movement (on: W, A, S, D move human "
+               "players up, left, down and right on the screen whichever way they face, at Move Speed; bots walk as "
+               "usual); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
                "down, shots go flat across the ground); Smoothing (0: the camera stays locked on the player; "
                "higher, up to 0.95: it lags behind, and turns behind, and catches up) and Facing (the camera's yaw "
                "with Turns With Player off: 90 puts north at the top of the screen). Turn Off and Turn On switch it "
@@ -1309,10 +1410,12 @@ EXAMPLES_3 = [
                "walk and fight as normal, but they aim where their own eyes look, not where the camera points. Best "
                "in the open: under a ceiling a camera Height above ends up inside the floor above or the solid map, "
                "and shows that (lower Height indoors). Don't mix it with third person.",
-         groups={"Top-Down Follow": TOP_DOWN_FOLLOW, "Top-Down Camera": TOP_DOWN_CAMERA},
+         groups={"Top-Down Follow": TOP_DOWN_FOLLOW, "Top-Down Movement": TOP_DOWN_MOVE,
+                 "Top-Down Camera": TOP_DOWN_CAMERA},
          nodes=[N("start", "HL_NodeMapStart", 0, 0),
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
-                  sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": True, "level": True})],
+                  sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": False, "level": True,
+                           "move": True, "speed": 220.0})],
          links=[("start.start", "cam.on")],
          steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node)",
                  ["start", "cam"])]),

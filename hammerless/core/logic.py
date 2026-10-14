@@ -176,6 +176,13 @@ HELPERS = {
         "    if (typeof t == \"array\") { local i = key.tointeger(); return (i >= 0 && i < t.len()) ? t[i] : null; }\n"
         "    try { return (key in t) ? t[key] : null; } catch (e) { return null; }\n}\n"
         "::HL_Count_ <- function(t) { return (t == null) ? 0.0 : t.len().tofloat(); }"),
+    "HL_Tick": (
+        "::HL_TickOn <- function(e) {   // a Timer set to Every Tick: the relay triggers itself every server tick\n"
+        "    e.ValidateScriptScope();\n"
+        "    e.GetScriptScope().HL_TickThink <- function() { DoEntFire(\"!self\", \"Trigger\", \"\", 0.0, self, self); "
+        "return 0.01; };\n"
+        "    AddThinkToEnt(e, \"HL_TickThink\");\n}\n"
+        "::HL_TickOff <- function(e) { AddThinkToEnt(e, null); }\n"),
     "HL_Angle": (
         "::HL_Angle <- function(v) {   // angles the game takes as a QAngle: a vector wire's (pitch, yaw, roll)\n"
         "    if (typeof v == \"QAngle\") return v;\n"
@@ -734,6 +741,19 @@ class _Compiler:
             e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": RELAY_ONCE if s.get("once") else RELAY})
             self.events.setdefault(game_event, []).append((cond, e.keyvalues["targetname"]))
             fire("happened", e, "OnTrigger")
+        elif k == "TIMER" and s.get("every_tick"):
+            # every server tick: a think function on a relay (a logic_timer's fastest is 0.1 s); the relay's
+            # OnTrigger is the tick, so it wires like any timer
+            self.helper("HL_Tick", HELPERS["HL_Tick"])
+            e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": RELAY})
+            name = e.keyvalues["targetname"]
+            take("start", name, "RunScriptCode", "::HL_TickOn(self)")
+            take("stop", name, "RunScriptCode", "::HL_TickOff(self)")
+            take("now", name, "Trigger")
+            fire("tick", e, "OnTrigger")
+            if s.get("running", True):          # (after the map's scripts are loaded)
+                self.add("logic_auto", f"hl_{slug}_start", {"spawnflags": "1"}).outputs.append(
+                    Output("OnMapSpawn", name, "RunScriptCode", "::HL_TickOn(self)", 1.0, 1))
         elif k == "TIMER":
             lo, hi = float(s.get("seconds", 10)), float(s.get("max_seconds", 0) or 0)
             kv = {"StartDisabled": "0" if s.get("running", True) else "1", "spawnflags": "0"}

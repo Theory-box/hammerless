@@ -477,6 +477,9 @@ class HL_NodeTimer(_Node, bpy.types.Node):
     seconds: FloatProperty(name="Every", default=10.0, min=0.1)
     max_seconds: FloatProperty(name="Up To", default=0.0, min=0.0, description="Random time up to this (0 = exact)")
     running: BoolProperty(name="Running", default=True, description="Starts running with the map")
+    every_tick: BoolProperty(name="Every Tick", default=False,
+                             description="Fire on every server tick (30 a second) instead of every N seconds: for "
+                                         "things that must follow the player closely, like movement or a camera")
 
     def make_sockets(self):
         self.ev_in("start", "Start")
@@ -485,13 +488,16 @@ class HL_NodeTimer(_Node, bpy.types.Node):
         self.ev_out("tick", "On Tick")
 
     def draw_buttons(self, context, layout):
-        row = layout.row(align=True)
-        row.prop(self, "seconds")
-        row.prop(self, "max_seconds")
+        layout.prop(self, "every_tick", toggle=True)
+        if not self.every_tick:
+            row = layout.row(align=True)
+            row.prop(self, "seconds")
+            row.prop(self, "max_seconds")
         layout.prop(self, "running", toggle=True)
 
     def settings(self):
-        return {"seconds": self.seconds, "max_seconds": self.max_seconds, "running": self.running}
+        return {"seconds": self.seconds, "max_seconds": self.max_seconds, "running": self.running,
+                "every_tick": self.every_tick}
 
 
 # ---------------------------------------------------------------- Scene
