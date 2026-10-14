@@ -497,6 +497,12 @@ def _objects(context, number, example):
             from .ops import make_entity_object
             obj = make_entity_object(context, shape.split(":", 1)[1], where, collection=coll, name=name,
                                      keyvalues=extra[0] if extra else None)
+        elif shape == "CURSOR_RING":               # (a self-lit model: (shape, offset, keyvalues))
+            from .examplemodels import make_cursor_ring
+            obj = make_cursor_ring(name, where, coll)
+            for k, v in (extra[0] if extra else {}).items():
+                kv = obj.hammerless.keyvalues.add()
+                kv.key, kv.value = k, str(v)
         elif shape == "POD":                       # (an animated model: mesh, armature, actions)
             from .examplemodels import make_pod
             obj = make_pod(context, name, where, coll)

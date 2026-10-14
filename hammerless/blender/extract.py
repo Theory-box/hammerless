@@ -243,6 +243,25 @@ def _alpha_mode(mat) -> str:
     return "OPAQUE"
 
 
+def _emissive(mat) -> bool:
+    """Whether a material glows: a Principled BSDF with Emission Strength above 0 and a colour that isn't black
+    (or wired), or an Emission shader. Model materials that glow are self-lit in the game (UnlitGeneric: full
+    bright, whatever light falls on them)."""
+    if mat is None or not mat.use_nodes or not mat.node_tree:
+        return False
+    for node in mat.node_tree.nodes:
+        if node.type == "EMISSION":
+            return any(link.from_node is node for link in mat.node_tree.links)
+        if node.type == "BSDF_PRINCIPLED":
+            strength, colour = node.inputs.get("Emission Strength"), node.inputs.get("Emission Color")
+            if strength is None or colour is None:
+                continue
+            if (strength.is_linked or strength.default_value > 0) and (
+                    colour.is_linked or any(c > 0 for c in tuple(colour.default_value)[:3])):
+                return True
+    return False
+
+
 def _base_color_image(mat):
     """The image feeding Base Color (through any nodes in between, e.g. Hue/Saturation or Mix);
     without a Principled BSDF or a wired Base Color, an image node that isn't wired to anything
@@ -654,7 +673,8 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
                 path, _ts, _lm = materials.resolve(mat)
                 mname = texture_file_name(mat.name) if mat is not None else "_empty_slot"
                 mode = _alpha_mode(mat) if mat is not None else "OPAQUE"
-                ir.model_materials[mname] = (_model_texture(mat, path, content), mode == "BLENDED", mode == "CUTOUT")
+                ir.model_materials[mname] = (_model_texture(mat, path, content), mode == "BLENDED", mode == "CUTOUT",
+                                             False, _emissive(mat))
                 mat_names[mi] = mname
             verts = []
             for li, vi in zip(tri.loops, tri.vertices):
@@ -718,8 +738,9 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
     if skeleton is not None and not CHECK_ONLY["on"]:     # (Check the Map: no need to play every animation)
         _sample_actions(obj, arm, skeleton, size, materials.report, game_rest)
         for m in set(t[0] for t in triangles):     # (its materials keep their colour on the infected: see models.py)
-            if m in ir.model_materials and len(ir.model_materials[m]) == 3:
-                ir.model_materials[m] = (*ir.model_materials[m], True)
+            if m in ir.model_materials:
+                spec = ir.model_materials[m]
+                ir.model_materials[m] = (*spec[:3], True, *spec[4:])
     if kind == "PHYSICS" and not pieces:
         materials.report.warnings.append(
             f"Custom Model '{obj.name}' is a Physics Prop but has no solid part (every part is flat or thinner than "

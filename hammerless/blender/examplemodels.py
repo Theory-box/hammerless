@@ -41,6 +41,48 @@ def flat_material(name: str, rgb, mottle: float = 0.08):
     return mat
 
 
+def make_cursor_ring(name: str, where, collection):
+    """A flat red ring with a dot in the middle (a top-down cursor), lying a little above its origin. Its material
+    has Emission, so the game shows it self-lit (full bright, glowing in the dark). Returns the Custom Model."""
+    import bmesh
+    mat = flat_material("Example Cursor Glow", (1.0, 0.08, 0.04), mottle=0.0)
+    bsdf = mat.node_tree.nodes.get("Principled BSDF") if mat.node_tree else None
+    if bsdf is not None and "Emission Color" in bsdf.inputs:
+        bsdf.inputs["Emission Color"].default_value = (1.0, 0.08, 0.04, 1.0)
+        bsdf.inputs["Emission Strength"].default_value = 2.0
+    bm = bmesh.new()
+    sides, lift, thick = 24, 0.03, 0.02
+    for r_out, r_in in ((0.30, 0.22), (0.06, 0.0)):         # the ring, the dot (its inside: one centre point)
+        centre = [bm.verts.new((0.0, 0.0, lift + h)) for h in (thick, 0.0)] if r_in == 0 else None
+        ring = []
+        for i in range(sides):
+            a = 2 * math.pi * i / sides
+            c, s_ = math.cos(a), math.sin(a)
+            outer = [bm.verts.new((c * r_out, s_ * r_out, lift + h)) for h in (thick, 0.0)]
+            inner = centre or [bm.verts.new((c * r_in, s_ * r_in, lift + h)) for h in (thick, 0.0)]
+            ring.append(outer + inner)
+        for i in range(sides):
+            (ot, ob, it, ib), (ot2, ob2, it2, ib2) = ring[i], ring[(i + 1) % sides]
+            bm.faces.new((ob, ob2, ot2, ot))                 # outside
+            if centre:
+                bm.faces.new((ot, ot2, it))                  # top
+                bm.faces.new((ob, ib, ob2))                  # bottom
+            else:
+                bm.faces.new((ot, ot2, it2, it))
+                bm.faces.new((ob, ib, ib2, ob2))
+                bm.faces.new((ib, it, it2, ib2))             # inside
+    mesh = bpy.data.meshes.new(name)
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.materials.append(mat)
+    obj = bpy.data.objects.new(name, mesh)
+    obj.location = where
+    collection.objects.link(obj)
+    obj.hammerless.role = "MODEL"
+    obj.hammerless.model_kind = "DYNAMIC"
+    return obj
+
+
 def _pod_material():
     return flat_material("Example Pod Flesh", (0.55, 0.12, 0.10))
 
