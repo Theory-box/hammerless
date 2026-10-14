@@ -122,6 +122,9 @@ def _image_rgb(img, width: int = 512):
         bpy.data.images.remove(small)
 
 
+_SKY_CACHE: dict = {}        # build base -> (what the sky picture was made from, its fingerprint)
+
+
 def export_sky(context, root, base: str) -> tuple[str, str]:
     """Sky Light from the sky: the sky's picture as <map>.hlsky_src.npy for the light compiler. Returns its
     fingerprint ("" for one colour) and a note for the log ("" if fine). Never stops the build."""
@@ -131,6 +134,16 @@ def export_sky(context, root, base: str) -> tuple[str, str]:
     s = context.scene.hammerless
     if s.sky_light == "FLAT":
         return "", ""
+    from .extract import _image_signature
+    if s.sky_light == "SKYBOX":
+        source = ("skybox", root, s.skyname)
+    else:
+        img = s.sky_image or _world_sky_image(context)
+        sig = _image_signature(img, round(s.sky_rotation, 6)) if img is not None else None
+        source = ("image", sig) if sig is not None else None
+    known = _SKY_CACHE.get(base)
+    if source is not None and known is not None and known[0] == source and os.path.exists(base + ".hlsky_src.npy"):
+        return known[1], ""              # (the same sky as last build: its picture is already saved)
     try:
         if s.sky_light == "SKYBOX":
             content = game_content(root)
@@ -147,7 +160,10 @@ def export_sky(context, root, base: str) -> tuple[str, str]:
         return "", f"Sky Light: couldn't use the sky picture ({ex}): the sky lights the map with one colour"
     # (the fingerprint covers how the picture is turned into the light, so a new version remakes it)
     recipe = f"{skylight.BLUR_DEGREES}|{skylight.MAP_W}|{skylight.MAP_H}|v2".encode()
-    return hashlib.sha1(recipe + pano.tobytes()).hexdigest()[:16], ""
+    key = hashlib.sha1(recipe + pano.tobytes()).hexdigest()[:16]
+    if source is not None:
+        _SKY_CACHE[base] = (source, key)
+    return key, ""
 
 
 def _quoted_object(message: str) -> str:
@@ -1068,7 +1084,9 @@ def _nav_key(vmf_path: str, rep, s, opts) -> str | None:
         o = cc.PRESETS[opts] if isinstance(opts, str) else opts
         extra = f"{o.vis}|{o.vis_tool}|{o.vis_exact}|{s.nav_analysis}|{not s.nav_culling}"   # (analysis reads the vis)
         # (instance files and the map's own models: props' collision)
-        extra += "|" + o.assets + "|" + cc.instances_hash(vmf_path, text.encode())
+        root = game_root(bpy.context)        # (models only: a repainted texture doesn't change the nav)
+        models = cc.asset_fingerprint(cc.Tools(root).gamedir, s.map_name, ("models",)) if root else ""
+        extra += "|" + models + "|" + cc.instances_hash(vmf_path, text.encode())
         return inputs_key(text, rep.nav_regions, rep.nav_climbs, s.wall_climbs, extra)
     except Exception:
         return None

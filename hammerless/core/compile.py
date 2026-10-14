@@ -574,25 +574,41 @@ def _has_lighting(bsp: str) -> bool:
     return any(struct.unpack_from("<iii", head, 8 + 16 * lump)[2] > 0 for lump in (8, 53))   # (version, offset, length)
 
 
-def asset_fingerprint(gamedir: str, map_name: str) -> str:
+_ASSET_PRINTS: dict = {}      # (gamedir, map, tops) -> (each file's name, size and time, the fingerprint)
+
+
+def asset_fingerprint(gamedir: str, map_name: str, tops=("materials", "models")) -> str:
     """The map's own exported files (custom textures and models, under materials/ and models/hammerless/<map>):
-    a repainted texture, a new Alpha or Surface, or an edited Custom Model changes it, so the map compiles again."""
+    a repainted texture, a new Alpha or Surface, or an edited Custom Model changes it, so the map compiles again.
+    Files are only read again when one's size or time changed (or one was added or removed)."""
     import hashlib
-    h = hashlib.sha1()
-    for top in ("materials", "models"):
+    listing = []
+    for top in tops:
         folder = os.path.join(gamedir, top, "hammerless", map_name)
         for dirpath, dirs, files in os.walk(folder):
             dirs.sort()
             for name in sorted(files):
                 full = os.path.join(dirpath, name)
-                h.update(os.path.relpath(full, gamedir).lower().encode())
                 try:
-                    with open(full, "rb") as f:
-                        for chunk in iter(lambda: f.read(1 << 20), b""):
-                            h.update(chunk)
+                    st = os.stat(full)
+                    listing.append((full, st.st_size, st.st_mtime_ns))
                 except OSError:
-                    pass
-    return h.hexdigest()[:16]
+                    listing.append((full, -1, -1))
+    key = (gamedir, map_name, tuple(tops))
+    known = _ASSET_PRINTS.get(key)
+    if known is not None and known[0] == listing:
+        return known[1]
+    h = hashlib.sha1()
+    for full, _size, _time in listing:
+        h.update(os.path.relpath(full, gamedir).lower().encode())
+        try:
+            with open(full, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+        except OSError:
+            pass
+    _ASSET_PRINTS[key] = (listing, h.hexdigest()[:16])
+    return _ASSET_PRINTS[key][1]
 
 
 def bsp_fog_farz(bsp: str) -> float:

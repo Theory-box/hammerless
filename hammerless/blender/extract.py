@@ -210,8 +210,16 @@ def texture_file_name(name: str) -> str:
 
 def _image_signature(img, *extra):
     """What a converted texture depends on, or None when that can't be told (always convert)."""
-    if img.is_dirty or img.packed_file is not None or img.source != "FILE":
+    if img.is_dirty or img.source != "FILE":
         return None
+    if img.packed_file is not None:          # (packed in the .blend: its packed bytes)
+        import hashlib
+        try:
+            data = img.packed_file.data
+        except (AttributeError, RuntimeError):
+            return None
+        return (("packed", img.name, hashlib.sha1(data).hexdigest()), tuple(img.size),
+                img.colorspace_settings.name) + extra
     path = bpy.path.abspath(img.filepath)
     try:
         st = os.stat(path)
