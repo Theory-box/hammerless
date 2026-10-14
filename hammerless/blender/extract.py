@@ -534,18 +534,31 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
     # the model is the mesh with modifiers applied: with any on, objects sharing the mesh can differ
     modified = any(m.show_viewport for m in obj.modifiers)
     shape = f"{obj.data.name}@{obj.name}" if modified else obj.data.name
+    rig = ""
+    if arm is not None:              # (copies of a rigged model share one model: the same rig data, actions and place
+        rel = arm.matrix_world.inverted() @ obj.matrix_world      # on the rig; each prop still plays its own copy)
+        rig = (arm.data.name, tuple(a.name for a in _armature_actions(arm)),
+               tuple(round(v, 4) for row in rel for v in row), arm.data.pose_position)
     key = (shape, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class_name or hs.physics_class, round(hs.model_mass, 3),
-           tuple(slot.material.name if slot.material else "" for slot in obj.material_slots),
-           arm.name if arm is not None else "")
+           tuple(slot.material.name if slot.material else "" for slot in obj.material_slots), rig)
     name = getattr(ir, "_model_keys", {}).get(key)
     if name is None:
         import hashlib
         stem = safe_name(obj.name if modified else obj.data.name)
         if key[1:] != ((1.0, 1.0, 1.0), "STATIC", "HULLS", key[4], key[5], key[6], ""):
             stem += "_" + hashlib.sha1(repr(key).encode()).hexdigest()[:6]
-        name = f"hammerless/{ir.settings.name}/{stem}"
+        folder = f"hammerless/{ir.settings.name}/"
+        room = MDL_NAME_MAX - len(folder) - len(".mdl")
+        if len(stem) > room:        # (the .mdl holds its name in 64 bytes: studiomdl refuses longer, the game cuts it)
+            short = hashlib.sha1(stem.encode()).hexdigest()[:6]
+            stem = (stem[:room - 7].rstrip("_") + "_" + short) if room >= 13 else short[:max(room, 1)]
+            if room < 6:
+                materials.report.errors.append(
+                    f"Custom Model '{obj.name}': the Map Name '{ir.settings.name}' is too long for model names (the "
+                    f"game keeps {MDL_NAME_MAX} characters of a model's path): give the map a shorter name")
+        name = folder + stem
         while name in ir.models:              # two meshes whose names clean up the same
-            name += "x"
+            name = name[:-1] + "x" if len(name) + len(".mdl") >= MDL_NAME_MAX else name + "x"
         ir.__dict__.setdefault("_model_keys", {})[key] = name
         ir.models[name] = _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, collide)
     spec = ir.models[name]
@@ -679,7 +692,7 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
         if rest_was is not None:
             arm.data.pose_position = rest_was
             bpy.context.view_layer.update()
-    if skeleton is not None:
+    if skeleton is not None and not CHECK_ONLY["on"]:     # (Check the Map: no need to play every animation)
         _sample_actions(obj, arm, skeleton, size, materials.report, game_rest)
         for m in set(t[0] for t in triangles):     # (its materials keep their colour on the infected: see models.py)
             if m in ir.model_materials and len(ir.model_materials[m]) == 3:
@@ -899,6 +912,10 @@ def _sample_actions(obj, arm, sk, size, report, game_rest=None):
             except (TypeError, RuntimeError):
                 pass
         scene.frame_set(old_frame)
+
+
+MDL_NAME_MAX = 63          # a model's path without "models/", as the .mdl stores it (64 bytes with its end)
+CHECK_ONLY = {"on": False}  # (set by Check the Map: the scene is read for problems, models aren't made)
 
 
 def object_keyvalues(obj) -> dict[str, str]:

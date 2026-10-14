@@ -940,7 +940,12 @@ class HL_OT_validate(bpy.types.Operator):
         rep = Report()
         root = game_root(context)
         game_content(root)              # (the game's surface list, as Build loads it)
-        ir, _ = extract_scene(context, rep, os.path.join(root, "left4dead2") if root else None)
+        from .extract import CHECK_ONLY
+        CHECK_ONLY["on"] = True
+        try:
+            ir, _ = extract_scene(context, rep, os.path.join(root, "left4dead2") if root else None)
+        finally:
+            CHECK_ONLY["on"] = False
         from .logic import compile_logic
         compile_logic(context, ir, rep)
         rep2 = validate(ir, game_content(root) if s.check_game_content else None)
