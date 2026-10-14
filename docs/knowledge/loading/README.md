@@ -4,7 +4,7 @@ Everything measured about getting from the Build & Play button to standing in th
 
 Code: `hammerless/core/compile.py` (`CompileJob`, `prestart_game`, `launch_game`, `send_commands`, `parse_flow`), `hammerless/core/buildplan.py` (smart build plans, `strip_stale`), `hammerless/core/stringtables.py` (the dictionary), `hammerless/core/timeline.py` (the build chart; steps collected in `blender/ops.py` `_timeline`), `hammerless/core/gamefiles.py` (the ready script), `hammerless/core/navworker.py`. Tests: `tests/unit/test_core.py`, `tests/ingame/bench.py` (`build`).
 
-Timeline (2026): smart builds 09-30 (c9a5577); audit round 1 of compile & Build & Play 10-03 (ad08c65); prestart and LAN loading 10-08 (612da78); stringtable dictionary 10-09 (351c6b5); lighting alongside vis and steps not slowing each other 10-09 (5a08f9f); build timeline and the kept nav 10-11 (a4d77c8, 87a2bc4); `lastbuild.log` 10-11 (1eb6acb); `hlvbsp -onlyents` 10-13 (42f40b9); Build & Play fixes (scripts with the new map only, the nav kept after Bake Lighting / Compute Visibility, nav processes stopped on every end, Cycles after the nav) and build caches 10-13 (d06144f, d82f2ad, c29bd02, 10ea8d0; 0.17.0).
+Timeline (2026): smart builds 09-30 (c9a5577); audit round 1 of compile & Build & Play 10-03 (ad08c65); prestart and LAN loading 10-08 (612da78); stringtable dictionary 10-09 (351c6b5); lighting alongside vis and steps not slowing each other 10-09 (5a08f9f); build timeline and the kept nav 10-11 (a4d77c8, 87a2bc4); `lastbuild.log` 10-11 (1eb6acb); `hlvbsp -onlyents` 10-13 (42f40b9); Build & Play fixes (scripts with the new map only, the nav kept after Bake Lighting / Compute Visibility, nav processes stopped on every end, Cycles after the nav) and build caches 10-13 (d06144f, d82f2ad, c29bd02, 10ea8d0; 0.17.0); the freeze recorder 10-13 (0df63c3) and the Build & Play freeze investigation (pose cache, parallel studiomdl 5865e70).
 
 ## The steps and what runs where
 
@@ -110,6 +110,26 @@ What a rebuild no longer redoes when its inputs are the same, each keyed by what
 
 Measured small, not worth caching (the user's 3.4 MB VMF, 2026-10-13): the nav inputs key 0.12 s, `bsp_signature` 0.02 s, `prepare_hlvbsp` 0.35 s.
 
+## Build & Play freezes: the freeze recorder and what the button press costs (2026-10-13)
+
+The main-thread freeze is the part of a Build & Play that Blender spends in `ops.export_vmf` before the background job starts: the scene read, the model compiles, the VMF write. Everything after it (compilers, nav, the Play path's waits on Steam, the prestart, `console.log` and the BSP copy) runs on threads or in other processes.
+
+**The freeze recorder** (`hammerless/blender/watchdog.py`, 0df63c3): Blender's main thread checks in once a second from a timer; when it has been silent for 20 s (`FREEZE_SECONDS`) a watcher thread writes the stack of every Python thread to `%TEMP%\hammerless_freeze.log` (`tempfile.gettempdir()`), one sample taken at second 20 of each freeze, appended; the file is removed once it passes 1 MB. It is the first thing to read for any freeze report: the frames say which line the main thread was on. The user's real freezes are the entries whose frames are under `extensions\user_default\hammerless` (the installed add-on); entries with repo or scratchpad paths come from test runs.
+
+**The 20-30 s freezes of 2026-10-12/13** began at 19:02 on 10-12, when 32 Swelling Pods went into the user's map. The log put nearly all of them in `_sample_actions` (`blender/extract.py`): `scene.frame_set` for each frame of each pod's 2 actions, about 100 frames per pod, on a 3,134-object scene, where the first `frame_set` after assigning an action or changing `pose_position` costs about 150 ms of depsgraph relations rebuild. Fixed by the pose cache in 0.17.0 (one sampling shared by all 32 pods: they have one rig fingerprint; see [../models/](../models/README.md)). The last user freeze in the log is 20:29 on 10-12, before that fix was installed. 5865e70 then made the studiomdl runs for Custom Models parallel (up to 8 at once): 32 pods 10 s -> 3.7 s; they only run when a model's SMD/QC changed, but a map rename or a model-naming change recompiles all of them once.
+
+**Ruled out** by measurement or code reading (Fable investigations, 2026-10-13): the netprops catalogue (parsed once per session), Example 62, Live Light Mixing's depsgraph handler, other add-ons' handlers (BlenderKit, BlenderGIS and the rest: 18.6 s with them off against 19.7 s with them on), the quality migration, panel drawing, and the Play path's waits (Steam, prestart, `console.log`, BSP copy: all on threads; `tasklist` 0.08 s).
+
+**What is left with 0.17.0** (the user's map, measured in a Blender window with the user's add-ons loaded): about 9 s of main-thread freeze on the first build after starting Blender, about 5 s on a rebuild, plus whatever the game's prestart contention adds on Build & Play (unmeasured). The parts:
+
+| Part | Cost | Why |
+|---|---|---|
+| Imported-VMF rebuild (`vmfimport.rebuild`) | 3.7 s | re-parses the 4.6 MB source and rebuilds its 2,177 solids in pure Python on every build |
+| Scene read | ~1.5 s | per-triangle Python loops in `_model_spec`, run for each of the 32 identical pods |
+| studiomdl (only when a model changed) | 3.7 s | 32 compiles, 8 at a time (5865e70) |
+
+Planned, not done: compile Custom Models in the background compile job instead of in `execute`; cache the imported map's text and redo only the changed solids; share one `ModelSpec` across identical pods; start the game after the export instead of before it; target under 1 s of freeze. Lesson: profile the whole button press on the user's map (cProfile of `ops.export_vmf`, plus a 0.1 s Blender timer measuring the gaps over a whole windowed build) before calling a freeze fixed: the pose cache alone looked like the whole answer until the rest of the press was timed.
+
 ## The two-way link and cancel
 
 Commands go in through `-hijack` (or the bench's file channel, logic/); results come back through `console.log` (`-condebug`): `HAMMERLESS_READY survivors spawned` (the load's end marker and the gate for game-side nav steps, which fail before survivors spawn), `HAMMERLESS_FLOW ...` (nav/), `HAMMERLESS_DIRECTOR map options active`, `HAMMERLESS_EVENT` (debug log), `HAMMERLESS_CRESCENDO`. Build & Play with a game-analysed nav loads an analysis map first (a second `HAMMERLESS_FLOW` follows); with a Blender-made nav there is one load. Cancel (Esc or the red button) stops the compilers at once, the nav and its analysis at their next stage, copies nothing (the map in the game and its scripts stay as they were, since 0.17.0), and the next build compiles again; closing Blender stops the build (the game keeps running); a second Build can't start while the first is making the nav, analysing or baking.
@@ -127,5 +147,6 @@ Commands go in through `-hijack` (or the bench's file channel, logic/); results 
 | A running game that won't change map: quit and press Build & Play again | known (TROUBLESHOOTING.md) |
 | Game-side files pile up (`.navNN` backups, old `hl_*` maps, 39 MB `console.log`) | known issue (audit 6) |
 | A failed or cancelled build isn't announced in the game (only in Blender, behind the game window) | known issue (audit 2 item 5); the old map keeps its scripts since 0.17.0 |
+| Build & Play still freezes Blender's main thread (~9 s first build, ~5 s rebuild on the user's imported map with 32 pods; target under 1 s) | known issue (see the freeze section above and [../known-issues.md](../known-issues.md) item 12) |
 
-Last checked: 2026-10-13 against branch light-layers, commit 10ea8d0 (0.17.0).
+Last checked: 2026-10-13 against branch light-layers, commit f834193 (0.17.0 + 5865e70).

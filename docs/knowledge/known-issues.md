@@ -85,6 +85,24 @@ traps), re-checked in the current code.
 - **Status:** the vis knowledge page records this as by design (the outputs are meant to be equivalent); audit 2
   calls it a defect. Undecided. *Start Fresh* forces a full build in the meantime.
 
+### 12. Build & Play still freezes Blender for seconds on a big map (2026-10-13)
+
+- **What happens:** the part of the button press that runs on Blender's main thread (`ops.export_vmf`: scene read,
+  Custom Model compiles, VMF write) freezes the window. On the user's imported map with 32 Swelling Pods and 0.17.0,
+  measured in a Blender window with the user's add-ons loaded: about 9 s on the first build after starting Blender,
+  about 5 s on a rebuild, plus whatever the game's prestart adds on Build & Play (unmeasured). The 20-30 s freezes
+  of 10-12/13 (`_sample_actions`) are fixed; see the fixed table.
+- **Where:** `vmfimport.rebuild` re-parses the 4.6 MB source and rebuilds 2,177 solids in pure Python on every
+  build (3.7 s); `extract._model_spec` runs per-triangle Python loops for each of the 32 identical pods (scene read
+  about 1.5 s); studiomdl, when a model's SMD/QC changed, 3.7 s even with 8 at a time (5865e70; a map rename or a
+  model-naming change recompiles all of them once).
+- **Suggested fix:** compile Custom Models in the background compile job instead of in `execute`; cache the imported
+  map's text and redo only the changed solids; share one `ModelSpec` across identical pods; start the game after the
+  export instead of before it. Target: under 1 s of freeze. Before calling it fixed, profile the whole button press
+  on the user's map (cProfile of `ops.export_vmf` plus a 0.1 s Blender timer measuring gaps over a whole windowed
+  build); and read `%TEMP%\hammerless_freeze.log` (the freeze recorder, `blender/watchdog.py`) first for any freeze
+  report. Details in [loading/README.md](loading/README.md).
+
 ## Defaults and settings
 
 ### 8. Control Volume: Nav Mesh and Light Baking ticked by default (audit 5 item 1)
@@ -134,5 +152,7 @@ traps), re-checked in the current code.
 | Cycles lighting froze Blender while the nav mesh was being made | d06144f | the bake starts after the nav thread ends |
 | Extra vrad options left out were logged as fallbacks | c29bd02 | plain notes when the tool runs; `-extra` known; Valve's vrad never gets `-scale` / `-ambient` / `-sky` |
 | Socket numbers lost digits (12345.67 -> 12345.7); `inf` / `nan` crashed the script | c29bd02 | `num_text`: shortest text that round-trips the single-precision value; 3.4e38 / 0.0 |
+| Build & Play froze Blender 20-30 s once 32 Swelling Pods were in the user's map (from 2026-10-12 19:02; `_sample_actions`: `frame_set` per frame of each pod's actions on a 3,134-object scene, ~150 ms depsgraph rebuild on the first frame of each action) | f57eadf, c29bd02 (0.17.0) | the pose cache: one sampling shared by all 32 pods (one rig fingerprint); traced with the freeze recorder (`watchdog.py`, 0df63c3); last user freeze in the log 10-12 20:29, before the fix was installed. Ruled out on the way: netprops catalogue, Example 62, Live Light Mixing's handler, other add-ons' handlers, quality migration, panel drawing, the Play path's waits |
+| studiomdl runs one after another (32 pods: 10 s of waiting) | 5865e70 | up to 8 at once |
 
-Last checked: 2026-10-13 against branch light-layers, commit 10ea8d0 (0.17.0).
+Last checked: 2026-10-13 against branch light-layers, commit f834193 (0.17.0 + 5865e70).
