@@ -556,9 +556,11 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
                 materials.report.errors.append(
                     f"Custom Model '{obj.name}': the Map Name '{ir.settings.name}' is too long for model names (the "
                     f"game keeps {MDL_NAME_MAX} characters of a model's path): give the map a shorter name")
-        name = folder + stem
-        while name in ir.models:              # two meshes whose names clean up the same
-            name = name[:-1] + "x" if len(name) + len(".mdl") >= MDL_NAME_MAX else name + "x"
+        name, n = folder + stem, 1
+        while name in ir.models:              # two meshes whose names clean up the same: _2, _3... (kept in the room)
+            n += 1
+            tail = f"_{n}"
+            name = folder + stem[:max(1, room - len(tail))] + tail
         ir.__dict__.setdefault("_model_keys", {})[key] = name
         ir.models[name] = _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, collide)
     spec = ir.models[name]
@@ -845,6 +847,45 @@ def _armature_actions(arm):
     return sorted(out, key=lambda a: a.name.lower())
 
 
+# Sampled poses, kept between builds: a rig's animation played frame by frame (scene.frame_set) makes Blender update
+# the whole scene each frame, about 0.6 s a model on a 3,000-object map. The pose of a rig without constraints or
+# drivers depends only on its bones and its actions, so copies of one rig (duplicated props) share one sampling,
+# and an unchanged rig isn't sampled again. Key: _rig_fingerprint; value: [(action, cyclic, frames)], each frame
+# {bone name: its matrix in armature space}.
+_POSE_CACHE: dict[str, list] = {}
+
+
+def _rig_fingerprint(arm, actions, fps) -> str | None:
+    """What a rig's sampled animations depend on: its bones' rest matrices and parents, each action's keys, frame
+    range and cycling, and the frame rate. None: don't share or keep its samples (constraints or drivers can follow
+    other objects; actions this Blender can't list the curves of)."""
+    import hashlib
+    if any(len(pb.constraints) for pb in arm.pose.bones):
+        return None
+    ad = arm.animation_data
+    if ad is not None and len(ad.drivers):
+        return None
+    parts = [round(fps, 4), arm.data.pose_position]
+    for b in arm.data.bones:
+        parts.append((b.name, b.parent.name if b.parent else "",
+                      tuple(round(v, 5) for row in b.matrix_local for v in row)))
+    for act in actions:
+        try:
+            curves = list(act.fcurves)
+        except (AttributeError, RuntimeError):
+            return None
+        parts.append((act.name, act.get("hl_name"), tuple(round(f, 4) for f in act.frame_range),
+                      bool(getattr(act, "use_cyclic", False))))
+        for fc in curves:
+            parts.append((fc.data_path, fc.array_index, fc.extrapolation, fc.mute,
+                          tuple(m.type for m in fc.modifiers),
+                          tuple((round(k.co.x, 4), round(k.co.y, 6), k.interpolation, k.easing,
+                                 round(k.handle_left.x, 4), round(k.handle_left.y, 6),
+                                 round(k.handle_right.x, 4), round(k.handle_right.y, 6))
+                                for k in fc.keyframe_points)))
+    return hashlib.sha1(repr(parts).encode()).hexdigest()
+
+
 def _sample_actions(obj, arm, sk, size, report, game_rest=None):
     """Every action of the armature, frame by frame, as an animation (its name; looping when Cyclic Animation is on
     in the action's settings)."""
@@ -853,11 +894,16 @@ def _sample_actions(obj, arm, sk, size, report, game_rest=None):
     if not actions:
         return
     scene = bpy.context.scene
+    fps = scene.render.fps / (scene.render.fps_base or 1.0)
+    key = _rig_fingerprint(arm, actions, fps) if game_rest is None else None
+    if key is not None and key in _POSE_CACHE:          # (sampled already: this build or an earlier one)
+        _animations_from_poses(sk, _POSE_CACHE[key], _bone_space(obj, arm), size, fps)
+        return
+    raw: list = []                                      # (what this sampling adds to the cache)
     ad = arm.animation_data or arm.animation_data_create()
     old_action, old_slot, old_nla = ad.action, getattr(ad, "action_slot", None), ad.use_nla
     ad.use_nla = False                       # (only the action being sampled moves the bones)
     old_frame = scene.frame_current
-    fps = scene.render.fps / (scene.render.fps_base or 1.0)
     space = _bone_space(obj, arm)
     by_name = {b.name: arm.pose.bones.get(b.name) for b in sk.bones}
     parents = [sk.bones[b.parent].name if b.parent >= 0 else None for b in sk.bones]
@@ -879,13 +925,15 @@ def _sample_actions(obj, arm, sk, size, report, game_rest=None):
             cyclic = bool(getattr(act, "use_cyclic", False))
             if cyclic and end > start:
                 end -= 1             # (a loop's last frame is its first again: written once)
-            frames = []
+            frames, poses = [], []
             for f in range(start, max(end, start) + 1):
                 scene.frame_set(f)
                 if game_rest is not None:           # (a game skeleton: the pose in the game's bone frames)
                     from .gameskeleton import game_pose
                     frames.append(game_pose(arm, sk, game_rest, bpy.context.scene.hammerless.units_per_meter))
                     continue
+                if key is not None:
+                    poses.append({pb.name: pb.matrix.copy() for pb in arm.pose.bones})
                 frame = []
                 for b, parent in zip(sk.bones, parents):
                     m = space @ by_name[b.name].matrix
@@ -899,23 +947,42 @@ def _sample_actions(obj, arm, sk, size, report, game_rest=None):
                 name += "_2"
             used.add(name.lower())
             sk.animations.append(skeletal.Animation(name, frames, fps, cyclic))
+            raw.append((name, cyclic, poses))
+        if key is not None:
+            _POSE_CACHE[key] = raw
     finally:
         arm.data.pose_position = old_position
-        for pb in arm.pose.bones:
-            if pb.name in basis:
-                pb.matrix_basis = basis[pb.name]
         ad.use_nla = old_nla
-        ad.action = old_action
+        try:
+            ad.action = old_action
+        except (TypeError, RuntimeError):
+            pass
         if old_slot is not None and hasattr(ad, "action_slot"):
             try:
                 ad.action_slot = old_slot
             except (TypeError, RuntimeError):
                 pass
         scene.frame_set(old_frame)
+        for pb in arm.pose.bones:     # (after the frame: re-evaluating the action would undo pose tweaks not keyed)
+            if pb.name in basis:
+                pb.matrix_basis = basis[pb.name]
 
 
 MDL_NAME_MAX = 63          # a model's path without "models/", as the .mdl stores it (64 bytes with its end)
 CHECK_ONLY = {"on": False}  # (set by Check the Map: the scene is read for problems, models aren't made)
+
+
+def _animations_from_poses(sk, raw, space, size, fps) -> None:
+    """A model's animations from a rig's sampled poses (_POSE_CACHE): each bone relative to its parent, in this
+    model's space and size, as _sample_actions works them out while sampling."""
+    from ..core import skeletal
+    parents = [sk.bones[b.parent].name if b.parent >= 0 else None for b in sk.bones]
+    for name, cyclic, poses in raw:
+        frames = []
+        for pose in poses:
+            frames.append([_local(space @ pose[parent] if parent is not None else None, space @ pose[b.name], size)
+                           for b, parent in zip(sk.bones, parents)])
+        sk.animations.append(skeletal.Animation(name, frames, fps, cyclic))
 
 
 def object_keyvalues(obj) -> dict[str, str]:
