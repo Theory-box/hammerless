@@ -40,7 +40,7 @@ Three methods turn the options into Valve-style argument lists, which both Valve
 
 | Method | Produces |
 |---|---|
-| `CompileOptions.extra(tool, ours)` | The Extra Options typed for that tool: all of them for Valve's tool; for ours only the ones it does (`toolopts.sort_options(tool, text)[0]`). `extra_notes()` returns the build-log lines about the options left out (since 2026-10-13, commit 1d2d8fd). |
+| `CompileOptions.extra(tool, ours)` | The Extra Options typed for that tool: all of them for Valve's tool; for ours only the ones it does (`toolopts.sort_options(tool, text)[0]`). `extra_notes()` returns the build-log lines about the options left out (since 2026-10-13, commit 1d2d8fd). For Valve's tool the words go through `toolopts.valve_accepts`, which drops the options L4D2's binary refuses with their values (`VALVE_REFUSES`: vrad `-scale 1`, `-ambient 3`, `-sky 1`), so Valve's vrad run as a fallback doesn't exit on usage (c29bd02). The notes are kept apart from the fallback notes (`CompileJob._option_notes`) and put in the log as plain notes when that tool runs, not through `_fallback` (c29bd02: they were counted as fallbacks before). |
 | `CompileOptions.vbsp_args()` | just `extra_vbsp.split()` (Valve's vbsp; `hlvbsp_command` builds ours and takes `extra("vbsp", True)`) |
 | `CompileOptions.vvis_args(ours)` | `None` when vis is SKIP; `["-fast"]` for FAST; plus `extra("vvis", ours)` |
 | `CompileOptions.vrad_args(ours)` | `None` when rad is SKIP; always `-hdr`; for FAST: `-fast` for Valve's vrad but `-noextra -bounce 2` for ours (commit 31a33e5; vrad's `-fast` is not ported); `-final` for FINAL; else `-extrasky N`, `-noextra`, `-bounce N`, `-chop N -maxchop N` when they differ from vrad's defaults; `-StaticPropLighting`, `-StaticPropPolys`; plus `extra("vrad", ours)` |
@@ -82,4 +82,4 @@ After a successful build the job writes `<map>.built.vmf`, `<map>.built.opts` (t
 
 None open as of 2026-10-13 (commit 31a33e5). Resolved the same day: the `rad="FAST"` preset path that still sent lighting to Valve's vrad (31a33e5: ours gets `-noextra -bounce 2`); the system docs' "extra options run Valve's tool" sentences (updated with 1d2d8fd's rule).
 
-Last checked: 2026-10-13 against branch light-layers, commit 41dc861.
+Last checked: 2026-10-13 against branch light-layers, commit 10ea8d0 (0.17.0).

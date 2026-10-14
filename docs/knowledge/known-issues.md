@@ -64,6 +64,9 @@ traps), re-checked in the current code.
   (`self.report` and the Problems list), which is behind the game window.
 - **Suggested fix:** tell the game (a console message or HUD text through the two-way link) that the build failed,
   or bring Blender to the front on a failure.
+- **Partly addressed (0.17.0, d06144f):** the old map no longer runs the new build's logic: the map's scripts are
+  written only once the compiled map is in the game, and the nav processes stop on every ending (see
+  [loading/](loading/README.md)). The missing note in the game remains open.
 
 ### 6. Warnings are hidden behind the game (audit 5 item 3)
 
@@ -125,5 +128,11 @@ traps), re-checked in the current code.
 | Audit 4 item 2: wall climbs undid the unreachable marks | a267cc1 | reachability worked out before the climb links |
 | Audit 5 item 7: unsaved .blend builds into a temp folder silently | earlier | warning: "The .blend isn't saved: the build goes to a temporary folder..." (`ops.py`) |
 | Audit 5 item 7: hlvrad's "can't load embree4.dll" fallback | e1e0d1d | the build no longer asks for Embree (never shipped) |
+| A failed, leaking or cancelled build left the old map running the new scripts, with the nav processes still going (part of audit 2 item 5) | d06144f, c29bd02 (0.17.0) | scripts written only with the new map; `_stop_nav` on every ending; the cancel message says what's true |
+| Bake Lighting / Compute Visibility then Play made the game regenerate the nav (two extra loads) | d06144f, c29bd02 | the nav follows the new map; only its analysis is redone when the visibility changed |
+| Imported maps with accented characters failed to build until Start Fresh (`UnicodeDecodeError` on the built `.vmf`) | d06144f | every VMF read uses `errors="replace"` |
+| Cycles lighting froze Blender while the nav mesh was being made | d06144f | the bake starts after the nav thread ends |
+| Extra vrad options left out were logged as fallbacks | c29bd02 | plain notes when the tool runs; `-extra` known; Valve's vrad never gets `-scale` / `-ambient` / `-sky` |
+| Socket numbers lost digits (12345.67 -> 12345.7); `inf` / `nan` crashed the script | c29bd02 | `num_text`: shortest text that round-trips the single-precision value; 3.4e38 / 0.0 |
 
-Last checked: 2026-10-13 against branch light-layers, commit 30de660.
+Last checked: 2026-10-13 against branch light-layers, commit 10ea8d0 (0.17.0).

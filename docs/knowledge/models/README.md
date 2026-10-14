@@ -4,7 +4,7 @@ What Hammerless knows about L4D2's model and texture files: the own writer for s
 
 Code: `hammerless/core/models.py` (Custom Models, fingerprints), `mdlwrite.py` (`.mdl`/`.vvd`/`.vtx`), `phywrite.py` (`.phy`), `skeletal.py` (SMD/QC), `gamemodel.py` (reads `.mdl`/`.ani`), `gamemesh.py` (reads `.vvd`/`.vtx`), `textures.py` (VTF/VMT), `vtf_read.py`, `vpk.py`, `content.py` (`GameContent`), `hammerless/blender/extract.py`, `texturing.py`, `preview.py`, `gameskeleton.py`, `placedchar.py`, `examplemodels.py`. Tests: `tests/ingame/test_models.py` (the reference run for the writer), unit tests for the skeletal writer and the pod export (8237803).
 
-Timeline (2026): Custom Models through studiomdl, then the own `.mdl`/`.vvd`/`.vtx` writer and `.phy` (default since) 10-08 (842e605, 619b9d9, 7855d1e); animated models 10-11/12 (93a5952, branch anim-models, 0.14.0); game model reader 9c9a8ff, game skeletons 2b60362, Import Game Mesh 105b828, placed characters (0.14.1, 2026-10-12); loose-material fix 500a493 (2026-10-13).
+Timeline (2026): Custom Models through studiomdl, then the own `.mdl`/`.vvd`/`.vtx` writer and `.phy` (default since) 10-08 (842e605, 619b9d9, 7855d1e); animated models 10-11/12 (93a5952, branch anim-models, 0.14.0); game model reader 9c9a8ff, game skeletons 2b60362, Import Game Mesh 105b828, placed characters (0.14.1, 2026-10-12); loose-material fix 500a493 (2026-10-13); 63-character model names, Check the Map without sampling, the pose cache and shared rig copies e88a0f4 / f57eadf / c29bd02 / 10ea8d0 (0.17.0, 2026-10-13).
 
 ## The own model writer (static, dynamic, physics props)
 
@@ -49,6 +49,21 @@ Measured on studiomdl (`ANIMATED_MODELS_COMPILE.md`, 2026-10-11):
 | `sdk_content/` | the Authoring Tools install Valve's complete survivor QC (`Francis_original/biker_original.qc`, 2030 lines) with its SMD/VTA files, DMX starter kits and Maya rigs: the first-hand reference; EULA: read, don't ship |
 
 Tested in game: the Swelling Pod (example 49) plays idle and swell, swells on walk-up, bursts for -20 HP and is removed, and a shot sets it off (`AllowTakeDamage`); the full example regression passed (42). Fable's audit fixes: scale, pose restore, Rest Position, instances, mirrored models (built with a warning), missing studiomdl.
+
+### Sampling speed: the pose cache (2026-10-13, 0.17.0)
+
+Measured: sampling a rig's actions frame by frame (`scene.frame_set`) makes Blender re-evaluate the whole depsgraph each frame, about 0.6 s per model on a 3,135-object map; 32 animated pods took 21 s of Build & Play. Fixes in `hammerless/blender/extract.py`:
+
+| Item | Detail | Status |
+|---|---|---|
+| `_POSE_CACHE` | Sampled poses kept between builds, keyed by `_rig_fingerprint`: the bones (rest matrices, parents, `use_connect`, inherit rotation/scale, local location, the pose bone's rotation mode), each action's name, `hl_name`, frame range and Cyclic flag, every F-curve's keys (co, interpolation, easing, handles), extrapolation, mute and F-modifier settings (`_settings_of`: every boolean/int/float/enum property, so a Noise's strength counts), and the scene frame rate; slotted actions (Blender 4.4+) are read through `_action_curves`. Value: per action, each frame's `{bone: matrix in armature space}`; `_animations_from_poses` turns them into a model's animations in that model's space and size. | `done` (f57eadf, c29bd02) |
+| Not cached | A rig with pose-bone constraints or drivers (`_rig_fingerprint` returns None: its pose can follow other objects), and a model on a game skeleton (`game_rest`): sampled every build. | by design |
+| Measured | 32 pods: 21 s -> about 2 s on the first build, 1.4 s and then about 1 s with the cache warm; output identical. | 2026-10-13 |
+| Check the Map | `CHECK_ONLY["on"]` (set by `HL_OT_validate`): `_model_spec` skips `_sample_actions`, the scene is read for problems only; 24 s -> 2 s on the 32-pod map. | `done` (e88a0f4) |
+| Shared models for copies | Copies of a rigged mesh share one `.mdl` only when the key matches: mesh shape, scale, kind, collision, physics class and mass, material slots, **and** the rig part (armature data name, its action names, the mesh's placement relative to the rig rounded to 4 places, pose position, the armature's own name when it has constraints or drivers (its own motion: no sharing), and its attachment Empties, found once per armature per build by `_rig_attachments` because `arm.children` scans every object in the file). Each prop still plays its own copy of the animation. | `done` (e88a0f4, 10ea8d0) |
+| Pose restore | After sampling the frame is restored first, then `matrix_basis` of every bone: restoring the bones before the frame let the action's re-evaluation undo un-keyed pose tweaks. | `done` (f57eadf) |
+
+Model names: the `.mdl` stores its path without `models/` in 64 bytes, so `MDL_NAME_MAX = 63` (studiomdl refused longer names; the own writer cut them, so the game couldn't find the file). `model_prop` keeps `hammerless/<map>/<stem>` within it: a long stem is cut and given a 6-character hash; a Map Name leaving under 6 characters is an error naming the map; two meshes whose names clean up the same get `_2`, `_3` within the room (before e88a0f4 an `x` was appended without limit).
 
 ## The game's own models (decoded from the VPKs, 2026-10-12)
 
@@ -102,6 +117,7 @@ Placed characters (`placedchar.py`): a `prop_dynamic` of the game's model loopin
 | Survivor puppet trick as a feature | not done |
 | Meshes without UVs get zero texture coordinates | known |
 | Writer speed vs studiomdl | not measured |
+| Animation sampling of rigs with constraints or drivers (not cached): ~0.6 s per model per frame set on a big map | known (by design; see the pose cache above) |
 | Enemies on bot bodies (precache rule: the map must precache any model given with `SetModel`) | see [../logic/](../logic/README.md) |
 
-Last checked: 2026-10-13 against branch light-layers, commit 46f75ac.
+Last checked: 2026-10-13 against branch light-layers, commit 10ea8d0 (0.17.0).

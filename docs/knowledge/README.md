@@ -99,7 +99,7 @@ Every page follows these rules so the facts stay traceable and checkable:
 
 | Page | What it covers |
 |---|---|
-| [models/README.md](models/README.md) | The own `.mdl`/`.vvd`/`.vtx`/`.phy` writer and its verification against studiomdl, the SMD/QC path and studiomdl's measured behaviour (the 90-degree turn, events, hitboxes, limits), the game's model files decoded (frame-anims, skeletons, libraries), game skeletons and placed characters proven in game, textures, alpha, material resolution, the loose-material fix, parallax |
+| [models/README.md](models/README.md) | The own `.mdl`/`.vvd`/`.vtx`/`.phy` writer and its verification against studiomdl, the SMD/QC path and studiomdl's measured behaviour (the 90-degree turn, events, hitboxes, limits), the game's model files decoded (frame-anims, skeletons, libraries), game skeletons and placed characters proven in game, the pose cache and the 63-character name limit, textures, alpha, material resolution, the loose-material fix, parallax |
 
 ### sound/
 
@@ -111,7 +111,7 @@ Every page follows these rules so the facts stay traceable and checkable:
 
 | Page | What it covers |
 |---|---|
-| [loading/README.md](loading/README.md) | The nine steps and where each runs, boot and load timings (`BinkOpen(`, the 6 s Steam wait), the stringtable dictionary findings and how it is carried over, the parallel build's lessons (contention, the GIL), smart build plans and when they fall back, the kept nav, audit items, the two-way link and cancel, limits |
+| [loading/README.md](loading/README.md) | The nine steps and where each runs, boot and load timings (`BinkOpen(`, the 6 s Steam wait), the stringtable dictionary findings and how it is carried over, the parallel build's lessons (contention, the GIL), smart build plans and when they fall back, the kept nav (also after Bake Lighting / Compute Visibility), what a failed or cancelled build leaves in the game, the build caches, audit items, the two-way link and cancel, limits |
 
 ### game-facts/
 
@@ -125,4 +125,4 @@ Every page follows these rules so the facts stay traceable and checkable:
 |---|---|
 | [known-issues.md](known-issues.md) | Open behaviour problems from the October 2026 audits, re-checked in the code: what happens, where, the suggested fix; and what's been fixed since |
 
-Last checked: 2026-10-13 against branch light-layers, commit 46f75ac.
+Last checked: 2026-10-13 against branch light-layers, commit 10ea8d0 (0.17.0).

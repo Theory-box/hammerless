@@ -43,7 +43,7 @@ Values are linear light in vrad's units: a decoded 1.0 in the lightmap is 255 "v
 
 Changing any setting makes the quality Custom. Build & Play's Quality maps to (vis, lighting): Quick = (Off, Off), Fast = (Fast, Fast), Normal = (Full, Normal), Final = (Full, Final), Ultra = (Full, Ultra).
 
-- Fast is **not** vrad's `-fast` (decision 2026-10-13; see compilers/valve-fallbacks.md case c): `CompileOptions.vrad_args(ours=True)` turns `rad="FAST"` into `-noextra -bounce 2`.
+- Fast is **not** vrad's `-fast` (decision 2026-10-13; see compilers/valve-fallbacks.md case c): `CompileOptions.vrad_args(ours=True)` turns `rad="FAST"` into `-noextra -bounce 2`. Files saved with the old Fast (Normal's settings plus vrad's `-fast`) are migrated once: `quality.SETTINGS_VERSION` is 2 and `migrate` applies the new Fast preset to a file at version 1 whose lighting quality is Fast (c29bd02).
 - Normal's 4x sky rays on the GPU: measured against a 64x reference on a large user map (2026-10-09), at 1x 54% of luxels were more than 1% off (mean 4.8%); 4x halves that, for 0.07 s more. On the CPU each doubling about doubles the sky time, so Exact keeps 1x.
 - Ultra is not vrad-identical by design (`-fixquirks`, 8x8 supersampling): 2.6 s on an RTX 4090, 15 s on the CPU (large user map).
 - Prop lighting default on at Normal since 2026-10-08 (commit 612da78) so the game doesn't light props at every map load.
@@ -89,4 +89,4 @@ All on "a large user map" unless noted; RTX 4090 for GPU figures; 16 threads.
 | Cycles vs vrad on a real level | correlation 0.976 (0.956 at first), brightness within 1-3%; seams 1.6% vrad vs 0.02% stitched; denoise 7.7% off vs 1.3% raw | 2026-10-07 |
 | vrad run-to-run noise | 0.34% of luxels (median 0.6%, 38 luxels > 5%); deterministic with bounce + `-noextra` | 2026-10-08 |
 
-Last checked: 2026-10-13 against branch light-layers, commit 41dc861.
+Last checked: 2026-10-13 against branch light-layers, commit 10ea8d0 (0.17.0).
