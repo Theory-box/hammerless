@@ -278,7 +278,12 @@ def build_map_text(context, root: str | None):
     else that compares against the last build (Analyze Navmesh) must use this too."""
     s = context.scene.hammerless
     rep = Report()
-    from .props import clean_map_name
+    from .props import MAP_NAME_MAX, clean_map_name
+    if s.map_name and len(s.map_name) > MAP_NAME_MAX:
+        rep.errors.append(f"Map Name '{s.map_name}' is {len(s.map_name)} characters: the game can't join a map whose "
+                          f"name is longer than {MAP_NAME_MAX} (it gets stuck loading). Use a shorter name, for "
+                          f"example '{clean_map_name(s.map_name)}'")
+        return None, None, rep
     if not s.map_name or clean_map_name(s.map_name) != s.map_name:
         rep.errors.append(f"Map Name '{s.map_name}' can't be used: use lowercase letters, digits and _ only "
                           f"(for example '{clean_map_name(s.map_name) or 'my_map'}')")

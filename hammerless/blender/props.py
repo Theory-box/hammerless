@@ -433,10 +433,14 @@ def set_surface_list(surfaces) -> None:
         SURFACE_ITEMS.append((s.name, s.name, friction_label(s)))
 
 
+MAP_NAME_MAX = 31        # (measured: with a 32-character map name the game can't join its own server)
+
+
 def clean_map_name(name: str) -> str:
-    """A map name the game, its console and file paths all accept: lowercase a-z, 0-9 and _."""
+    """A map name the game, its console and file paths all accept: lowercase a-z, 0-9 and _, at most 31 characters."""
     import re
-    return re.sub(r"[^a-z0-9_]", "", re.sub(r"[\s\-.]+", "_", name.strip().lower())).strip("_")
+    clean = re.sub(r"[^a-z0-9_]", "", re.sub(r"[\s\-.]+", "_", name.strip().lower())).strip("_")
+    return clean[:MAP_NAME_MAX].rstrip("_")
 
 
 def _on_map_name(self):
