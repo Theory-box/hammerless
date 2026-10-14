@@ -550,7 +550,7 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
         rig = (arm.data.name, tuple(a.name for a in _armature_actions(arm)),
                tuple(round(v, 4) for row in rel for v in row), arm.data.pose_position,
                arm.name if own else "",            # (constraints / drivers: this rig moves its own way)
-               tuple(sorted((c.name, c.parent_bone) for c in arm.children if c.type == "EMPTY")))   # (attachments)
+               _rig_attachments(ir, arm))
     key = (shape, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class_name or hs.physics_class, round(hs.model_mass, 3),
            tuple(slot.material.name if slot.material else "" for slot in obj.material_slots), rig)
     name = getattr(ir, "_model_keys", {}).get(key)
@@ -901,6 +901,15 @@ def _rig_fingerprint(arm, actions, fps) -> str | None:
                                  round(k.handle_right.x, 4), round(k.handle_right.y, 6))
                                 for k in fc.keyframe_points)))
     return hashlib.sha1(repr(parts).encode()).hexdigest()
+
+
+def _rig_attachments(ir, arm) -> tuple:
+    """An armature's attachment Empties (name, bone), worked out once per armature per build (arm.children looks
+    through every object in the file)."""
+    cache = ir.__dict__.setdefault("_rig_attachments", {})
+    if arm.name not in cache:
+        cache[arm.name] = tuple(sorted((c.name, c.parent_bone) for c in arm.children if c.type == "EMPTY"))
+    return cache[arm.name]
 
 
 def _settings_of(item) -> tuple:

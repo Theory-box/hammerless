@@ -136,7 +136,10 @@ def export_sky(context, root, base: str) -> tuple[str, str]:
         return "", ""
     from .extract import _image_signature
     if s.sky_light == "SKYBOX":
-        source = ("skybox", root, s.skyname)
+        import glob                      # (loose sky faces in the game folder: replaced ones count)
+        faces = sorted(glob.glob(os.path.join(root or "", "left4dead2", "materials", "skybox", glob.escape(s.skyname)
+                                              + "*.vtf")))
+        source = ("skybox", root, s.skyname, tuple((f, os.path.getsize(f), os.path.getmtime(f)) for f in faces))
     else:
         img = s.sky_image or _world_sky_image(context)
         sig = _image_signature(img, round(s.sky_rotation, 6)) if img is not None else None

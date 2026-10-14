@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.17.0 (test release, 2026-10-13)
+
+- **Build & Play doesn't freeze on animated models**: a rig's animation is sampled once and shared by its copies (32 animated pods: 21 s to about 1 s); Check the Map doesn't sample animations at all. Long Map Names no longer break Custom Model names (the game's 63-character limit).
+- **Bake Lighting / Compute Visibility, then Play keep your nav mesh**: the game no longer regenerates it (two extra map loads); after a visibility change only its visibility data is redone.
+- **A failed, leaking or cancelled build leaves the game as it was**: the map's scripts go into the game only with the new map (the old map no longer runs new logic), the nav generator and analysis stop, and the cancel message says what's true.
+- Imported maps with accented characters build (they failed until Start Fresh).
+- Cycles lighting no longer freezes Blender while the nav mesh is being made.
+- Faster rebuilds: the sound analysis, packed textures, the sky picture and custom files are only redone when they changed; a repainted texture no longer remakes the nav mesh. Scene sorting no longer goes through every object on each change.
+- Extra vrad Options left out are listed in the build log; `-extra` is known; Valve's vrad never gets options it refuses. Files saved with the old Fast lighting get the new Fast settings.
+- Bottomless Clip (Example 57) leaves weapons without a clip (melee, throwables, pills) alone. Numbers typed on sockets keep their digits (12345.67 was cut to 12345.7).
 
 - **Set Entity Property keeps whole numbers exact**: a whole-number property (a colour with its see-through amount, flags, counts) gets a Whole Number input that keeps every digit; a Number input rounds past about 7 digits, which turned colours with alpha into other colours.
 - Hammerless's light compiler now does vrad's `-softsun`, `-textureshadows` (alpha-tested foliage and fences casting partial shadows), `-scale` and `-ambient` in Extra vrad Options (they used to be left out); Exact lighting matches Valve's vrad to the byte with them (no supersampling). A map with no vis now gets vrad's faint ambient light, as Valve's vrad gives it.

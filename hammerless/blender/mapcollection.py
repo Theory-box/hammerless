@@ -255,6 +255,7 @@ _timer = [False]
 _new_colls: dict = {}         # scene name -> collections that appeared since the last sort
 _sigs: dict = {}              # object session id -> its kind settings when last seen (see _sig)
 _counts: dict = {}            # scene name -> (objects, collections) when last listed
+_outside: dict = {}           # scene name -> objects updated in its depsgraph that aren't in it (instanced)
 
 
 def _sig(obj) -> tuple:
@@ -401,13 +402,15 @@ def _on_depsgraph(scene, depsgraph):
         return
     counts = (len(scene.objects), len(bpy.data.collections))
     known_now = _known.get(scene.name)
-    if (_counts.get(scene.name) != counts or known_now is None or any(
-            isinstance(u.id, bpy.types.Object) and u.id.original.session_uid not in known_now
-            for u in depsgraph.updates)):
+    outside = _outside.setdefault(scene.name, set())   # (evaluated here but not the scene's: instanced collections)
+    unknown = {u.id.original.session_uid for u in depsgraph.updates if isinstance(u.id, bpy.types.Object)} - (
+        known_now or set()) - outside
+    if _counts.get(scene.name) != counts or known_now is None or unknown:
         # (objects or collections added or removed: only then is every object listed, not on each move or
         # each of a build's scene updates)
         _counts[scene.name] = counts
         ids = {o.session_uid: o for o in scene.objects}
+        outside |= unknown - ids.keys()            # (not listed again for these)
         known = _known.get(scene.name)
         _known[scene.name] = set(ids)
         colls = {c.session_uid for c in bpy.data.collections}
@@ -438,6 +441,7 @@ def _on_depsgraph(scene, depsgraph):
 @bpy.app.handlers.persistent
 def _on_load(*_args):
     _counts.clear()
+    _outside.clear()
     _known.clear()
     _pending.clear()
     _known_colls.clear()
