@@ -1242,24 +1242,22 @@ EXAMPLES_3 = [
                 ("Health 100..1 becomes a field of view of 90..55", ["health", "scale", "plus", "full", "pick",
                                                                       "fov"])]),
     dict(title="Top-Down Camera", level="Camera",
-         objects={"button": ("BUTTON", (0.0, 0.0, 1.0))},
-         about="Press the button: every survivor sees the game from straight above, like a top-down shooter; press "
-               "it again for their own eyes. All in one node, Top-Down Camera (Tab goes in; its settings are on the "
-               "node): Height (units above the player), Smoothing (0: the camera stays locked on the player; higher, "
-               "up to 0.95: it lags behind and catches up) and Facing (the camera's yaw, fixed: 90 puts north at the "
-               "top of the screen; it never turns with the player). Each survivor gets a point_viewcontrol of their "
-               "own (kept in a player variable), switched on with its Enable input (setting their m_hViewEntity "
-               "alone doesn't change what they see; Enable also makes them unhurtable, which the group puts "
-               "back). Players still walk and fight as normal, but they aim where their own eyes look, not where "
-               "the camera points. Best in the open: under a ceiling a camera Height above ends up inside the floor "
-               "above or the solid map, and shows that (lower Height indoors).",
+         about="A top-down mode, on from the start like a third-person mode: every survivor sees the game from "
+               "straight above, like a top-down shooter. All in one node, Top-Down Camera (Tab goes in; its settings "
+               "are on the node): Height (units above the player), Smoothing (0: the camera stays locked on the "
+               "player; higher, up to 0.95: it lags behind and catches up) and Facing (the camera's yaw, fixed: 90 "
+               "puts north at the top of the screen; it never turns with the player). Turn Off and Turn On switch it "
+               "during play (wire any event to them). Each survivor gets a point_viewcontrol of their own (kept in a "
+               "player variable), switched on with its Enable input (setting their m_hViewEntity alone doesn't "
+               "change what they see; Enable also makes them unhurtable, which the group puts back). Players still "
+               "walk and fight as normal, but they aim where their own eyes look, not where the camera points. Best "
+               "in the open: under a ceiling a camera Height above ends up inside the floor above or the solid map, "
+               "and shows that (lower Height indoors). Don't mix it with third person.",
          groups={"Top-Down Follow": TOP_DOWN_FOLLOW, "Top-Down Camera": TOP_DOWN_CAMERA},
-         nodes=[N("button", "HL_NodeButton", 0, 0, sockets={"object": "@button"}, once=False, reset=1.0),
-                N("if_on", "HL_NodeIf", 1, 0, label="On already?"),
-                N("cam", "HL_NodeGroup", 2, 0, group="Top-Down Camera",
+         nodes=[N("start", "HL_NodeMapStart", 0, 0),
+                N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
                   sockets={"height": 500.0, "smoothing": 0.5, "facing": 90.0})],
-         links=[("button.pressed", "if_on.in"), ("cam.is_on", "if_on.condition"), ("if_on.true", "cam.off"),
-                ("if_on.false", "cam.on")],
-         steps=[("Press: the top-down camera on, or off again (Tab into the group; settings on the node)",
-                 ["button", "if_on", "cam"])]),
+         links=[("start.start", "cam.on")],
+         steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node)",
+                 ["start", "cam"])]),
 ]

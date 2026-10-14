@@ -107,6 +107,10 @@ return true;
 '''
 
 
+# the name of a compiled graph function ending in `end` (e.g. Example 62's "cam_set_on")
+TOPDOWN_FN = '(function(end) { foreach (k, v in getroottable()) if (typeof k == "string" && k.find("HL_S_") == 0 && k.len() > end.len() && k.slice(k.len() - end.len()) == end) return k; return null; })'
+
+
 def check(run: Run, n: int, b: Bench):
     """One example's check. Returns a note; raises AssertionError on failure, SkipTest to skip."""
     m = b.mark
@@ -505,8 +509,9 @@ def check(run: Run, n: int, b: Bench):
         # (example 45 puts everyone in third person, which keeps the player's own view angles: first person here)
         b.console("sb_stop 1", "firstperson", wait=0.3)    # (bots standing still: cameras settle exactly above them)
         b.run("foreach (s in T.survivors()) s.SetVelocity(Vector(0, 0, 0));")
-        mk = m(); b.console(f"ent_fire {run.obj(62, 'button')} Press", wait=1.5)
-        run.expect(62, mk, "button.pressed -> if_on.in")
+        # (it's on from map start; the run turned it off for the other examples: Turn On again, as a wire would)
+        run.expect(62, run.load_mark, "start.start -> cam/set_on.run")
+        b.run('getroottable()[' + TOPDOWN_FN + '("cam_set_on")].call(::HL_Scope);'); time.sleep(1.5)
         got = b.value(views)
         assert got and all(v is not None and v[0] == "point_viewcontrol" for v in got), f"views: {got}"
         assert all(abs(v[1][0]) < 2 and abs(v[1][1]) < 2 and abs(v[1][2] - 500) < 2 for v in got), \
@@ -543,7 +548,7 @@ def check(run: Run, n: int, b: Bench):
         turned = b.value(views)
         assert all(abs(v[3] - 90) < 0.5 for v in turned if v), f"a camera turned: {turned}"
         # off
-        mk = m(); b.console(f"ent_fire {run.obj(62, 'button')} Press", wait=1.0)
+        b.run('getroottable()[' + TOPDOWN_FN + '("cam_set_off")].call(::HL_Scope);'); time.sleep(1.0)
         off = b.value(views)
         left = b.value('T.count("point_viewcontrol")')
         b.console("sb_stop 0", "firstperson", "thirdpersonshoulder", wait=0.1)    # (as example 45 left it)
@@ -602,6 +607,8 @@ def main(argv):
         run.load_mark = b.load_mark
         b.console("sv_cheats 1", "god 1", "director_stop", "nb_blind 1", wait=1)
         b.run(GAME)
+        # Example 62 turns a top-down camera on at map start: off for the other examples (its own check turns it on)
+        b.run('local f = ' + TOPDOWN_FN + '("cam_set_off"); if (f) getroottable()[f].call(::HL_Scope);'); time.sleep(0.5)
         # leave the safe room for real: the examples that wait for it see it happen
         run.left_mark = b.mark()
         b.run("foreach (s in T.survivors()) T.to(s, Vector(1000, 0, 200));")
