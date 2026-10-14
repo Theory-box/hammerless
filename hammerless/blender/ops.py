@@ -363,7 +363,7 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
                           "Tools): it isn't in the game's bin folder")
         return
     m.write_model_materials(gamedir, f"models/hammerless/{ir.settings.name}", ir.model_materials)
-    built = 0
+    built, jobs = 0, []
     writer = _writer_version() if own else "studiomdl"     # (a fixed model writer makes the models again)
     for name, spec in ir.models.items():
         sig = hashlib.sha1(("".join(m.source_files(spec).values()) + m.qc_text(spec)
@@ -395,7 +395,12 @@ def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None
                 f.write(sig)
             built += 1
             continue
-        res = m.compile_model(studiomdl, gamedir, spec, folder)
+        jobs.append((name, spec, folder, stamp, sig))
+    # studiomdl runs: several at once (each its own process and folder; one after another, 32 animated props took 10 s)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=max(1, min(8, (os.cpu_count() or 2) - 1))) as pool:
+        results = list(pool.map(lambda j: m.compile_model(studiomdl, gamedir, j[1], j[2]), jobs))
+    for (name, _spec, _folder, stamp, sig), res in zip(jobs, results):
         if not res.ok:
             errs = m.studiomdl_errors(res.log) or res.log.strip().splitlines()[-3:]
             rep.errors.append(f"Custom Model '{name.split('/')[-1]}' didn't compile: " + "; ".join(errs[:3]))
