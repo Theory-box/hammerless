@@ -773,6 +773,154 @@ TOP_DOWN_ASSIST = dict(
            ("Their aim snapped to it", ["z_at", "chest", "z_chest", "to_it", "face", "h_ang", "hp", "snap_to",
                                         "snap"])])
 
+TOP_DOWN_CURSOR = dict(
+    about="Mouse Cursor for a top-down camera: one human survivor, one tick. The mouse still turns their view, so "
+          "each tick the turn since the last tick (their eye yaw against the yaw the group last gave them, and their "
+          "pitch) moves a cursor: mouse left/right moves it left/right on the screen, up/down up/down the screen "
+          "(Sensitivity units per degree), kept within Radius of them. Their aim then snaps, level, toward the cursor "
+          "(a helper info_target hl_cur_<player number> turned by Set Forward Vector gives the yaw), so shots go out "
+          "flat that way. The cursor is a model (a prop_dynamic_override hl_cursor_<player number>: models render "
+          "through a camera, effects don't), put on the ground under the cursor point (a Trace Line down). Screen "
+          "directions come from their camera like Top-Down Movement. Bots are left alone.",
+    inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("radius", "Radius", "num"),
+            ("sensitivity", "Sensitivity", "num"), ("model", "Cursor Model", "text")],
+    outputs=[("then", "Then", "event")],
+    nodes=[fn("bot", "IsPlayerABot", 0, 2, label="A bot?"),
+           N("if_human", "HL_NodeIf", 1, 0, label="Bots aim as usual"),
+           _var("cam", "top_down_camera", 0, 4, kind="thing", label="Their camera"),
+           N("no_cam", "HL_NodeCheck", 1, 4, label="No camera yet?", op="NOT_SET"),
+           N("if_cam", "HL_NodeIf", 2, 0, label="Camera there?"),
+           fn("idx", "entity:GetEntityIndex", 1, 6),
+           N("hname", "HL_NodeFormatText", 2, 6, label="Their aim helper", template="hl_cur_{a}"),
+           N("cname", "HL_NodeFormatText", 2, 7, label="Their cursor", template="hl_cursor_{a}"),
+           fn("found", "Entities.FindByName", 3, 6, label="Their aim helper"),
+           N("missing", "HL_NodeCheck", 4, 6, label="Not made yet?", op="NOT_SET"),
+           N("if_new", "HL_NodeIf", 3, 0, label="Made the first time"),
+           fn("feet", "entity:GetOrigin", 3, 8, label="Their feet"),
+           N("kv_helper", "HL_NodeMakeTable", 4, 8, label="The helper", fields="targetname: text, origin: vec"),
+           fn("spawn_helper", "SpawnEntityFromTable", 4, 0, {"p0": "info_target"}),
+           N("kv_cursor", "HL_NodeMakeTable", 5, 8, label="The cursor model (not solid)",
+             fields="targetname: text, origin: vec, model: text, solid: int", sockets={"f_solid": 0}),
+           fn("spawn_cursor", "SpawnEntityFromTable", 5, 0, {"p0": "prop_dynamic_override"}),
+           fn("aim0", "player:EyeAngles", 5, 10, label="Where they aim"),
+           N("aim0_p", "HL_NodeBreakVector", 6, 10),
+           _var("start_yaw", "top_down_cursor_yaw", 6, 0, get=False, kind="num", label="Yaw so far"),
+           # screen directions from their camera
+           fn("cam_fwd", "entity:GetForwardVector", 6, 3, label="Where the camera looks"),
+           N("cf", "HL_NodeBreakVector", 7, 3),
+           N("flat", "HL_NodeMakeVector", 8, 3, label="Flattened", sockets={"z": 0.0}),
+           N("up", "HL_NodeVectorMath", 9, 3, label="Screen-up", op="NORMALIZE"),
+           N("zaxis", "HL_NodeMakeVector", 9, 4, label="Straight up", sockets={"x": 0.0, "y": 0.0, "z": 1.0}),
+           N("left", "HL_NodeVectorMath", 10, 4, label="Screen-left", op="CROSS"),
+           N("start_off", "HL_NodeVectorMath", 10, 2, label="A little up the screen", op="SCALE",
+             sockets={"scale": 60.0}),
+           _var("start_cursor", "top_down_cursor", 7, 0, get=False, kind="vec", label="Cursor (from them)"),
+           # the mouse's turn since last tick
+           fn("aim", "player:EyeAngles", 7, 12, label="Where they aim now"),
+           N("ap", "HL_NodeBreakVector", 8, 12),
+           _var("last_yaw", "top_down_cursor_yaw", 8, 13, kind="num", label="Yaw the group gave them"),
+           N("dy", "HL_NodeMath", 9, 12, label="Turned (yaw)", op="SUBTRACT"),
+           N("w1", "HL_NodeMath", 10, 12, label="+ 540", op="ADD", sockets={"b": 540.0}),
+           N("w2", "HL_NodeMath", 11, 12, label="Modulo 360", op="MODULO", sockets={"b": 360.0}),
+           N("w3", "HL_NodeMath", 12, 12, label="- 180: the short way", op="SUBTRACT", sockets={"b": 180.0}),
+           N("dx_amt", "HL_NodeMath", 13, 12, label="x Sensitivity (left: turned left)", op="MULTIPLY"),
+           N("dy_amt", "HL_NodeMath", 10, 14, label="Pitch x -Sensitivity (up: looked up)", op="MULTIPLY"),
+           N("neg_sens", "HL_NodeMath", 9, 14, label="- Sensitivity", op="MULTIPLY", sockets={"b": -1.0}),
+           N("move_l", "HL_NodeVectorMath", 14, 12, label="Along screen-left", op="SCALE"),
+           N("move_u", "HL_NodeVectorMath", 14, 13, label="Along screen-up", op="SCALE"),
+           _var("cursor", "top_down_cursor", 13, 15, kind="vec", label="Cursor (from them)"),
+           N("sum1", "HL_NodeVectorMath", 15, 13, label="Moved", op="ADD"),
+           N("sum2", "HL_NodeVectorMath", 16, 13, label="Moved", op="ADD"),
+           # kept within Radius
+           N("len", "HL_NodeVectorMath", 16, 14, label="How far", op="LENGTH"),
+           N("len_ok", "HL_NodeMath", 17, 14, label="At least 1", op="MAXIMUM", sockets={"b": 1.0}),
+           N("capped", "HL_NodeMath", 17, 15, label="At most Radius", op="MINIMUM"),
+           N("ratio", "HL_NodeMath", 18, 14, label="Shrink by", op="DIVIDE"),
+           N("kept", "HL_NodeVectorMath", 19, 13, label="Within Radius", op="SCALE"),
+           _var("keep", "top_down_cursor", 8, 0, get=False, kind="vec", label="Cursor (from them)"),
+           # their aim toward it, level
+           fn("helper", "Entities.FindByName", 9, 6, label="Their aim helper"),
+           fn("face", "entity:SetForwardVector", 9, 0, label="The helper facing the cursor"),
+           fn("h_ang", "entity:GetAngles", 10, 6, label="So its angles are the way"),
+           N("hp", "HL_NodeBreakVector", 11, 6),
+           N("level", "HL_NodeMakeVector", 12, 6, label="Level, that way", sockets={"x": 0.0, "z": 0.0}),
+           fn("snap", "player:SnapEyeAngles", 10, 0, label="Their aim on the cursor"),
+           _var("keep_yaw", "top_down_cursor_yaw", 11, 0, get=False, kind="num", label="Yaw the group gave them"),
+           # the cursor model on the ground there
+           N("at", "HL_NodeVectorMath", 12, 8, label="Over the ground there", op="ADD"),
+           N("above", "HL_NodeMakeVector", 12, 9, label="120 up", sockets={"x": 0.0, "y": 0.0, "z": 120.0}),
+           N("below", "HL_NodeMakeVector", 12, 10, label="300 down", sockets={"x": 0.0, "y": 0.0, "z": -300.0}),
+           N("from", "HL_NodeVectorMath", 13, 9, label="From above", op="ADD"),
+           N("to", "HL_NodeVectorMath", 13, 10, label="To below", op="ADD"),
+           N("kv_trace", "HL_NodeMakeTable", 14, 9, label="The trace (solid things)",
+             fields="start: vec, end: vec, ignore: thing, mask: int", sockets={"f_mask": 33636363}),
+           _var("trace", "top_down_cursor_trace", 12, 0, get=False, kind="any", label="The trace (kept)"),
+           _var("traced", "top_down_cursor_trace", 15, 10, kind="any", label="The trace"),
+           fn("cast", "TraceLine", 15, 9, label="Trace down"),
+           N("if_cast", "HL_NodeIf", 13, 0, label="Traced"),
+           N("ground", "HL_NodeGetField", 16, 10, label="The ground", sockets={"key": "pos"}),
+           fn("cursor_ent", "Entities.FindByName", 14, 6, label="Their cursor"),
+           fn("place", "entity:SetOrigin", 14, 0, label="The cursor there")],
+    links=[("in.player", "bot.p0"), ("bot.result", "if_human.condition"), ("in.run", "if_human.in"),
+           ("if_human.true", "out.then"),
+           ("in.player", "cam.player"), ("cam.result", "no_cam.a"), ("no_cam.result", "if_cam.condition"),
+           ("if_human.false", "if_cam.in"), ("if_cam.true", "out.then"),
+           ("in.player", "idx.target"), ("idx.result", "hname.a"), ("idx.result", "cname.a"),
+           ("hname.result", "found.p1"), ("found.result", "missing.a"),
+           ("if_cam.false", "if_new.in"), ("missing.result", "if_new.condition"),
+           # made the first time: helper, cursor model, yaw so far, cursor a little up the screen
+           ("in.player", "feet.target"), ("hname.result", "kv_helper.f_targetname"), ("feet.result", "kv_helper.f_origin"),
+           ("if_new.true", "spawn_helper.run"), ("kv_helper.table", "spawn_helper.p1"),
+           ("cname.result", "kv_cursor.f_targetname"), ("feet.result", "kv_cursor.f_origin"),
+           ("in.model", "kv_cursor.f_model"),
+           ("spawn_helper.then", "spawn_cursor.run"), ("kv_cursor.table", "spawn_cursor.p1"),
+           ("in.player", "aim0.target"), ("aim0.result", "aim0_p.vector"),
+           ("spawn_cursor.then", "start_yaw.run"), ("in.player", "start_yaw.player"), ("aim0_p.y", "start_yaw.value"),
+           ("cam.result", "cam_fwd.target"), ("cam_fwd.result", "cf.vector"), ("cf.x", "flat.x"), ("cf.y", "flat.y"),
+           ("flat.result", "up.a"), ("zaxis.result", "left.a"), ("up.vector", "left.b"), ("up.vector", "start_off.a"),
+           ("start_yaw.then", "start_cursor.run"), ("in.player", "start_cursor.player"),
+           ("start_off.vector", "start_cursor.value"),
+           # each tick: the mouse's turn moves the cursor
+           ("in.player", "aim.target"), ("aim.result", "ap.vector"), ("in.player", "last_yaw.player"),
+           ("ap.y", "dy.a"), ("last_yaw.result", "dy.b"), ("dy.value", "w1.a"), ("w1.value", "w2.a"),
+           ("w2.value", "w3.a"), ("w3.value", "dx_amt.a"), ("in.sensitivity", "dx_amt.b"),
+           ("in.sensitivity", "neg_sens.a"), ("ap.x", "dy_amt.a"), ("neg_sens.value", "dy_amt.b"),
+           ("left.vector", "move_l.a"), ("dx_amt.value", "move_l.scale"),
+           ("up.vector", "move_u.a"), ("dy_amt.value", "move_u.scale"),
+           ("in.player", "cursor.player"), ("cursor.result", "sum1.a"), ("move_l.vector", "sum1.b"),
+           ("sum1.vector", "sum2.a"), ("move_u.vector", "sum2.b"),
+           ("sum2.vector", "len.a"), ("len.value", "len_ok.a"), ("len_ok.value", "capped.a"), ("in.radius", "capped.b"),
+           ("capped.value", "ratio.a"), ("len_ok.value", "ratio.b"), ("sum2.vector", "kept.a"), ("ratio.value", "kept.scale"),
+           ("start_cursor.then", "keep.run"), ("if_new.false", "keep.run"), ("in.player", "keep.player"),
+           ("kept.vector", "keep.value"),
+           # their aim toward it, level
+           ("hname.result", "helper.p1"), ("keep.then", "face.run"), ("helper.result", "face.target"),
+           ("kept.vector", "face.p0"), ("helper.result", "h_ang.target"), ("h_ang.result", "hp.vector"),
+           ("hp.y", "level.y"), ("face.then", "snap.run"), ("in.player", "snap.target"), ("level.result", "snap.p0"),
+           ("snap.then", "keep_yaw.run"), ("in.player", "keep_yaw.player"), ("hp.y", "keep_yaw.value"),
+           # the cursor model on the ground under the cursor point
+           ("feet.result", "at.a"), ("kept.vector", "at.b"), ("at.vector", "from.a"), ("above.result", "from.b"),
+           ("at.vector", "to.a"), ("below.result", "to.b"),
+           ("from.vector", "kv_trace.f_start"), ("to.vector", "kv_trace.f_end"), ("in.player", "kv_trace.f_ignore"),
+           ("keep_yaw.then", "trace.run"), ("in.player", "trace.player"), ("kv_trace.table", "trace.value"),
+           ("trace.then", "if_cast.in"), ("in.player", "traced.player"), ("traced.result", "cast.p0"),
+           ("cast.result", "if_cast.condition"), ("traced.result", "ground.table"),
+           ("cname.result", "cursor_ent.p1"), ("if_cast.true", "place.run"), ("if_cast.false", "place.run"),
+           ("cursor_ent.result", "place.target"), ("ground.value", "place.p0"), ("place.then", "out.then")],
+    steps=[("Humans with a camera only", ["bot", "if_human", "cam", "no_cam", "if_cam"]),
+           ("Made the first time: helper, cursor model, start", ["idx", "hname", "cname", "found", "missing", "if_new",
+                                                                  "feet", "kv_helper", "spawn_helper", "kv_cursor",
+                                                                  "spawn_cursor", "aim0", "aim0_p", "start_yaw",
+                                                                  "start_off", "start_cursor"]),
+           ("Screen directions from the camera", ["cam_fwd", "cf", "flat", "up", "zaxis", "left"]),
+           ("The mouse's turn moves the cursor, within Radius", ["aim", "ap", "last_yaw", "dy", "w1", "w2", "w3",
+                                                                "dx_amt", "neg_sens", "dy_amt", "move_l", "move_u",
+                                                                "cursor", "sum1", "sum2", "len", "len_ok", "capped",
+                                                                "ratio", "kept", "keep"]),
+           ("Their aim toward it, level", ["helper", "face", "h_ang", "hp", "level", "snap", "keep_yaw"]),
+           ("The cursor model on the ground there", ["at", "above", "below", "from", "to", "kv_trace", "trace",
+                                                      "traced", "cast", "if_cast", "ground", "cursor_ent", "place"])])
+
 TOP_DOWN_CAMERA = dict(
     about="Turn On: every survivor (bots too) sees the game from above, through a camera of their own that follows "
           "them without turning with them ('Top-Down Follow'): ten times a second (the Timer: 0.1 s is its fastest) "
@@ -785,7 +933,8 @@ TOP_DOWN_CAMERA = dict(
             ("smoothing", "Smoothing", "num"), ("facing", "Facing (yaw)", "num"),
             ("turn", "Turns With Player", "bool"), ("level", "Level Aim", "bool"),
             ("move", "Screen Movement", "bool"), ("speed", "Move Speed", "num"),
-            ("assist", "Aim Assist", "bool")],
+            ("assist", "Aim Assist", "bool"), ("cursor", "Mouse Cursor", "bool"),
+            ("cursor_radius", "Cursor Radius", "num"), ("sensitivity", "Cursor Sensitivity", "num")],
     outputs=[("is_on", "Is On", "bool")],
     nodes=[N("set_on", "HL_NodeSetVariable", 0, 0, label="On", var_name="top_down_on", scope="GROUP",
              value_kind="bool", sockets={"value": True}),
@@ -815,6 +964,14 @@ TOP_DOWN_CAMERA = dict(
            N("mover", "HL_NodeGroup", 5, 8, group="Top-Down Movement"),
            N("if_assist", "HL_NodeIf", 6, 8, label="Aim Assist?"),
            N("assist", "HL_NodeGroup", 7, 8, group="Top-Down Aim Assist", sockets={"radius": 200.0}),
+           N("if_cursor", "HL_NodeIf", 8, 8, label="Mouse Cursor?"),
+           N("cursor", "HL_NodeGroup", 9, 8, group="Top-Down Cursor",
+             sockets={"model": "models/props_junk/gascan001a.mdl"}),
+           fn("idx_c", "entity:GetEntityIndex", 8, 10),
+           N("cur_off", "HL_NodeFormatText", 9, 10, label="Their cursor", template="hl_cursor_{a}"),
+           N("help_off", "HL_NodeFormatText", 9, 11, label="Their aim helper", template="hl_cur_{a}"),
+           fn("kill_cursor", "EntFire", 10, 4, {"p1": "Kill"}, label="Their cursor removed"),
+           fn("kill_helper", "EntFire", 11, 4, {"p1": "Kill"}, label="Their aim helper removed"),
 
            # off: their own walking back
            N("flags_off", "HL_NodeGetProperty", 6, 6, label="Their flags", key="m_fFlags"),
@@ -825,7 +982,14 @@ TOP_DOWN_CAMERA = dict(
            ("each3.each", "if_move.in"), ("in.move", "if_move.condition"), ("if_move.true", "mover.run"),
            ("each3.item", "mover.player"), ("in.speed", "mover.speed"),
            ("mover.then", "if_assist.in"), ("if_move.false", "if_assist.in"), ("in.assist", "if_assist.condition"),
-           ("if_assist.true", "assist.run"), ("each3.item", "assist.player"), ("set_off.then", "tick.stop"),
+           ("if_assist.true", "assist.run"), ("each3.item", "assist.player"),
+           ("assist.then", "if_cursor.in"), ("if_assist.false", "if_cursor.in"), ("in.cursor", "if_cursor.condition"),
+           ("if_cursor.true", "cursor.run"), ("each3.item", "cursor.player"), ("in.cursor_radius", "cursor.radius"),
+           ("in.sensitivity", "cursor.sensitivity"),
+           ("walk.then", "kill_cursor.run"), ("each2.item", "idx_c.target"), ("idx_c.result", "cur_off.a"),
+           ("idx_c.result", "help_off.a"), ("cur_off.result", "kill_cursor.p0"),
+           ("kill_cursor.then", "kill_helper.run"), ("help_off.result", "kill_helper.p0"),
+           ("set_off.then", "tick.stop"),
            ("forget.then", "walk.run"), ("each2.item", "walk.entity"), ("each2.item", "flags_off.entity"),
            ("flags_off.value", "walk_back.a"), ("walk_back.value", "walk.value"),
 
@@ -841,9 +1005,11 @@ TOP_DOWN_CAMERA = dict(
     steps=[("On: ten times a second, each survivor's camera follows them",
             ["set_on", "timer", "state", "if_on", "each", "follow"]),
            ("Off: their own eyes again, the cameras removed",
-            ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk"]),
+            ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk",
+             "idx_c", "cur_off", "help_off", "kill_cursor", "kill_helper"]),
            ("Screen Movement: every tick, each human survivor moves relative to the screen",
-            ["tick", "state2", "if_on2", "if_move", "each3", "mover", "if_assist", "assist"])])
+            ["tick", "state2", "if_on2", "if_move", "each3", "mover", "if_assist", "assist", "if_cursor",
+             "cursor"])])
 
 EXAMPLES_3 = [
     dict(title="Power-Up: Nuke", level="Power-Ups",
@@ -1483,8 +1649,10 @@ EXAMPLES_3 = [
                "straight above, like a top-down shooter. All in one node, Top-Down Camera (Tab goes in; its settings "
                "are on the node): Height (units above the player); Screen Movement (on: W, A, S, D move human "
                "players up, left, down and right on the screen whichever way they face, at Move Speed; bots walk as "
-               "usual); Aim Assist (on: while a human player holds fire, their aim snaps to the nearest common in "
-               "front of them); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
+               "usual); Mouse Cursor (on: the mouse moves a cursor model within Cursor Radius of each human player, "
+               "Cursor Sensitivity units per degree, and their aim points level at it); Aim Assist (on: while a "
+               "human player holds fire, their aim snaps to the nearest common in front of them; don't use it with "
+               "the cursor); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
                "down, shots go flat across the ground); Smoothing (0: the camera stays locked on the player; "
                "higher, up to 0.95: it lags behind, and turns behind, and catches up) and Facing (the camera's yaw "
                "with Turns With Player off: 90 puts north at the top of the screen). Turn Off and Turn On switch it "
@@ -1495,11 +1663,13 @@ EXAMPLES_3 = [
                "in the open: under a ceiling a camera Height above ends up inside the floor above or the solid map, "
                "and shows that (lower Height indoors). Don't mix it with third person.",
          groups={"Top-Down Follow": TOP_DOWN_FOLLOW, "Top-Down Movement": TOP_DOWN_MOVE,
-                 "Top-Down Aim Assist": TOP_DOWN_ASSIST, "Top-Down Camera": TOP_DOWN_CAMERA},
+                 "Top-Down Aim Assist": TOP_DOWN_ASSIST, "Top-Down Cursor": TOP_DOWN_CURSOR,
+                 "Top-Down Camera": TOP_DOWN_CAMERA},
          nodes=[N("start", "HL_NodeMapStart", 0, 0),
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
                   sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": False, "level": True,
-                           "move": True, "speed": 220.0, "assist": True})],
+                           "move": True, "speed": 220.0, "assist": False, "cursor": True,
+                           "cursor_radius": 250.0, "sensitivity": 6.0})],
          links=[("start.start", "cam.on")],
          steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node)",
                  ["start", "cam"])]),
