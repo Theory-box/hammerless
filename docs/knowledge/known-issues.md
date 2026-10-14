@@ -108,6 +108,23 @@ traps), re-checked in the current code.
 - **Suggested fix:** profile a full compile of this map (which phase is slower: the CSG, portals, the collision
   writer, the Python-prepared tables), then match or beat vbsp.
 
+## Logic
+
+### 15. Top-down camera: effects on the player don't render through a camera entity (2026-10-14)
+
+- **What happens:** through a `point_viewcontrol` the game draws neither the laser sight nor the flashlight (both are
+  drawn from the player's own eyes), nor glow outlines (`m_Glow.m_iGlowType` 3 is set and reads back but isn't
+  drawn), nor an `m_clrRender` tint on commons, nor an `env_sprite` near the player. An `env_beam` between two
+  `info_target`s draws where the targets were when it switched on and never follows them (targets are server-only
+  unless spawnflag 2, always transmit); `env_laser` moves its end only on its own ~0.1 s think. Also, a camera
+  parented to the player inherits their pitch, and `cl_pitchup` / `cl_pitchdown` can't be set by a map.
+- **Where:** the Top-Down Camera node group (`hammerless/blender/logicgroups.py`, Example 62). The Laser Sight
+  (56592cf, 4ccb44a) and Aim Highlight (587d0d3) were removed in 04d5abc; the mode keeps the fixed camera, Screen
+  Movement and Level Aim. Details in [logic/README.md](logic/README.md), "Top-down and camera modes".
+- **Status:** decided, not fixable from a map: the user judged the mode too limited by what renders through a camera
+  entity. Anything an aim indicator needs must be a world model or a beam between always-transmitted points
+  spawned in place.
+
 ## Defaults and settings
 
 ### 8. Control Volume: Nav Mesh and Light Baking ticked by default (audit 5 item 1)
@@ -163,4 +180,4 @@ traps), re-checked in the current code.
 | A build folder past Windows' 260-character path limit made the light compiler fall back to Valve's vrad silently (its model copies couldn't be written) | 283c44a (2026-10-14) | the export warns when the path would pass the limit (the fall back itself stays the net; [compilers/valve-fallbacks.md](compilers/valve-fallbacks.md) case i) |
 | Map names of 32+ characters: the game loaded the map but never joined its own listen server (`console.log`: "Netchannel: failed reading message net_SignonState from loopback", no HAMMERLESS_READY; was item 13). Measured 2026-10-14 on `demo_level`: 31 characters loads and the survivors spawn, 32 and 33 don't | 78892b4 (2026-10-14) | `props.MAP_NAME_MAX = 31`: `clean_map_name` trims a typed name to 31 characters, and `build_map_text` refuses a longer stored Map Name with a message |
 
-Last checked: 2026-10-14 against branch light-layers, commit 78892b4.
+Last checked: 2026-10-14 against branch light-layers, commit 04d5abc.

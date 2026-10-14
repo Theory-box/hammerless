@@ -109,6 +109,22 @@ Lessons recorded in `tests/ingame/README.md`: test map names `hl_test_*` only; n
 
 Each of 55-61 uses a property the game offers no other way; all checked in game.
 
+## Top-down and camera modes (measured 2026-10-14)
+
+Status: `partial`. The Top-Down Camera node group stops at a fixed camera + Screen Movement + Level Aim (Example 62, 4388389); Turns With Player (031d459) stays; the Laser Sight (56592cf, 4ccb44a) and Aim Highlight (587d0d3) were removed in 04d5abc because they don't render through a camera entity (the user judged the mode too limited by that; see [../known-issues.md](../known-issues.md) item 15). Facts, all measured in game:
+
+| Fact | Consequence |
+|---|---|
+| `cl_pitchup` / `cl_pitchdown` can't be set by a map: `point_clientcommand` ignored them | the player's look pitch can't be clamped from logic |
+| A `point_viewcontrol` parented to the player (`SetParent !activator`) follows every frame but inherits the player's **pitch**: it orbits when they look up or down | the camera is never attached; Turns With Player turns a free camera instead |
+| A free camera turns by angular velocity: `ApplyLocalAngularVelocityImpulse`'s vector maps x roll(?), y pitch, **z yaw**; `Vector(0, 0, yaw)` turns about the up axis and the game integrates it every tick; `GetLocalAngularVelocity` returns (pitch, yaw, roll), a different order | Turns With Player closes the yaw gap with a z impulse each update; no tilt or jitter |
+| L4D2's server tick is **30 Hz** | the Timer's Every Tick option (`HL_TickOn` / `HL_TickOff`, a think on a `logic_relay`, 4388389) fires 30 times a second |
+| `FL_ATCONTROLS` (`m_fFlags` bit 64) switches off WASD walking but keeps mouse look, buttons, gravity and collisions; `GetButtonMask` gives `IN_FORWARD` 8, `IN_BACK` 16, `IN_MOVELEFT` 512, `IN_MOVERIGHT` 1024; `SetVelocity` each tick moves the player and the game still does collisions | Screen Movement: each tick a velocity from the keys held and the camera's screen directions; Turn Off clears the flag |
+| Screen directions without trig: a camera looking down at pitch 89 has a forward vector whose flattened xy is screen-up; screen-left = (0, 0, 1) x up | used by Screen Movement |
+| Through a `point_viewcontrol` these are **not drawn**: the game's laser sight and flashlight (drawn from the player's own eyes), glow outlines (`m_Glow.m_iGlowType` 3 is set and reads back but isn't drawn), `m_clrRender` tint on commons, an `env_sprite` (`glow01`) placed near the player | Aim Highlight and tints are out; what is seen through a camera is the world, models and beams only |
+| `env_beam` between two `info_target`s: `info_target`s are server-only unless spawnflag 2 (always transmit); a beam between two static unparented points draws where they were when it switched on and never follows them (one between transmitted points spawned in place did draw); a moving laser never showed; `env_laser` updates its end only on its own think (~0.1 s) | the laser was dropped (04d5abc) |
+| Trace masks: Make Table's whole-number fields were rounded through floats (1174421515 -> 1174421504 lost `CONTENTS_SOLID` etc., so the trace hit nothing solid) | fixed 587d0d3: int fields are whole-number sockets and typed values are written exactly. `TraceLine` is a value-only node: drive it through an If's condition and keep the table in a variable so Get Field reads the filled one |
+
 ## Custom enemies on bot bodies (measured 2026-09-29, not in nodes)
 
 `info_l4d1_survivor_spawn` (character 4-7, input `SpawnSurvivor`) spawns a bot on team 4. The map must precache the L4D1 survivor models (a hidden `prop_dynamic` per model) or spawning crashes with "UTIL_SetModel: not precached" (same for any `SetModel` swap). `CommandABot` move works; attack is accepted but does nothing: the script is the brain (aim with `SnapEyeAngles` each 0.1 s think; fire with `m_afButtonForced = 1`; semi-auto weapons fire once per press, so give an SMG and toggle). Team 2 <-> team 4 bullets are dropped by the engine (not even `AllowTakeDamage` sees them) and survivors can't damage team-4 bots at all; workaround: `weapon_fire` -> `TraceLine` (mask 33570827) from the shooter's eye; enemy -> survivor `TakeDamage(dmg, DMG_BULLET, enemy)`; survivor -> enemy `SetHealth`, and at 0 a `prop_ragdoll` plus `kickid`. Four at once worked; `sb_stop` freezes them; survivor bots won't target them. Status: `not done` (the L4D2.5 goal, see the roadmap notes).
@@ -129,4 +145,4 @@ Each of 55-61 uses a property the game offers no other way; all checked in game.
 - `docs/systems/LOGIC_AND_SCRIPTING.md` says "54 ready-made graphs"; `docs/LOGIC_NODES.md` lists examples up to 61 (60 numbered graphs, 48 listed last), and `tests/ingame/README.md` says "all 45 examples". The counts are from different dates.
 - Commit b69fe96 says 2,511 properties; the catalogue holds 2,631 after 21d7c4e. The commit message is the older number.
 
-Last checked: 2026-10-13 against branch light-layers, commit 10ea8d0 (0.17.0).
+Last checked: 2026-10-14 against branch light-layers, commit 04d5abc.
