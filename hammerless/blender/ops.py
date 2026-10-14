@@ -474,6 +474,13 @@ def export_vmf(op, context, defer_scripts: bool = False) -> tuple[str | None, st
     if not bpy.data.filepath and not os.path.isabs(bpy.path.abspath(s.output_dir or "//")):
         rep2.warnings.append("The .blend isn't saved: the build goes to a temporary folder Blender deletes on quit "
                              "(the next build after a restart compiles everything again). Save the .blend first")
+    # (the light compiler's copies of the game's models sit in "<map>.hlvrad_models\models\<folder>\<model>.dx90.vtx"
+    # under the build folder: past Windows' 260 characters they can't be written, and Valve's vrad lights the map)
+    if len(path) + len(s.map_name) + 110 > 259:
+        rep2.warnings.append(f"The build folder '{os.path.dirname(path)}' is deep: files the light compiler needs "
+                             "would pass Windows' 260-character path limit (then Valve's vrad lights the map). Save "
+                             "the .blend in a shorter folder, use a shorter Map Name, or set Settings > Game & "
+                             "Folders > Work Folder to a short path such as C:\\hammerless")
     try:
         path.encode("mbcs", "strict")
     except (UnicodeEncodeError, LookupError):

@@ -5,7 +5,7 @@
 No Hammer, no VMF editing, no console commands.
 
 > [!WARNING]
-> **Work in progress (v0.16, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene, and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
+> **Work in progress (v0.17, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene, and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
 
 ## Our own toolchain: rebuilt, measured, faster
 
@@ -20,6 +20,21 @@ Hammerless doesn't just call Valve's tools. Most of the map pipeline has been re
 | **Model compiler** | Our own .mdl / .vvd / .vtx / .phy writer for props; animated models through the game's studiomdl. | Static, dynamic and physics props without any extra tools. | [Models & Textures](docs/systems/MODELS_AND_TEXTURES.md) |
 | **Logic** | Node graphs compiled to the game's own scripting and entity I/O, with the game's script API mapped from the running game. | 62 worked examples, most checked automatically in the running game. All 2,631 entity properties, read from the game itself. | [Logic & Scripting](docs/systems/LOGIC_AND_SCRIPTING.md) |
 | **Build & map loading** | Steps run side by side, smart builds redo only what changed, the game boots while the map compiles. | **About 8 s** from the button to standing in a small map. | [Build & Play](docs/systems/BUILD_AND_PLAY.md) |
+
+### A whole build, from scratch, on a real map
+
+Build & Play on a user's map (an imported 4.6 MB Hammer map, 3,134 objects, 32 animated props), every system fresh: a new map name and build folder each run, the game closed before each run, Normal lighting (HDR) and Full visibility on both sides. Each run was checked for any fall back to the other side's tools (none).
+
+| Step | All Valve's tools (1 run) | All Hammerless (median of 3) | |
+|---|---|---|---|
+| Export from Blender | 4.3 s | 4.0 s | same work |
+| Map compiler | 4.5 s | 5.4 s | ours 1.2× slower here |
+| Visibility (Full) | 541 s | 6.1 s | **89× faster** |
+| Lighting (Normal, HDR) | 23.3 s | 8.8 s, alongside vis | **2.6× faster** |
+| Nav mesh and its analysis | 24 s inside the game, plus 2 extra map loads | 2.4 s + 3.2 s, during the compile | |
+| **Button to standing in the map** | **623 s (10 min 23 s)** | **28 s** | **22× faster** |
+
+The three Hammerless runs agreed within 1.5 s; Valve's side ran once, as its vis alone takes 9 minutes. Blender itself waits about 5 s of that on a first build (a fresh Blender reading the map), about 1 s on later builds. Our vis default is about 1% looser than vvis (its exact mode matches vvis byte for byte); our lighting on the graphics card looks the same as vrad's but isn't byte-identical (its exact mode is). Machine: AMD Ryzen 7 7800X3D (8 cores), NVIDIA RTX 4090, 64 GB RAM, Windows 10, Blender 4.4, Hammerless 0.17 (2026-10-14).
 
 ## The systems in depth
 
