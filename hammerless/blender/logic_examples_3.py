@@ -803,11 +803,13 @@ TOP_DOWN_CURSOR = dict(
           "Set Velocity, drawn smoothly between ticks; a model moved by Set Origin jumps, as Set "
           "Origin is a teleport): each tick the mover gets the speed that closes the gap to the ground point within "
           "the tick, times 1 - Smoothing (0 to 0.95: higher, the model glides after the cursor; the aim always goes "
-          "to the cursor itself). Screen directions come from their camera like Top-Down Movement. Bots are left "
-          "alone.",
+          "to the cursor itself). Light: a light_dynamic (hl_curl_<player number>, Light Colour 'R G B A', "
+          "Light Brightness, Light Radius in units) made with the cursor, 40 units above it, riding the same mover. "
+          "Screen directions come from their camera like Top-Down Movement. Bots are left alone.",
     inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("radius", "Radius", "num"),
             ("sensitivity", "Sensitivity", "num"), ("model", "Cursor Model", "text"),
-            ("smoothing", "Smoothing", "num")],
+            ("smoothing", "Smoothing", "num"), ("light", "Light", "bool"), ("light_colour", "Light Colour", "text"),
+            ("light_brightness", "Light Brightness", "num"), ("light_radius", "Light Radius", "num")],
     outputs=[("then", "Then", "event")],
     nodes=[fn("bot", "IsPlayerABot", 0, 2, label="A bot?"),
            N("if_human", "HL_NodeIf", 1, 0, label="Bots aim as usual"),
@@ -833,6 +835,17 @@ TOP_DOWN_CURSOR = dict(
            fn("mover_model", "entity:SetModel", 6, 2, label="A model, so the game smooths its movement"),
            fn("spawn_cursor", "SpawnEntityFromTable", 5, 0, {"p0": "prop_dynamic_override"}),
            N("ride", "HL_NodeFireInput", 6, 1, label="The cursor rides the mover", sockets={"input": "SetParent"}),
+           N("if_light", "HL_NodeIf", 6, 0, label="Light?"),
+           N("lname", "HL_NodeFormatText", 2, 9, label="Their cursor's light", template="hl_curl_{a}"),
+           N("lift", "HL_NodeMakeVector", 3, 10, label="40 up", sockets={"x": 0.0, "y": 0.0, "z": 40.0}),
+           N("l_at", "HL_NodeVectorMath", 4, 10, label="Above the cursor", op="ADD"),
+           N("kv_light", "HL_NodeMakeTable", 6, 9, label="The light's settings (a point light)",
+             fields="targetname: text, origin: vec, _light: text, brightness: num, distance: num, "
+                    "spotlight_radius: num, _inner_cone: num, _cone: num, spawnflags: int",
+             sockets={"f_spotlight_radius": 0.0, "f__inner_cone": 0.0, "f__cone": 0.0, "f_spawnflags": 0}),
+           fn("spawn_light", "SpawnEntityFromTable", 7, 1, {"p0": "light_dynamic"}),
+           N("light_ride", "HL_NodeFireInput", 8, 1, label="The light rides the mover", sockets={"input": "SetParent"}),
+           N("light_on", "HL_NodeFireInput", 9, 1, label="On", sockets={"input": "TurnOn"}),
            fn("aim0", "player:EyeAngles", 5, 10, label="Where they aim"),
            N("aim0_p", "HL_NodeBreakVector", 6, 10),
            _var("start_yaw", "top_down_cursor_yaw", 6, 0, get=False, kind="num", label="Yaw so far"),
@@ -919,7 +932,16 @@ TOP_DOWN_CURSOR = dict(
            ("in.model", "mover_model.p0"), ("mover_model.then", "spawn_cursor.run"), ("kv_cursor.table", "spawn_cursor.p1"),
            ("spawn_cursor.then", "ride.run"), ("spawn_cursor.result", "ride.entity"), ("mname.result", "ride.value"),
            ("in.player", "aim0.target"), ("aim0.result", "aim0_p.vector"),
-           ("ride.then", "start_yaw.run"), ("in.player", "start_yaw.player"), ("aim0_p.y", "start_yaw.value"),
+           ("ride.then", "if_light.in"), ("in.light", "if_light.condition"),
+           ("idx.result", "lname.a"), ("feet.result", "l_at.a"), ("lift.result", "l_at.b"),
+           ("lname.result", "kv_light.f_targetname"), ("l_at.vector", "kv_light.f_origin"),
+           ("in.light_colour", "kv_light.f__light"), ("in.light_brightness", "kv_light.f_brightness"),
+           ("in.light_radius", "kv_light.f_distance"),
+           ("if_light.true", "spawn_light.run"), ("kv_light.table", "spawn_light.p1"),
+           ("spawn_light.then", "light_ride.run"), ("spawn_light.result", "light_ride.entity"),
+           ("mname.result", "light_ride.value"),
+           ("light_ride.then", "light_on.run"), ("spawn_light.result", "light_on.entity"),
+           ("light_on.then", "start_yaw.run"), ("if_light.false", "start_yaw.run"), ("in.player", "start_yaw.player"), ("aim0_p.y", "start_yaw.value"),
            ("cam.result", "cam_fwd.target"), ("cam_fwd.result", "cf.vector"), ("cf.x", "flat.x"), ("cf.y", "flat.y"),
            ("flat.result", "up.a"), ("zaxis.result", "left.a"), ("up.vector", "left.b"), ("up.vector", "start_off.a"),
            ("start_yaw.then", "start_cursor.run"), ("in.player", "start_cursor.player"),
@@ -958,7 +980,8 @@ TOP_DOWN_CURSOR = dict(
     steps=[("Humans with a camera only", ["bot", "if_human", "cam", "no_cam", "if_cam"]),
            ("Made the first time: helper, mover, cursor model riding it, start",
             ["idx", "hname", "cname", "mname", "found", "missing", "if_new", "feet", "kv_helper", "spawn_helper",
-             "kv_mover", "spawn_mover", "mover_model", "kv_cursor", "spawn_cursor", "ride", "aim0", "aim0_p", "start_yaw",
+             "kv_mover", "spawn_mover", "mover_model", "kv_cursor", "spawn_cursor", "ride", "if_light", "lname",
+             "lift", "l_at", "kv_light", "spawn_light", "light_ride", "light_on", "aim0", "aim0_p", "start_yaw",
              "start_off", "start_cursor"]),
            ("Screen directions from the camera", ["cam_fwd", "cf", "flat", "up", "zaxis", "left"]),
            ("The mouse's turn moves the cursor, within Radius", ["aim", "ap", "last_yaw", "dy", "w1", "w2", "w3",
@@ -987,7 +1010,9 @@ TOP_DOWN_CAMERA = dict(
             ("assist", "Aim Assist", "bool"), ("cursor", "Mouse Cursor", "bool"),
             ("cursor_radius", "Cursor Radius", "num"), ("sensitivity", "Cursor Sensitivity", "num"),
             ("cursor_smoothing", "Cursor Smoothing", "num"), ("cursor_model", "Cursor Model", "text"),
-            ("move_accel", "Move Acceleration", "num")],
+            ("move_accel", "Move Acceleration", "num"), ("cursor_light", "Cursor Light", "bool"),
+            ("light_colour", "Light Colour", "text"), ("light_brightness", "Light Brightness", "num"),
+            ("light_radius", "Light Radius", "num")],
     outputs=[("is_on", "Is On", "bool")],
     nodes=[N("set_on", "HL_NodeSetVariable", 0, 0, label="On", var_name="top_down_on", scope="GROUP",
              value_kind="bool", sockets={"value": True}),
@@ -1025,9 +1050,11 @@ TOP_DOWN_CAMERA = dict(
            N("cur_off", "HL_NodeFormatText", 9, 10, label="Their cursor", template="hl_cursor_{a}"),
            N("help_off", "HL_NodeFormatText", 9, 11, label="Their aim helper", template="hl_cur_{a}"),
            N("mover_off", "HL_NodeFormatText", 9, 12, label="Their cursor's mover", template="hl_curm_{a}"),
+           N("light_off", "HL_NodeFormatText", 9, 13, label="Their cursor's light", template="hl_curl_{a}"),
            fn("kill_cursor", "EntFire", 10, 4, {"p1": "Kill"}, label="Their cursor removed"),
            fn("kill_helper", "EntFire", 11, 4, {"p1": "Kill"}, label="Their aim helper removed"),
            fn("kill_mover", "EntFire", 12, 4, {"p1": "Kill"}, label="Their cursor's mover removed"),
+           fn("kill_light", "EntFire", 13, 4, {"p1": "Kill"}, label="Their cursor's light removed"),
 
            # off: their own walking back
            N("flags_off", "HL_NodeGetProperty", 6, 6, label="Their flags", key="m_fFlags"),
@@ -1042,11 +1069,14 @@ TOP_DOWN_CAMERA = dict(
            ("assist.then", "if_cursor.in"), ("if_assist.false", "if_cursor.in"), ("in.cursor", "if_cursor.condition"),
            ("if_cursor.true", "cursor.run"), ("each3.item", "cursor.player"), ("in.cursor_radius", "cursor.radius"),
            ("in.sensitivity", "cursor.sensitivity"), ("in.cursor_smoothing", "cursor.smoothing"),
-           ("in.cursor_model", "cursor.model"),
+           ("in.cursor_model", "cursor.model"), ("in.cursor_light", "cursor.light"),
+           ("in.light_colour", "cursor.light_colour"), ("in.light_brightness", "cursor.light_brightness"),
+           ("in.light_radius", "cursor.light_radius"),
            ("walk.then", "kill_cursor.run"), ("each2.item", "idx_c.target"), ("idx_c.result", "cur_off.a"),
            ("idx_c.result", "help_off.a"), ("cur_off.result", "kill_cursor.p0"),
            ("kill_cursor.then", "kill_helper.run"), ("help_off.result", "kill_helper.p0"),
            ("idx_c.result", "mover_off.a"), ("kill_helper.then", "kill_mover.run"), ("mover_off.result", "kill_mover.p0"),
+           ("idx_c.result", "light_off.a"), ("kill_mover.then", "kill_light.run"), ("light_off.result", "kill_light.p0"),
            ("set_off.then", "tick.stop"),
            ("forget.then", "walk.run"), ("each2.item", "walk.entity"), ("each2.item", "flags_off.entity"),
            ("flags_off.value", "walk_back.a"), ("walk_back.value", "walk.value"),
@@ -1065,7 +1095,7 @@ TOP_DOWN_CAMERA = dict(
             ["set_on", "timer", "state", "if_on", "each", "follow", "no_cursor", "level_on"]),
            ("Off: their own eyes again, the cameras removed",
             ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk",
-             "idx_c", "cur_off", "help_off", "kill_cursor", "kill_helper", "mover_off", "kill_mover"]),
+             "idx_c", "cur_off", "help_off", "kill_cursor", "kill_helper", "mover_off", "kill_mover", "light_off", "kill_light"]),
            ("Screen Movement: every tick, each human survivor moves relative to the screen",
             ["tick", "state2", "if_on2", "if_move", "each3", "mover", "if_assist", "assist", "if_cursor",
              "cursor"])])
@@ -1725,7 +1755,8 @@ EXAMPLES_3 = [
                "glows in the dark), placed in the map hidden (rendermode 10) so its model is loaded; the graph "
                "reads its model (Get Model Name) for Cursor Model. Replace its mesh to change the cursor, or give "
                "Cursor Model any model the map loads. Move Acceleration (0 to 1): how much of the way to full speed "
-               "each tick takes them (low: a tap barely moves them, holding builds up). Cursor Smoothing (0 to 0.95): the model glides after the "
+               "each tick takes them (low: a tap barely moves them, holding builds up). Cursor Light: a point light riding "
+               "the cursor (Light Colour 'R G B A', Light Brightness, Light Radius in units). Cursor Smoothing (0 to 0.95): the model glides after the "
                "cursor instead of jumping with it; bots are never touched.",
          objects={"cursor": ("CURSOR_RING", (0.0, 0.0, 0.0),
                              {"targetname": "hl_cursor_model", "rendermode": "10", "solid": "0",
@@ -1739,7 +1770,8 @@ EXAMPLES_3 = [
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
                   sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": False, "level": True,
                            "move": True, "speed": 220.0, "assist": False, "cursor": True,
-                           "cursor_radius": 250.0, "sensitivity": 6.0, "cursor_smoothing": 0.5, "move_accel": 0.25})],
+                           "cursor_radius": 250.0, "sensitivity": 6.0, "cursor_smoothing": 0.5, "move_accel": 0.25, "cursor_light": True,
+                           "light_colour": "255 40 20 255", "light_brightness": 2.0, "light_radius": 200.0})],
          links=[("start.start", "cam.on"), ("ring.result", "ring_model.target"),
                 ("ring_model.result", "cam.cursor_model")],
          steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node); the cursor "
