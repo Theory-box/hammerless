@@ -30,7 +30,8 @@ def presets_for(s) -> dict:
 BUILD_LEVELS = {"QUICK": ("SKIP", "OFF"), "FAST": ("FAST", "FAST"), "NORMAL": ("FULL", "NORMAL"),
                 "FINAL": ("FULL", "FINAL"), "ULTRA": ("FULL", "ULTRA")}
 
-SETTINGS_VERSION = 1      # (quality.migrate: files saved before per-system qualities are translated once)
+SETTINGS_VERSION = 2      # (quality.migrate: files saved before per-system qualities are translated once; 2: the
+#                            new Fast lighting)
 _applying = False         # (settings being set by a preset: not a change of the user's own)
 
 
@@ -127,6 +128,12 @@ def migrate(s):
     """A scene saved with the single Quality (Quick / Fast / Normal / Final / Custom): the same build with the new
     settings. Custom kept its Visibility, Lighting (vrad) and prop lighting choices."""
     if s.settings_version >= SETTINGS_VERSION:
+        return
+    if s.settings_version == 1:
+        if s.light_quality == "FAST":     # (the old Fast was Normal's settings plus vrad's -fast: now its own)
+            _set(s, presets_for(s)["FAST"])
+            _sync_build(s)
+        s.settings_version = SETTINGS_VERSION
         return
     old = s.compile_preset
     if old in BUILD_LEVELS:

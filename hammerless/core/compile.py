@@ -63,7 +63,8 @@ class CompileOptions:
         (toolopts.py: the rest are left out, with a note in the build log)."""
         text = getattr(self, "extra_" + tool)
         if not ours:
-            return text.split()
+            from .toolopts import valve_accepts
+            return valve_accepts(tool, text.split())
         from .toolopts import sort_options
         return sort_options(tool, text)[0]
 
@@ -687,7 +688,7 @@ class CompileJob:
             self._notes.append("Hammerless map compiler isn't installed: running Valve's vbsp")
         if opts.vis_tool == "HAMMERLESS" and opts.vvis_args() is not None and not use_hlvvis(opts):
             self._notes.append("Hammerless vis isn't installed: running Valve's vvis")
-        self._notes += opts.extra_notes()          # (Extra Options ours leaves out: never a reason to run Valve's)
+        self._option_notes = opts.extra_notes()    # (Extra Options ours leaves out: never a reason to run Valve's)
         self._valve_vbsp = None             # Valve's vbsp, run instead when ours can't (or fails)
         self._valve_onlyents = None         # (and its -onlyents, for a smart build's entity-only step)
         if use_hlvbsp(opts):
@@ -976,6 +977,9 @@ class CompileJob:
             for msg in self._notes:
                 if ("vbsp" in msg and "vbsp" in ran) or ("vvis" in msg and "vvis" in ran):
                     self._fallback(msg)
+            for msg in self._option_notes:         # ("Extra vrad options left out ...": said when that tool runs)
+                if msg.split()[1] in ran:
+                    self._q.put(msg)
             for stale in (self.base + ".stamp", self.base + ".built.vmf", self.base + ".built.opts"):   # a failed compile mustn't look
                 if os.path.exists(stale):                                     # up to date or be built on
                     os.remove(stale)

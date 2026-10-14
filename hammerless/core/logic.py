@@ -178,11 +178,11 @@ HELPERS = {
         "::HL_Count_ <- function(t) { return (t == null) ? 0.0 : t.len().tofloat(); }"),
     "HL_Prop": (
         "::HL_PropOk <- function(e, name, i) {   // the entity has the property (and the list that slot)\n"
-        "    if (typeof e != \"instance\" || !e.IsValid() || !NetProps.HasProp(e, name)) return false;\n"
+        "    if (typeof e != \"instance\" || !(\"IsValid\" in e) || !e.IsValid() || !NetProps.HasProp(e, name)) return false;\n"
         "    return i == null || (i >= 0 && i < NetProps.GetPropArraySize(e, name));\n}\n"
         "::HL_PropValue <- function(t, v) {   // v as the property's type (i f v s e), or null when it can't be\n"
         "    local ty = typeof v;\n"
-        "    if (t == \"e\") return (v == null || ty == \"instance\") ? [v] : null;\n"
+        "    if (t == \"e\") return (v == null || (ty == \"instance\" && \"IsValid\" in v)) ? [v] : null;\n"
         "    if (t == \"v\") return (ty == \"Vector\") ? [v] : null;\n"
         "    if (t == \"s\") return (v == null) ? null : [v.tostring()];\n"
         "    if (ty != \"integer\" && ty != \"float\" && ty != \"bool\" && ty != \"string\") return null;\n"

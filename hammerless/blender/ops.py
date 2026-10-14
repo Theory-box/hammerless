@@ -1679,8 +1679,8 @@ class HL_OT_build(bpy.types.Operator):
         return tl
 
     def _eye_points(self, context):
-        """Where players can see from, for skipping faces nobody sees: over this build's nav mesh (waiting
-        for it if it's still being made), else the map's nav file in the game. None: bake every face."""
+        """Where players can see from, for skipping faces nobody sees: over this build's nav mesh (_step starts
+        the bake once it's made), else the map's nav file in the game. None: bake every face."""
         from ..core.lightbake import eye_points
         mesh = None
         if self._nav is not None:
@@ -1718,6 +1718,7 @@ class HL_OT_build(bpy.types.Operator):
         """Blender ended the operator itself (File > Open / New, the window closed): let the job end too."""
         if self._job is not None:
             self._job.bake_abandoned = True
+            self._job.cancel()           # (its scripts would be lost with this operator: the old map stays whole)
         self._stop_nav()
         self._stop_bake()
         _BUILDING.discard(getattr(self, "_key", None))

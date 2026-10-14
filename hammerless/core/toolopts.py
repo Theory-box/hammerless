@@ -43,7 +43,7 @@ VVIS = dict(_COMMON, **{
 })
 
 VRAD = dict(_COMMON, **{
-    "-bounce": (1, OURS), "-chop": (1, OURS), "-maxchop": (1, OURS), "-dispchop": (1, OURS),
+    "-bounce": (1, OURS), "-extra": (0, OURS), "-chop": (1, OURS), "-maxchop": (1, OURS), "-dispchop": (1, OURS),
     "-extrasky": (1, OURS), "-final": (0, OURS), "-noextra": (0, OURS), "-smooth": (1, OURS), "-lights": (1, OURS),
     "-staticproplighting": (0, OURS), "-staticproppolys": (0, OURS), "-hdr": (0, NO_EFFECT),
     "-fast": (0, NOT_DONE),               # (vrad's rough preview: Hammerless's Fast quality is its own, quality.py)
@@ -65,6 +65,24 @@ VRAD = dict(_COMMON, **{
 })
 
 TABLES = {"vbsp": VBSP, "vvis": VVIS, "vrad": VRAD}
+
+# (options of Valve's source that L4D2's own tools refuse, with how many values follow them)
+VALVE_REFUSES = {"vrad": {"-scale": 1, "-ambient": 3, "-sky": 1}}
+
+
+def valve_accepts(tool: str, words: list[str]) -> list[str]:
+    """Extra options for Valve's own tool without the ones it refuses (and their values): when Valve's vrad runs
+    instead of ours, -scale / -ambient / -sky would stop it."""
+    refused = VALVE_REFUSES.get(tool, {})
+    out, i = [], 0
+    while i < len(words):
+        n = refused.get(words[i].lower())
+        if n is None:
+            out.append(words[i])
+            i += 1
+        else:
+            i += 1 + n
+    return out
 
 
 def sort_options(tool: str, text: str) -> tuple[list[str], list[str]]:

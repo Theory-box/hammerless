@@ -427,7 +427,7 @@ def check(run: Run, n: int, b: Bench):
         b.console("+reload", wait=0.1); b.console("-reload", wait=3.0)     # (a fresh gun: let it finish anything)
         mk = m(); b.console(f"ent_fire {run.obj(57, 'button')} Press", wait=0.5)
         on = fire()
-        run.expect(57, mk, "button.pressed -> on.run", "if_on.true -> refill.run")
+        run.expect(57, mk, "button.pressed -> on.run", "if_clip.true -> refill.run")
         time.sleep(10)
         off = fire()
         assert on == 20, f"clip 20 -> {on} while bottomless"
@@ -626,6 +626,11 @@ def main(argv):
                 result = ("FAIL", str(e))
             except Exception:
                 result = ("FAIL", traceback.format_exc(limit=2))
+            if result[0] == "FAIL" and n in (56, 62):     # (their checks freeze bots / change the view: undone
+                try:                                    # even when they stop early, for the examples after them)
+                    b.console("sb_stop 0", "firstperson", "thirdpersonshoulder", wait=0.1)
+                except BenchError:
+                    pass
             run.results[n] = result
             print(f"{result[0]:4} {n:2d} {titles[n]}: {result[1]}", flush=True)
         b.console("nb_blind 0", "director_start", "god 0", "sv_cheats 0", wait=0.5)

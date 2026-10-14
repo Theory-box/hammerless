@@ -5,7 +5,7 @@
  * bounce, vertex normals, world lights, leaf ambient, detail prop and static prop vertex lighting. The CPU
  * ("Exact") is vrad's to the byte on the test maps with -noextra (bounce on); -gpu traces on the GPU (Vulkan): the
  * same look, faster, not to the byte. vrad's options it does: -bounce -chop -maxchop -dispchop -extrasky -final
- * -noextra -extra -smooth -lights -fast -StaticPropLighting -StaticPropPolys -softsun -textureshadows (texshadows.c)
+ * -noextra -extra -smooth -lights -fast (parsed; Hammerless never passes it) -StaticPropLighting -StaticPropPolys -softsun -textureshadows (texshadows.c)
  * and Valve's source's debug options -scale -ambient -sky. Hammerless's own: -gpu -gi -layers -remix -onlylights
  * -visfrom -skymap -nobake -keeplight -sspoints -sspasses -ssthreshold -fixquirks -timing (each below). */
 #include <float.h>

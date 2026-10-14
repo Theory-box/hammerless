@@ -125,11 +125,23 @@ def call_expr(f: dict, target: str | None, args: list[str]) -> str:
 def num_text(value) -> str:
     """A number as Squirrel: short (0.35, not 0.3499999940395355), but whole numbers of 7 digits or more in full
     ({:g} would round a colour like 16777215 to 1.67772e+07)."""
+    import math
     v = float(value or 0.0)
+    if not math.isfinite(v):         # (Squirrel has no inf / nan literal: the largest float instead, nan as 0)
+        return "0.0" if math.isnan(v) else ("3.4e38" if v > 0 else "-3.4e38")
     if v == int(v) and 1e6 <= abs(v) < 1e15:
         return f"{int(v)}.0"
-    text = f"{v:g}"
-    return text if any(c in text for c in ".e") or text in ("inf", "-inf", "nan") else text + ".0"
+    import struct
+
+    def single(x):
+        try:
+            return struct.unpack("<f", struct.pack("<f", x))[0]
+        except OverflowError:
+            return x
+    # (the fewest digits that are still the same single-precision number Blender holds: 0.35, not 0.349999994;
+    # 12345.67 kept whole, where {:g} cut it to 12345.7)
+    text = next((t for t in (f"{v:.{d}g}" for d in range(6, 10)) if single(float(t)) == single(v)), f"{v:.17g}")
+    return text if any(c in text for c in ".e") else text + ".0"
 
 
 def literal(kind: str, value) -> str:

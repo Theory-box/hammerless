@@ -72,7 +72,8 @@ def scene_bvh(context, geometry=None):
         return None, None
     v, corners, sizes = geometry
     polys = [c.tolist() for c in np.split(corners, np.cumsum(sizes)[:-1])]
-    return BVHTree.FromPolygons(v.tolist(), polys), (tuple(v.min(axis=0)), tuple(v.max(axis=0)))
+    return BVHTree.FromPolygons(v.tolist(), polys), (tuple(map(float, v.min(axis=0))),
+                                                     tuple(map(float, v.max(axis=0))))
 
 
 # The last analysis, kept: it depends only on the solid geometry, the starts and the Sound volumes, so a build

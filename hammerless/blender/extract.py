@@ -545,8 +545,12 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
     rig = ""
     if arm is not None:              # (copies of a rigged model share one model: the same rig data, actions and place
         rel = arm.matrix_world.inverted() @ obj.matrix_world      # on the rig; each prop still plays its own copy)
+        own = any(len(pb.constraints) for pb in arm.pose.bones) or (
+            arm.animation_data is not None and len(arm.animation_data.drivers))
         rig = (arm.data.name, tuple(a.name for a in _armature_actions(arm)),
-               tuple(round(v, 4) for row in rel for v in row), arm.data.pose_position)
+               tuple(round(v, 4) for row in rel for v in row), arm.data.pose_position,
+               arm.name if own else "",            # (constraints / drivers: this rig moves its own way)
+               tuple(sorted((c.name, c.parent_bone) for c in arm.children if c.type == "EMPTY")))   # (attachments)
     key = (shape, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class_name or hs.physics_class, round(hs.model_mass, 3),
            tuple(slot.material.name if slot.material else "" for slot in obj.material_slots), rig)
     name = getattr(ir, "_model_keys", {}).get(key)
@@ -877,23 +881,42 @@ def _rig_fingerprint(arm, actions, fps) -> str | None:
         return None
     parts = [round(fps, 4), arm.data.pose_position]
     for b in arm.data.bones:
+        pb = arm.pose.bones.get(b.name)
         parts.append((b.name, b.parent.name if b.parent else "",
-                      tuple(round(v, 5) for row in b.matrix_local for v in row)))
+                      tuple(round(v, 5) for row in b.matrix_local for v in row),
+                      b.use_connect, b.use_inherit_rotation, b.inherit_scale, b.use_local_location,
+                      pb.rotation_mode if pb is not None else ""))
     for act in actions:
         try:
-            curves = list(act.fcurves)
+            curves = _action_curves(act)
         except (AttributeError, RuntimeError):
             return None
         parts.append((act.name, act.get("hl_name"), tuple(round(f, 4) for f in act.frame_range),
                       bool(getattr(act, "use_cyclic", False))))
         for fc in curves:
             parts.append((fc.data_path, fc.array_index, fc.extrapolation, fc.mute,
-                          tuple(m.type for m in fc.modifiers),
+                          tuple(_settings_of(m) for m in fc.modifiers),
                           tuple((round(k.co.x, 4), round(k.co.y, 6), k.interpolation, k.easing,
                                  round(k.handle_left.x, 4), round(k.handle_left.y, 6),
                                  round(k.handle_right.x, 4), round(k.handle_right.y, 6))
                                 for k in fc.keyframe_points)))
     return hashlib.sha1(repr(parts).encode()).hexdigest()
+
+
+def _settings_of(item) -> tuple:
+    """An F-modifier's type and settings (a Noise's strength, a Cycles' count...), for _rig_fingerprint."""
+    out = [item.type]
+    for p in item.bl_rna.properties:
+        if p.identifier in ("rna_type", "is_active", "show_expanded", "active") or p.type not in (
+                "BOOLEAN", "INT", "FLOAT", "ENUM"):
+            continue
+        v = getattr(item, p.identifier, None)
+        try:
+            v = tuple(v)
+        except TypeError:
+            pass
+        out.append((p.identifier, repr(v)))
+    return tuple(out)
 
 
 def _sample_actions(obj, arm, sk, size, report, game_rest=None):

@@ -400,7 +400,10 @@ def _on_depsgraph(scene, depsgraph):
     if map_collection(scene) is None:
         return
     counts = (len(scene.objects), len(bpy.data.collections))
-    if _counts.get(scene.name) != counts or scene.name not in _known:
+    known_now = _known.get(scene.name)
+    if (_counts.get(scene.name) != counts or known_now is None or any(
+            isinstance(u.id, bpy.types.Object) and u.id.original.session_uid not in known_now
+            for u in depsgraph.updates)):
         # (objects or collections added or removed: only then is every object listed, not on each move or
         # each of a build's scene updates)
         _counts[scene.name] = counts

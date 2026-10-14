@@ -1127,8 +1127,9 @@ EXAMPLES_3 = [
          about="Press the button: for 10 seconds nobody's clip runs down. Each shot (the game event 'weapon_fire', "
                "which comes just before the round is taken) Get Entity Property reads the shooter's "
                "m_hActiveWeapon (the gun in their hands) and that gun's m_iClip1 (rounds in the clip), and Set "
-               "Entity Property adds one: the round the shot takes. The 'bottomless' variable says whether the "
-               "power-up is on.",
+               "Entity Property adds one: the round the shot takes. Melee weapons, throwables and pills have no "
+               "clip (m_iClip1 is -1): they're left alone. The 'bottomless' variable says whether the power-up is "
+               "on.",
          nodes=[N("button", "HL_NodeButton", 0, 0, sockets={"object": "@button"}, once=False, reset=10.0),
                 N("on", "HL_NodeSetVariable", 1, 0, label="On", var_name="bottomless", value_kind="bool",
                   sockets={"value": True}),
@@ -1142,14 +1143,18 @@ EXAMPLES_3 = [
                 N("gun", "HL_NodeGetProperty", 2, 5, label="The gun in their hands", key="m_hActiveWeapon"),
                 N("clip", "HL_NodeGetProperty", 3, 5, label="Rounds in its clip", key="m_iClip1"),
                 N("plus", "HL_NodeMath", 4, 5, label="One more", op="ADD", sockets={"b": 1.0}),
-                N("refill", "HL_NodeSetProperty", 4, 3, label="Put the round back", key="m_iClip1")],
+                N("has_clip", "HL_NodeCompare", 4, 6, label="Has a clip?", op="GREATER_EQUAL", sockets={"b": 0.0}),
+                N("if_clip", "HL_NodeIf", 3, 3),
+                N("refill", "HL_NodeSetProperty", 5, 3, label="Put the round back", key="m_iClip1")],
          links=[("button.pressed", "on.run"), ("button.pressed", "msg.show"), ("button.pressed", "wait.in"),
                 ("wait.out", "off.run"), ("shot.happened", "if_on.in"), ("is_on.result", "if_on.condition"),
-                ("if_on.true", "refill.run"), ("shot.userid", "gun.entity"), ("gun.value", "clip.entity"),
+                ("if_on.true", "if_clip.in"), ("clip.value", "has_clip.a"), ("has_clip.result", "if_clip.condition"),
+                ("if_clip.true", "refill.run"), ("shot.userid", "gun.entity"), ("gun.value", "clip.entity"),
                 ("clip.value", "plus.a"), ("gun.value", "refill.entity"), ("plus.value", "refill.value")],
          steps=[("Press: the power-up is on for 10 s", ["button", "on", "msg", "wait", "off"]),
                 ("Each shot while it's on: the round goes back in the clip", ["shot", "is_on", "if_on", "gun", "clip",
-                                                                              "plus", "refill"])]),
+                                                                              "has_clip", "if_clip", "plus",
+                                                                              "refill"])]),
     dict(title="Progress Bar Gate", level="Map Parts",
          objects={"button": ("BUTTON", (0.0, -1.5, 1.0)), "gate": ("GATE", (0.0, 1.5, 1.5))},
          about="Press the button: every survivor sees the game's own progress bar fill over 5 seconds, then the "
