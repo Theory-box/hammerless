@@ -630,9 +630,10 @@ TOP_DOWN_MOVE = dict(
           "shooting, jumping and crouching work; the game still does gravity, stairs and collisions). Each tick: the "
           "keys held (Get Button Mask: forward 8, back 16, left 512, right 1024) make a direction from their camera's "
           "screen-up (its forward direction, flattened: it looks down at 89, so that points up the screen) and "
-          "screen-left (straight up x screen-up), and their speed goes Acceleration of the way (0 to 1 each tick) "
-          "toward Move Speed that way (Set Velocity, keeping their falling or jumping speed): a tap barely moves "
-          "them, holding builds up to full speed. No key: the game slows them down as usual.",
+          "screen-left (straight up x screen-up), and their speed changes toward Move Speed that way by at most "
+          "Acceleration x Move Speed each tick (Set Velocity, keeping their falling or jumping speed): a tap barely "
+          "moves them, holding builds up to full speed (a fixed step, not a share of the gap: the game's friction "
+          "between ticks would otherwise hold them below full speed). No key: the game slows them down as usual.",
     inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("speed", "Move Speed", "num"),
             ("accel", "Acceleration", "num")],
     outputs=[("then", "Then", "event")],
@@ -675,7 +676,11 @@ TOP_DOWN_MOVE = dict(
            N("to_full", "HL_NodeVectorMath", 14, 5, label="Full speed - now", op="SUBTRACT"),
            N("a_max", "HL_NodeMath", 12, 9, label="Acceleration, at most 1", op="MINIMUM", sockets={"b": 1.0}),
            N("a_min", "HL_NodeMath", 13, 9, label="At least 0.01", op="MAXIMUM", sockets={"b": 0.01}),
-           N("step", "HL_NodeVectorMath", 15, 5, label="x Acceleration", op="SCALE"),
+           N("a_step", "HL_NodeMath", 14, 9, label="x Move Speed: the most a tick changes", op="MULTIPLY"),
+           N("gap_len", "HL_NodeVectorMath", 14, 7, label="How far off", op="LENGTH"),
+           N("by", "HL_NodeMath", 15, 8, label="That, at most the step", op="MINIMUM"),
+           N("gap_dir", "HL_NodeVectorMath", 15, 7, label="Which way", op="NORMALIZE"),
+           N("step", "HL_NodeVectorMath", 15, 5, label="The change this tick", op="SCALE"),
            N("new_v", "HL_NodeVectorMath", 16, 5, label="Now + that", op="ADD"),
            N("nb", "HL_NodeBreakVector", 17, 5),
            N("final", "HL_NodeMakeVector", 18, 6, label="That, still falling or jumping as they were"),
@@ -701,7 +706,9 @@ TOP_DOWN_MOVE = dict(
            ("wish.vector", "dirn.a"), ("dirn.vector", "spd.a"), ("in.speed", "spd.scale"),
            ("in.player", "cur.target"), ("cur.result", "cb.vector"),
            ("cb.x", "cur_flat.x"), ("cb.y", "cur_flat.y"), ("spd.vector", "to_full.a"), ("cur_flat.result", "to_full.b"),
-           ("in.accel", "a_max.a"), ("a_max.value", "a_min.a"), ("to_full.vector", "step.a"), ("a_min.value", "step.scale"),
+           ("in.accel", "a_max.a"), ("a_max.value", "a_min.a"), ("a_min.value", "a_step.a"), ("in.speed", "a_step.b"),
+           ("to_full.vector", "gap_len.a"), ("gap_len.value", "by.a"), ("a_step.value", "by.b"),
+           ("to_full.vector", "gap_dir.a"), ("gap_dir.vector", "step.a"), ("by.value", "step.scale"),
            ("cur_flat.result", "new_v.a"), ("step.vector", "new_v.b"), ("new_v.vector", "nb.vector"),
            ("nb.x", "final.x"), ("nb.y", "final.y"), ("cb.z", "final.z"),
            ("if_moving.true", "go.run"), ("in.player", "go.target"), ("final.result", "go.p0"), ("go.then", "out.then")],
@@ -712,7 +719,7 @@ TOP_DOWN_MOVE = dict(
            ("Screen-up and screen-left from the camera", ["cam_fwd", "cf", "flat", "up", "zaxis", "left"]),
            ("Toward Move Speed that way, Acceleration of the way each tick",
             ["w_up", "w_left", "wish", "len", "moving", "if_moving", "dirn", "spd", "cur", "cb", "cur_flat", "to_full",
-             "a_max", "a_min", "step", "new_v", "nb", "final", "go"])])
+             "a_max", "a_min", "a_step", "gap_len", "by", "gap_dir", "step", "new_v", "nb", "final", "go"])])
 
 
 TOP_DOWN_ASSIST = dict(
@@ -1754,8 +1761,8 @@ EXAMPLES_3 = [
                "'Example 62 cursor' (a red ring whose material has Emission, so it's self-lit in the game: it "
                "glows in the dark), placed in the map hidden (rendermode 10) so its model is loaded; the graph "
                "reads its model (Get Model Name) for Cursor Model. Replace its mesh to change the cursor, or give "
-               "Cursor Model any model the map loads. Move Acceleration (0 to 1): how much of the way to full speed "
-               "each tick takes them (low: a tap barely moves them, holding builds up). Cursor Light: a point light riding "
+               "Cursor Model any model the map loads. Move Acceleration (0 to 1): the most their speed changes each "
+               "tick, as a share of Move Speed (low: a tap barely moves them, holding builds up to full speed). Cursor Light: a point light riding "
                "the cursor (Light Colour 'R G B A', Light Brightness, Light Radius in units). Cursor Smoothing (0 to 0.95): the model glides after the "
                "cursor instead of jumping with it; bots are never touched.",
          objects={"cursor": ("CURSOR_RING", (0.0, 0.0, 0.0),
@@ -1770,7 +1777,7 @@ EXAMPLES_3 = [
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
                   sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": False, "level": True,
                            "move": True, "speed": 220.0, "assist": False, "cursor": True,
-                           "cursor_radius": 250.0, "sensitivity": 6.0, "cursor_smoothing": 0.5, "move_accel": 0.25, "cursor_light": True,
+                           "cursor_radius": 250.0, "sensitivity": 6.0, "cursor_smoothing": 0.5, "move_accel": 0.15, "cursor_light": True,
                            "light_colour": "255 40 20 255", "light_brightness": 2.0, "light_radius": 200.0})],
          links=[("start.start", "cam.on"), ("ring.result", "ring_model.target"),
                 ("ring_model.result", "cam.cursor_model")],
