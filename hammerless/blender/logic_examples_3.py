@@ -697,111 +697,6 @@ TOP_DOWN_MOVE = dict(
            ("That way at Move Speed", ["w_up", "w_left", "wish", "len", "moving", "if_moving", "dirn", "spd", "cur",
                                        "cb", "sb", "final", "go"])])
 
-TOP_DOWN_HIGHLIGHT = dict(
-    about="Aim Highlight for a top-down camera (the game's own laser sight and flashlight don't show through it): the "
-          "zombie on one human survivor's aim line glows red, one tick. Their aim: a helper info_target "
-          "(hl_aim_<player number>, made the first time) is turned the way they aim (their eye angles, level) and its "
-          "forward direction is their aim; a Trace Line from their eyes, Reach units that way (mask 1174421515: what "
-          "bullets hit), says what it hit (enthit). A common, a Witch or a special infected (a player not a survivor) "
-          "gets the outline every glowing thing has (m_Glow.m_iGlowType 3: always; m_Glow.m_glowColorOverride: red) "
-          "and is remembered (player variable 'top_down_aimed'); when the aim leaves it, its outline goes off. Bots "
-          "have none.",
-    inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("reach", "Reach", "num")],
-    outputs=[("then", "Then", "event")],
-    nodes=[fn("bot", "IsPlayerABot", 0, 2, label="A bot?"),
-           N("if_human", "HL_NodeIf", 1, 0, label="Bots have none"),
-           fn("idx", "entity:GetEntityIndex", 0, 4),
-           N("hname", "HL_NodeFormatText", 1, 4, label="Their aim helper", template="hl_aim_{a}"),
-           fn("found", "Entities.FindByName", 2, 4, label="Their aim helper"),
-           N("missing", "HL_NodeCheck", 3, 4, label="Not made yet?", op="NOT_SET"),
-           N("if_new", "HL_NodeIf", 2, 0, label="Made the first time"),
-           fn("eye", "player:EyePosition", 2, 6, label="Their eyes"),
-           N("kv_helper", "HL_NodeMakeTable", 3, 6, label="The helper", fields="targetname: text, origin: vec"),
-           fn("spawn_helper", "SpawnEntityFromTable", 3, 0, {"p0": "info_target"}),
-           # their aim direction
-           fn("helper", "Entities.FindByName", 4, 4, label="Their aim helper"),
-           fn("aim", "player:EyeAngles", 4, 8, label="Where they aim"),
-           N("ap", "HL_NodeBreakVector", 5, 8),
-           N("level", "HL_NodeMakeVector", 6, 8, label="Level, the way they aim", sockets={"x": 0.0, "z": 0.0}),
-           fn("turn", "entity:SetAngles", 4, 0, label="The helper turned the way they aim"),
-           fn("dir", "entity:GetForwardVector", 6, 6, label="So its forward is their aim"),
-           N("far", "HL_NodeVectorMath", 7, 6, label="x Reach", op="SCALE"),
-           N("to", "HL_NodeVectorMath", 8, 6, label="From their eyes", op="ADD"),
-           N("kv_trace", "HL_NodeMakeTable", 8, 7, label="The trace (what bullets hit)",
-             fields="start: vec, end: vec, ignore: thing, mask: int", sockets={"f_mask": 1174421515}),
-           _var("trace", "top_down_aim_trace", 5, 0, get=False, kind="any",
-                label="The trace (kept: Trace Line fills it in)"),
-           _var("traced", "top_down_aim_trace", 9, 9, kind="any", label="The trace"),
-           fn("cast", "TraceLine", 9, 8, label="Trace it"),
-           N("if_cast", "HL_NodeIf", 6, 0, label="Traced"),
-           N("hit", "HL_NodeGetField", 10, 9, label="What it hit", sockets={"key": "enthit"}),
-           # a zombie?
-           fn("cls", "entity:GetClassname", 10, 10, label="Its class"),
-           N("is_common", "HL_NodeTextCheck", 11, 10, label="A common?", op="EQUAL", sockets={"b": "infected"}),
-           N("is_witch", "HL_NodeTextCheck", 11, 11, label="A Witch?", op="EQUAL", sockets={"b": "witch"}),
-           N("is_player", "HL_NodeTextCheck", 11, 12, label="A player?", op="EQUAL", sockets={"b": "player"}),
-           fn("surv", "player:IsSurvivor", 10, 13, label="A survivor?"),
-           N("not_surv", "HL_NodeBoolMath", 12, 13, label="Not a survivor", op="NOT"),
-           N("special", "HL_NodeBoolMath", 13, 12, label="A special infected", op="AND"),
-           N("either", "HL_NodeBoolMath", 12, 10, label="Common or Witch", op="OR"),
-           N("zombie", "HL_NodeBoolMath", 14, 11, label="A zombie?", op="OR"),
-           # still the same one?
-           _var("was", "top_down_aimed", 7, 11, kind="thing", label="The one lit up"),
-           N("same", "HL_NodeCheck", 8, 11, label="Still that one?", op="EQUAL"),
-           N("if_same", "HL_NodeIf", 7, 0, label="Another (or none)?"),
-           N("had", "HL_NodeCheck", 9, 12, label="One lit up?", op="IS_SET"),
-           N("if_had", "HL_NodeIf", 8, 0),
-           N("glow_off", "HL_NodeSetProperty", 9, 0, label="Its outline off", key="m_Glow.m_iGlowType",
-             sockets={"value": 0}),
-           N("if_zombie", "HL_NodeIf", 10, 0, label="A zombie on the aim?"),
-           N("glow_on", "HL_NodeSetProperty", 11, 0, label="Outline always", key="m_Glow.m_iGlowType",
-             sockets={"value": 3}),
-           N("red", "HL_NodeSetProperty", 12, 0, label="Red", key="m_Glow.m_glowColorOverride",
-             sockets={"value": 255}),
-           _var("keep", "top_down_aimed", 13, 0, get=False, kind="thing", label="The one lit up"),
-           _var("none", "top_down_aimed", 11, 2, get=False, kind="thing", label="None lit up (empty)")],
-    links=[("in.player", "bot.p0"), ("bot.result", "if_human.condition"), ("in.run", "if_human.in"),
-           ("if_human.true", "out.then"),
-           ("in.player", "idx.target"), ("idx.result", "hname.a"), ("hname.result", "found.p1"),
-           ("found.result", "missing.a"), ("if_human.false", "if_new.in"), ("missing.result", "if_new.condition"),
-           ("in.player", "eye.target"), ("hname.result", "kv_helper.f_targetname"), ("eye.result", "kv_helper.f_origin"),
-           ("if_new.true", "spawn_helper.run"), ("kv_helper.table", "spawn_helper.p1"),
-           # the helper turned the way they aim; trace from their eyes that way
-           ("spawn_helper.then", "turn.run"), ("if_new.false", "turn.run"),
-           ("hname.result", "helper.p1"), ("helper.result", "turn.target"),
-           ("in.player", "aim.target"), ("aim.result", "ap.vector"), ("ap.y", "level.y"), ("level.result", "turn.p0"),
-           ("helper.result", "dir.target"), ("dir.result", "far.a"), ("in.reach", "far.scale"),
-           ("eye.result", "to.a"), ("far.vector", "to.b"),
-           ("eye.result", "kv_trace.f_start"), ("to.vector", "kv_trace.f_end"), ("in.player", "kv_trace.f_ignore"),
-           ("turn.then", "trace.run"), ("in.player", "trace.player"), ("kv_trace.table", "trace.value"),
-           ("trace.then", "if_cast.in"), ("in.player", "traced.player"), ("traced.result", "cast.p0"),
-           ("cast.result", "if_cast.condition"), ("traced.result", "hit.table"),
-           # a zombie?
-           ("hit.value", "cls.target"), ("cls.result", "is_common.a"), ("cls.result", "is_witch.a"),
-           ("cls.result", "is_player.a"), ("hit.value", "surv.target"), ("surv.result", "not_surv.a"),
-           ("is_player.result", "special.a"), ("not_surv.result", "special.b"),
-           ("is_common.result", "either.a"), ("is_witch.result", "either.b"),
-           ("either.result", "zombie.a"), ("special.result", "zombie.b"),
-           # another one than before: the old one's outline off, the new one's on (and remembered)
-           ("in.player", "was.player"), ("was.result", "same.a"), ("hit.value", "same.b"),
-           ("if_cast.true", "if_same.in"), ("if_cast.false", "if_same.in"), ("same.result", "if_same.condition"),
-           ("if_same.true", "out.then"),
-           ("if_same.false", "if_had.in"), ("was.result", "had.a"), ("had.result", "if_had.condition"),
-           ("if_had.true", "glow_off.run"), ("was.result", "glow_off.entity"),
-           ("glow_off.then", "if_zombie.in"), ("if_had.false", "if_zombie.in"), ("zombie.result", "if_zombie.condition"),
-           ("if_zombie.true", "glow_on.run"), ("hit.value", "glow_on.entity"),
-           ("glow_on.then", "red.run"), ("hit.value", "red.entity"),
-           ("red.then", "keep.run"), ("in.player", "keep.player"), ("hit.value", "keep.value"), ("keep.then", "out.then"),
-           ("if_zombie.false", "none.run"), ("in.player", "none.player"), ("none.then", "out.then")],
-    steps=[("Humans only; their aim helper made the first time", ["bot", "if_human", "idx", "hname", "found", "missing",
-                                                                 "if_new", "eye", "kv_helper", "spawn_helper"]),
-           ("What's on their aim line", ["helper", "aim", "ap", "level", "turn", "dir", "far", "to", "kv_trace",
-                                         "trace", "traced", "cast", "if_cast", "hit"]),
-           ("A zombie? (common, Witch, special infected)", ["cls", "is_common", "is_witch", "is_player", "surv",
-                                                           "not_surv", "special", "either", "zombie"]),
-           ("Another one than before: old outline off, new one red", ["was", "same", "if_same", "had", "if_had",
-                                                                      "glow_off", "if_zombie", "glow_on", "red",
-                                                                      "keep", "none"])])
 
 TOP_DOWN_CAMERA = dict(
     about="Turn On: every survivor (bots too) sees the game from above, through a camera of their own that follows "
@@ -814,8 +709,7 @@ TOP_DOWN_CAMERA = dict(
     inputs=[("on", "Turn On", "event"), ("off", "Turn Off", "event"), ("height", "Height", "num"),
             ("smoothing", "Smoothing", "num"), ("facing", "Facing (yaw)", "num"),
             ("turn", "Turns With Player", "bool"), ("level", "Level Aim", "bool"),
-            ("move", "Screen Movement", "bool"), ("speed", "Move Speed", "num"),
-            ("highlight", "Aim Highlight", "bool")],
+            ("move", "Screen Movement", "bool"), ("speed", "Move Speed", "num")],
     outputs=[("is_on", "Is On", "bool")],
     nodes=[N("set_on", "HL_NodeSetVariable", 0, 0, label="On", var_name="top_down_on", scope="GROUP",
              value_kind="bool", sockets={"value": True}),
@@ -843,12 +737,7 @@ TOP_DOWN_CAMERA = dict(
            N("if_move", "HL_NodeIf", 3, 8, label="Screen Movement?"),
            N("each3", "HL_NodeForEach", 4, 8, what="SURVIVORS"),
            N("mover", "HL_NodeGroup", 5, 8, group="Top-Down Movement"),
-           N("if_laser", "HL_NodeIf", 6, 8, label="Aim Highlight?"),
-           N("laser", "HL_NodeGroup", 7, 8, group="Top-Down Aim Highlight", sockets={"reach": 3000.0}),
-           _var("aimed_off", "top_down_aimed", 7, 10, kind="thing", label="The one lit up"),
-           N("glow_off", "HL_NodeSetProperty", 8, 4, label="Its outline off", key="m_Glow.m_iGlowType",
-             sockets={"value": 0}),
-           _var("forget_aimed", "top_down_aimed", 9, 4, get=False, kind="thing", label="None lit up (empty)"),
+
            # off: their own walking back
            N("flags_off", "HL_NodeGetProperty", 6, 6, label="Their flags", key="m_fFlags"),
            N("walk_back", "HL_NodeMath", 7, 6, label="- FL_ATCONTROLS (64)", op="BIT_CLEAR", sockets={"b": 64.0}),
@@ -857,13 +746,10 @@ TOP_DOWN_CAMERA = dict(
            ("tick.tick", "if_on2.in"), ("state2.result", "if_on2.condition"), ("if_on2.true", "each3.run"),
            ("each3.each", "if_move.in"), ("in.move", "if_move.condition"), ("if_move.true", "mover.run"),
            ("each3.item", "mover.player"), ("in.speed", "mover.speed"),
-           ("mover.then", "if_laser.in"), ("if_move.false", "if_laser.in"), ("in.highlight", "if_laser.condition"),
-           ("if_laser.true", "laser.run"), ("each3.item", "laser.player"), ("set_off.then", "tick.stop"),
+           ("set_off.then", "tick.stop"),
            ("forget.then", "walk.run"), ("each2.item", "walk.entity"), ("each2.item", "flags_off.entity"),
            ("flags_off.value", "walk_back.a"), ("walk_back.value", "walk.value"),
-           # off: the zombie they lit up goes dark
-           ("walk.then", "glow_off.run"), ("each2.item", "aimed_off.player"), ("aimed_off.result", "glow_off.entity"),
-           ("glow_off.then", "forget_aimed.run"), ("each2.item", "forget_aimed.player"),
+
            ("timer.tick", "if_on.in"), ("state.result", "if_on.condition"), ("if_on.true", "each.run"),
            ("each.each", "follow.run"), ("each.item", "follow.player"), ("in.height", "follow.height"),
            ("in.smoothing", "follow.smoothing"), ("in.facing", "follow.facing"), ("in.turn", "follow.turn"),
@@ -876,10 +762,9 @@ TOP_DOWN_CAMERA = dict(
     steps=[("On: ten times a second, each survivor's camera follows them",
             ["set_on", "timer", "state", "if_on", "each", "follow"]),
            ("Off: their own eyes again, the cameras removed",
-            ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk",
-             "aimed_off", "glow_off", "forget_aimed"]),
+            ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk"]),
            ("Screen Movement: every tick, each human survivor moves relative to the screen",
-            ["tick", "state2", "if_on2", "if_move", "each3", "mover", "if_laser", "laser"])])
+            ["tick", "state2", "if_on2", "if_move", "each3", "mover"])])
 
 EXAMPLES_3 = [
     dict(title="Power-Up: Nuke", level="Power-Ups",
@@ -1519,8 +1404,7 @@ EXAMPLES_3 = [
                "straight above, like a top-down shooter. All in one node, Top-Down Camera (Tab goes in; its settings "
                "are on the node): Height (units above the player); Screen Movement (on: W, A, S, D move human "
                "players up, left, down and right on the screen whichever way they face, at Move Speed; bots walk as "
-               "usual); Aim Highlight (on: the zombie on each human player's aim line glows red, as the top-down "
-               "camera doesn't show the game's own laser sights); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
+               "usual); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
                "down, shots go flat across the ground); Smoothing (0: the camera stays locked on the player; "
                "higher, up to 0.95: it lags behind, and turns behind, and catches up) and Facing (the camera's yaw "
                "with Turns With Player off: 90 puts north at the top of the screen). Turn Off and Turn On switch it "
@@ -1531,11 +1415,11 @@ EXAMPLES_3 = [
                "in the open: under a ceiling a camera Height above ends up inside the floor above or the solid map, "
                "and shows that (lower Height indoors). Don't mix it with third person.",
          groups={"Top-Down Follow": TOP_DOWN_FOLLOW, "Top-Down Movement": TOP_DOWN_MOVE,
-                 "Top-Down Aim Highlight": TOP_DOWN_HIGHLIGHT, "Top-Down Camera": TOP_DOWN_CAMERA},
+                 "Top-Down Camera": TOP_DOWN_CAMERA},
          nodes=[N("start", "HL_NodeMapStart", 0, 0),
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
                   sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": False, "level": True,
-                           "move": True, "speed": 220.0, "highlight": True})],
+                           "move": True, "speed": 220.0})],
          links=[("start.start", "cam.on")],
          steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node)",
                  ["start", "cam"])]),
