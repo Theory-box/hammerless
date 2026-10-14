@@ -785,10 +785,13 @@ TOP_DOWN_CURSOR = dict(
           "(Sensitivity units per degree), kept within Radius of them. Their aim then snaps, level, toward the cursor "
           "(a helper info_target hl_cur_<player number> turned by Set Forward Vector gives the yaw), so shots go out "
           "flat that way. The cursor is a model (a prop_dynamic_override hl_cursor_<player number>: models render "
-          "through a camera, effects don't), put on the ground under the cursor point (a Trace Line down). Screen "
-          "directions come from their camera like Top-Down Movement. Smoothing (0 to 0.95): the model is shown "
-          "where the cursor is (0) or glides after it, closing 1 - Smoothing of the gap each tick (the aim always "
-          "goes to the cursor itself). Bots are left alone.",
+          "through a camera, effects don't), on the ground under the cursor point (a Trace Line down). It rides an "
+          "invisible mover (a point_viewcontrol hl_curm_<player number>, never switched on: it moves by its speed, "
+          "Set Velocity, and the game draws that smoothly between ticks; a model moved by Set Origin jumps, as Set "
+          "Origin is a teleport): each tick the mover gets the speed that closes the gap to the ground point within "
+          "the tick, times 1 - Smoothing (0 to 0.95: higher, the model glides after the cursor; the aim always goes "
+          "to the cursor itself). Screen directions come from their camera like Top-Down Movement. Bots are left "
+          "alone.",
     inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("radius", "Radius", "num"),
             ("sensitivity", "Sensitivity", "num"), ("model", "Cursor Model", "text"),
             ("smoothing", "Smoothing", "num")],
@@ -801,6 +804,7 @@ TOP_DOWN_CURSOR = dict(
            fn("idx", "entity:GetEntityIndex", 1, 6),
            N("hname", "HL_NodeFormatText", 2, 6, label="Their aim helper", template="hl_cur_{a}"),
            N("cname", "HL_NodeFormatText", 2, 7, label="Their cursor", template="hl_cursor_{a}"),
+           N("mname", "HL_NodeFormatText", 2, 8, label="Their cursor's mover", template="hl_curm_{a}"),
            fn("found", "Entities.FindByName", 3, 6, label="Their aim helper"),
            N("missing", "HL_NodeCheck", 4, 6, label="Not made yet?", op="NOT_SET"),
            N("if_new", "HL_NodeIf", 3, 0, label="Made the first time"),
@@ -810,7 +814,11 @@ TOP_DOWN_CURSOR = dict(
            N("kv_cursor", "HL_NodeMakeTable", 5, 8, label="The cursor model (not solid, no shadow)",
              fields="targetname: text, origin: vec, model: text, solid: int, disableshadows: int",
              sockets={"f_solid": 0, "f_disableshadows": 1}),
+           N("kv_mover", "HL_NodeMakeTable", 5, 9, label="The mover (moves by its speed)",
+             fields="targetname: text, origin: vec"),
+           fn("spawn_mover", "SpawnEntityFromTable", 5, 1, {"p0": "point_viewcontrol"}),
            fn("spawn_cursor", "SpawnEntityFromTable", 5, 0, {"p0": "prop_dynamic_override"}),
+           N("ride", "HL_NodeFireInput", 6, 1, label="The cursor rides the mover", sockets={"input": "SetParent"}),
            fn("aim0", "player:EyeAngles", 5, 10, label="Where they aim"),
            N("aim0_p", "HL_NodeBreakVector", 6, 10),
            _var("start_yaw", "top_down_cursor_yaw", 6, 0, get=False, kind="num", label="Yaw so far"),
@@ -824,7 +832,6 @@ TOP_DOWN_CURSOR = dict(
            N("start_off", "HL_NodeVectorMath", 10, 2, label="A little up the screen", op="SCALE",
              sockets={"scale": 60.0}),
            _var("start_cursor", "top_down_cursor", 7, 0, get=False, kind="vec", label="Cursor (from them)"),
-           _var("start_shown", "top_down_cursor_shown", 7, 1, get=False, kind="vec", label="Shown at (from them)"),
            # the mouse's turn since last tick
            fn("aim", "player:EyeAngles", 7, 12, label="Where they aim now"),
            N("ap", "HL_NodeBreakVector", 8, 12),
@@ -856,15 +863,6 @@ TOP_DOWN_CURSOR = dict(
            N("level", "HL_NodeMakeVector", 12, 6, label="Level, that way", sockets={"x": 0.0, "z": 0.0}),
            fn("snap", "player:SnapEyeAngles", 10, 0, label="Their aim on the cursor"),
            _var("keep_yaw", "top_down_cursor_yaw", 11, 0, get=False, kind="num", label="Yaw the group gave them"),
-           # where the model is shown: gliding after the cursor
-           _var("shown", "top_down_cursor_shown", 12, 12, kind="vec", label="Shown at (from them)"),
-           N("glide_gap", "HL_NodeVectorMath", 13, 11, label="Cursor - shown", op="SUBTRACT"),
-           N("g_max", "HL_NodeMath", 12, 13, label="Smoothing, at most 0.95", op="MINIMUM", sockets={"b": 0.95}),
-           N("g_min", "HL_NodeMath", 13, 13, label="At least 0", op="MAXIMUM", sockets={"b": 0.0}),
-           N("g_part", "HL_NodeMath", 14, 13, label="1 - Smoothing", op="SUBTRACT", sockets={"a": 1.0}),
-           N("glide_step", "HL_NodeVectorMath", 14, 11, label="x (1 - Smoothing)", op="SCALE"),
-           N("glided", "HL_NodeVectorMath", 15, 11, label="Shown + that", op="ADD"),
-           _var("keep_shown", "top_down_cursor_shown", 12, 1, get=False, kind="vec", label="Shown at (from them)"),
            # the cursor model on the ground there
            N("at", "HL_NodeVectorMath", 12, 8, label="Over the ground there", op="ADD"),
            N("above", "HL_NodeMakeVector", 12, 9, label="120 up", sockets={"x": 0.0, "y": 0.0, "z": 120.0}),
@@ -878,13 +876,22 @@ TOP_DOWN_CURSOR = dict(
            fn("cast", "TraceLine", 15, 9, label="Trace down"),
            N("if_cast", "HL_NodeIf", 13, 0, label="Traced"),
            N("ground", "HL_NodeGetField", 16, 10, label="The ground", sockets={"key": "pos"}),
-           fn("cursor_ent", "Entities.FindByName", 14, 6, label="Their cursor"),
-           fn("place", "entity:SetOrigin", 14, 0, label="The cursor there")],
+           # the mover's speed: closing the gap to the ground point within the tick (30 a second)
+           fn("mover", "Entities.FindByName", 14, 6, label="Their cursor's mover"),
+           fn("m_at", "entity:GetOrigin", 15, 6, label="Where it is"),
+           N("m_gap", "HL_NodeVectorMath", 17, 10, label="The gap", op="SUBTRACT"),
+           N("m_rate", "HL_NodeVectorMath", 18, 10, label="Closed within a tick (x 30)", op="SCALE",
+             sockets={"scale": 30.0}),
+           N("g_max", "HL_NodeMath", 16, 12, label="Smoothing, at most 0.95", op="MINIMUM", sockets={"b": 0.95}),
+           N("g_min", "HL_NodeMath", 17, 12, label="At least 0", op="MAXIMUM", sockets={"b": 0.0}),
+           N("g_part", "HL_NodeMath", 18, 12, label="1 - Smoothing", op="SUBTRACT", sockets={"a": 1.0}),
+           N("m_vel", "HL_NodeVectorMath", 19, 10, label="x (1 - Smoothing)", op="SCALE"),
+           fn("place", "entity:SetVelocity", 14, 0, label="The mover's speed until the next tick")],
     links=[("in.player", "bot.p0"), ("bot.result", "if_human.condition"), ("in.run", "if_human.in"),
            ("if_human.true", "out.then"),
            ("in.player", "cam.player"), ("cam.result", "no_cam.a"), ("no_cam.result", "if_cam.condition"),
            ("if_human.false", "if_cam.in"), ("if_cam.true", "out.then"),
-           ("in.player", "idx.target"), ("idx.result", "hname.a"), ("idx.result", "cname.a"),
+           ("in.player", "idx.target"), ("idx.result", "hname.a"), ("idx.result", "cname.a"), ("idx.result", "mname.a"),
            ("hname.result", "found.p1"), ("found.result", "missing.a"),
            ("if_cam.false", "if_new.in"), ("missing.result", "if_new.condition"),
            # made the first time: helper, cursor model, yaw so far, cursor a little up the screen
@@ -892,15 +899,16 @@ TOP_DOWN_CURSOR = dict(
            ("if_new.true", "spawn_helper.run"), ("kv_helper.table", "spawn_helper.p1"),
            ("cname.result", "kv_cursor.f_targetname"), ("feet.result", "kv_cursor.f_origin"),
            ("in.model", "kv_cursor.f_model"),
-           ("spawn_helper.then", "spawn_cursor.run"), ("kv_cursor.table", "spawn_cursor.p1"),
+           ("mname.result", "kv_mover.f_targetname"), ("feet.result", "kv_mover.f_origin"),
+           ("spawn_helper.then", "spawn_mover.run"), ("kv_mover.table", "spawn_mover.p1"),
+           ("spawn_mover.then", "spawn_cursor.run"), ("kv_cursor.table", "spawn_cursor.p1"),
+           ("spawn_cursor.then", "ride.run"), ("spawn_cursor.result", "ride.entity"), ("mname.result", "ride.value"),
            ("in.player", "aim0.target"), ("aim0.result", "aim0_p.vector"),
-           ("spawn_cursor.then", "start_yaw.run"), ("in.player", "start_yaw.player"), ("aim0_p.y", "start_yaw.value"),
+           ("ride.then", "start_yaw.run"), ("in.player", "start_yaw.player"), ("aim0_p.y", "start_yaw.value"),
            ("cam.result", "cam_fwd.target"), ("cam_fwd.result", "cf.vector"), ("cf.x", "flat.x"), ("cf.y", "flat.y"),
            ("flat.result", "up.a"), ("zaxis.result", "left.a"), ("up.vector", "left.b"), ("up.vector", "start_off.a"),
            ("start_yaw.then", "start_cursor.run"), ("in.player", "start_cursor.player"),
            ("start_off.vector", "start_cursor.value"),
-           ("start_cursor.then", "start_shown.run"), ("in.player", "start_shown.player"),
-           ("start_off.vector", "start_shown.value"),
            # each tick: the mouse's turn moves the cursor
            ("in.player", "aim.target"), ("aim.result", "ap.vector"), ("in.player", "last_yaw.player"),
            ("ap.y", "dy.a"), ("last_yaw.result", "dy.b"), ("dy.value", "w1.a"), ("w1.value", "w2.a"),
@@ -912,7 +920,7 @@ TOP_DOWN_CURSOR = dict(
            ("sum1.vector", "sum2.a"), ("move_u.vector", "sum2.b"),
            ("sum2.vector", "len.a"), ("len.value", "len_ok.a"), ("len_ok.value", "capped.a"), ("in.radius", "capped.b"),
            ("capped.value", "ratio.a"), ("len_ok.value", "ratio.b"), ("sum2.vector", "kept.a"), ("ratio.value", "kept.scale"),
-           ("start_shown.then", "keep.run"), ("if_new.false", "keep.run"), ("in.player", "keep.player"),
+           ("start_cursor.then", "keep.run"), ("if_new.false", "keep.run"), ("in.player", "keep.player"),
            ("kept.vector", "keep.value"),
            # their aim toward it, level
            ("hname.result", "helper.p1"), ("keep.then", "face.run"), ("helper.result", "face.target"),
@@ -920,34 +928,33 @@ TOP_DOWN_CURSOR = dict(
            ("hp.y", "level.y"), ("face.then", "snap.run"), ("in.player", "snap.target"), ("level.result", "snap.p0"),
            ("snap.then", "keep_yaw.run"), ("in.player", "keep_yaw.player"), ("hp.y", "keep_yaw.value"),
            # the cursor model on the ground under the cursor point
-           ("in.player", "shown.player"), ("kept.vector", "glide_gap.a"), ("shown.result", "glide_gap.b"),
-           ("in.smoothing", "g_max.a"), ("g_max.value", "g_min.a"), ("g_min.value", "g_part.b"),
-           ("glide_gap.vector", "glide_step.a"), ("g_part.value", "glide_step.scale"),
-           ("shown.result", "glided.a"), ("glide_step.vector", "glided.b"),
-           ("keep_yaw.then", "keep_shown.run"), ("in.player", "keep_shown.player"), ("glided.vector", "keep_shown.value"),
-           ("feet.result", "at.a"), ("glided.vector", "at.b"), ("at.vector", "from.a"), ("above.result", "from.b"),
+           ("feet.result", "at.a"), ("kept.vector", "at.b"), ("at.vector", "from.a"), ("above.result", "from.b"),
            ("at.vector", "to.a"), ("below.result", "to.b"),
            ("from.vector", "kv_trace.f_start"), ("to.vector", "kv_trace.f_end"), ("in.player", "kv_trace.f_ignore"),
-           ("keep_shown.then", "trace.run"), ("in.player", "trace.player"), ("kv_trace.table", "trace.value"),
+           ("keep_yaw.then", "trace.run"), ("in.player", "trace.player"), ("kv_trace.table", "trace.value"),
            ("trace.then", "if_cast.in"), ("in.player", "traced.player"), ("traced.result", "cast.p0"),
            ("cast.result", "if_cast.condition"), ("traced.result", "ground.table"),
-           ("cname.result", "cursor_ent.p1"), ("if_cast.true", "place.run"), ("if_cast.false", "place.run"),
-           ("cursor_ent.result", "place.target"), ("ground.value", "place.p0"), ("place.then", "out.then")],
+           ("mname.result", "mover.p1"), ("mover.result", "m_at.target"),
+           ("ground.value", "m_gap.a"), ("m_at.result", "m_gap.b"), ("m_gap.vector", "m_rate.a"),
+           ("in.smoothing", "g_max.a"), ("g_max.value", "g_min.a"), ("g_min.value", "g_part.b"),
+           ("m_rate.vector", "m_vel.a"), ("g_part.value", "m_vel.scale"),
+           ("if_cast.true", "place.run"), ("if_cast.false", "place.run"),
+           ("mover.result", "place.target"), ("m_vel.vector", "place.p0"), ("place.then", "out.then")],
     steps=[("Humans with a camera only", ["bot", "if_human", "cam", "no_cam", "if_cam"]),
-           ("Made the first time: helper, cursor model, start", ["idx", "hname", "cname", "found", "missing", "if_new",
-                                                                  "feet", "kv_helper", "spawn_helper", "kv_cursor",
-                                                                  "spawn_cursor", "aim0", "aim0_p", "start_yaw",
-                                                                  "start_off", "start_cursor", "start_shown"]),
+           ("Made the first time: helper, mover, cursor model riding it, start",
+            ["idx", "hname", "cname", "mname", "found", "missing", "if_new", "feet", "kv_helper", "spawn_helper",
+             "kv_mover", "spawn_mover", "kv_cursor", "spawn_cursor", "ride", "aim0", "aim0_p", "start_yaw",
+             "start_off", "start_cursor"]),
            ("Screen directions from the camera", ["cam_fwd", "cf", "flat", "up", "zaxis", "left"]),
            ("The mouse's turn moves the cursor, within Radius", ["aim", "ap", "last_yaw", "dy", "w1", "w2", "w3",
                                                                 "dx_amt", "neg_sens", "dy_amt", "move_l", "move_u",
                                                                 "cursor", "sum1", "sum2", "len", "len_ok", "capped",
                                                                 "ratio", "kept", "keep"]),
            ("Their aim toward it, level", ["helper", "face", "h_ang", "hp", "level", "snap", "keep_yaw"]),
-           ("Where the model is shown: gliding after the cursor (Smoothing)",
-            ["shown", "glide_gap", "g_max", "g_min", "g_part", "glide_step", "glided", "keep_shown"]),
            ("The cursor model on the ground there", ["at", "above", "below", "from", "to", "kv_trace", "trace",
-                                                      "traced", "cast", "if_cast", "ground", "cursor_ent", "place"])])
+                                                      "traced", "cast", "if_cast", "ground"]),
+           ("The mover's speed: the gap to there within the tick, times 1 - Smoothing",
+            ["mover", "m_at", "m_gap", "m_rate", "g_max", "g_min", "g_part", "m_vel", "place"])])
 
 TOP_DOWN_CAMERA = dict(
     about="Turn On: every human survivor sees the game from above, through a camera of their own that follows "
@@ -998,8 +1005,10 @@ TOP_DOWN_CAMERA = dict(
            fn("idx_c", "entity:GetEntityIndex", 8, 10),
            N("cur_off", "HL_NodeFormatText", 9, 10, label="Their cursor", template="hl_cursor_{a}"),
            N("help_off", "HL_NodeFormatText", 9, 11, label="Their aim helper", template="hl_cur_{a}"),
+           N("mover_off", "HL_NodeFormatText", 9, 12, label="Their cursor's mover", template="hl_curm_{a}"),
            fn("kill_cursor", "EntFire", 10, 4, {"p1": "Kill"}, label="Their cursor removed"),
            fn("kill_helper", "EntFire", 11, 4, {"p1": "Kill"}, label="Their aim helper removed"),
+           fn("kill_mover", "EntFire", 12, 4, {"p1": "Kill"}, label="Their cursor's mover removed"),
 
            # off: their own walking back
            N("flags_off", "HL_NodeGetProperty", 6, 6, label="Their flags", key="m_fFlags"),
@@ -1018,6 +1027,7 @@ TOP_DOWN_CAMERA = dict(
            ("walk.then", "kill_cursor.run"), ("each2.item", "idx_c.target"), ("idx_c.result", "cur_off.a"),
            ("idx_c.result", "help_off.a"), ("cur_off.result", "kill_cursor.p0"),
            ("kill_cursor.then", "kill_helper.run"), ("help_off.result", "kill_helper.p0"),
+           ("idx_c.result", "mover_off.a"), ("kill_helper.then", "kill_mover.run"), ("mover_off.result", "kill_mover.p0"),
            ("set_off.then", "tick.stop"),
            ("forget.then", "walk.run"), ("each2.item", "walk.entity"), ("each2.item", "flags_off.entity"),
            ("flags_off.value", "walk_back.a"), ("walk_back.value", "walk.value"),
@@ -1035,7 +1045,7 @@ TOP_DOWN_CAMERA = dict(
             ["set_on", "timer", "state", "if_on", "each", "follow"]),
            ("Off: their own eyes again, the cameras removed",
             ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk",
-             "idx_c", "cur_off", "help_off", "kill_cursor", "kill_helper"]),
+             "idx_c", "cur_off", "help_off", "kill_cursor", "kill_helper", "mover_off", "kill_mover"]),
            ("Screen Movement: every tick, each human survivor moves relative to the screen",
             ["tick", "state2", "if_on2", "if_move", "each3", "mover", "if_assist", "assist", "if_cursor",
              "cursor"])])
