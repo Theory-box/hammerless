@@ -630,9 +630,11 @@ TOP_DOWN_MOVE = dict(
           "shooting, jumping and crouching work; the game still does gravity, stairs and collisions). Each tick: the "
           "keys held (Get Button Mask: forward 8, back 16, left 512, right 1024) make a direction from their camera's "
           "screen-up (its forward direction, flattened: it looks down at 89, so that points up the screen) and "
-          "screen-left (straight up x screen-up), and they get Move Speed that way (Set Velocity, keeping their "
-          "falling or jumping speed). No key: the game slows them down as usual.",
-    inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("speed", "Move Speed", "num")],
+          "screen-left (straight up x screen-up), and their speed goes Acceleration of the way (0 to 1 each tick) "
+          "toward Move Speed that way (Set Velocity, keeping their falling or jumping speed): a tap barely moves "
+          "them, holding builds up to full speed. No key: the game slows them down as usual.",
+    inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("speed", "Move Speed", "num"),
+            ("accel", "Acceleration", "num")],
     outputs=[("then", "Then", "event")],
     nodes=[fn("bot", "IsPlayerABot", 0, 2, label="A bot?"),
            N("if_human", "HL_NodeIf", 1, 0, label="Bots walk as usual"),
@@ -666,11 +668,17 @@ TOP_DOWN_MOVE = dict(
            N("moving", "HL_NodeCompare", 11, 6, label="A key held?", op="GREATER", sockets={"b": 0.0}),
            N("if_moving", "HL_NodeIf", 4, 0),
            N("dirn", "HL_NodeVectorMath", 11, 5, label="One unit long", op="NORMALIZE"),
-           N("spd", "HL_NodeVectorMath", 12, 5, label="x Move Speed", op="SCALE"),
+           N("spd", "HL_NodeVectorMath", 12, 5, label="x Move Speed: full speed", op="SCALE"),
            fn("cur", "entity:GetVelocity", 11, 8, label="Their speed now"),
            N("cb", "HL_NodeBreakVector", 12, 8),
-           N("sb", "HL_NodeBreakVector", 13, 5),
-           N("final", "HL_NodeMakeVector", 14, 6, label="That way, still falling or jumping as they were"),
+           N("cur_flat", "HL_NodeMakeVector", 13, 8, label="Their speed along the ground", sockets={"z": 0.0}),
+           N("to_full", "HL_NodeVectorMath", 14, 5, label="Full speed - now", op="SUBTRACT"),
+           N("a_max", "HL_NodeMath", 12, 9, label="Acceleration, at most 1", op="MINIMUM", sockets={"b": 1.0}),
+           N("a_min", "HL_NodeMath", 13, 9, label="At least 0.01", op="MAXIMUM", sockets={"b": 0.01}),
+           N("step", "HL_NodeVectorMath", 15, 5, label="x Acceleration", op="SCALE"),
+           N("new_v", "HL_NodeVectorMath", 16, 5, label="Now + that", op="ADD"),
+           N("nb", "HL_NodeBreakVector", 17, 5),
+           N("final", "HL_NodeMakeVector", 18, 6, label="That, still falling or jumping as they were"),
            fn("go", "entity:SetVelocity", 5, 0, label="Their speed this tick")],
     links=[("in.player", "bot.p0"), ("bot.result", "if_human.condition"), ("in.run", "if_human.in"),
            ("if_human.true", "out.then"),
@@ -690,17 +698,21 @@ TOP_DOWN_MOVE = dict(
            ("w_up.vector", "wish.a"), ("w_left.vector", "wish.b"), ("wish.vector", "len.a"), ("len.value", "moving.a"),
            ("no_walk.then", "if_moving.in"), ("moving.result", "if_moving.condition"), ("if_moving.false", "out.then"),
            # that way at Move Speed, keeping their up-and-down speed
-           ("wish.vector", "dirn.a"), ("dirn.vector", "spd.a"), ("in.speed", "spd.scale"), ("spd.vector", "sb.vector"),
+           ("wish.vector", "dirn.a"), ("dirn.vector", "spd.a"), ("in.speed", "spd.scale"),
            ("in.player", "cur.target"), ("cur.result", "cb.vector"),
-           ("sb.x", "final.x"), ("sb.y", "final.y"), ("cb.z", "final.z"),
+           ("cb.x", "cur_flat.x"), ("cb.y", "cur_flat.y"), ("spd.vector", "to_full.a"), ("cur_flat.result", "to_full.b"),
+           ("in.accel", "a_max.a"), ("a_max.value", "a_min.a"), ("to_full.vector", "step.a"), ("a_min.value", "step.scale"),
+           ("cur_flat.result", "new_v.a"), ("step.vector", "new_v.b"), ("new_v.vector", "nb.vector"),
+           ("nb.x", "final.x"), ("nb.y", "final.y"), ("cb.z", "final.z"),
            ("if_moving.true", "go.run"), ("in.player", "go.target"), ("final.result", "go.p0"), ("go.then", "out.then")],
     steps=[("Humans with a camera only", ["bot", "if_human", "cam", "no_cam", "if_cam"]),
            ("Their own walking off (FL_ATCONTROLS)", ["flags", "atc", "no_walk"]),
            ("The keys held: up - down, left - right", ["keys", "k_f", "k_b", "k_l", "k_r", "f1", "b1", "l1", "r1",
                                                        "ud", "lr"]),
            ("Screen-up and screen-left from the camera", ["cam_fwd", "cf", "flat", "up", "zaxis", "left"]),
-           ("That way at Move Speed", ["w_up", "w_left", "wish", "len", "moving", "if_moving", "dirn", "spd", "cur",
-                                       "cb", "sb", "final", "go"])])
+           ("Toward Move Speed that way, Acceleration of the way each tick",
+            ["w_up", "w_left", "wish", "len", "moving", "if_moving", "dirn", "spd", "cur", "cb", "cur_flat", "to_full",
+             "a_max", "a_min", "step", "new_v", "nb", "final", "go"])])
 
 
 TOP_DOWN_ASSIST = dict(
@@ -974,7 +986,8 @@ TOP_DOWN_CAMERA = dict(
             ("move", "Screen Movement", "bool"), ("speed", "Move Speed", "num"),
             ("assist", "Aim Assist", "bool"), ("cursor", "Mouse Cursor", "bool"),
             ("cursor_radius", "Cursor Radius", "num"), ("sensitivity", "Cursor Sensitivity", "num"),
-            ("cursor_smoothing", "Cursor Smoothing", "num"), ("cursor_model", "Cursor Model", "text")],
+            ("cursor_smoothing", "Cursor Smoothing", "num"), ("cursor_model", "Cursor Model", "text"),
+            ("move_accel", "Move Acceleration", "num")],
     outputs=[("is_on", "Is On", "bool")],
     nodes=[N("set_on", "HL_NodeSetVariable", 0, 0, label="On", var_name="top_down_on", scope="GROUP",
              value_kind="bool", sockets={"value": True}),
@@ -1023,7 +1036,7 @@ TOP_DOWN_CAMERA = dict(
     links=[("in.on", "set_on.run"), ("set_on.then", "timer.start"), ("set_on.then", "tick.start"),
            ("tick.tick", "if_on2.in"), ("state2.result", "if_on2.condition"), ("if_on2.true", "each3.run"),
            ("each3.each", "if_move.in"), ("in.move", "if_move.condition"), ("if_move.true", "mover.run"),
-           ("each3.item", "mover.player"), ("in.speed", "mover.speed"),
+           ("each3.item", "mover.player"), ("in.speed", "mover.speed"), ("in.move_accel", "mover.accel"),
            ("mover.then", "if_assist.in"), ("if_move.false", "if_assist.in"), ("in.assist", "if_assist.condition"),
            ("if_assist.true", "assist.run"), ("each3.item", "assist.player"),
            ("assist.then", "if_cursor.in"), ("if_assist.false", "if_cursor.in"), ("in.cursor", "if_cursor.condition"),
@@ -1711,7 +1724,8 @@ EXAMPLES_3 = [
                "'Example 62 cursor' (a red ring whose material has Emission, so it's self-lit in the game: it "
                "glows in the dark), placed in the map hidden (rendermode 10) so its model is loaded; the graph "
                "reads its model (Get Model Name) for Cursor Model. Replace its mesh to change the cursor, or give "
-               "Cursor Model any model the map loads. Cursor Smoothing (0 to 0.95): the model glides after the "
+               "Cursor Model any model the map loads. Move Acceleration (0 to 1): how much of the way to full speed "
+               "each tick takes them (low: a tap barely moves them, holding builds up). Cursor Smoothing (0 to 0.95): the model glides after the "
                "cursor instead of jumping with it; bots are never touched.",
          objects={"cursor": ("CURSOR_RING", (0.0, 0.0, 0.0),
                              {"targetname": "hl_cursor_model", "rendermode": "10", "solid": "0",
@@ -1725,7 +1739,7 @@ EXAMPLES_3 = [
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
                   sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": False, "level": True,
                            "move": True, "speed": 220.0, "assist": False, "cursor": True,
-                           "cursor_radius": 250.0, "sensitivity": 6.0, "cursor_smoothing": 0.5})],
+                           "cursor_radius": 250.0, "sensitivity": 6.0, "cursor_smoothing": 0.5, "move_accel": 0.25})],
          links=[("start.start", "cam.on"), ("ring.result", "ring_model.target"),
                 ("ring_model.result", "cam.cursor_model")],
          steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node); the cursor "
