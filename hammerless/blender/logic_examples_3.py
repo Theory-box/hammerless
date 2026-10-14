@@ -697,6 +697,111 @@ TOP_DOWN_MOVE = dict(
            ("That way at Move Speed", ["w_up", "w_left", "wish", "len", "moving", "if_moving", "dirn", "spd", "cur",
                                        "cb", "sb", "final", "go"])])
 
+TOP_DOWN_LASER = dict(
+    about="A laser sight seen from any camera (the game's own laser and flashlight are drawn from the player's eyes, "
+          "so a top-down camera doesn't show them): one human survivor, one tick. Their laser is an env_laser "
+          "(named hl_laser_<player number>, red, the game's sprites/laserbeam) on the 'muzzle_flash' point of the gun "
+          "in their hands (SetParent to the gun, then SetParentAttachment; again whenever they switch guns), shining "
+          "at an info_target (hl_laser_end_<player number>) that each tick is moved to where their aim hits: a Trace "
+          "Line from their eyes, Reach units along the way they face. A melee weapon or empty hands: the laser is "
+          "off. Bots have none.",
+    inputs=[("run", "Run", "event"), ("player", "Player", "thing"), ("reach", "Reach", "num")],
+    outputs=[("then", "Then", "event")],
+    nodes=[fn("bot", "IsPlayerABot", 0, 2, label="A bot?"),
+           N("if_human", "HL_NodeIf", 1, 0, label="Bots have none"),
+           fn("idx", "entity:GetEntityIndex", 0, 4),
+           N("lname", "HL_NodeFormatText", 1, 4, label="Their laser's name", template="hl_laser_{a}"),
+           N("ename", "HL_NodeFormatText", 1, 5, label="Its end point's name", template="hl_laser_end_{a}"),
+           fn("found", "Entities.FindByName", 2, 4, label="Their laser"),
+           N("missing", "HL_NodeCheck", 3, 4, label="Not made yet?", op="NOT_SET"),
+           N("if_new", "HL_NodeIf", 2, 0, label="Made the first time"),
+           fn("eye", "player:EyePosition", 2, 7, label="Their eyes"),
+           N("kv_end", "HL_NodeMakeTable", 3, 6, label="The end point", fields="targetname: text, origin: vec"),
+           fn("spawn_end", "SpawnEntityFromTable", 3, 0, {"p0": "info_target"}),
+           N("kv_laser", "HL_NodeMakeTable", 4, 6, label="The laser (1: on; red; no damage)",
+             fields="targetname: text, origin: vec, LaserTarget: text, texture: text, width: num, rendercolor: text, "
+                    "renderamt: int, damage: num, NoiseAmplitude: num, spawnflags: int",
+             sockets={"f_texture": "sprites/laserbeam.vmt", "f_width": 1.5, "f_rendercolor": "255 20 20",
+                      "f_renderamt": 220, "f_damage": 0.0, "f_NoiseAmplitude": 0.0, "f_spawnflags": 1}),
+           fn("spawn_laser", "SpawnEntityFromTable", 4, 0, {"p0": "env_laser"}),
+           # a gun with a muzzle?
+           fn("gun", "player:GetActiveWeapon", 3, 9, label="In their hands"),
+           N("has_gun", "HL_NodeCheck", 4, 9, label="Something?", op="IS_SET"),
+           N("if_gun", "HL_NodeIf", 5, 1),
+           fn("att", "entity:LookupAttachment", 4, 10, {"p0": "muzzle_flash"}),
+           N("has_att", "HL_NodeCompare", 5, 10, label="With a muzzle?", op="GREATER", sockets={"b": 0.0}),
+           N("if_att", "HL_NodeIf", 6, 1),
+           fn("off", "EntFire", 6, 3, {"p1": "TurnOff"}, label="Laser off"),
+           # on the muzzle of the gun in their hands (again when it's another gun)
+           _var("had", "top_down_laser_gun", 6, 10, kind="thing", label="The gun it's on"),
+           N("other", "HL_NodeCheck", 7, 10, label="Another gun?", op="NOT_EQUAL"),
+           N("if_other", "HL_NodeIf", 7, 1),
+           fn("parent", "EntFire", 8, 1, {"p1": "SetParent", "p2": "!activator"}),
+           fn("attach", "EntFire", 9, 1, {"p1": "SetParentAttachment", "p2": "muzzle_flash"}),
+           _var("keep_gun", "top_down_laser_gun", 10, 1, get=False, kind="thing", label="The gun it's on"),
+           fn("on", "EntFire", 11, 1, {"p1": "TurnOn"}),
+           # where their aim hits
+           fn("facing", "entity:GetForwardVector", 8, 7, label="The way they face"),
+           N("fp", "HL_NodeBreakVector", 9, 7),
+           N("flat", "HL_NodeMakeVector", 10, 7, label="Level", sockets={"z": 0.0}),
+           N("dir", "HL_NodeVectorMath", 11, 7, label="One unit long", op="NORMALIZE"),
+           N("far", "HL_NodeVectorMath", 12, 7, label="x Reach", op="SCALE"),
+           N("to", "HL_NodeVectorMath", 13, 7, label="From their eyes", op="ADD"),
+           N("kv_trace", "HL_NodeMakeTable", 12, 8, label="The trace", fields="start: vec, end: vec, ignore: thing"),
+           _var("trace", "top_down_laser_trace", 13, 2, get=False, kind="any", label="The trace (kept: Trace Line "
+                "fills it in)"),
+           _var("traced", "top_down_laser_trace", 13, 9, kind="any", label="The trace"),
+           fn("cast", "TraceLine", 14, 3, label="Trace it"),
+           N("if_cast", "HL_NodeIf", 14, 2, label="Traced (hit or not: Pos is filled in either way)"),
+           N("hit", "HL_NodeGetField", 14, 9, label="Where it hit", sockets={"key": "pos"}),
+           fn("end_ent", "Entities.FindByName", 14, 10, label="Their end point"),
+           fn("move_end", "entity:SetOrigin", 15, 2, label="The laser's end there")],
+    links=[("in.player", "bot.p0"), ("bot.result", "if_human.condition"), ("in.run", "if_human.in"),
+           ("if_human.true", "out.then"),
+           ("in.player", "idx.target"), ("idx.result", "lname.a"), ("idx.result", "ename.a"),
+           ("lname.result", "found.p1"), ("found.result", "missing.a"),
+           ("if_human.false", "if_new.in"), ("missing.result", "if_new.condition"),
+           # made the first time: the end point, then the laser shining at it
+           ("in.player", "eye.target"), ("ename.result", "kv_end.f_targetname"), ("eye.result", "kv_end.f_origin"),
+           ("if_new.true", "spawn_end.run"), ("kv_end.table", "spawn_end.p1"),
+           ("lname.result", "kv_laser.f_targetname"), ("eye.result", "kv_laser.f_origin"),
+           ("ename.result", "kv_laser.f_LaserTarget"),
+           ("spawn_end.then", "spawn_laser.run"), ("kv_laser.table", "spawn_laser.p1"),
+           # a gun with a muzzle in their hands? else off
+           ("spawn_laser.then", "if_gun.in"), ("if_new.false", "if_gun.in"),
+           ("in.player", "gun.target"), ("gun.result", "has_gun.a"), ("has_gun.result", "if_gun.condition"),
+           ("gun.result", "att.target"), ("att.result", "has_att.a"), ("has_att.result", "if_att.condition"),
+           ("if_gun.true", "if_att.in"), ("if_gun.false", "off.run"), ("if_att.false", "off.run"),
+           ("lname.result", "off.p0"), ("off.then", "out.then"),
+           # on that gun's muzzle (again when they switch guns), on
+           ("in.player", "had.player"), ("had.result", "other.a"), ("gun.result", "other.b"),
+           ("if_att.true", "if_other.in"), ("other.result", "if_other.condition"),
+           ("if_other.true", "parent.run"), ("lname.result", "parent.p0"), ("gun.result", "parent.p4"),
+           ("parent.then", "attach.run"), ("lname.result", "attach.p0"), ("gun.result", "attach.p4"),
+           ("attach.then", "keep_gun.run"), ("in.player", "keep_gun.player"), ("gun.result", "keep_gun.value"),
+           ("keep_gun.then", "on.run"), ("if_other.false", "on.run"), ("lname.result", "on.p0"),
+           # the end: where their aim hits, Reach along the way they face
+           ("in.player", "facing.target"), ("facing.result", "fp.vector"), ("fp.x", "flat.x"), ("fp.y", "flat.y"),
+           ("flat.result", "dir.a"), ("dir.vector", "far.a"), ("in.reach", "far.scale"),
+           ("eye.result", "to.a"), ("far.vector", "to.b"),
+           ("eye.result", "kv_trace.f_start"), ("to.vector", "kv_trace.f_end"), ("in.player", "kv_trace.f_ignore"),
+           ("on.then", "trace.run"), ("in.player", "trace.player"), ("kv_trace.table", "trace.value"),
+           ("trace.then", "if_cast.in"), ("in.player", "traced.player"), ("traced.result", "cast.p0"),
+           ("cast.result", "if_cast.condition"), ("traced.result", "hit.table"), ("ename.result", "end_ent.p1"),
+           ("if_cast.true", "move_end.run"), ("if_cast.false", "move_end.run"),
+           ("end_ent.result", "move_end.target"), ("hit.value", "move_end.p0"),
+           ("move_end.then", "out.then")],
+    steps=[("Humans only", ["bot", "if_human"]),
+           ("Their laser and its end point: made the first time", ["idx", "lname", "ename", "found", "missing", "if_new",
+                                                                    "eye", "kv_end", "spawn_end", "kv_laser",
+                                                                    "spawn_laser"]),
+           ("A gun with a muzzle in their hands? Else off", ["gun", "has_gun", "if_gun", "att", "has_att", "if_att",
+                                                             "off"]),
+           ("On that gun's muzzle (again when it's another gun), on", ["had", "other", "if_other", "parent", "attach",
+                                                                       "keep_gun", "on"]),
+           ("Its end where their aim hits", ["facing", "fp", "flat", "dir", "far", "to", "kv_trace", "trace", "traced",
+                                            "cast", "if_cast", "hit", "end_ent", "move_end"])])
+
 TOP_DOWN_CAMERA = dict(
     about="Turn On: every survivor (bots too) sees the game from above, through a camera of their own that follows "
           "them without turning with them ('Top-Down Follow'): ten times a second (the Timer: 0.1 s is its fastest) "
@@ -708,7 +813,8 @@ TOP_DOWN_CAMERA = dict(
     inputs=[("on", "Turn On", "event"), ("off", "Turn Off", "event"), ("height", "Height", "num"),
             ("smoothing", "Smoothing", "num"), ("facing", "Facing (yaw)", "num"),
             ("turn", "Turns With Player", "bool"), ("level", "Level Aim", "bool"),
-            ("move", "Screen Movement", "bool"), ("speed", "Move Speed", "num")],
+            ("move", "Screen Movement", "bool"), ("speed", "Move Speed", "num"),
+            ("laser", "Laser Sight", "bool")],
     outputs=[("is_on", "Is On", "bool")],
     nodes=[N("set_on", "HL_NodeSetVariable", 0, 0, label="On", var_name="top_down_on", scope="GROUP",
              value_kind="bool", sockets={"value": True}),
@@ -736,16 +842,31 @@ TOP_DOWN_CAMERA = dict(
            N("if_move", "HL_NodeIf", 3, 8, label="Screen Movement?"),
            N("each3", "HL_NodeForEach", 4, 8, what="SURVIVORS"),
            N("mover", "HL_NodeGroup", 5, 8, group="Top-Down Movement"),
+           N("if_laser", "HL_NodeIf", 6, 8, label="Laser Sight?"),
+           N("laser", "HL_NodeGroup", 7, 8, group="Top-Down Laser", sockets={"reach": 3000.0}),
+           N("lname_off", "HL_NodeFormatText", 7, 10, label="Their laser", template="hl_laser_{a}"),
+           N("ename_off", "HL_NodeFormatText", 7, 11, label="Its end point", template="hl_laser_end_{a}"),
+           fn("idx_off", "entity:GetEntityIndex", 6, 10),
+           fn("kill_laser", "EntFire", 8, 4, {"p1": "Kill"}, label="Their laser removed"),
+           fn("kill_end", "EntFire", 9, 4, {"p1": "Kill"}, label="Its end point removed"),
+           _var("forget_gun", "top_down_laser_gun", 10, 4, get=False, kind="thing", label="On no gun (empty)"),
            # off: their own walking back
            N("flags_off", "HL_NodeGetProperty", 6, 6, label="Their flags", key="m_fFlags"),
            N("walk_back", "HL_NodeMath", 7, 6, label="- FL_ATCONTROLS (64)", op="BIT_CLEAR", sockets={"b": 64.0}),
            N("walk", "HL_NodeSetProperty", 6, 4, label="Their own walking back", key="m_fFlags")],
     links=[("in.on", "set_on.run"), ("set_on.then", "timer.start"), ("set_on.then", "tick.start"),
-           ("tick.tick", "if_on2.in"), ("state2.result", "if_on2.condition"), ("if_on2.true", "if_move.in"),
-           ("in.move", "if_move.condition"), ("if_move.true", "each3.run"), ("each3.each", "mover.run"),
-           ("each3.item", "mover.player"), ("in.speed", "mover.speed"), ("set_off.then", "tick.stop"),
+           ("tick.tick", "if_on2.in"), ("state2.result", "if_on2.condition"), ("if_on2.true", "each3.run"),
+           ("each3.each", "if_move.in"), ("in.move", "if_move.condition"), ("if_move.true", "mover.run"),
+           ("each3.item", "mover.player"), ("in.speed", "mover.speed"),
+           ("mover.then", "if_laser.in"), ("if_move.false", "if_laser.in"), ("in.laser", "if_laser.condition"),
+           ("if_laser.true", "laser.run"), ("each3.item", "laser.player"), ("set_off.then", "tick.stop"),
            ("forget.then", "walk.run"), ("each2.item", "walk.entity"), ("each2.item", "flags_off.entity"),
            ("flags_off.value", "walk_back.a"), ("walk_back.value", "walk.value"),
+           # off: their laser and its end point removed
+           ("walk.then", "kill_laser.run"), ("each2.item", "idx_off.target"), ("idx_off.result", "lname_off.a"),
+           ("idx_off.result", "ename_off.a"), ("lname_off.result", "kill_laser.p0"),
+           ("kill_laser.then", "kill_end.run"), ("ename_off.result", "kill_end.p0"),
+           ("kill_end.then", "forget_gun.run"), ("each2.item", "forget_gun.player"),
            ("timer.tick", "if_on.in"), ("state.result", "if_on.condition"), ("if_on.true", "each.run"),
            ("each.each", "follow.run"), ("each.item", "follow.player"), ("in.height", "follow.height"),
            ("in.smoothing", "follow.smoothing"), ("in.facing", "follow.facing"), ("in.turn", "follow.turn"),
@@ -758,9 +879,10 @@ TOP_DOWN_CAMERA = dict(
     steps=[("On: ten times a second, each survivor's camera follows them",
             ["set_on", "timer", "state", "if_on", "each", "follow"]),
            ("Off: their own eyes again, the cameras removed",
-            ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk"]),
+            ["set_off", "each2", "cam", "disable", "back", "gone", "forget", "flags_off", "walk_back", "walk",
+             "idx_off", "lname_off", "ename_off", "kill_laser", "kill_end", "forget_gun"]),
            ("Screen Movement: every tick, each human survivor moves relative to the screen",
-            ["tick", "state2", "if_on2", "if_move", "each3", "mover"])])
+            ["tick", "state2", "if_on2", "if_move", "each3", "mover", "if_laser", "laser"])])
 
 EXAMPLES_3 = [
     dict(title="Power-Up: Nuke", level="Power-Ups",
@@ -1400,7 +1522,8 @@ EXAMPLES_3 = [
                "straight above, like a top-down shooter. All in one node, Top-Down Camera (Tab goes in; its settings "
                "are on the node): Height (units above the player); Screen Movement (on: W, A, S, D move human "
                "players up, left, down and right on the screen whichever way they face, at Move Speed; bots walk as "
-               "usual); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
+               "usual); Laser Sight (on: a red laser from each human player's gun to where they aim, seen from the "
+               "top-down camera, which doesn't show the game's own laser sights); Turns With Player (on: the camera turns as they turn instead); Level Aim (on: they can't aim up or "
                "down, shots go flat across the ground); Smoothing (0: the camera stays locked on the player; "
                "higher, up to 0.95: it lags behind, and turns behind, and catches up) and Facing (the camera's yaw "
                "with Turns With Player off: 90 puts north at the top of the screen). Turn Off and Turn On switch it "
@@ -1411,11 +1534,11 @@ EXAMPLES_3 = [
                "in the open: under a ceiling a camera Height above ends up inside the floor above or the solid map, "
                "and shows that (lower Height indoors). Don't mix it with third person.",
          groups={"Top-Down Follow": TOP_DOWN_FOLLOW, "Top-Down Movement": TOP_DOWN_MOVE,
-                 "Top-Down Camera": TOP_DOWN_CAMERA},
+                 "Top-Down Laser": TOP_DOWN_LASER, "Top-Down Camera": TOP_DOWN_CAMERA},
          nodes=[N("start", "HL_NodeMapStart", 0, 0),
                 N("cam", "HL_NodeGroup", 1, 0, group="Top-Down Camera",
                   sockets={"height": 500.0, "smoothing": 0.3, "facing": 90.0, "turn": False, "level": True,
-                           "move": True, "speed": 220.0})],
+                           "move": True, "speed": 220.0, "laser": True})],
          links=[("start.start", "cam.on")],
          steps=[("The map starts: the top-down camera on (Tab into the group; settings on the node)",
                  ["start", "cam"])]),
