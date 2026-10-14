@@ -61,7 +61,7 @@ def objects_near(vmf_path: str, point, pad: float = 1.0) -> list[str]:
     try:
         with open(os.path.splitext(vmf_path)[0] + ".brushes.json", encoding="utf-8") as f:
             sources = json.load(f)
-        with open(vmf_path, encoding="utf-8") as f:
+        with open(vmf_path, encoding="utf-8", errors="replace") as f:
             text = f.read()
     except (OSError, ValueError):
         return []

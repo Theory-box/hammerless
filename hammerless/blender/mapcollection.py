@@ -254,6 +254,7 @@ _pending: dict = {}           # object session id -> True when new (else: its ki
 _timer = [False]
 _new_colls: dict = {}         # scene name -> collections that appeared since the last sort
 _sigs: dict = {}              # object session id -> its kind settings when last seen (see _sig)
+_counts: dict = {}            # scene name -> (objects, collections) when last listed
 
 
 def _sig(obj) -> tuple:
@@ -391,26 +392,34 @@ def _apply_pending():
 
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph):
+    from ..core.entities import CONTROL, NAV_CUT, NO_BAKE
     from .props import forget_bake_volumes
-    forget_bake_volumes()
+    if any(isinstance(u.id, bpy.types.Object) and u.id.original.hammerless.classname in (CONTROL, NAV_CUT, NO_BAKE)
+           for u in depsgraph.updates):
+        forget_bake_volumes()            # (a Control Volume changed: the Bake menu lists them)
     if map_collection(scene) is None:
         return
-    ids = {o.session_uid: o for o in scene.objects}
-    known = _known.get(scene.name)
-    _known[scene.name] = set(ids)
-    colls = {c.session_uid for c in bpy.data.collections}
-    known_colls = _known_colls.get(scene.name)
-    _known_colls[scene.name] = colls
-    if known is None:
-        for o in ids.values():        # (first look at this scene: what's there stays where it is)
-            _sigs[o.session_uid] = _sig(o)
-        return
-    if known_colls is not None and colls - known_colls and ids.keys() - known:
-        # (collections that came with new objects, e.g. Append: kept until those are sorted)
-        _new_colls.setdefault(scene.name, set()).update(colls - known_colls)
-    for uid in ids.keys() - known:
-        _pending[uid] = True
-        _sigs[uid] = _sig(ids[uid])
+    counts = (len(scene.objects), len(bpy.data.collections))
+    if _counts.get(scene.name) != counts or scene.name not in _known:
+        # (objects or collections added or removed: only then is every object listed, not on each move or
+        # each of a build's scene updates)
+        _counts[scene.name] = counts
+        ids = {o.session_uid: o for o in scene.objects}
+        known = _known.get(scene.name)
+        _known[scene.name] = set(ids)
+        colls = {c.session_uid for c in bpy.data.collections}
+        known_colls = _known_colls.get(scene.name)
+        _known_colls[scene.name] = colls
+        if known is None:
+            for o in ids.values():        # (first look at this scene: what's there stays where it is)
+                _sigs[o.session_uid] = _sig(o)
+            return
+        if known_colls is not None and colls - known_colls and ids.keys() - known:
+            # (collections that came with new objects, e.g. Append: kept until those are sorted)
+            _new_colls.setdefault(scene.name, set()).update(colls - known_colls)
+        for uid in ids.keys() - known:
+            _pending[uid] = True
+            _sigs[uid] = _sig(ids[uid])
     for u in depsgraph.updates:
         if isinstance(u.id, bpy.types.Object):    # (a settings change can come tagged as a transform one)
             o = u.id.original
@@ -425,6 +434,7 @@ def _on_depsgraph(scene, depsgraph):
 
 @bpy.app.handlers.persistent
 def _on_load(*_args):
+    _counts.clear()
     _known.clear()
     _pending.clear()
     _known_colls.clear()

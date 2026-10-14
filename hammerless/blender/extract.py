@@ -585,14 +585,16 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
 
 def _hull_thickness(hull) -> float:
     """The smallest distance across a convex hull (Hammer units): from each face's plane to the farthest point."""
-    best = float("inf")
-    for f in hull.faces:
-        n = f.normal
-        if n.length < 1e-9:
-            continue
-        d0 = n.dot(f.verts[0].co)
-        best = min(best, max(abs(n.dot(v.co) - d0) for v in hull.verts))
-    return 0.0 if best == float("inf") else best
+    import numpy as np
+    normals = np.array([tuple(f.normal) for f in hull.faces], dtype=np.float64).reshape(-1, 3)
+    first = np.array([tuple(f.verts[0].co) for f in hull.faces], dtype=np.float64).reshape(-1, 3)
+    pts = np.array([tuple(v.co) for v in hull.verts], dtype=np.float64).reshape(-1, 3)
+    ok = np.linalg.norm(normals, axis=1) >= 1e-9
+    if not ok.any() or not len(pts):
+        return 0.0
+    normals, first = normals[ok], first[ok]
+    d0 = (normals * first).sum(axis=1)
+    return float(np.abs(pts @ normals.T - d0).max(axis=0).min())   # (each face: its farthest point; the least)
 
 
 def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, collide):

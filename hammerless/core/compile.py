@@ -546,6 +546,22 @@ def bsp_signature(path: str) -> str:
     return _SIGNATURES[path][1]
 
 
+def bsp_lump_hash(path: str, index: int) -> str | None:
+    """Fingerprint of one lump of a compiled map (e.g. 4, the visibility), or None when it can't be read."""
+    import hashlib
+    import struct
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8 + 16 * 64)
+            if head[:4] != b"VBSP":
+                return None
+            _ver, off, length, _cc = struct.unpack_from("<iiii", head, 8 + 16 * index)
+            f.seek(off)
+            return hashlib.sha1(f.read(length)).hexdigest()
+    except (OSError, struct.error):
+        return None
+
+
 def _has_lighting(bsp: str) -> bool:
     """The .bsp exists and has baked lighting (LDR or HDR lightmap lump not empty)."""
     import struct
@@ -1087,7 +1103,7 @@ class CompileJob:
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
             self._q.put(("OK",))
         except _Cancelled:
-            self._q.put("Build cancelled: nothing was copied to the game")
+            self._q.put("Build cancelled: the compiled map wasn't copied to the game")
             self._q.put(("CANCELLED",))
         except Exception as ex:  # surfaced to the user in the log
             self._q.put(f"!! {ex}")
@@ -1184,7 +1200,7 @@ class CompileJob:
             same_opts = (_opts_rest(built) == _opts_rest(repr(self._opts)) and built_vis in VIS_RANK
                          and built_rad is not None)
             if same_opts and os.path.exists(self.base + ".bsp"):
-                with open(self.base + ".built.vmf", encoding="utf-8") as f:
+                with open(self.base + ".built.vmf", encoding="utf-8", errors="replace") as f:
                     old = f.read()
         except OSError:
             pass
@@ -1560,17 +1576,19 @@ def set_nav_inputs(tools: Tools, map_name: str, key: str | None) -> None:
 
 
 def nav_follow_bsp(tools: Tools, map_name: str) -> None:
-    """The map was compiled again but its nav still fits (only logic changed): the nav's header gets the new map's
-    size (the game checks it) and the marker the new map's signature."""
+    """The map was compiled again but its nav still fits (only logic or lighting changed): the nav's header gets the
+    new map's size (the game checks it) and the marker the new map's signature (whoever made the nav)."""
     import struct
     nav = os.path.join(tools.maps_dir, map_name + ".nav")
     bsp = os.path.join(tools.maps_dir, map_name + ".bsp")
+    # (the marker first: a game-made nav counts only when it's newer than its marker, see nav_maker)
+    set_nav_maker(tools, map_name, nav_maker(tools, map_name) or "blender")
     with open(nav, "r+b") as f:
         head = f.read(16)
         if len(head) == 16 and head[:4] == bytes((0xCE, 0xFA, 0xED, 0xFE)):
             f.seek(12)
             f.write(struct.pack("<I", os.path.getsize(bsp)))
-    set_nav_maker(tools, map_name, "blender")
+    os.utime(nav)
 
 
 def set_nav_maker(tools: Tools, map_name: str, maker: str) -> None:
@@ -1730,6 +1748,8 @@ def _watch_ready(log: str, start: int, launch_id: int, timeout: float = 660.0):
     while time.time() - t0 < timeout and LOAD_STATUS["launch_id"] == launch_id:
         time.sleep(0.5)
         try:
+            if os.path.getsize(log) < pos:     # (the game started a new console.log: read it from the start)
+                pos = 0
             with open(log, "rb") as f:
                 f.seek(pos)
                 chunk = f.read()

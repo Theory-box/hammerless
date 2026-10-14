@@ -26,11 +26,12 @@ def _solid(obj) -> bool:
     return role == "BRUSH_ENTITY" and (obj.hammerless.classname or "func_detail") in SOLID_BRUSH_ENTITIES
 
 
-def scene_bvh(context):
-    """The scene's solid geometry (walls, floors, terrain, solid brush entities) in Hammer units."""
+def scene_geometry(context):
+    """The scene's solid geometry (walls, floors, terrain, solid brush entities) in Hammer units, as arrays:
+    (vertices (n, 3), each polygon's corners one after another, each polygon's corner count)."""
     scale = context.scene.hammerless.units_per_meter
     depsgraph = context.evaluated_depsgraph_get()
-    verts, polys = [], []
+    verts, corners, sizes, base = [], [], [], 0
     from .mapcollection import map_objects
     inside = map_objects(context.scene)
     for obj in context.scene.objects:
@@ -39,16 +40,44 @@ def scene_bvh(context):
         ev = obj.evaluated_get(depsgraph)
         mesh = ev.to_mesh()
         try:
-            m = obj.matrix_world
-            base = len(verts)
-            verts += [tuple((m @ v.co) * scale) for v in mesh.vertices]
-            polys += [tuple(base + i for i in p.vertices) for p in mesh.polygons]
+            co = np.empty(len(mesh.vertices) * 3, np.float32)
+            mesh.vertices.foreach_get("co", co)
+            # (as mathutils works out matrix_world @ co * scale: single precision products summed in double;
+            # the listening spots' grid starts at the bounds, so a last-bit difference moves every spot)
+            m = np.array(obj.matrix_world, dtype=np.float32)
+            prod = co.reshape(-1, 1, 3) * m[None, :3, :3]
+            w = ((prod[..., 0].astype(np.float64) + prod[..., 1]) + prod[..., 2]) + m[:3, 3].astype(np.float64)
+            verts.append(w.astype(np.float32) * np.float32(scale))
+            idx = np.empty(len(mesh.loops), np.int32)
+            mesh.loops.foreach_get("vertex_index", idx)
+            start = np.empty(len(mesh.polygons), np.int32)
+            total = np.empty(len(mesh.polygons), np.int32)
+            mesh.polygons.foreach_get("loop_start", start)
+            mesh.polygons.foreach_get("loop_total", total)
+            if len(total):           # (each polygon's corners in polygon order)
+                corners.append(idx[np.repeat(start, total) + np.arange(total.sum()) - np.repeat(np.cumsum(total) - total, total)] + base)
+                sizes.append(total)
+            base += len(mesh.vertices)
         finally:
             ev.to_mesh_clear()
-    if not polys:
+    if not sizes:
+        return None
+    return np.concatenate(verts), np.concatenate(corners), np.concatenate(sizes)
+
+
+def scene_bvh(context, geometry=None):
+    """The scene's solid geometry (scene_geometry) as a BVH tree, and its bounds; (None, None) when there is none."""
+    geometry = scene_geometry(context) if geometry is None else geometry
+    if geometry is None:
         return None, None
-    v = np.array(verts)
-    return BVHTree.FromPolygons(verts, polys), (tuple(v.min(axis=0)), tuple(v.max(axis=0)))
+    v, corners, sizes = geometry
+    polys = [c.tolist() for c in np.split(corners, np.cumsum(sizes)[:-1])]
+    return BVHTree.FromPolygons(v.tolist(), polys), (tuple(v.min(axis=0)), tuple(v.max(axis=0)))
+
+
+# The last analysis, kept: it depends only on the solid geometry, the starts and the Sound volumes, so a build
+# where they didn't change (e.g. only logic) reuses it. {"key": ..., "result": (spots, zones, spacing, summary)}
+_TRACE_CACHE: dict = {"key": None, "result": None}
 
 
 START_CLASSES = ("info_survivor_position", "info_player_start")
@@ -89,22 +118,34 @@ def scene_volumes(context, aspect: str) -> list:
 
 def trace(context, starts=None):
     """Run the analysis. Returns (spots, zones, spacing, summary) or raises ValueError."""
+    import hashlib
     t0 = time.time()
-    bvh, bounds = scene_bvh(context)
-    if bvh is None:
+    geometry = scene_geometry(context)
+    if geometry is None:
         raise ValueError("Nothing to trace: the scene has no walls or floors")
+    vols = scene_volumes(context, "sound")
+    starts = scene_starts(context) if starts is None else starts
+    h = hashlib.sha1(repr((sorted(tuple(round(c, 3) for c in p) for p in starts), repr(vols))).encode())
+    for a in geometry:
+        h.update(a.astype(np.float32 if a.dtype.kind == "f" else np.int32).tobytes())
+    key = h.hexdigest()
+    if _TRACE_CACHE["key"] == key:
+        spots, zl, spacing, summary = _TRACE_CACHE["result"]
+        _state.update(spots=spots, zones=zl, summary=summary, batches=None)
+        _redraw()
+        return spots, zl, spacing, summary
+    bvh, bounds = scene_bvh(context, geometry)
 
     def cast(origin, direction, distance):
         hit = bvh.ray_cast(Vector(origin), Vector(direction), distance)
         return None if hit[0] is None else (hit[3], hit[1].z)
     spots, spacing = acoustics.sample_spots(bounds, cast)
-    vols = scene_volumes(context, "sound")
     if vols:                        # (Control Volumes ticked Sound: not listened from there)
         from ..core.control import skipped
         spots = [sp for sp in spots if not skipped(vols, "sound", sp.pos)]
     if not spots:
         raise ValueError("No floors found to listen from")
-    spots = acoustics.reachable(spots, scene_starts(context) if starts is None else starts)
+    spots = acoustics.reachable(spots, starts)
     if not spots:
         raise ValueError("No floor can be reached from the survivors' start: check the start is on a floor")
     acoustics.analyse(spots, cast)
@@ -116,6 +157,7 @@ def trace(context, starts=None):
                f"{sum(len(z.positions) for z in zl)} sound portals ({time.time() - t0:.1f} s)")
     _state.update(spots=spots, zones=zl, summary=summary, batches=None)
     _redraw()
+    _TRACE_CACHE.update(key=key, result=(spots, zl, spacing, summary))
     return spots, zl, spacing, summary
 
 

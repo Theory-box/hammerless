@@ -200,12 +200,17 @@ def _start_nav_analysis(mesh, vmf_path: str, bsp_path: str, root: str) -> dict:
         t0 = time.time()
         try:
             from ..core.navworker import analyze
-            with open(vmf_path, encoding="utf-8") as f:
+            with open(vmf_path, encoding="utf-8", errors="replace") as f:
                 text = f.read()
             analyze(mesh, text, bsp_path, root, progress, lambda: box["stop"])
             box["done"] = True
         except Exception as ex:          # reported; the game analyzes the nav mesh instead
             box["error"] = str(ex)
+        if bsp_path.endswith(".analysis.bsp"):      # (its own copy of the map: only this analysis reads it)
+            try:
+                os.remove(bsp_path)
+            except OSError:
+                pass
         box["seconds"] = time.time() - t0
         box["span"] = (t0, time.time())
     box["thread"] = threading.Thread(target=work, daemon=True)
@@ -411,8 +416,25 @@ def _remove_old_models(gamedir: str, ir) -> None:
                 pass
 
 
-def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
-    """Extract + build + write. Returns (vmf_path, game_root, report)."""
+def write_map_scripts(gamedir: str, map_name: str, files: dict, rep: Report) -> None:
+    """The map's own game files (scripts, mode file): written, the ones this build no longer makes removed,
+    and recorded. Raises OSError."""
+    for rel, content in files.items():
+        full = os.path.join(gamedir, *rel.split("/"))
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as f:
+            f.write(content)
+    from ..core.gamefiles import record_game_files, stale_game_files
+    for rel in stale_game_files(gamedir, map_name, files):   # (e.g. every logic graph deleted)
+        os.remove(os.path.join(gamedir, *rel.split("/")))
+        rep.info.append(f"Removed {rel} (this build no longer makes it)")
+    record_game_files(gamedir, map_name, files)
+
+
+def export_vmf(op, context, defer_scripts: bool = False) -> tuple[str | None, str | None, Report]:
+    """Extract + build + write. Returns (vmf_path, game_root, report). defer_scripts: the map's scripts aren't
+    written into the game yet (rep.pending_scripts: Build writes them once the compiled map is in the game, so
+    a failed or cancelled build leaves the old map with its own scripts)."""
     s = context.scene.hammerless
     root = game_root(context)
     gamedir = os.path.join(root, "left4dead2") if root else None
@@ -462,16 +484,16 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
                                  "This build replaces that map in the game: give this one its own Map Name")
         files = game_files(ir)
         try:
-            for rel, content in files.items():
-                full = os.path.join(gamedir, *rel.split("/"))
-                os.makedirs(os.path.dirname(full), exist_ok=True)
-                with open(full, "w", encoding="utf-8") as f:
-                    f.write(content)
-            from ..core.gamefiles import record_game_files, stale_game_files
-            for rel in stale_game_files(gamedir, s.map_name, files):   # (e.g. every logic graph deleted)
-                os.remove(os.path.join(gamedir, *rel.split("/")))
-                rep2.info.append(f"Removed {rel} (this build no longer makes it)")
-            record_game_files(gamedir, s.map_name, files)
+            if defer_scripts:
+                rep2.pending_scripts = (gamedir, s.map_name, files)
+                for rel, content in files.items():   # (except the nav marks: Build compares them to the nav's
+                    if rel.rsplit("/", 1)[-1].startswith("navmark_"):      # own copy, and the old map ignores them)
+                        full = os.path.join(gamedir, *rel.split("/"))
+                        os.makedirs(os.path.dirname(full), exist_ok=True)
+                        with open(full, "w", encoding="utf-8") as f:
+                            f.write(content)
+            else:
+                write_map_scripts(gamedir, s.map_name, files, rep2)
             cc.set_map_owner(cc.Tools(root), s.map_name, path)
             if ir.scripted_mode:
                 _write_mode_addon(gamedir, rep2)
@@ -488,7 +510,7 @@ def export_vmf(op, context) -> tuple[str | None, str | None, Report]:
         regions, _ = collect_regions(ir)
         rep2.nav_regions = regions
         rep2.nav_climbs = collect_climbs(ir)[0]
-        rep2.info.append(f"Wrote {len(files)} script(s) to the game folder; nav marking covers "
+        rep2.info.append(f"{'Made' if defer_scripts else 'Wrote'} {len(files)} script(s) for the game folder; nav marking covers "
                          f"{len(regions)} region(s)")
     return path, root, rep2
 
@@ -1059,7 +1081,7 @@ def _start_nav_generation(vmf_path: str, regions, climbs=(), wall_climbs=False, 
     import time
     from ..core.navpredict import cached
     from ..core.navworker import predict
-    with open(vmf_path, encoding="utf-8") as f:
+    with open(vmf_path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     box = {"stage": "starting", "mesh": None, "error": None, "seconds": 0.0, "stop": False}
     reuse = cached(text, regions, climbs, wall_climbs, roofs)  # Build Navmesh was pressed on this exact map: no wait
@@ -1242,7 +1264,8 @@ class HL_OT_build(bpy.types.Operator):
                     # (an installed game mode the add-on has changed: updated before the game reads it)
                     _write_mode_addon(gamedir, Report())
                 cc.prestart_game(cc.Tools(early_root), launch_options(context.scene.hammerless))
-        path, root, rep = export_vmf(self, context)
+        path, root, rep = export_vmf(self, context, defer_scripts=True)
+        self._pending_scripts = getattr(rep, "pending_scripts", None)
         self._export_s = time.time() - self._t0
         from .problems import store
         store(context, rep, new_build=True)
@@ -1343,7 +1366,13 @@ class HL_OT_build(bpy.types.Operator):
         s = context.scene.hammerless
         unanalyzed = s.nav_analysis == "BLENDER" and cc.nav_analyzed(tools, s.map_name) is False
         if self.bake or self.vis_only:
-            pass                     # lighting / visibility only: the nav is made by the next Build / Build & Play
+            # lighting / visibility only: the nav mesh stays (it fits the walls, which don't change); _step moves
+            # it onto the new map, without its analysis if the visibility changed
+            game_bsp = os.path.join(tools.maps_dir, s.map_name + ".bsp")
+            self._nav_fit = (os.path.exists(os.path.join(tools.maps_dir, s.map_name + ".nav"))
+                             and os.path.exists(game_bsp) and cc.nav_maker(tools, s.map_name) is not None
+                             and not cc.nav_outdated(tools, s.map_name))
+            self._vis_before = cc.bsp_lump_hash(game_bsp, 4) if self._nav_fit else None
         elif s.nav_source == "BLENDER" and (not self._job.up_to_date() or needs_nav(context, root) or unanalyzed):
             self._nav_key = _nav_key(path, rep, s, opts)
             if (self._nav_key and not needs_nav(context, root) and s.nav_analysis == "BLENDER"
@@ -1380,11 +1409,16 @@ class HL_OT_build(bpy.types.Operator):
             self.report({"ERROR"}, f"Build & Play stopped: {ex}")
             return self._finish(context, {"CANCELLED"})
 
+    def _settings(self, context):
+        """The built scene's settings (another scene may be shown now)."""
+        owner = bpy.data.scenes.get(self._owner[0])
+        return (owner or context.scene).hammerless
+
     def _start_analysis_early(self, context):
         """The nav analysis needs the compiled walls and visibility, not the lighting: start it as soon
         as the nav mesh is made and the compile is past its last visibility step (vrad may still run)."""
         nav = self._nav
-        if nav is None or nav.get("analysis") is not None or context.scene.hammerless.nav_analysis != "BLENDER":
+        if nav is None or nav.get("analysis") is not None or self._settings(context).nav_analysis != "BLENDER":
             return
         if nav["thread"].is_alive() or nav["mesh"] is None:
             return
@@ -1396,18 +1430,43 @@ class HL_OT_build(bpy.types.Operator):
     def _cancel_build(self, context):
         """Esc or Cancel: everything this build runs stops (the compile, nav mesh and analysis, Cycles bake)."""
         self._job.cancel()
-        if self._nav is not None:
-            self._nav["stop"] = True
-            if self._nav.get("analysis") is not None:
-                self._nav["analysis"]["stop"] = True
+        self._stop_nav()
         self._stop_bake()
-        compiled = self._job.done and not self._job.failed      # (cancelled while the nav mesh was being made)
+        new = self._job.poll()                                   # (first: a job that just ended counts as done)
+        compiled = self._job.done and not self._job.failed and not self._job.cancelled
+        if compiled:                     # (cancelled while the nav mesh was being made: the map is in the game)
+            self._write_scripts(context)
         msg = ("Build cancelled: the map was already compiled and is in the game; its nav mesh wasn't finished "
                "(the next build makes it)" if compiled else
-               "Build cancelled: nothing was copied to the game (the next build compiles the map again)")
-        write_log(self._job.poll() + [msg], append=True)
+               "Build cancelled: the map in the game and its scripts are unchanged (the next build compiles the map "
+               "again)")
+        write_log(new + [msg], append=True)
         self.report({"WARNING"}, msg)
         return self._finish(context, {"CANCELLED"})
+
+    def _write_scripts(self, context) -> bool:
+        """The map's scripts into the game, now that its compiled map is there (export_vmf, defer_scripts)."""
+        pending, self._pending_scripts = getattr(self, "_pending_scripts", None), None
+        if pending is None:
+            return True
+        rep = Report()
+        try:
+            write_map_scripts(*pending, rep)
+        except OSError as ex:
+            self.report({"ERROR"}, f"Can't write the map's scripts into the game folder ({ex}). Is Left 4 Dead 2 "
+                                   "installed somewhere that needs administrator rights?")
+            return False
+        if rep.info:
+            write_log([f"info: {i}" for i in rep.info], append=True)
+        return True
+
+    def _stop_nav(self):
+        """The nav mesh and analysis processes stop (their watcher threads end them): however the build ends."""
+        nav = getattr(self, "_nav", None)
+        if nav is not None:
+            nav["stop"] = True
+            if nav.get("analysis") is not None:
+                nav["analysis"]["stop"] = True
 
     def _stop_bake(self):
         bake = getattr(self, "_bake", None)
@@ -1422,8 +1481,9 @@ class HL_OT_build(bpy.types.Operator):
             self._bake = None
 
     def _step(self, context):
-        if self._job.bake_request and getattr(self, "_bake", None) is None:
-            self._cycles_bake(context)
+        nav_making = self._nav is not None and self._nav["thread"].is_alive()
+        if self._job.bake_request and getattr(self, "_bake", None) is None and not nav_making:
+            self._cycles_bake(context)           # (after the nav mesh: the bake skips faces nobody sees from it)
         bake = getattr(self, "_bake", None)
         if bake is not None and bake["proc"].poll() is not None:
             from .cyclesbake import process_result
@@ -1450,7 +1510,7 @@ class HL_OT_build(bpy.types.Operator):
             return {"PASS_THROUGH"}
         summ = self._job.summary
         if self._job.cancelled:
-            self.report({"WARNING"}, "Build cancelled: nothing was copied to the game")
+            self.report({"WARNING"}, "Build cancelled: the map in the game and its scripts are unchanged")
             return self._finish(context, {"CANCELLED"})
         if self._job.failed:
             msg = "Map leaks! Use 'Load Leak' to see where." if summ and summ.leaked else \
@@ -1461,6 +1521,8 @@ class HL_OT_build(bpy.types.Operator):
                 failed.errors = [f"Compiler: {e}" for e in summ.errors[:20]]
                 store(context, failed)
             self.report({"ERROR"}, msg)
+            return self._finish(context, {"CANCELLED"})
+        if not self._write_scripts(context):
             return self._finish(context, {"CANCELLED"})
         import time
         owner = bpy.data.scenes.get(self._owner[0])     # (the scene that was built, even if another is shown now)
@@ -1526,6 +1588,16 @@ class HL_OT_build(bpy.types.Operator):
                     write_log(self._nav["mesh"].problems, append=True)
                 s.generate_nav = False
                 timing += f", nav mesh {self._nav['seconds']:.1f}s (during the compile)"
+        if getattr(self, "_nav_fit", False) and not self._job.skipped and not getattr(self, "_nav_followed", False):
+            self._nav_followed = True            # (Bake Lighting / Compute Visibility: the nav mesh stays)
+            tools = cc.Tools(self._root)
+            try:
+                if cc.bsp_lump_hash(os.path.join(tools.maps_dir, self._owner[1] + ".bsp"), 4) != self._vis_before:
+                    cc.clear_nav_analysis(tools, self._owner[1])     # (its visibility data was for the old vis)
+                    cc.set_nav_inputs(tools, self._owner[1], None)
+                cc.nav_follow_bsp(tools, self._owner[1])
+            except OSError as ex:
+                self.report({"WARNING"}, f"Couldn't update the nav mesh for the new map ({ex}): the next build makes it")
         if self._nav_kept and not getattr(self, "_nav_followed", False):
             self._nav_followed = True
             try:
@@ -1594,8 +1666,7 @@ class HL_OT_build(bpy.types.Operator):
         from ..core.lightbake import eye_points
         mesh = None
         if self._nav is not None:
-            self._nav["thread"].join()
-            mesh = self._nav.get("mesh")
+            mesh = self._nav.get("mesh")     # (_step starts the bake once the nav mesh is done)
         if mesh is None and self._root:
             from ..core.navfile import load_nav
             path = os.path.join(cc.Tools(self._root).maps_dir, self._owner[1] + ".nav")
@@ -1614,7 +1685,7 @@ class HL_OT_build(bpy.types.Operator):
         try:
             from .cyclesbake import start_process
             opts = self._job._opts
-            self._bake = start_process(bsp, context.scene.hammerless.units_per_meter, opts.cycles_samples,
+            self._bake = start_process(bsp, self._settings(context).units_per_meter, opts.cycles_samples,
                                        opts.cycles_denoise, opts.cycles_stitch, self._eye_points(context))
             _BAKES.append(self._bake)
             context.workspace.status_text_set("Hammerless: baking the lighting with Cycles (Esc cancels)...")
@@ -1629,6 +1700,7 @@ class HL_OT_build(bpy.types.Operator):
         """Blender ended the operator itself (File > Open / New, the window closed): let the job end too."""
         if self._job is not None:
             self._job.bake_abandoned = True
+        self._stop_nav()
         self._stop_bake()
         _BUILDING.discard(getattr(self, "_key", None))
         _CANCEL.discard(getattr(self, "_key", None))
@@ -1639,6 +1711,7 @@ class HL_OT_build(bpy.types.Operator):
         BUILD_PROGRESS["vis"] = ""
 
     def _finish(self, context, result):
+        self._stop_nav()                         # (a failed or leaking build: nobody reads the nav any more)
         self._stop_bake()
         _BUILDING.discard(getattr(self, "_key", None))
         _CANCEL.discard(getattr(self, "_key", None))

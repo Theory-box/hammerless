@@ -149,7 +149,7 @@ def portal_owners(portals: Portals, vmf_path: str) -> list:
     """For each portal, the Blender object whose brush it was split along (a brush side on the same
     plane, the nearest one when several are), or None: vbsp's own splitting of open space."""
     try:
-        with open(vmf_path, encoding="utf-8") as f:
+        with open(vmf_path, encoding="utf-8", errors="replace") as f:
             text = f.read()
         base = os.path.splitext(vmf_path)[0]
         base = base[:-len(".built")] if base.endswith(".built") else base       # (map.built.vmf -> map)
