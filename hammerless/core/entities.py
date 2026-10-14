@@ -335,6 +335,15 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
                KeyDef("climb", "climb_1", "Climb name (pairs the two ends)")),
               size=(12.0, 12.0, 12.0)),
 
+    # --- effects
+    EntityDef("info_particle_system", "Particle Effect", "Effects",
+              "One of the game's particle effects (fire, smoke, sparks, blood...): pick it in the Particles panel. "
+              "On from the map's start, or off until logic starts it (Start / Stop inputs).",
+              (KeyDef("effect_name", "", "Effect"),
+               KeyDef("start_active", "1", "Starts on", (("1", "Yes: on from the start"),
+                                                         ("0", "No: logic starts it")))),
+              size=(16.0, 16.0, 16.0), floor_origin=False),
+
     # --- lights (basic; full lighting comes later)
     EntityDef("light", "Point Light", "Lights", "Omni light.",
               (KeyDef("_light", "255 240 220 300", "Color + brightness"),), floor_origin=False),
@@ -345,7 +354,8 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
                KeyDef("pitch", "-50", "Sun pitch")), floor_origin=False),
 ]}
 
-CATEGORIES = ["Players", "Director", "Props", "Infected", "Items", "Weapons", "Logic", "Brush Entities", "Lights"]
+CATEGORIES = ["Players", "Director", "Props", "Infected", "Items", "Weapons", "Logic", "Brush Entities", "Lights",
+              "Effects"]
 
 
 def default_keyvalues(classname: str) -> dict[str, str]:
@@ -693,6 +703,9 @@ def preview_model(classname: str, keyvalues: dict[str, str]) -> str:
     """Model to show in Blender for an entity ('' = use a box)."""
     if keyvalues.get("model", "").endswith(".mdl"):
         return keyvalues["model"]
+    if classname == "info_particle_system":      # (a particle effect: its picture on crossed planes, see particlebrowser)
+        effect = keyvalues.get("effect_name", "").strip()
+        return f"pfx:{effect}" if effect else ""
     if classname == "info_survivor_position":
         return f"models/survivors/{SURVIVOR_BY_ORDER.get(keyvalues.get('Order', '1'), 'survivor_gambler')}.mdl"
     if classname == "info_zombie_spawn":

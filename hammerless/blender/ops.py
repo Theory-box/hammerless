@@ -570,6 +570,12 @@ def preview_mesh(classname: str, scale: float, model: str = ""):
     """Shared wireframe box + forward arrow showing an entity's size and facing.
     With a model path, the box is the model's real bounds (read from the game)."""
     bounds = None
+    if model.startswith("pfx:"):                 # (a particle effect: crossed planes with its picture)
+        from .particlebrowser import particle_mesh
+        mesh = particle_mesh(model[4:], scale)
+        if mesh is not None:
+            return mesh
+        model = ""
     if model:
         full = real_model_mesh(model, scale)
         if full is not None:
