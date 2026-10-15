@@ -72,6 +72,38 @@ class SlabCollision(unittest.TestCase):
         self.assertEqual(len(r.brushes), 6)
         self.assertEqual(len(r.skipped), 2)
 
+    def test_two_sided_wall_is_one_brush(self):
+        # a 4 m x 3 m wall 6 inches thick: front face (y=0.1524) faces +y, back face (y=0) faces -y
+        t = 6 * INCH
+        co, tri = [], []
+        quad(co, tri, (0, t, 0), (0, t, 3), (4, t, 3), (4, t, 0))          # facing +y? check below
+        quad(co, tri, (0, 0, 0), (4, 0, 0), (4, 0, 3), (0, 0, 3))
+        co, tri = np.array(co, float), np.array(tri)
+        r = slab_brushes(co, tri, INCH, 0.05)
+        self.assertEqual(r.paired_walls, 1)
+        self.assertEqual(len(r.brushes), 1)
+        vs = r.brushes[0][0]
+        self.assertAlmostEqual(vs[:, 1].min(), 0.0, places=6)
+        self.assertAlmostEqual(vs[:, 1].max(), t, places=6)
+
+    def test_wall_split_by_the_mesh_merges(self):
+        # one 4 m wall made of two quads that don't share vertices (a T-junction / split vertices)
+        co, tri = [], []
+        quad(co, tri, (0, 0, 0), (0, 0, 3), (2, 0, 3), (2, 0, 0))
+        quad(co, tri, (2, 0, 0), (2, 0, 1.5), (4, 0, 1.5), (4, 0, 0))
+        quad(co, tri, (2, 0, 1.5), (2, 0, 3), (4, 0, 3), (4, 0, 1.5))
+        r = slab_brushes(np.array(co, float), np.array(tri), INCH, 0.05)
+        self.assertEqual(len(r.brushes), 1)
+
+    def test_gable_top_uses_convex_pieces(self):
+        # a wall whose top is a triangle (not square-cornered): still covered, exactly on the plane
+        co = [(0, 0, 0), (4, 0, 0), (4, 0, 3), (2, 0, 4.5), (0, 0, 3)]
+        tri = [(0, 2, 1), (0, 4, 2), (4, 3, 2)]
+        r = slab_brushes(np.array(co, float), np.array(tri), INCH, 0.05)
+        self.assertGreaterEqual(len(r.brushes), 1)
+        top = max(vs[:, 2].max() for vs, _m, _g in r.brushes)
+        self.assertGreater(top, 4.4)
+
     def test_faces_wound_outward(self):
         co, tri = room()
         r = slab_brushes(co, tri, INCH, 0.05)

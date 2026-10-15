@@ -122,7 +122,8 @@ class HL_OT_make_collision(bpy.types.Operator):
             except Exception:              # (it stays beside the mesh: still built)
                 pass
         msg = (f"{len(r.brushes)} collision brushes from {r.kept_regions} flat areas "
-               f"({100 * r.kept_share:.1f}% of the surface); {r.regions - r.kept_regions} small areas left out")
+               f"({100 * r.kept_share:.1f}% of the surface; {r.paired_walls} two-sided walls as one brush each); "
+               f"{r.regions - r.kept_regions} small areas and {r.thin} thin strips left out")
         if len(r.brushes) > MAX_BRUSHES_WARN:
             self.report({"WARNING"}, msg + f": that's a lot of the map's 8,192 brushes, raise Smallest Face")
         else:
