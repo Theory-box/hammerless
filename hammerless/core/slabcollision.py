@@ -354,8 +354,9 @@ def _drop_contained(brushes, eps):
 
 
 def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.0,
-                 overlap_in: float = 0.0) -> SlabResult:
-    """co (n, 3), tri (m, 3) -> SlabResult. min_area in the mesh's units squared."""
+                 overlap_in: float = 0.0, min_width: float | None = None) -> SlabResult:
+    """co (n, 3), tri (m, 3) -> SlabResult. min_area in the mesh's units squared; min_width (mesh units): no brush
+    narrower than this (the map compiler refuses brushes under 1 game unit), default 1 inch."""
     co = np.asarray(co, np.float64)
     tri = np.asarray(tri, np.int64)
     res = SlabResult()
@@ -435,6 +436,8 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
     res.skipped = [t for r, k in zip(regions, keep) if not k for t in r]
 
     thick, over = thickness_in * inch, overlap_in * inch
+    min_w = min_width * 1.02 if min_width is not None else inch
+    thick = max(thick, min_w)
     bases = [_wall_basis(g[0]) for g in groups]
     rect_tris = defaultdict(list)                # group -> triangles whose region outline is square-cornered
     other = defaultdict(list)                    # group -> regions cut into convex pieces instead
@@ -466,8 +469,9 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
 
     def emit_rects(g, rects, lo, hi):
         for (u0, u1, v0, v1) in rects:
-            poly = np.array([(u0 - over, v0 - over), (u1 + over, v0 - over), (u1 + over, v1 + over),
-                             (u0 - over, v1 + over)])
+            gu = max(over, (min_w - (u1 - u0)) / 2)          # (widened to the smallest brush the map allows)
+            gv = max(over, (min_w - (v1 - v0)) / 2)
+            poly = np.array([(u0 - gu, v0 - gv), (u1 + gu, v0 - gv), (u1 + gu, v1 + gv), (u0 - gu, v1 + gv)])
             emit(g, poly, lo, hi)
 
     def slab(g):
@@ -545,7 +549,8 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
                     poly = poly[::-1]
                 if _area2d(poly) < (0.5 * inch) ** 2:                 # a sliver
                     continue
-                poly = offset_convex(poly, over)
+                w = _width(poly)
+                poly = offset_convex(poly, max(over, (min_w - w) / 2 + 0.01 * inch))
                 if len(poly) >= 3:
                     emit(g, poly, lo, hi)
 

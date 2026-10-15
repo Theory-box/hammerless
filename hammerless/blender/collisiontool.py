@@ -75,7 +75,9 @@ class HL_OT_make_collision(bpy.types.Operator):
         unit = context.scene.unit_settings.scale_length or 1.0
         inch = 0.0254 / unit
         co, tri = _world_triangles(src, context.evaluated_depsgraph_get())
-        r = slab_brushes(co, tri, inch, src.hammerless.collision_min_area / unit ** 2)
+        upm = context.scene.hammerless.units_per_meter or 52.49
+        r = slab_brushes(co, tri, inch, src.hammerless.collision_min_area / unit ** 2,
+                         min_width=max(inch, 1.05 / upm / unit))      # (1 game unit: the smallest brush)
         if not r.brushes:
             self.report({"WARNING"}, f"'{src.name}' has no flat area bigger than Smallest Face: no brushes made")
             return {"CANCELLED"}
