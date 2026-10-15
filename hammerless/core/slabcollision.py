@@ -501,7 +501,8 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
             U, V = _grid_lines(np.concatenate([ta, tb]), 0.01 * inch)
             ma = _close_gaps(_fill(ta, U, V), U, V, GAP_IN * inch)
             mb = _close_gaps(_fill(tb, U, V), U, V, GAP_IN * inch)
-            emit_rects(ga, _cover(ma & mb, U, V), groups[gb][1], groups[ga][1])     # the whole wall
+            emit_rects(ga, _cover(ma & mb, U, V), min(groups[gb][1], groups[ga][1] - thick),   # the whole wall
+                       groups[ga][1])                                               # (never thinner than a slab)
             emit_rects(ga, _cover(ma & ~mb, U, V), *slab(ga))
             emit_rects(gb, _cover(mb & ~ma, U, V), *slab(gb))
         else:

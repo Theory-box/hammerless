@@ -104,6 +104,16 @@ class SlabCollision(unittest.TestCase):
         top = max(vs[:, 2].max() for vs, _m, _g in r.brushes)
         self.assertGreater(top, 4.4)
 
+    def test_very_thin_two_sided_wall_keeps_a_slab_thickness(self):
+        t = 0.2 * INCH                     # two faces 0.2 in apart (a panel): the brush is still 1 inch thick
+        co, tri = [], []
+        quad(co, tri, (0, t, 0), (0, t, 3), (4, t, 3), (4, t, 0))
+        quad(co, tri, (0, 0, 0), (4, 0, 0), (4, 0, 3), (0, 0, 3))
+        r = slab_brushes(np.array(co, float), np.array(tri), INCH, 0.05)
+        self.assertEqual(len(r.brushes), 1)
+        vs = r.brushes[0][0]
+        self.assertGreaterEqual(vs[:, 1].max() - vs[:, 1].min(), INCH - 1e-9)
+
     def test_faces_wound_outward(self):
         co, tri = room()
         r = slab_brushes(co, tri, INCH, 0.05)
