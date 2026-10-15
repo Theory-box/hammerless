@@ -55,14 +55,27 @@ def write_vtf(path: str, rgba: np.ndarray, normal_map: bool = False) -> None:
     )
     header = header.ljust(80, b"\0")
 
+    parts = [header]
+    for mip in reversed(mips):  # smallest first
+        data = mip[..., [2, 1, 0, 3]] if has_alpha else mip[..., [2, 1, 0]]
+        parts.append(np.ascontiguousarray(data).tobytes())
+    write_if_changed(path, b"".join(parts))
+
+
+def write_if_changed(path: str, data: bytes) -> bool:
+    """Write the file unless it already holds exactly this (its time stays, so the build's asset fingerprint
+    doesn't have to read it again: re-reading freshly written files is what antivirus makes slow). Returns
+    whether it wrote."""
+    try:
+        if os.path.getsize(path) == len(data):
+            with open(path, "rb") as f:
+                if f.read() == data:
+                    return False
+    except OSError:
+        pass
     with open(path, "wb") as f:
-        f.write(header)
-        for mip in reversed(mips):  # smallest first
-            if has_alpha:
-                data = mip[..., [2, 1, 0, 3]]
-            else:
-                data = mip[..., [2, 1, 0]]
-            f.write(np.ascontiguousarray(data).tobytes())
+        f.write(data)
+    return True
 
 
 def read_vtf_header(path: str) -> dict:
@@ -92,6 +105,5 @@ def write_material(game_dir: str, material_path: str, rgba: np.ndarray, **vmt_kw
     base = os.path.join(game_dir, "materials", *material_path.split("/"))
     os.makedirs(os.path.dirname(base), exist_ok=True)
     write_vtf(base + ".vtf", rgba)
-    with open(base + ".vmt", "w", encoding="utf-8") as f:
-        f.write(vmt_text(material_path, **vmt_kwargs))
+    write_if_changed(base + ".vmt", vmt_text(material_path, **vmt_kwargs).encode("utf-8"))
     return base + ".vtf", base + ".vmt"

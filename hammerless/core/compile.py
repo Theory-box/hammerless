@@ -1,6 +1,7 @@
 """Locate L4D2, run vbsp/vvis/vrad, parse logs, launch the game."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import queue
@@ -576,12 +577,25 @@ def _has_lighting(bsp: str) -> bool:
 
 
 _ASSET_PRINTS: dict = {}      # (gamedir, map, tops) -> (each file's name, size and time, the fingerprint)
+_FILE_PRINTS: dict = {}       # prints file -> {relative path: [size, time, content hash]} (also kept on disk)
+
+
+def _file_prints(path: str) -> dict:
+    if path not in _FILE_PRINTS:
+        try:
+            with open(path, encoding="utf-8") as f:
+                _FILE_PRINTS[path] = json.load(f)
+        except (OSError, ValueError):
+            _FILE_PRINTS[path] = {}
+    return _FILE_PRINTS[path]
 
 
 def asset_fingerprint(gamedir: str, map_name: str, tops=("materials", "models")) -> str:
     """The map's own exported files (custom textures and models, under materials/ and models/hammerless/<map>):
     a repainted texture, a new Alpha or Surface, or an edited Custom Model changes it, so the map compiles again.
-    Files are only read again when one's size or time changed (or one was added or removed)."""
+    Each file's content hash is remembered with its size and time (in memory and in <map>.prints.json beside the
+    map's materials), so only new or changed files are read: reading them all (235 MB on a real map) right after
+    the export wrote them froze Blender for 22 s (antivirus scans freshly written files when they're opened)."""
     import hashlib
     listing = []
     for top in tops:
@@ -599,13 +613,35 @@ def asset_fingerprint(gamedir: str, map_name: str, tops=("materials", "models"))
     known = _ASSET_PRINTS.get(key)
     if known is not None and known[0] == listing:
         return known[1]
+    store_path = os.path.join(gamedir, "materials", "hammerless", map_name + ".prints.json")
+    store = _file_prints(store_path)
+    changed = False
     h = hashlib.sha1()
-    for full, _size, _time in listing:
-        h.update(os.path.relpath(full, gamedir).lower().encode())
+    seen = set()
+    for full, size, mtime in listing:
+        rel = os.path.relpath(full, gamedir).replace("\\", "/").lower()
+        seen.add(rel)
+        rec = store.get(rel)
+        if rec is None or rec[0] != size or rec[1] != mtime:
+            fh = hashlib.sha1()
+            try:
+                with open(full, "rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        fh.update(chunk)
+            except OSError:
+                pass
+            rec = store[rel] = [size, mtime, fh.hexdigest()]
+            changed = True
+        h.update(rel.encode())
+        h.update(rec[2].encode())
+    for rel in [r for r in store if r not in seen]:
+        del store[rel]
+        changed = True
+    if changed:
         try:
-            with open(full, "rb") as f:
-                for chunk in iter(lambda: f.read(1 << 20), b""):
-                    h.update(chunk)
+            os.makedirs(os.path.dirname(store_path), exist_ok=True)
+            with open(store_path, "w", encoding="utf-8") as f:
+                json.dump(store, f)
         except OSError:
             pass
     _ASSET_PRINTS[key] = (listing, h.hexdigest()[:16])
