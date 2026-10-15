@@ -150,7 +150,8 @@ def _area2d(pts):
 COS_TOL = math.cos(math.radians(1.0))       # faces within this angle are one plane
 MAX_WALL_IN = 12.0                          # a wall's two faces at most this far apart (inches) make one brush
 GAP_IN = 6.0                                # gaps narrower than this in a surface are filled (nobody fits through)
-THIN_IN = 2.0                               # strips narrower than this get no brush (trim edges, bevels)
+THIN_IN = 2.0                               # areas narrower than this get no brush (trim edges, bevels)
+RECT_DEG = 1.5                              # outline edges this close to a wall's own directions count as square
 
 
 def _wall_basis(n):
@@ -165,21 +166,23 @@ def _wall_basis(n):
     return u, np.cross(n, u)
 
 
-def _rectilinear(ts, tri, co, u, v, tol) -> bool:
-    """Whether a region's outline only runs along u or v (short edges under 1/4 in aside)."""
+def _rectilinear(ts, tri, co, u, v, short) -> bool:
+    """Whether a region's outline only runs along u or v: within RECT_DEG of them (a wall a hair off true still
+    counts), edges shorter than `short` (bevels, chamfers) aside."""
     count = defaultdict(int)
     for t in ts:
         a, b, c = (int(x) for x in tri[t])
         for e in ((a, b), (b, c), (c, a)):
             count[(min(e), max(e))] += 1
+    slope = math.tan(math.radians(RECT_DEG))
     for (a, b), k in count.items():
         if k != 1:
             continue
         d = co[b] - co[a]
         du, dv = abs(float(d @ u)), abs(float(d @ v))
-        if max(du, dv) < 5 * tol:
+        if max(du, dv) < short:
             continue
-        if min(du, dv) > tol:
+        if min(du, dv) > slope * max(du, dv):
             return False
     return True
 
@@ -439,7 +442,12 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
         ts = regions[ri]
         g = int(gid[ts[0]])
         u, v = bases[g]
-        if _rectilinear(ts, tri, co, u, v, 0.05 * inch):
+        tuv = co[np.unique(tri[ts])] @ np.stack([u, v], 1)
+        if min(np.ptp(tuv[:, 0]), np.ptp(tuv[:, 1])) < THIN_IN * inch:     # the whole area is a thin strip
+            res.thin += 1
+            res.skipped += ts
+            continue
+        if _rectilinear(ts, tri, co, u, v, THIN_IN * inch):
             rect_tris[g] += ts
         else:
             other[g].append(ts)
@@ -458,9 +466,6 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
 
     def emit_rects(g, rects, lo, hi):
         for (u0, u1, v0, v1) in rects:
-            if min(u1 - u0, v1 - v0) < THIN_IN * inch:
-                res.thin += 1
-                continue
             poly = np.array([(u0 - over, v0 - over), (u1 + over, v0 - over), (u1 + over, v1 + over),
                              (u0 - over, v1 + over)])
             emit(g, poly, lo, hi)
@@ -539,9 +544,6 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
                 if _area2d(poly) < 0:
                     poly = poly[::-1]
                 if _area2d(poly) < (0.5 * inch) ** 2:                 # a sliver
-                    continue
-                if _width(poly) < THIN_IN * inch:                      # a thin strip (trim, a bevel)
-                    res.thin += 1
                     continue
                 poly = offset_convex(poly, over)
                 if len(poly) >= 3:
