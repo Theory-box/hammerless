@@ -380,6 +380,10 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
     model_collision: EnumProperty(name="Collision", default="HULLS", items=[
         ("HULLS", "Convex Pieces", "Solid: each loose part of the mesh wrapped in its convex hull"),
         ("NONE", "None", "Players and zombies walk through it (not for Physics props)")])
+    collision_min_area: FloatProperty(
+        name="Smallest Face", default=0.05, min=0.0, soft_max=1.0, precision=3,
+        description="Make Collision Brushes: flat areas smaller than this (square metres) get no brush (trim, "
+                    "small details); they're shown in the skipped-faces object")
     physics_class_name: StringProperty(options={"HIDDEN"})
     physics_class: EnumProperty(name="Physics Class", items=lambda self, context: _physics_classes(),
                                 get=_physics_class_get, set=_physics_class_set,
