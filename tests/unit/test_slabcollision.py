@@ -126,6 +126,13 @@ class SlabCollision(unittest.TestCase):
             self.assertLessEqual(vs[:, 2].max(), 0.2 + 1e-9)       # nothing above the tread
             self.assertGreaterEqual(vs[:, 0].min(), -1e-9)        # nothing in front of the riser
 
+    def test_wall_a_hair_off_square_is_one_brush(self):
+        # a 4 m x 3 m wall whose top edge drops 1.5 inches across (under a degree): one brush, not a panel and a strip
+        co, tri = [], []
+        quad(co, tri, (0, 0, 0), (0, 0, 3), (4, 0, 3 - 1.5 * INCH), (4, 0, 0))
+        r = slab_brushes(np.array(co, float), np.array(tri), INCH, 0.05)
+        self.assertEqual(len(r.brushes), 1)
+
     def test_faces_wound_outward(self):
         co, tri = room()
         r = slab_brushes(co, tri, INCH, 0.05)

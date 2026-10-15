@@ -151,6 +151,7 @@ COS_TOL = math.cos(math.radians(1.0))       # faces within this angle are one pl
 MAX_WALL_IN = 12.0                          # a wall's two faces at most this far apart (inches) make one brush
 GAP_IN = 6.0                                # gaps narrower than this in a surface are filled (nobody fits through)
 THIN_IN = 2.0                               # areas narrower than this get no brush (trim edges, bevels)
+SNAP_IN = 2.0                               # grid lines closer than this (inches) merge
 RECT_DEG = 1.5                              # outline edges this close to a wall's own directions count as square
 
 
@@ -194,12 +195,51 @@ def _bbox_overlap(ta, tb) -> float:
     return float(max(0.0, w[0]) * max(0.0, w[1]))
 
 
-def _grid_lines(tuv, q):
-    """Grid lines at every corner position of the triangles (rounded to q), along u and along v."""
+def _grid_lines(tuv, q, snap=0.0):
+    """Grid lines at every corner position of the triangles (rounded to q), along u and along v. Lines closer than
+    snap merge into one (a wall a hair off square: its slightly sloped edge made two lines and a strip of half-filled
+    cells between them, so the wall came out as a panel plus a strip)."""
     p = tuv.reshape(-1, 2)
-    U = np.unique(np.round(p[:, 0] / q)) * q
-    V = np.unique(np.round(p[:, 1] / q)) * q
-    return U, V
+
+    def lines(x):
+        x = np.unique(np.round(x / q)) * q
+        if snap <= 0 or len(x) < 2:
+            return x
+        out, run = [], [x[0]]
+        for a in x[1:]:
+            if a - run[0] < snap:
+                run.append(a)
+            else:
+                out.append((run[0] + run[-1]) / 2 if len(run) > 1 else run[0])
+                run = [a]
+        out.append((run[0] + run[-1]) / 2 if len(run) > 1 else run[0])
+        out[0], out[-1] = min(out[0], x[0]), max(out[-1], x[-1])     # (the outer edges stay where they are)
+        return np.array(out)
+    return lines(p[:, 0]), lines(p[:, 1])
+
+
+def _merge_rects(rects, eps):
+    """Rectangles that line up exactly along a whole edge join (until none do)."""
+    rects = [list(r) for r in rects]
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(rects)):
+            a = rects[i]
+            for j in range(i + 1, len(rects)):
+                b = rects[j]
+                if abs(a[0] - b[0]) < eps and abs(a[1] - b[1]) < eps and (abs(a[3] - b[2]) < eps or abs(b[3] - a[2]) < eps):
+                    a[2], a[3] = min(a[2], b[2]), max(a[3], b[3])
+                elif abs(a[2] - b[2]) < eps and abs(a[3] - b[3]) < eps and (abs(a[1] - b[0]) < eps or abs(b[1] - a[0]) < eps):
+                    a[0], a[1] = min(a[0], b[0]), max(a[1], b[1])
+                else:
+                    continue
+                del rects[j]
+                changed = True
+                break
+            if changed:
+                break
+    return [tuple(r) for r in rects]
 
 
 def _fill(tuv, U, V):
@@ -468,7 +508,7 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
         res.brushes.append((vs, len(poly_uv), g))
 
     def emit_rects(g, rects, lo, hi):
-        for (u0, u1, v0, v1) in rects:
+        for (u0, u1, v0, v1) in _merge_rects(rects, 0.01 * inch):
             gu = max(over, (min_w - (u1 - u0)) / 2)          # (widened to the smallest brush the map allows)
             gv = max(over, (min_w - (v1 - v0)) / 2)
             poly = np.array([(u0 - gu, v0 - gv), (u1 + gu, v0 - gv), (u1 + gu, v1 + gv), (u0 - gu, v1 + gv)])
@@ -507,7 +547,7 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
             ga, gb = (g, paired[g]) if groups[g][2] > 0 else (paired[g], g)
             done |= {ga, gb}
             ta, tb = uv_tris(ga, rect_tris[ga]), uv_tris(gb, rect_tris[gb])
-            U, V = _grid_lines(np.concatenate([ta, tb]), 0.01 * inch)
+            U, V = _grid_lines(np.concatenate([ta, tb]), 0.01 * inch, SNAP_IN * inch)
             ma = _close_gaps(_fill(ta, U, V), U, V, GAP_IN * inch)
             mb = _close_gaps(_fill(tb, U, V), U, V, GAP_IN * inch)
             emit_rects(ga, _cover(ma & mb, U, V), min(groups[gb][1], groups[ga][1] - thick),   # the whole wall
@@ -517,7 +557,7 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
         else:
             done.add(g)
             tu = uv_tris(g, ts)
-            U, V = _grid_lines(tu, 0.01 * inch)
+            U, V = _grid_lines(tu, 0.01 * inch, SNAP_IN * inch)
             emit_rects(g, _cover(_close_gaps(_fill(tu, U, V), U, V, GAP_IN * inch), U, V), *slab(g))
     res.paired_walls = len(paired) // 2
 
