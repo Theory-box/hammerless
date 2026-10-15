@@ -4,10 +4,10 @@
    (vertices welded by position first). Regions smaller than min_area are left out (trim, details).
 2. Each region is cut into a few convex pieces in 2D on its plane (Hertel-Mehlhorn: its own triangles merged across
    shared edges, longest first, while the merged polygon stays convex).
-3. Each piece becomes a brush: the polygon pushed out by `overlap` on every edge (so neighbouring slabs overlap at
-   corners; a sharp corner is cut off flat instead of spiking out), extruded `thickness` BEHIND the surface (the
-   side its triangles face away from), so floors and walls are exactly where they are drawn and doorways keep
-   their width.
+3. Each piece becomes a brush: the polygon extruded `thickness` BEHIND the surface (the side its triangles face
+   away from), so floors and walls are exactly where they are drawn and doorways keep their width. Behind the
+   surface, neighbouring slabs already meet at corners (no edge push: pushing every edge out made lips stick past
+   each other at every corner); `overlap` can still push edges out (sharp corners cut off flat, no spikes).
 4. Identical brushes and slivers are dropped.
 
 Everything is in the mesh's own units; `inch` says how long an inch is in them.
@@ -351,7 +351,7 @@ def _drop_contained(brushes, eps):
 
 
 def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.0,
-                 overlap_in: float = 0.5) -> SlabResult:
+                 overlap_in: float = 0.0) -> SlabResult:
     """co (n, 3), tri (m, 3) -> SlabResult. min_area in the mesh's units squared."""
     co = np.asarray(co, np.float64)
     tri = np.asarray(tri, np.int64)

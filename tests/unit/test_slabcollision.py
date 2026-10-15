@@ -114,6 +114,18 @@ class SlabCollision(unittest.TestCase):
         vs = r.brushes[0][0]
         self.assertGreaterEqual(vs[:, 1].max() - vs[:, 1].min(), INCH - 1e-9)
 
+    def test_step_corner_has_no_lip(self):
+        # a tread (top at z=0.2, facing up, x 0..1) and its riser (facing -x at x=0, z 0..0.2): each brush stops at
+        # the corner instead of sticking past the other
+        co, tri = [], []
+        quad(co, tri, (0, 0, 0.2), (1, 0, 0.2), (1, 1, 0.2), (0, 1, 0.2))
+        quad(co, tri, (0, 0, 0), (0, 0, 0.2), (0, 1, 0.2), (0, 1, 0))
+        r = slab_brushes(np.array(co, float), np.array(tri), INCH, 0.05)
+        self.assertEqual(len(r.brushes), 2)
+        for vs, _m, _g in r.brushes:
+            self.assertLessEqual(vs[:, 2].max(), 0.2 + 1e-9)       # nothing above the tread
+            self.assertGreaterEqual(vs[:, 0].min(), -1e-9)        # nothing in front of the riser
+
     def test_faces_wound_outward(self):
         co, tri = room()
         r = slab_brushes(co, tri, INCH, 0.05)

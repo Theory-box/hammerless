@@ -245,17 +245,41 @@ def _outward(points, tris):
         return [], []
     where = {i: k for k, i in enumerate(used)}
     pts = [tuple(points[i]) for i in used]
-    c = [sum(p[k] for p in pts) / len(pts) for k in range(3)]
-    out = []
-    for t in tris:
-        a, b, d = (pts[where[i]] for i in t)
-        u = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
-        v = (d[0] - a[0], d[1] - a[1], d[2] - a[2])
-        n = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
-        tri = tuple(where[i] for i in t)
-        if n[0] * (a[0] - c[0]) + n[1] * (a[1] - c[1]) + n[2] * (a[2] - c[2]) < 0:
-            tri = (tri[0], tri[2], tri[1])
-        out.append(tri)
+    out = [tuple(where[i] for i in t) for t in tris]
+    # one winding for all: neighbours made to agree across their shared edges (a sliver triangle of a thin
+    # piece can face either way by a test against the centre, which left the piece 'not closed'), then the
+    # whole piece turned outward by its signed volume
+    by_edge = {}
+    for k, t in enumerate(out):
+        for e in range(3):
+            by_edge.setdefault(frozenset((t[e], t[(e + 1) % 3])), []).append(k)
+    done = [False] * len(out)
+    for start in range(len(out)):
+        if done[start]:
+            continue
+        done[start] = True
+        stack = [start]
+        while stack:
+            k = stack.pop()
+            t = out[k]
+            for e in range(3):
+                a, b = t[e], t[(e + 1) % 3]
+                for j in by_edge[frozenset((a, b))]:
+                    if j == k or done[j]:
+                        continue
+                    s = out[j]
+                    same = any(s[f] == a and s[(f + 1) % 3] == b for f in range(3))
+                    if same:                       # (it runs the edge the same way: it faces the other way)
+                        out[j] = (s[0], s[2], s[1])
+                    done[j] = True
+                    stack.append(j)
+    vol = 0.0
+    for t in out:
+        a, b, d = (pts[i] for i in t)
+        vol += (a[0] * (b[1] * d[2] - b[2] * d[1]) - a[1] * (b[0] * d[2] - b[2] * d[0])
+                + a[2] * (b[0] * d[1] - b[1] * d[0]))
+    if vol < 0:
+        out = [(t[0], t[2], t[1]) for t in out]
     return pts, out
 
 
