@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 import bpy
 
-from ..core.slabcollision import brush_faces, slab_brushes
+from ..core.slabcollision import slab_brushes
 
 OF = "hl_collision_of"          # on the made objects: the name of the mesh they were made from
 SKIPPED_SUFFIX = " (skipped faces)"
@@ -85,11 +85,12 @@ class HL_OT_make_collision(bpy.types.Operator):
         verts, faces, cols = [], [], []
         rng = np.random.default_rng(7)
         rcol = {}
-        for vs, m, ri in r.brushes:
-            faces += brush_faces(m, len(verts))
+        for vs, bf, ri in r.brushes:
+            k = len(verts)
+            faces += [tuple(k + i for i in f) for f in bf]
             verts += [tuple(v) for v in vs]
             c = rcol.setdefault(ri, (*rng.uniform(0.2, 1.0, 3), 1.0))
-            cols += [c] * (m + 2)
+            cols += [c] * len(bf)
         mesh = bpy.data.meshes.new(src.name + " Collision")
         mesh.from_pydata(verts, [], faces)
         attr = mesh.color_attributes.new("region", "FLOAT_COLOR", "CORNER")

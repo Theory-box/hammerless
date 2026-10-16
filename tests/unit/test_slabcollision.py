@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from hammerless.core.slabcollision import brush_faces, slab_brushes  # noqa: E402
+from hammerless.core.slabcollision import slab_brushes  # noqa: E402
 
 INCH = 0.0254          # metres
 
@@ -37,8 +37,8 @@ class SlabCollision(unittest.TestCase):
         r = slab_brushes(co, tri, INCH, 0.05)
         self.assertEqual(len(r.brushes), 6)
         self.assertEqual(r.kept_regions, 6)
-        for vs, m, _ri in r.brushes:
-            self.assertEqual(m, 4)
+        for vs, faces, _ri in r.brushes:
+            self.assertEqual(len(faces), 6)
             lo, hi = vs.min(0), vs.max(0)
             # every brush lies outside the room (behind its face), 1 inch thick
             thin = int(np.argmin(hi - lo))
@@ -133,12 +133,42 @@ class SlabCollision(unittest.TestCase):
         r = slab_brushes(np.array(co, float), np.array(tri), INCH, 0.05)
         self.assertEqual(len(r.brushes), 1)
 
+    def test_solid_box_is_one_brush(self):
+        # a closed 1 m beam whose faces look outward: one brush, exactly its own shape
+        co, tri = room(1.0)
+        tri = tri[:, ::-1]                       # (the room's faces turned outward: a solid box)
+        r = slab_brushes(co, tri, INCH, 0.05)
+        self.assertEqual(r.solid_parts, 1)
+        self.assertEqual(len(r.brushes), 1)
+        vs, faces, _ = r.brushes[0]
+        self.assertEqual(len(faces), 6)
+        self.assertTrue(np.allclose(vs.min(0), 0) and np.allclose(vs.max(0), 1.0))
+
+    def test_room_is_not_a_solid_box(self):
+        co, tri = room()                         # faces looking inward: air, never one solid brush
+        r = slab_brushes(co, tri, INCH, 0.05)
+        self.assertEqual(r.solid_parts, 0)
+
+    def test_gable_wall_rectangles_below_the_slope(self):
+        # a 4 m wall, square up to 3 m, then a gable to 4.5 m, with a window: rectangles below, a few pieces above
+        co = [(0, 0, 0), (4, 0, 0), (4, 0, 3), (2, 0, 4.5), (0, 0, 3),
+              (1, 0, 1), (2, 0, 1), (2, 0, 2), (1, 0, 2)]
+        tri = [(0, 1, 5), (1, 6, 5), (1, 2, 6), (2, 7, 6), (2, 4, 7), (4, 8, 7), (4, 0, 8), (0, 5, 8), (4, 2, 3)]
+        r = slab_brushes(np.array(co, float), np.array(tri), INCH, 0.05)
+        self.assertEqual(r.gables, 1)
+        self.assertLessEqual(len(r.brushes), 7)
+        top = max(vs[:, 2].max() for vs, _f, _g in r.brushes)
+        self.assertGreater(top, 4.4)
+        for vs, _f, _g in r.brushes:            # the window stays open
+            lo, hi = vs.min(0), vs.max(0)
+            self.assertFalse(lo[0] < 1.5 < hi[0] and lo[2] < 1.5 < hi[2], (lo, hi))
+
     def test_faces_wound_outward(self):
         co, tri = room()
         r = slab_brushes(co, tri, INCH, 0.05)
-        vs, m, _ = r.brushes[0]
+        vs, faces, _ = r.brushes[0]
         centre = vs.mean(0)
-        for f in brush_faces(m):
+        for f in faces:
             p = vs[list(f)]
             nrm = np.cross(p[1] - p[0], p[2] - p[0])
             self.assertGreater(float(nrm @ (p.mean(0) - centre)), 0)

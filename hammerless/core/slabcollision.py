@@ -23,13 +23,15 @@ import numpy as np
 
 @dataclass
 class SlabResult:
-    brushes: list = field(default_factory=list)   # (verts (2m, 3): the back face then the front face, m, region)
+    brushes: list = field(default_factory=list)   # (verts (k, 3), faces [vertex index tuples, wound outward], region)
     skipped: list = field(default_factory=list)   # triangle indices left out (small regions)
     regions: int = 0
     kept_regions: int = 0
     kept_share: float = 0.0                        # share of the surface area in kept regions
     skipped_area: float = 0.0
     paired_walls: int = 0                          # two-sided walls made one brush each
+    solid_parts: int = 0                           # closed convex loose parts made one brush each
+    gables: int = 0                                # square-cornered below a slope: rectangles there
     thin: int = 0                                  # strips narrower than THIN_IN left out
 
 
@@ -152,6 +154,7 @@ MAX_WALL_IN = 12.0                          # a wall's two faces at most this fa
 GAP_IN = 6.0                                # gaps narrower than this in a surface are filled (nobody fits through)
 THIN_IN = 2.0                               # areas narrower than this get no brush (trim edges, bevels)
 SNAP_IN = 2.0                               # grid lines closer than this (inches) merge
+MAX_PART_PLANES = 24                        # a convex part with more faces than this stays slabs (round things)
 RECT_DEG = 1.5                              # outline edges this close to a wall's own directions count as square
 
 
@@ -346,8 +349,7 @@ def _cover(mask, U, V) -> list:
     return out
 
 
-def _brush_planes(vs, m):
-    faces = brush_faces(m)
+def _brush_planes(vs, faces):
     out = []
     centre = vs.mean(0)
     for f in faces:
@@ -393,6 +395,113 @@ def _drop_contained(brushes, eps):
     return [b for b, g in zip(keep, gone) if not g]
 
 
+def _hull2d(pts):
+    """Counter-clockwise convex hull (monotone chain) of 2D points: their indices."""
+    order = sorted(range(len(pts)), key=lambda i: (pts[i][0], pts[i][1]))
+
+    def cross(o, a, b):
+        return (pts[a][0] - pts[o][0]) * (pts[b][1] - pts[o][1]) - (pts[a][1] - pts[o][1]) * (pts[b][0] - pts[o][0])
+    lower, upper = [], []
+    for i in order:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], i) <= 1e-15:
+            lower.pop()
+        lower.append(i)
+    for i in reversed(order):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], i) <= 1e-15:
+            upper.pop()
+        upper.append(i)
+    return lower[:-1] + upper[:-1]
+
+
+def _convex_part_brush(co, tri, ts, tol, min_w):
+    """A closed loose part that is convex (every vertex behind every face): its own faces as one brush
+    (coplanar triangles merged into polygons). None when it isn't closed, isn't convex, is too thin or has too
+    many faces for a brush."""
+    count = defaultdict(int)
+    for t in ts:
+        a, b, c = (int(x) for x in tri[t])
+        for e in ((a, b), (b, c), (c, a)):
+            count[(min(e), max(e))] += 1
+    if any(k != 2 for k in count.values()):
+        return None
+    vids = np.unique(tri[ts])
+    pts = co[vids]
+    centre = pts.mean(0)
+    planes = []                                        # (outward normal, offset, triangles)
+    for t in ts:
+        a, b, c = co[tri[t]]
+        n = np.cross(b - a, c - a)
+        ln = np.linalg.norm(n)
+        if ln < 1e-12:
+            continue
+        n /= ln
+        if n @ (a - centre) < 0:                      # faces looking inward: a room (air), not a solid
+            return None
+        d = float(n @ a)
+        if (pts @ n - d > tol).any():                  # a vertex in front of a face: not convex
+            return None
+        for P in planes:
+            if P[0] @ n > COS_TOL and abs(P[1] - d) < tol:
+                P[2].append(t)
+                break
+        else:
+            planes.append((n, d, [t]))
+    if len(planes) < 4 or len(planes) > MAX_PART_PLANES:
+        return None
+    for n, d, _ in planes:                             # thin along some face direction: leave it to the slabs
+        if float((pts @ n).max() - (pts @ n).min()) < min_w:
+            return None
+    index = {int(v): k for k, v in enumerate(vids)}
+    faces = []
+    for n, d, tts in planes:
+        u = np.cross(n, [1.0, 0, 0] if abs(n[0]) < 0.9 else [0, 1.0, 0])
+        u /= np.linalg.norm(u)
+        v = np.cross(n, u)
+        fv = sorted({int(x) for t in tts for x in tri[t]})
+        loop = _hull2d([(float(co[i] @ u), float(co[i] @ v)) for i in fv])     # (u x v = n: counter-clockwise faces n)
+        if len(loop) < 3:
+            return None
+        faces.append(tuple(index[fv[i]] for i in loop))
+    return pts, faces
+
+
+def _clip_v(t, vcut, below):
+    """The part of a 2D triangle with v <= vcut (below) or v >= vcut, as triangles."""
+    out = []
+    m = len(t)
+    for i in range(m):
+        a, b = t[i], t[(i + 1) % m]
+        ina = (a[1] <= vcut) if below else (a[1] >= vcut)
+        inb = (b[1] <= vcut) if below else (b[1] >= vcut)
+        if ina:
+            out.append(a)
+        if ina != inb and abs(b[1] - a[1]) > 1e-15:
+            k = (vcut - a[1]) / (b[1] - a[1])
+            out.append((a[0] + k * (b[0] - a[0]), vcut))
+    return [(out[0], out[i], out[i + 1]) for i in range(1, len(out) - 1)] if len(out) >= 3 else []
+
+
+def _lowest_slanted(ts, tri, co, u, v, short):
+    """The lowest v of an outline edge that isn't along u or v (None when all are)."""
+    count = defaultdict(int)
+    for t in ts:
+        a, b, c = (int(x) for x in tri[t])
+        for e in ((a, b), (b, c), (c, a)):
+            count[(min(e), max(e))] += 1
+    slope = math.tan(math.radians(RECT_DEG))
+    low = None
+    for (a, b), k in count.items():
+        if k != 1:
+            continue
+        d = co[b] - co[a]
+        du, dv = abs(float(d @ u)), abs(float(d @ v))
+        if max(du, dv) < short or min(du, dv) <= slope * max(du, dv):
+            continue
+        m = min(float(co[a] @ v), float(co[b] @ v))
+        low = m if low is None else min(low, m)
+    return low
+
+
 def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.0,
                  overlap_in: float = 0.0, min_width: float | None = None) -> SlabResult:
     """co (n, 3), tri (m, 3) -> SlabResult. min_area in the mesh's units squared; min_width (mesh units): no brush
@@ -410,6 +519,40 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
     nrm = np.zeros_like(cr)
     nrm[ok] = cr[ok] / (2 * area[ok])[:, None]
     cent = (A + B + C) / 3
+    thick, over = thickness_in * inch, overlap_in * inch
+    min_w = min_width * 1.02 if min_width is not None else inch
+    thick = max(thick, min_w)
+    # 0. closed convex loose parts (beams, posts, steps, boxes): one brush each from their own faces
+    lp = np.arange(len(tri))
+
+    def lfind(x):
+        while lp[x] != x:
+            lp[x] = lp[lp[x]]
+            x = lp[x]
+        return x
+    edge_all = defaultdict(list)
+    for t in ok:
+        a, b, c = tri[t]
+        for e in ((a, b), (b, c), (c, a)):
+            edge_all[(min(e), max(e))].append(t)
+    for ts_ in edge_all.values():
+        for t in ts_[1:]:
+            ra, rb = lfind(ts_[0]), lfind(t)
+            if ra != rb:
+                lp[ra] = rb
+    loose = defaultdict(list)
+    for t in ok:
+        loose[lfind(t)].append(int(t))
+    used = np.zeros(len(tri), bool)
+    for k, ts_ in enumerate(loose.values()):
+        if len(ts_) < 4 or len(ts_) > 400:
+            continue
+        got = _convex_part_brush(co, tri, ts_, 0.05 * inch, min_w)
+        if got is not None:
+            res.brushes.append((got[0], got[1], -1 - k))
+            res.solid_parts += 1
+            used[ts_] = True
+    ok = ok[~used[ok]]
     # 1. planes, with a tolerance: normals within about a degree (biggest triangles first set the direction),
     # then offsets along it within a quarter inch; each plane split by which way its triangles face
     canon = nrm.copy()
@@ -475,12 +618,10 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
     res.skipped_area = float(r_area[~keep].sum())
     res.skipped = [t for r, k in zip(regions, keep) if not k for t in r]
 
-    thick, over = thickness_in * inch, overlap_in * inch
-    min_w = min_width * 1.02 if min_width is not None else inch
-    thick = max(thick, min_w)
     bases = [_wall_basis(g[0]) for g in groups]
     rect_tris = defaultdict(list)                # group -> triangles whose region outline is square-cornered
     other = defaultdict(list)                    # group -> regions cut into convex pieces instead
+    gables = defaultdict(list)                   # group -> (region, v below which it's square-cornered)
     for ri in np.flatnonzero(keep):
         ts = regions[ri]
         g = int(gid[ts[0]])
@@ -492,6 +633,10 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
             continue
         if _rectilinear(ts, tri, co, u, v, THIN_IN * inch):
             rect_tris[g] += ts
+            continue
+        vcut = _lowest_slanted(ts, tri, co, u, v, THIN_IN * inch)
+        if vcut is not None and vcut - float(tuv[:, 1].min()) >= THIN_IN * inch:
+            gables[g].append((ts, vcut))      # (a gable: square below its lowest slanted edge)
         else:
             other[g].append(ts)
 
@@ -505,7 +650,7 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
         u, v = bases[g]
         base = np.outer(poly_uv[:, 0], u) + np.outer(poly_uv[:, 1], v)
         vs = np.concatenate([base + n * lo, base + n * hi])
-        res.brushes.append((vs, len(poly_uv), g))
+        res.brushes.append((vs, brush_faces(len(poly_uv)), g))
 
     def emit_rects(g, rects, lo, hi):
         for (u0, u1, v0, v1) in _merge_rects(rects, 0.01 * inch):
@@ -562,37 +707,70 @@ def slab_brushes(co, tri, inch: float, min_area: float, thickness_in: float = 1.
     res.paired_walls = len(paired) // 2
 
     # 3. everything else: convex pieces of the region's own triangles (Hertel-Mehlhorn)
+    def hm_emit(g, P, tris2):
+        lo, hi = slab(g)
+        for loop in convex_pieces(tris2, P):
+            poly = _drop_collinear(np.array([P[x] for x in loop]))
+            if len(poly) < 3:
+                continue
+            if _area2d(poly) < 0:
+                poly = poly[::-1]
+            if _area2d(poly) < (0.5 * inch) ** 2:                 # a sliver
+                continue
+            w = _width(poly)
+            poly = offset_convex(poly, max(over, (min_w - w) / 2 + 0.01 * inch))
+            if len(poly) >= 3:
+                emit(g, poly, lo, hi)
+
+    def ccw(P, a, b, c):
+        pa, pb, pc = P[a], P[b], P[c]
+        z = (pb[0] - pa[0]) * (pc[1] - pa[1]) - (pb[1] - pa[1]) * (pc[0] - pa[0])
+        if abs(z) < 1e-14:
+            return None
+        return [a, b, c] if z > 0 else [a, c, b]
+
     for g, regs in other.items():
         u, v = bases[g]
-        lo, hi = slab(g)
         for ts in regs:
             verts = sorted({int(x) for t in ts for x in tri[t]})
             P = {vi: (float(co[vi] @ u), float(co[vi] @ v)) for vi in verts}
-            tris2 = {}
-            seen_t = set()
+            tris2, seen_t = {}, set()
             for t in ts:
-                a, b, c = (int(x) for x in tri[t])
-                fs = frozenset((a, b, c))
+                fs = frozenset(int(x) for x in tri[t])
                 if fs in seen_t:
                     continue
                 seen_t.add(fs)
-                pa, pb, pc = P[a], P[b], P[c]
-                z = (pb[0] - pa[0]) * (pc[1] - pa[1]) - (pb[1] - pa[1]) * (pc[0] - pa[0])
-                if abs(z) < 1e-14:
-                    continue
-                tris2[t] = [a, b, c] if z > 0 else [a, c, b]
-            for loop in convex_pieces(tris2, P):
-                poly = _drop_collinear(np.array([P[x] for x in loop]))
-                if len(poly) < 3:
-                    continue
-                if _area2d(poly) < 0:
-                    poly = poly[::-1]
-                if _area2d(poly) < (0.5 * inch) ** 2:                 # a sliver
-                    continue
-                w = _width(poly)
-                poly = offset_convex(poly, max(over, (min_w - w) / 2 + 0.01 * inch))
-                if len(poly) >= 3:
-                    emit(g, poly, lo, hi)
+                lp_ = ccw(P, *(int(x) for x in tri[t]))
+                if lp_ is not None:
+                    tris2[t] = lp_
+            hm_emit(g, P, tris2)
+
+    # gables: rectangles below the lowest slanted edge, convex pieces above it
+    for g, regs in gables.items():
+        for ts, vcut in regs:
+            tu = uv_tris(g, ts)
+            low = [c for t in tu for c in _clip_v([tuple(x) for x in t], vcut, True)]
+            high = [c for t in tu for c in _clip_v([tuple(x) for x in t], vcut, False)]
+            if low:
+                tl = np.array(low)
+                U, V = _grid_lines(tl, 0.01 * inch, SNAP_IN * inch)
+                emit_rects(g, _cover(_close_gaps(_fill(tl, U, V), U, V, GAP_IN * inch), U, V), *slab(g))
+            if high:
+                ids, P, tris2 = {}, {}, {}
+                for k, t in enumerate(high):
+                    vv = []
+                    for x in t:
+                        key = (round(x[0] / (0.001 * inch)), round(x[1] / (0.001 * inch)))
+                        if key not in ids:
+                            ids[key] = len(ids)
+                            P[ids[key]] = (float(x[0]), float(x[1]))
+                        vv.append(ids[key])
+                    if len(set(vv)) == 3:
+                        lp_ = ccw(P, *vv)
+                        if lp_ is not None:
+                            tris2[k] = lp_
+                hm_emit(g, P, tris2)
+            res.gables += 1
 
     # 4. duplicates and brushes inside other brushes go
     res.brushes = _drop_contained(res.brushes, 0.05 * inch)
