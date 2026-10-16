@@ -1588,6 +1588,9 @@ static DWORD WINAPI flow_worker(LPVOID arg) {
    taken on every pair of triangles at barycentric steps of 0.25: the smallest squared distance found */
 static int g_radial;
 static int g_gpu;                 /* -gpu: the rough pass's plane tests on the graphics card (hlvvis_gpu.c) */
+/* the default (no -exact / -jacobi / -gpu / -cpu): on a graphics card that can, -jacobi on it twice, the second
+   pass with might-see sets pruned by the first's vis (g_two); else the merged windows on the CPU */
+static int g_auto = 1, g_two;
 static int g_front_done;          /* the front bits are already in (from the GPU) */
 static double g_vis_radius2;      /* farz squared */
 static float tri_dist2(const V *a, const V *b) {
@@ -1902,16 +1905,19 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!_stricmp(argv[i], "-threads") && i + 1 < argc) threads = atoi(argv[++i]);
         else if (!_stricmp(argv[i], "-fast")) fast = 1;
-        else if (!_stricmp(argv[i], "-exact")) g_merge = 0;
-        else if (!_stricmp(argv[i], "-jacobi")) g_jacobi = 1;
-        else if (!_stricmp(argv[i], "-gpu")) g_gpu = 1;
+        else if (!_stricmp(argv[i], "-exact")) g_merge = 0, g_auto = 0;
+        else if (!_stricmp(argv[i], "-jacobi")) g_jacobi = 1, g_auto = 0;
+        else if (!_stricmp(argv[i], "-gpu")) g_gpu = 1, g_auto = 0;
+        else if (!_stricmp(argv[i], "-cpu")) g_auto = 0;       /* (the merged windows on the CPU, no graphics card) */
         else if (!_stricmp(argv[i], "-gpuselftest")) return vgpu_fp64_selftest(4000000) == 0 ? 0 : 1;
         else if (!_stricmp(argv[i], "-game") && i + 1 < argc) i++;
         else if (!_stricmp(argv[i], "-radius_override") && i + 1 < argc) radius_override = argv[++i];
         else if (argv[i][0] == '-') { printf("Error: unsupported option %s\n", argv[i]); return 2; }
         else map = argv[i];
     }
-    if (!map) { printf("usage: hlvvis [-fast] [-exact] [-threads N] [-radius_override R] [-game dir] <map>\n"); return 2; }
+    if (!map) { printf("usage: hlvvis [-fast] [-exact | -cpu | -jacobi [-gpu]] [-threads N] [-radius_override R] [-game dir] <map>\n"); return 2; }
+    if (getenv("HL_TWO")) g_auto = 0;          /* (the experiments choose for themselves) */
+    if (g_auto) g_gpu = 1;
     if (g_merge) g_maxpts = MAXPTS;
     if (getenv("HL_MERGE_EPS")) g_merge_eps = atof(getenv("HL_MERGE_EPS"));
     if (getenv("HL_GROW_EPS")) g_grow_eps = atof(getenv("HL_GROW_EPS"));
@@ -2022,7 +2028,13 @@ int main(int argc, char **argv) {
         g_mtest_rec = xmalloc((size_t)g_mtest_cap * sizeof(vgpu_mrec_t) + 16);
         g_mtest_res = xmalloc((size_t)g_mtest_cap * sizeof(vgpu_mres_t) + 16);
     }
-    if (g_gpu && g_jacobi && !fast) {
+    if (g_auto && !fast && !g_radial && g_gpu) {
+        /* the default: the two GPU passes when the card takes them, else the merged windows on the CPU */
+        g_jacobi = 1; g_robust_sep = 1; set_hull_cap(16);
+        g_gpu_pipe = gpu_pipe_setup();
+        if (g_gpu_pipe) g_two = 1;
+        else { g_jacobi = 0; g_robust_sep = 0; set_hull_cap(MAXPTS); printf("(no GPU flow: the merged windows on the CPU) "); }
+    } else if (g_gpu && g_jacobi && !fast) {
         if (getenv("HL_GPU_STEPS") || getenv("HL_GPU_CHECK")) {
             /* (dev) only the expansion steps on the GPU, a round at a time (HL_GPU_CHECK=1: each checked on the CPU) */
             g_gpu_check = getenv("HL_GPU_CHECK") != NULL;
@@ -2075,7 +2087,15 @@ int main(int argc, char **argv) {
         for (int i = 0; i < NPD; i++) total_w += (double)P[i].nmight * P[i].nmight + 1;
         LARGE_INTEGER fs, fn;
         QueryPerformanceCounter(&fs);
-        if (g_gpu_pipe && !gpu_pipe_flow(total_w)) {
+        int gpu_ok = g_gpu_pipe ? gpu_pipe_flow(total_w) : 1;
+        if (!gpu_ok && g_two) {
+            /* (the default: the merged windows on the CPU, all of it) */
+            printf("Warning: the GPU failed during the flow: the merged windows on the CPU do it\n");
+            for (int i = 0; i < NPD; i++) { P[i].status = 0; g_pdur[i] = 0; memset(P[i].vis, 0, (size_t)PW * 8); }
+            g_done = 0; g_gpu_pipe = 0; g_two = 0;
+            g_jacobi = 0; g_robust_sep = 0; set_hull_cap(MAXPTS);
+            g_jrounds = g_jexp = g_gpu_items = 0;
+        } else if (!gpu_ok) {
             printf("Warning: the GPU failed during the flow: the CPU does the rest\n");
             /* (the bases it finished are right; the rest start again) */
             g_done = 0;
@@ -2109,7 +2129,7 @@ int main(int argc, char **argv) {
         for (int t = 0; t < threads; t++) CloseHandle(hs[t]);
         free(hs);
         }
-        if (g_gpu_pipe && getenv("HL_TWO") && atoi(getenv("HL_TWO")) == 4 && !g_jv1) {
+        if (g_gpu_pipe && (g_two || (getenv("HL_TWO") && atoi(getenv("HL_TWO")) == 4)) && !g_jv1) {
             /* (experiment) the second pass on the GPU: -jacobi with might-see sets over clusters, tests = the first
                pass's vis (the CPU's: HL_TWO=2 HL_JM_CL=1 HL_JM_NOMORE=1) */
             LARGE_INTEGER p1; QueryPerformanceCounter(&p1);
@@ -2136,7 +2156,20 @@ int main(int argc, char **argv) {
             g_wpool.cap = nwords;
             for (int i = 0; i < NPD; i++) { memset(P[i].vis, 0, (size_t)PW * 8); P[i].status = 0; g_pdur[i] = 0; }
             g_done = 0;
-            if (!gpu_pipe_flow(total_w)) fail("the GPU failed in the second pass%s", "");
+            if (!gpu_pipe_flow(total_w)) {
+                /* (the CPU does the rest of the second pass: the same steps, the same result) */
+                printf("Warning: the GPU failed in the second pass: the CPU does the rest\n");
+                g_done = 0;
+                for (int i = 0; i < NPD; i++)
+                    if (P[i].status == 2) g_done++;
+                    else { P[i].status = 0; memset(P[i].vis, 0, (size_t)PW * 8); }
+                g_gpu_pipe = 0; g_next = 0;
+                HANDLE *hs3 = xmalloc(threads * sizeof(HANDLE));
+                for (int t = 0; t < threads; t++) hs3[t] = CreateThread(NULL, 64 << 20, flow_worker, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+                for (int t = 0; t < threads; t += 64) WaitForMultipleObjects(threads - t < 64 ? threads - t : 64, hs3 + t, TRUE, INFINITE);
+                for (int t = 0; t < threads; t++) CloseHandle(hs3[t]);
+                free(hs3);
+            }
             goto passes_done;
         }
         if (getenv("HL_TWO") && !g_jv1) { g_jx = 2; }
