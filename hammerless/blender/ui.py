@@ -402,11 +402,17 @@ def _draw_control(layout, hs):
     kv = {k.key: k.value for k in hs.keyvalues}
     only = kv.get("mode", "EXCLUDE").upper() == "ONLY"
     box = layout.box()
+    on = _on(kv.get("enabled", "1"))
+    op = box.operator("hammerless.control_enable", text="Enabled" if on else "Disabled (does nothing)",
+                      icon="CHECKBOX_HLT" if on else "CHECKBOX_DEHLT", depress=on)
+    op.name, op.enabled = hs.id_data.name, not on
     row = box.row(align=True)
+    row.enabled = on
     for value, label in (("EXCLUDE", "Not Inside"), ("ONLY", "Only Inside")):
         op = row.operator("hammerless.kv_set", text=label, depress=(value == "ONLY") == only)
         op.key, op.value = "mode", value
     grid = box.grid_flow(columns=2, align=True)
+    grid.enabled = on
     for key, label, icon in _CONTROL_TICKS:
         on = _on(kv.get(key, "0"))
         cell = grid.row(align=True)
@@ -651,7 +657,6 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
             row.enabled = s.light_quality != "OFF" and (ours or not partial)
             op = row.operator("hammerless.build", text="Bake Lighting", icon="LIGHT_SUN")
             op.play, op.bake, op.view = False, True, view
-            op.volume = area[4:] if area.startswith("VOL:") else ""
             op.selected = area == "SELECTED"
         row.prop(s, "bake_area", text="")
         if view:
@@ -924,6 +929,56 @@ class HL_PT_sound(_Panel, bpy.types.Panel):
         draw_panel(self.layout, context)
 
 
+# ---------------------------------------------------------------- Control Volumes
+
+def control_volume_objects(context) -> list:
+    """The map's Control Volumes (and older volumes), by name."""
+    from ..core.entities import CONTROL, NAV_CUT, NO_BAKE
+    from .mapcollection import map_objects
+    inside = map_objects(context.scene)
+    return sorted((o for o in context.scene.objects if o.name in inside
+                   and o.hammerless.classname in (CONTROL, NAV_CUT, NO_BAKE)), key=lambda o: o.name.lower())
+
+
+class HL_PT_control_volumes(_Panel, bpy.types.Panel):
+    bl_label = "Control Volumes"
+    bl_order = 7
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw_header_preset(self, context):
+        vols = control_volume_objects(context)
+        if vols:
+            on = sum(_on({k.key: k.value for k in o.hammerless.keyvalues}.get("enabled", "1")) for o in vols)
+            _status(self.layout, f"{on} of {len(vols)} on")
+
+    def draw(self, context):
+        layout = self.layout
+        vols = control_volume_objects(context)
+        if not vols:
+            _hint(layout, "No Control Volumes in the map", "Add one: Add > Volumes > Control Volume")
+        for o in vols:
+            kv = {k.key: k.value for k in o.hammerless.keyvalues}
+            on = _on(kv.get("enabled", "1"))
+            row = layout.row(align=True)
+            op = row.operator("hammerless.control_enable", text="", emboss=False,
+                              icon="CHECKBOX_HLT" if on else "CHECKBOX_DEHLT")
+            op.name, op.enabled = o.name, not on
+            sel = row.operator("hammerless.select_object", text=o.name, emboss=o == context.object,
+                               icon="RESTRICT_SELECT_OFF")
+            sel.name = o.name
+            what = row.row(align=True)
+            what.enabled = on
+            if o.hammerless.classname == "hammerless_control":
+                what.label(text="Only" if kv.get("mode", "EXCLUDE").upper() == "ONLY" else "Not")
+                for key, label, icon in _CONTROL_TICKS:
+                    if _on(kv.get(key, "0")):
+                        what.label(text="", icon=icon)
+            else:
+                what.label(text="(older volume)")
+        add = layout.row()
+        add.operator("hammerless.spawn_item", text="Add Control Volume", icon="ADD").item = "entity:hammerless_control"
+
+
 # ---------------------------------------------------------------- AI Director
 
 class HL_PT_director(_Panel, bpy.types.Panel):
@@ -1176,7 +1231,8 @@ CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_MT_weather,
            HL_PT_object, HL_PT_obj_model, HL_PT_obj_light, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
            HL_PT_lighting, HL_PT_view_light, HL_PT_environment, HL_PT_sun, HL_PT_fog, HL_PT_light_quality,
            HL_PT_light_advanced,
-           HL_PT_visibility, HL_PT_navmesh, HL_PT_view_nav, HL_PT_sound, HL_PT_director, HL_PT_logic,
+           HL_PT_visibility, HL_PT_navmesh, HL_PT_view_nav, HL_PT_sound, HL_PT_control_volumes, HL_PT_director,
+           HL_PT_logic,
            HL_PT_settings, HL_PT_folders, HL_PT_compilers, HL_PT_scene, HL_PT_game, HL_PT_debug,
            HL_PT_collection, *CATEGORY_MENUS, HL_MT_add)
 

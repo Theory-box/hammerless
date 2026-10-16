@@ -393,11 +393,6 @@ def _apply_pending():
 
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph):
-    from ..core.entities import CONTROL, NAV_CUT, NO_BAKE
-    from .props import forget_bake_volumes
-    if any(isinstance(u.id, bpy.types.Object) and u.id.original.hammerless.classname in (CONTROL, NAV_CUT, NO_BAKE)
-           for u in depsgraph.updates):
-        forget_bake_volumes()            # (a Control Volume changed: the Bake menu lists them)
     if map_collection(scene) is None:
         return
     counts = (len(scene.objects), len(bpy.data.collections))
@@ -464,7 +459,7 @@ def convert_old_volumes() -> int:
             continue
         kv = {k.key: k.value for k in o.hammerless.keyvalues}
         only = cls == NO_BAKE and _on(kv.get("invert", "0"))
-        values = {"mode": "ONLY" if only else "EXCLUDE", "nav": "1" if cls == NAV_CUT else "0",
+        values = {"enabled": kv.get("enabled", "1"), "mode": "ONLY" if only else "EXCLUDE", "nav": "1" if cls == NAV_CUT else "0",
                   "light": "1" if cls == NO_BAKE else "0", "vis": "0", "sound": "0", "spawns": "0"}
         o.hammerless.keyvalues.clear()
         for k, v in values.items():
@@ -472,9 +467,6 @@ def convert_old_volumes() -> int:
             item.key, item.value = k, v
         o.hammerless.classname = CONTROL
         n += 1
-    if n:
-        from .props import forget_bake_volumes
-        forget_bake_volumes()
     return n
 
 

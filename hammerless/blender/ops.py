@@ -1343,9 +1343,6 @@ class HL_OT_build(bpy.types.Operator):
         if properties.bake and properties.selected:
             return ("Bake only around the selected objects (when they've changed): the rest of the map keeps its "
                     "last bake. The next build doesn't bake it again unless something changed")
-        if properties.bake and properties.volume:
-            return (f"Bake only inside '{properties.volume}' (a quick look at that area): the rest of the map "
-                    "keeps its last bake. Builds bake inside every Only inside volume")
         if properties.bake and properties.view:
             return ("Bake only what this viewport sees, out to the distance set (a quick look at one spot): the "
                     "rest of the map keeps its last bake. The next build doesn't bake it again unless something changed")
@@ -1364,9 +1361,6 @@ class HL_OT_build(bpy.types.Operator):
                        description="Lighting only: fast visibility, no nav mesh, then show the lighting")
     selected: BoolProperty(name="Bake Selected", default=False, options={"HIDDEN", "SKIP_SAVE"},
                            description="With Bake Lighting: bake only around the selected objects")
-    volume: StringProperty(name="Bake Volume", default="", options={"HIDDEN", "SKIP_SAVE"},
-                           description="With Bake Lighting: bake only inside this Control Volume (Only inside, "
-                                       "Light Baking)")
     vis_only: BoolProperty(name="Compute Visibility", default=False, options={"HIDDEN", "SKIP_SAVE"},
                            description="Compile and run visibility only (no lighting, no nav mesh)")
     view: BoolProperty(name="Bake What the View Sees", default=False, options={"HIDDEN", "SKIP_SAVE"},
@@ -1501,11 +1495,11 @@ class HL_OT_build(bpy.types.Operator):
         elif context.scene.hammerless.sky_light != "FLAT" and opts.rad != "SKIP":
             write_log(["Sky Light from the sky needs the Hammerless light compiler: the sky lights the map with "
                        "one colour"], append=True)
-        # what a build bakes: everywhere but the Not-inside volumes, and only inside the Only-inside ones (if any:
-        # the rest keeps the last bake)
+        # what a build or a bake bakes: everywhere but the Not-inside volumes, and only inside the Only-inside ones
+        # (if any: the rest keeps the last bake). Disabled volumes aren't in rep at all.
         only = "".join(rep.bake_only[k] for k in sorted(rep.bake_only))
         build_light = (rep.no_bake + only, bool(only))
-        no_bake = rep.no_bake if self.bake else build_light[0]
+        no_bake = build_light[0]
         if self.bake and self.view:
             vol = _view_volume(context)
             if vol is None:
@@ -1513,15 +1507,6 @@ class HL_OT_build(bpy.types.Operator):
                 return {"CANCELLED"}
             if not cc.use_hlvrad(opts):
                 self.report({"ERROR"}, "Baking what the view sees needs the Hammerless light compiler (Lighting > Advanced)")
-                return {"CANCELLED"}
-            no_bake += vol
-        if self.bake and self.volume:
-            vol = rep.bake_only.get(self.volume)
-            if vol is None:
-                self.report({"ERROR"}, f"Control Volume '{self.volume}' (Only inside, Light Baking) isn't in the map")
-                return {"CANCELLED"}
-            if not cc.use_hlvrad(opts):
-                self.report({"ERROR"}, "Baking part of the map needs the Hammerless light compiler (Lighting > Advanced)")
                 return {"CANCELLED"}
             no_bake += vol
         if self.bake and self.selected:
@@ -1533,7 +1518,7 @@ class HL_OT_build(bpy.types.Operator):
                 self.report({"ERROR"}, "Baking part of the map needs the Hammerless light compiler (Lighting > Advanced)")
                 return {"CANCELLED"}
             no_bake += vol
-        partial = self.bake and (self.view or self.volume or self.selected)
+        partial = self.bake and (self.view or self.selected or build_light[1])
         if partial or (not self.bake and build_light[1]):
             import dataclasses
             opts = dataclasses.replace(opts, keep_light=True)    # (the rest keeps the last bake)
@@ -2340,8 +2325,27 @@ class HL_OT_kv_set(bpy.types.Operator):
                 kv = o.hammerless.keyvalues.add()
                 kv.key = self.key
             kv.value = self.value
-        from .props import forget_bake_volumes
-        forget_bake_volumes()                # (a Control Volume's mode or ticks: the Bake dropdown's choices)
+        return {"FINISHED"}
+
+
+class HL_OT_control_enable(bpy.types.Operator):
+    bl_idname = "hammerless.control_enable"
+    bl_label = "Enable Control Volume"
+    bl_description = "Switch this Control Volume on or off: off, it does nothing (nav, spawns, visibility, light "
+    "baking, sound)"
+    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
+    name: StringProperty()
+    enabled: BoolProperty()
+
+    def execute(self, context):
+        obj = bpy.data.objects.get(self.name)
+        if obj is None:
+            return {"CANCELLED"}
+        kv = next((k for k in obj.hammerless.keyvalues if k.key == "enabled"), None)
+        if kv is None:
+            kv = obj.hammerless.keyvalues.add()
+            kv.key = "enabled"
+        kv.value = "1" if self.enabled else "0"
         return {"FINISHED"}
 
 
@@ -2365,7 +2369,8 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
 
 CLASSES = (HL_OT_pick_sky, HL_OT_pick_model, HL_OT_pick_material, HL_OT_refresh_previews, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_entity_class, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
            HL_OT_export_vmf, HL_OT_build, HL_OT_cancel_build, HL_OT_start_fresh, HL_OT_launch, HL_OT_load_leak,
-           HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues, HL_OT_kv_set)
+           HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues, HL_OT_kv_set,
+           HL_OT_control_enable)
 
 
 def register():

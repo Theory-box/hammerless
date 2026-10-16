@@ -333,7 +333,8 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
     EntityDef(CONTROL, "Control Volume", "Brush Entities",
               "Where things are worked out: Not Inside or Only Inside, for what's ticked (nav mesh, light "
               "baking, visibility, sound, zombie spawns). Not written into the map.",
-              (KeyDef("mode", "EXCLUDE", "Mode", (("EXCLUDE", "Not inside"), ("ONLY", "Only inside"))),
+              (KeyDef("enabled", "1", "Enabled", (("0", "No"), ("1", "Yes"))),
+               KeyDef("mode", "EXCLUDE", "Mode", (("EXCLUDE", "Not inside"), ("ONLY", "Only inside"))),
                KeyDef("nav", "1", "Nav Mesh", (("0", "No"), ("1", "Yes"))),
                KeyDef("light", "1", "Light Baking", (("0", "No"), ("1", "Yes"))),
                KeyDef("vis", "0", "Visibility", (("0", "No"), ("1", "Yes"))),

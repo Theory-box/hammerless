@@ -95,41 +95,6 @@ def _sky_choice_set(self, value):
 _BAKE_AREAS: list = []        # (kept: Blender holds on to the strings of a list from an items function)
 
 
-def bake_only_objects(scene) -> list:
-    """The map's volumes to bake only inside (Control Volumes ticked Light Baking, Only inside), by name."""
-    from ..core.control import settings_of
-    from ..core.entities import CONTROL, NO_BAKE
-    from ..core.ir import Entity
-    from .mapcollection import map_objects
-    inside = map_objects(scene)
-    out = []
-    for o in scene.objects:
-        if o.name in inside and o.hammerless.classname in (CONTROL, NO_BAKE) and o.visible_get():
-            kv = {k.key: k.value for k in o.hammerless.keyvalues}
-            st = settings_of(Entity(o.hammerless.classname, None, (0, 0, 0), kv))
-            if st and st[0] and "light" in st[1]:
-                out.append(o.name)
-    return sorted(out)
-
-
-_bake_only_cache = {"key": None, "names": []}
-
-
-def forget_bake_volumes():
-    """The scene changed: the Bake dropdown's volumes are worked out again."""
-    _bake_only_cache["key"] = None
-
-
-def _bake_only_cached(scene) -> list[str]:
-    """bake_only_objects, worked out at most twice a second (the dropdown asks on every redraw), and again whenever
-    objects are added, removed or changed (forget_bake_volumes)."""
-    import time
-    key = (scene.name_full, len(bpy.data.objects), int(time.monotonic() * 2))
-    if _bake_only_cache["key"] != key:
-        _bake_only_cache.update(key=key, names=bake_only_objects(scene))
-    return _bake_only_cache["names"]
-
-
 def _bake_area_items(self, context):
     scene = self.id_data if isinstance(self.id_data, bpy.types.Scene) else (context or bpy.context).scene
     items = [("MAP", "Whole Map", "Bake the whole map's lighting", "WORLD", 0),
@@ -137,8 +102,6 @@ def _bake_area_items(self, context):
                                             "the last bake's lighting", "HIDE_OFF", 1)]
     items.append(("SELECTED", "Selected Objects", "Bake only around the selected objects (their bounds); the rest "
                                                   "keeps the last bake's lighting", "RESTRICT_SELECT_OFF", 2))
-    for i, name in enumerate(_bake_only_cached(scene)):
-        items.append(("VOL:" + name, name, f"Only inside the Control Volume '{name}'", "MESH_CUBE", i + 3))
     if [it[0] for it in items] != [it[0] for it in _BAKE_AREAS]:
         _BAKE_AREAS.clear()
         _BAKE_AREAS.extend(items)

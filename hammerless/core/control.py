@@ -2,14 +2,15 @@
 
 Mode *Not inside* (EXCLUDE) or *Only inside* (ONLY), and a tick for each thing it controls:
   nav     the nav mesh isn't made (Not inside) / is made only there (Only inside)
-  light   light isn't baked (the ambient colour, or the last bake) / Only inside: a choice in Lighting's Bake dropdown
+  light   light isn't baked (the ambient colour, or the last bake) / baked only there (the rest keeps the last bake)
   vis     brushes (Auto detail) don't cut up visibility: they become func_detail (Only inside: those outside do)
   sound   the sound trace doesn't listen there / listens only there
   spawns  no zombies spawn on the nav there (EMPTY + NO_MOBS marks; Not inside only)
 The older No Nav Volume (nav, Not inside) and No Bake Volume (light; its invert key = Only inside) read as the same.
 
 A point is skipped for a thing when it's inside a Not-inside volume ticked for it, or when there are Only-inside
-volumes ticked for it and it's inside none of them.
+volumes ticked for it and it's inside none of them. Every build and bake uses every volume; one whose 'enabled'
+key is off does nothing at all (it's in the map, but nothing reads it).
 """
 from __future__ import annotations
 
@@ -60,6 +61,8 @@ def _hulls(e: Entity) -> tuple:
 def settings_of(e: Entity) -> tuple[bool, frozenset] | None:
     """(only inside, what it controls) for a Control Volume or one of the older volumes; None for anything else."""
     kv = e.keyvalues
+    if e.classname in (CONTROL, NAV_CUT, NO_BAKE) and not _on(kv.get("enabled", "1")):
+        return None                           # (switched off: as if it weren't there)
     if e.classname == CONTROL:
         only = str(kv.get("mode", "EXCLUDE")).upper() == "ONLY"
         aspects = frozenset(a for a in ASPECTS if _on(kv.get(a, "0")))

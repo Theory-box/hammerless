@@ -1577,7 +1577,7 @@ def test_new_objects_sorted():
 
 
 def test_bake_area_choices():
-    # Lighting's Bake choice: the whole map, the view, and each No Bake Volume set to Bake only inside
+    # Lighting's Bake choice: the whole map, the view or the selection (volumes aren't choices: every bake uses them)
     s = reset_scene()
     add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
     vol = add_box("test area", (2, 2, 2), (0, 0, 1))
@@ -1588,7 +1588,7 @@ def test_bake_area_choices():
     skip.hammerless.role, skip.hammerless.classname = "BRUSH_ENTITY", "hammerless_no_bake"
     from hammerless.blender.props import _bake_area_items
     ids = [it[0] for it in _bake_area_items(s, bpy.context)]
-    assert ids == ["MAP", "VIEW", "SELECTED", "VOL:test area"], ids   # (a Don't-bake volume isn't a choice)
+    assert ids == ["MAP", "VIEW", "SELECTED"], ids
     # Selected Objects: the selection's bounds, turned with it
     from hammerless.blender.ops import _selection_volume
     from hammerless.core.lightvolumes import in_volume
@@ -1602,10 +1602,8 @@ def test_bake_area_choices():
     assert not in_volume(sel, (0, 0, -0.25 * upm))              # (inside the floor's box: baked)
     assert in_volume(sel, (0, 0, 3 * upm))                      # (above it: kept)
     assert s.bake_area == "MAP"
-    s.bake_area = "VOL:test area"
-    assert s.bake_area == "VOL:test area" and s.bake_area_name == "VOL:test area"
-    bpy.data.objects.remove(vol)
-    assert s.bake_area == "MAP"                                  # (gone: the whole map)
+    s.bake_area_name = "VOL:test area"                           # (a file saved when volumes were choices)
+    assert s.bake_area == "MAP"
 
 
 def test_texture_read_back():
@@ -1707,9 +1705,11 @@ def test_control_volumes():
     def values(o):
         return {k.key: k.value for k in o.hammerless.keyvalues}
     assert cut.hammerless.classname == "hammerless_control"
-    assert values(cut) == {"mode": "EXCLUDE", "nav": "1", "light": "0", "vis": "0", "sound": "0", "spawns": "0"}
+    assert values(cut) == {"enabled": "1", "mode": "EXCLUDE", "nav": "1", "light": "0", "vis": "0", "sound": "0",
+                           "spawns": "0"}
     assert values(nb)["mode"] == "ONLY" and values(nb)["light"] == "1" and values(nb)["nav"] == "0"
-    assert [it[0] for it in _bake_area_items(s, bpy.context)][-1] == "VOL:old bake"
+    assert values(nb)["enabled"] == "1" and values(cut)["enabled"] == "1"     # (converted: on)
+    assert not any(it[0].startswith("VOL:") for it in _bake_area_items(s, bpy.context))
     # the toggles
     bpy.context.view_layer.objects.active = cut
     bpy.ops.hammerless.kv_set(key="vis", value="1")

@@ -1711,6 +1711,43 @@ class TestControlVolume(unittest.TestCase):
         self.assertEqual(list(bake_only_volumes(old)), ["area"])
 
 
+class TestControlVolumeEnabled(unittest.TestCase):
+    """A Control Volume switched off (enabled 0) does nothing at all: nav, spawns, visibility, light, sound."""
+
+    def _map(self, mode, enabled):
+        ir = TestControlVolume._map(None, mode, nav=True, light=True, vis=True, sound=True, spawns=True)
+        if enabled is not None:
+            ir.entities[-1].keyvalues["enabled"] = enabled
+        return ir
+
+    def test_off_does_nothing(self):
+        from hammerless.core.control import skipped, volumes
+        from hammerless.core.lightvolumes import bake_only_volumes, no_bake_text
+        from hammerless.core.nav import collect_regions
+        for mode in ("EXCLUDE", "ONLY"):
+            for enabled, on in ((None, True), ("1", True), ("0", False)):    # (no key: on, as older files)
+                ir = self._map(mode, enabled)
+                vols = volumes(ir)
+                self.assertEqual(len(vols), 1 if on else 0, (mode, enabled))
+                regions, _ = collect_regions(ir)
+                self.assertEqual(len(regions), (2 if mode == "EXCLUDE" else 1) if on else 0, (mode, enabled))
+                light = no_bake_text(ir) if mode == "EXCLUDE" else "".join(bake_only_volumes(ir).values())
+                self.assertEqual(bool(light), on, (mode, enabled))
+                self.assertEqual(skipped(vols, "sound", (0, 0, 0)), on and mode == "ONLY")
+                text, rep = build_vmf(ir)
+                self.assertIsNotNone(text, rep.errors)
+                made = any("made func_detail (Visibility)" in i for i in rep.info)
+                self.assertEqual(made, on, (mode, enabled))
+                self.assertEqual(bool(rep.no_bake or rep.bake_only), on, (mode, enabled))
+
+    def test_old_volumes(self):
+        from hammerless.core.control import volumes
+        from hammerless.core.entities import NO_BAKE
+        ir = self._map("EXCLUDE", None)
+        ir.entities[-1].classname, ir.entities[-1].keyvalues = NO_BAKE, {"invert": "0", "enabled": "0"}
+        self.assertEqual(volumes(ir), [])
+
+
 class TestNoBake(unittest.TestCase):
     """No Bake Volume: hlvrad doesn't bake inside it (or, inverted, only inside it)."""
 
