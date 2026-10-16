@@ -59,6 +59,7 @@ _ALIASES = {
     "env_player_blocker": "invisible wall clip", "prop_static": "model", "prop_physics": "model barrel",
     "hammerless_control": "no nav cut bake lightmap skip vis detail sound spawn only exclude volume",
     "hammerless_nav_area": "nav square area manual roof smoker ledge mesh",
+    "func_precipitation": "rain storm snow ash bugs smoke weather precipitation wind",
 }
 _TIPS = {
     "START_SAFE_ROOM": "Comes with 4 survivor spawns, weapons and a door. One per map.",
@@ -71,6 +72,7 @@ _TIPS = {
     "info_director": "Added automatically. You only need this to name it yourself.",
     "info_player_start": "Added automatically when missing.",
     "light_environment": "Set the sun in Lighting > Environment > Sun instead. Added automatically.",
+    "func_precipitation": "Scale it over the whole playable area, up to well above the roofs.",
 }
 
 # Default box (Hammer units, mins/maxs) for a new brush entity added without a mesh
@@ -88,6 +90,7 @@ BRUSH_BOXES = {
     "hammerless_control": ((-512, -512, -64), (512, 512, 256)),
     "hammerless_nav_area": ((-256, -256, 0), (256, 256, 8)),
     "info_changelevel": ((0, 0, 0), (320, 256, 128)),
+    "func_precipitation": ((-1024, -1024, 0), (1024, 1024, 1024)),
 }
 DEFAULT_BRUSH_BOX = ((-64, -64, 0), (64, 64, 128))
 

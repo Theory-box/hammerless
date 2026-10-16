@@ -938,10 +938,10 @@ class HL_OT_set_brush_entity(bpy.types.Operator):
                 hs.classname = self.classname
             changed += 1
             if self.classname in ("info_changelevel", "trigger_once", "trigger_multiple",
-                                  "env_player_blocker", "func_playerinfected_clip"):
+                                  "env_player_blocker", "func_playerinfected_clip", "func_precipitation"):
                 o.display_type = "WIRE"
-                mat = "tools/toolstrigger" if "trigger" in self.classname or self.classname == "info_changelevel" \
-                    else "tools/toolsplayerclip"
+                mat = "tools/toolstrigger" if "trigger" in self.classname or self.classname in (
+                    "info_changelevel", "func_precipitation") else "tools/toolsplayerclip"
                 if o.data.users > 1:
                     o.data = o.data.copy()          # don't change the other objects sharing this mesh
                 o.data.materials.clear()

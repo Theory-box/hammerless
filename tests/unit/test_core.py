@@ -3821,3 +3821,28 @@ class TestLightMixingPlan(unittest.TestCase):
         # (an HDR scale isn't mixed in the view: bake)
         self.assertEqual(self.plan(self._vmf("255 255 255 200", self.TAG),
                                    self._vmf("255 255 255 200", self.TAG + '"_lightscaleHDR" "2"\n')), "lighting")
+
+
+class TestWeather(unittest.TestCase):
+    """Weather Volume: friendly keys -> func_precipitation's own, one env_wind for the strongest wind."""
+
+    def test_keys_and_wind(self):
+        from hammerless.core.build import Report, weather_entities
+        r = Report()
+        out = weather_entities([
+            Entity("func_precipitation", keyvalues={"weather": "rain", "density": "150", "wind": "auto"}),
+            Entity("func_precipitation", keyvalues={"weather": "storm", "density": "40", "wind": "auto"}),
+            Entity("func_precipitation", keyvalues={"preciptype": "4", "renderamt": "50"}),   # (imported: kept)
+        ], r)
+        rain, storm, imported, wind = out
+        self.assertEqual((rain.keyvalues["preciptype"], rain.keyvalues["renderamt"]), ("4", "100"))
+        self.assertEqual((storm.keyvalues["preciptype"], storm.keyvalues["renderamt"]), ("6", "40"))
+        self.assertEqual(imported.keyvalues, {"preciptype": "4", "renderamt": "50"})
+        self.assertEqual((wind.classname, wind.keyvalues["maxwind"]), ("env_wind", "150"))
+        self.assertFalse(any(k in rain.keyvalues for k in ("weather", "density", "wind")))
+
+    def test_no_wind(self):
+        from hammerless.core.build import Report, weather_entities
+        out = weather_entities([Entity("func_precipitation", keyvalues={"weather": "storm", "wind": "none"}),
+                                Entity("func_precipitation", keyvalues={"weather": "bugs"})], Report())
+        self.assertFalse(any(e.classname == "env_wind" for e in out))

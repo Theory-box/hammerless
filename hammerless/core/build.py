@@ -1,16 +1,14 @@
 """MapIR -> VMF text, with validation and automatic fixes (sealing, director, sun)."""
 from __future__ import annotations
 
-import os
-
 import dataclasses
-
+import os
 from dataclasses import dataclass, field
 
 from . import geometry as g
 from .displacement import build_patches
 from .entities import default_keyvalues
-from .entities import MOVE_DIR_ANGLES, MOVE_DIR_AXIS, PSEUDO_ENTITIES, ZOMBIES_ONLY
+from .entities import MOVE_DIR_ANGLES, MOVE_DIR_AXIS, PSEUDO_ENTITIES, WEATHER, WIND_COMMON, WINDS, ZOMBIES_ONLY
 from .gamefiles import collect_crescendos, director_input_script, script_path
 from .ir import Brush, Entity, MapIR, Output, Vec3
 from .nav import collect_climbs, collect_regions
@@ -364,6 +362,41 @@ def solid_geometry(ir: MapIR) -> list:
     return ir.brushes + [b for e in ir.entities if e.classname in ("func_detail", VIS_ONLY_CLASS) for b in e.brushes]
 
 
+def weather_entities(entities: list, report: Report) -> list:
+    """Weather Volumes (func_precipitation with weather / density / wind): the game's keys (preciptype,
+    renderamt, rendercolor), and one env_wind for the strongest wind any of them asks for. A func_precipitation
+    with the game's own keys (an imported map's) is left as it is."""
+    out, wind = [], "none"
+    for e in entities:
+        if e.classname != "func_precipitation" or "weather" not in e.keyvalues:
+            out.append(e)
+            continue
+        kv = dict(e.keyvalues)
+        kind = kv.pop("weather", "storm").strip().lower()
+        if kind not in WEATHER:
+            report.warnings.append(f"Weather Volume '{e.source}': weather '{kind}' isn't one of "
+                                   f"{', '.join(WEATHER)}; using storm.")
+            kind = "storm"
+        ptype, color, auto_wind = WEATHER[kind]
+        kv["preciptype"] = ptype
+        try:
+            kv["renderamt"] = f"{max(0, min(100, int(float(kv.pop('density', '100')))))}"
+        except ValueError:
+            report.warnings.append(f"Weather Volume '{e.source}': amount isn't a number; using 100.")
+            kv["renderamt"] = "100"
+        if color:
+            kv.setdefault("rendercolor", color)
+        w = kv.pop("wind", "auto").strip().lower()
+        w = auto_wind if w == "auto" else w
+        if w in WINDS and (wind == "none" or w == "storm"):
+            wind = w
+        out.append(dataclasses.replace(e, keyvalues=kv))
+    if wind != "none" and not any(e.classname == "env_wind" for e in out):
+        out.append(Entity("env_wind", HELPER_SPOT, (0, 0, 0), {"targetname": "hammerless_wind", **WIND_COMMON,
+                                                                **WINDS[wind]}))
+    return out
+
+
 def mover_entity(e: Entity, report: Report) -> Entity:
     """Mover (func_movelinear): friendly keys -> the game's. direction -> movedir, distance 'auto' ->
     the brush's size that way, move_time (seconds) -> speed."""
@@ -587,6 +620,7 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
             e.keyvalues = {**e.keyvalues, "map": FALLBACK_NEXT_MAP}
     entities = [zombie_ladder_entity(e, report) if e.classname == "func_ladder" else e for e in entities]
     entities = [mover_entity(e, report) if e.classname == "func_movelinear" else e for e in entities]
+    entities = weather_entities(entities, report)
     classes = {e.classname for e in entities}
     if base is not None:
         classes |= {(b.get("classname") or "") for b in base_entities if b is not None}

@@ -313,6 +313,8 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                     box.label(text=line)
         if hs.classname == "hammerless_control":
             _draw_control(layout, hs)
+        elif hs.classname == "func_precipitation" and any(k.key == "weather" for k in hs.keyvalues):
+            _draw_weather(layout, hs)
         if eff == "BRUSH":
             _enum_menu(col, hs, "brush_detail", "Detail",
                        f"Auto ({_detail_note(context, obj)})" if hs.brush_detail == "AUTO" else None)
@@ -411,6 +413,44 @@ def _draw_control(layout, hs):
         cell.enabled = not (key == "spawns" and only)
         op = cell.operator("hammerless.kv_set", text=label, icon=icon, depress=on)
         op.key, op.value = key, "0" if on else "1"
+
+
+class HL_MT_weather(bpy.types.Menu):
+    bl_label = "Weather"
+    bl_idname = "HL_MT_weather"
+
+    def draw(self, context):
+        from ..core.entities import WEATHER_TYPES
+        for value, label in WEATHER_TYPES:
+            op = self.layout.operator("hammerless.kv_set", text=label)
+            op.key, op.value = "weather", value
+
+
+def _draw_weather(layout, hs):
+    """A Weather Volume: the weather (a dropdown), then the settings that weather has."""
+    from ..core.entities import WEATHER, WEATHER_TYPES, WIND_CHOICES
+    items = {k.key: k for k in hs.keyvalues}
+    kind = items["weather"].value.strip().lower()
+    col = _settings(layout.box())
+    row = col.row(align=True)
+    split = row.split(factor=0.4, align=True)
+    left = split.row()
+    left.alignment = "RIGHT"
+    left.label(text="Weather")
+    split.menu("HL_MT_weather", text=dict(WEATHER_TYPES).get(kind, kind or "?"))
+    if "density" in items:
+        col.prop(items["density"], "value", text="Amount (0-100)")
+    if kind in WEATHER and WEATHER[kind][2] != "none":       # (bugs and smoke have no wind)
+        wind = items["wind"].value.strip().lower() if "wind" in items else "auto"
+        row = col.row(align=True)
+        split = row.split(factor=0.4, align=True)
+        left = split.row()
+        left.alignment = "RIGHT"
+        left.label(text="Wind")
+        btns = split.row(align=True)
+        for value, label in WIND_CHOICES:
+            op = btns.operator("hammerless.kv_set", text=label if value != "auto" else "Auto", depress=value == wind)
+            op.key, op.value = "wind", value
 
 
 def _detail_note(context, obj) -> str:
@@ -1129,7 +1169,7 @@ def _add_menu(self, context):
     self.layout.menu(HL_MT_add.bl_idname, icon="WORLD")
 
 
-CLASSES = (HL_UL_keyvalues, HL_UL_outputs,
+CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_MT_weather,
            HL_PT_build, HL_PT_problems,
            HL_PT_object, HL_PT_obj_model, HL_PT_obj_light, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
            HL_PT_lighting, HL_PT_view_light, HL_PT_environment, HL_PT_sun, HL_PT_fog, HL_PT_light_quality,

@@ -75,6 +75,20 @@ POPULATIONS = tuple((p, p.title()) for p in (
 YES_NO = (("1", "Yes"), ("0", "No"))
 # Mover direction choices -> func_movelinear movedir (pitch yaw roll; Source +X is yaw 0, down is pitch 90)
 MOVE_DIRECTIONS = (("down", "Down"), ("up", "Up"), ("+x", "+X"), ("-x", "-X"), ("+y", "+Y"), ("-y", "-Y"))
+# Weather Volume (func_precipitation): weather -> (preciptype, rendercolor, wind with Auto). The particle types are
+# the ones L4D2's campaigns use (Valve Developer wiki, func_precipitation); colours and winds from Hard Rain's maps.
+WEATHER_TYPES = (("storm", "Rain Storm"), ("rain", "Rain"), ("snow", "Snow"), ("ash", "Ash"), ("bugs", "Bugs"),
+                 ("smoke", "Smoke"))
+WEATHER = {"storm": ("6", "31 34 52", "storm"), "rain": ("4", "31 34 52", "light"), "snow": ("3", "", "light"),
+           "ash": ("5", "", "light"), "bugs": ("7", "", "none"), "smoke": ("8", "", "none")}
+WIND_CHOICES = (("auto", "With the weather"), ("none", "None"), ("light", "Light"), ("storm", "Storm"))
+# env_wind as Hard Rain's maps set it: wind_normal and wind_storm (c4m3)
+WINDS = {
+    "light": {"minwind": "15", "maxwind": "30", "mingust": "50", "maxgust": "100"},
+    "storm": {"minwind": "75", "maxwind": "150", "mingust": "100", "maxgust": "200"},
+}
+WIND_COMMON = {"windradius": "-1", "mingustdelay": "15", "maxgustdelay": "30", "gustduration": "5",
+               "gustdirchange": "20", "angles": "0 -180 0"}
 MOVE_DIR_ANGLES = {"down": "90 0 0", "up": "-90 0 0", "+x": "0 0 0", "-x": "0 180 0", "+y": "0 90 0", "-y": "0 270 0"}
 MOVE_DIR_AXIS = {"down": (2, -1), "up": (2, 1), "+x": (0, 1), "-x": (0, -1), "+y": (1, 1), "-y": (1, -1)}
 # weapon_item_spawn choices (key, label, Hammerless default): health and throwables on
@@ -269,6 +283,13 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               "material (the Ladder preset does this). The compiler turns it into an L4D2 ladder "
               "the nav mesh understands.",
               (KeyDef("team", "everyone", "Who climbs: everyone or zombies"),), brush=True),
+    EntityDef("func_precipitation", "Weather Volume", "Brush Entities",
+              "Rain, snow, ash and the like inside this box. One box over the whole playable area is enough: "
+              "buildings keep the rain out by themselves (Valve's Hard Rain does the same).",
+              (KeyDef("weather", "storm", "Weather", WEATHER_TYPES),
+               KeyDef("density", "100", "Amount (0-100)"),
+               KeyDef("wind", "auto", "Wind", WIND_CHOICES),
+               KeyDef("targetname", "rain", "Name")), brush=True),
     EntityDef("func_movelinear", "Mover (gate, lift, sliding door)", "Brush Entities",
               "A brush that slides in a straight line when told to: gates, garage doors, drawbridges, "
               "lifts. Send it Open to slide out, Close to slide back (e.g. from a button's OnPressed). It "

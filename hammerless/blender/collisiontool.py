@@ -26,13 +26,42 @@ def _world_triangles(obj, depsgraph):
         tri = np.empty(len(me.loop_triangles) * 3, np.int64)
         me.loop_triangles.foreach_get("vertices", tri)
         tri = tri.reshape(-1, 3)
+        mi = np.empty(len(me.loop_triangles), np.int64)
+        me.loop_triangles.foreach_get("material_index", mi)
+        mats = [s.material for s in ev.material_slots]
     finally:
         ev.to_mesh_clear()
     M = np.array(obj.matrix_world)
     co = co @ M[:3, :3].T + M[:3, 3]
     if np.linalg.det(M[:3, :3]) < 0:           # (mirrored: keep the faces looking the same way)
         tri = tri[:, ::-1]
-    return co, tri
+    return co, tri, mi, mats
+
+
+def _see_through(mats, context) -> list:
+    """Per material slot: is it glass, a fence or foliage (the game's $translucent / $alphatest / $additive, or a
+    Blender material whose alpha is used)? Those faces collide but mustn't block visibility."""
+    from .extract import _alpha_mode, game_path
+    content = game_dir = None
+    out = []
+    for mat in mats:
+        path = game_path(mat)
+        if path:
+            if content is None:
+                from .ops import game_content, game_root
+                import os
+                root = game_root(context)
+                content = game_content(root) or False
+                game_dir = os.path.join(root, "left4dead2") if root else None
+            vmt = {}
+            if content:
+                from ..core.gamematerials import read_vmt
+                vmt = read_vmt(content, path, game_dir)
+            out.append(any(str(vmt.get(k, "0")).strip() not in ("0", "")
+                           for k in ("$translucent", "$alphatest", "$additive")))
+        else:
+            out.append(mat is not None and _alpha_mode(mat) != "OPAQUE")
+    return out
 
 
 def _outputs(src, skipped: bool):
@@ -109,16 +138,25 @@ class HL_OT_make_collision(bpy.types.Operator):
         src = context.active_object
         unit = context.scene.unit_settings.scale_length or 1.0
         inch = 0.0254 / unit
-        co, tri = _world_triangles(src, context.evaluated_depsgraph_get())
+        co, tri, mi, mats = _world_triangles(src, context.evaluated_depsgraph_get())
         upm = context.scene.hammerless.units_per_meter or 52.49
-        r = slab_brushes(co, tri, inch, src.hammerless.collision_min_area / unit ** 2,
-                         min_width=max(inch, 1.05 / upm / unit))      # (1 game unit: the smallest brush)
+        min_area = src.hammerless.collision_min_area / unit ** 2
+        min_width = max(inch, 1.05 / upm / unit)      # (1 game unit: the smallest brush)
+        r = slab_brushes(co, tri, inch, min_area, min_width=min_width)
         if not r.brushes:
             self.report({"WARNING"}, f"'{src.name}' has no flat area bigger than Smallest Face: no brushes made")
             return {"CANCELLED"}
+        # the vis blockers: the same pieces, or, with glass in the mesh, pieces of its opaque faces only
+        rv, clear = r, 0
+        if src.hammerless.collision_blocks_vis and mats:
+            see = np.array(_see_through(mats, context) + [False])
+            glass = see[np.clip(mi, 0, len(mats))]
+            clear = int(glass.sum())
+            if clear:
+                rv = slab_brushes(co, tri[~glass], inch, min_area, min_width=min_width) if clear < len(tri) else None
         rng = np.random.default_rng(7)
         rcol = {}
-        for _vs, _bf, ri in r.brushes:
+        for _vs, _bf, ri in r.brushes + (rv.brushes if rv is not None and rv is not r else []):
             rcol.setdefault(ri, (*rng.uniform(0.2, 1.0, 3), 1.0))
         # the previous result goes (its material and place are kept: e.g. tools/toolsinvisible set by hand)
         old = _outputs(src, False)
@@ -149,13 +187,13 @@ class HL_OT_make_collision(bpy.types.Operator):
                 hs.model_kind = "STATIC"
                 hs.model_collision = "HULLS"
             else:
-                hs.role = "BRUSH"
-                hs.brush_detail = "WORLD" if src.hammerless.collision_blocks_vis else "DETAIL"
+                hs.role = "BRUSH"     # (world brushes block vis themselves, unless glass needs its own blockers)
+                hs.brush_detail = "WORLD" if src.hammerless.collision_blocks_vis and rv is r else "DETAIL"
             obj.display_type = "SOLID"
             made.append(obj)
-        if props and src.hammerless.collision_blocks_vis:      # the same pieces, blocking vis only
-            name = src.name + VIS_SUFFIX
-            obj = _new_output(name, _mesh(name, r.brushes, rcol, game_material("tools/toolsnodraw")), src)
+        if src.hammerless.collision_blocks_vis and rv is not None and rv.brushes and (props or rv is not r):
+            name = src.name + VIS_SUFFIX                     # the pieces blocking vis only
+            obj = _new_output(name, _mesh(name, rv.brushes, rcol, game_material("tools/toolsnodraw")), src)
             obj.hammerless.role = "BRUSH"
             obj.hammerless.brush_detail = "VIS"
             obj.display_type = "WIRE"
@@ -166,6 +204,8 @@ class HL_OT_make_collision(bpy.types.Operator):
         msg = (f"{what} from {r.kept_regions} flat areas "
                f"({100 * r.kept_share:.1f}% of the surface; {r.paired_walls} two-sided walls as one brush each); "
                f"{r.regions - r.kept_regions} small areas and {r.thin} thin strips left out")
+        if clear:
+            msg += f"; {clear} see-through faces (glass, fences) collide but don't block vis"
         if not props and len(r.brushes) > MAX_BRUSHES_WARN:
             self.report({"WARNING"}, msg + f": that's a lot of the map's 8,192 brushes, raise Smallest Face")
         else:
