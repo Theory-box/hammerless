@@ -264,11 +264,11 @@ def selected_targets(context) -> list[tuple]:
                 out.append((obj, sel))
     else:
         out = [(o, None) for o in context.selected_objects if _paintable(o)]
-        srcs = {o.get("hl_collision_of") for o, _f in out} - {None}
-        if srcs:                        # (one collision prop picked: the texture goes on the whole set)
+        sets = {o.parent for o, _f in out if o.get("hl_collision_of") is not None and o.parent is not None}
+        if sets:                        # (one collision prop picked: the texture goes on its whole set)
             have = {o for o, _f in out}
-            out += [(o, None) for o in bpy.data.objects
-                    if o.get("hl_collision_of") in srcs and o not in have and _paintable(o)
+            out += [(o, None) for p in sets for o in p.children
+                    if o.get("hl_collision_of") is not None and o not in have and _paintable(o)
                     and o.hammerless.brush_detail != "VIS"]
     return out
 

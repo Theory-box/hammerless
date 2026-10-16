@@ -1956,6 +1956,21 @@ def test_make_collision_modes():
     assert len(world.blocks("solid")) == 6, len(world.blocks("solid"))      # (only the automatic seal's)
     house.hammerless.collision_blocks_vis = False
     assert not [o for o in press() if o.hammerless.brush_detail == "VIS"]
+    # a duplicated house (with its collision): each one's Make Collision replaces only its own
+    bpy.ops.object.select_all(action="DESELECT")
+    house.select_set(True)
+    for o in house.children:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = house
+    bpy.ops.object.duplicate()
+    copy = next(o for o in bpy.context.selected_objects if o.get(OF) is None)
+    assert copy != house and len(copy.children) == len(house.children) == 4
+    copy_kids = set(copy.children)
+    press()
+    assert set(copy.children) == copy_kids and len(house.children) == 4
+    bpy.context.view_layer.objects.active = copy
+    assert bpy.ops.hammerless.make_collision() == {"FINISHED"}
+    assert len(copy.children) == 4 and not (set(copy.children) & copy_kids) and len(house.children) == 4
     # tools/toolsinvisible on a model: a see-through alpha-tested material with its own texture (decals stick)
     d = os.path.join(TMP, "game_inv")
     written = write_model_materials(d, "models/hammerless/x", {

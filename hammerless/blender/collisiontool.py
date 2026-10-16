@@ -35,9 +35,12 @@ def _world_triangles(obj, depsgraph):
     return co, tri
 
 
-def _outputs(src_name: str, skipped: bool):
+def _outputs(src, skipped: bool):
+    """What Make Collision made from src: its collision children (a duplicated house's copies are the copy's
+    children, so each keeps its own), and unparented ones by name (made before they were parented)."""
     return [o for o in bpy.data.objects
-            if o.get(OF) == src_name and o.name.endswith(SKIPPED_SUFFIX) == skipped]
+            if o.get(OF) is not None and o.name.endswith(SKIPPED_SUFFIX) == skipped
+            and (o.parent == src or (o.parent is None and o.get(OF) == src.name))]
 
 
 def _remove(objs):
@@ -118,7 +121,7 @@ class HL_OT_make_collision(bpy.types.Operator):
         for _vs, _bf, ri in r.brushes:
             rcol.setdefault(ri, (*rng.uniform(0.2, 1.0, 3), 1.0))
         # the previous result goes (its material and place are kept: e.g. tools/toolsinvisible set by hand)
-        old = _outputs(src.name, False)
+        old = _outputs(src, False)
         material = None
         for o in old:
             if o.hammerless.brush_detail == "VIS":      # (the vis-only brushes: always nodraw)
@@ -157,7 +160,7 @@ class HL_OT_make_collision(bpy.types.Operator):
             obj.hammerless.brush_detail = "VIS"
             obj.display_type = "WIRE"
             made.append(obj)
-        _remove(_outputs(src.name, True))     # (the skipped-faces object older versions made)
+        _remove(_outputs(src, True))     # (the skipped-faces object older versions made)
         what = (f"{len(groups)} invisible props of {len(r.brushes)} collision pieces" if props
                 else f"{len(r.brushes)} collision brushes")
         msg = (f"{what} from {r.kept_regions} flat areas "
