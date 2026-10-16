@@ -1795,6 +1795,7 @@ class HL_OT_build(bpy.types.Operator):
                     write_log(self._nav["mesh"].problems, append=True)
                 s.generate_nav = False
                 timing += f", nav mesh {self._nav['seconds']:.1f}s (during the compile)"
+                self._show_nav(context, self._nav["mesh"])
         if getattr(self, "_nav_fit", False) and not self._job.skipped and not getattr(self, "_nav_followed", False):
             self._nav_followed = True            # (Bake Lighting / Compute Visibility: the nav mesh stays)
             tools = cc.Tools(self._root)
@@ -1811,6 +1812,7 @@ class HL_OT_build(bpy.types.Operator):
                 if not self._job.skipped:
                     cc.nav_follow_bsp(cc.Tools(self._root), self._owner[1])
                 timing += ", nav mesh kept (nothing it's made from changed)"
+                self._show_nav(context, None)
             except OSError as ex:
                 cc.set_nav_inputs(cc.Tools(self._root), self._owner[1], None)
                 self.report({"WARNING"}, f"Couldn't update the nav mesh for the new map ({ex}): the next build makes it")
@@ -1821,6 +1823,10 @@ class HL_OT_build(bpy.types.Operator):
                 f.write(timing + "\n")
         except OSError:
             pass
+        if not self.bake and not self._job.skipped:
+            from . import lightview
+            if lightview.shown() and (context.scene.name, context.scene.hammerless.map_name) == self._owner:
+                lightview.load(context)          # (the shown lighting: this build's, now, not at the next redraw)
         tl = self._timeline()
         if not self.play:                      # (Build & Play writes it once the game has loaded)
             write_log(tl.chart(), append=True)
@@ -1852,6 +1858,25 @@ class HL_OT_build(bpy.types.Operator):
             note = (" Nav mesh made" + (" and analyzed" if self._nav.get("analyzed") else "") if made else "")
             self.report({"INFO"}, f"{compiled}.{note}  [{timing}]")
         return self._finish(context, {"FINISHED"})
+
+    def _show_nav(self, context, mesh):
+        """This build's nav mesh in the viewport and the Problems list, as Build Nav Mesh shows it (mesh None: the
+        one on disk, kept from before, when nothing is shown yet)."""
+        if (context.scene.name, context.scene.hammerless.map_name) != self._owner:
+            return                               # (another scene / map is active now: not its nav)
+        from . import navview
+        try:
+            if mesh is not None:
+                navview.set_predicted(mesh, self._owner)
+            elif navview.mesh() is None:
+                navview.load(context)
+            else:
+                return
+            if navview.report() is not None:
+                from .problems import store_nav
+                store_nav(context, navview.mesh(), navview.report(), predicted=mesh is not None)
+        except Exception as ex:                  # (the build is done either way: the preview is extra)
+            print("Hammerless: couldn't show the nav mesh:", ex)
 
     def _timeline(self):
         """When each step of this build ran (core/timeline.py)."""
