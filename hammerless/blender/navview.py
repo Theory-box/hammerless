@@ -166,8 +166,9 @@ def spawn_reasons(mesh, viewer=None) -> dict:
 def _area_color(a, rep, mode, viewer=None, reasons=None):
     if mode == "VIS":
         lists = visibility_lists() or {}
-        if viewer is None:
-            return COLORS["unseen"]
+        if viewer is None:               # (the cursor isn't on the nav: the areas as they are, not all "unseen",
+            return (COLORS["start"] if a.spawn_attributes & PLAYER_START else    # which is all but invisible)
+                    COLORS["end"] if a.spawn_attributes & CHECKPOINT else COLORS["plain"])
         if a.id == viewer.id:
             return COLORS["viewer"]
         v = lists.get(viewer.id, {}).get(a.id, 0)
@@ -908,6 +909,8 @@ def draw_panel(layout, context):
                                                 "Orange: Zombie Spawn Area. Light blue: normal"]))
     if s.nav_color_mode in ("WHY", "VIS", "AHEAD") and not visibility_lists():
         lines.append("(Build Nav Mesh with the analysis to also show what's in view)")
+    elif s.nav_color_mode == "VIS" and cursor_area(s.units_per_meter) is None:
+        lines.insert(0, "Put the 3D cursor on the nav (Shift + right-click) to see what's visible from there")
     lines.append("Blue: start room. Purple: end room")
     legend = layout.column(align=True)
     legend.scale_y = 0.8

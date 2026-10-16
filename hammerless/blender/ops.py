@@ -1872,6 +1872,8 @@ class HL_OT_build(bpy.types.Operator):
                 navview.load(context)
             else:
                 return
+            if navview.mesh() is not None:
+                context.scene.hammerless.show_nav = True     # (drawn, as Build Nav Mesh shows it)
             if navview.report() is not None:
                 from .problems import store_nav
                 store_nav(context, navview.mesh(), navview.report(), predicted=mesh is not None)
