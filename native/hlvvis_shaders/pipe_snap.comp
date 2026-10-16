@@ -1,0 +1,46 @@
+#version 460
+// hlvvis -jacobi GPU pipeline: per pair (slot, frontier portal x), the CPU's start of a round: x's expansion count goes
+// up, past the limit it opens fully (the whole base, the whole portal: a superset), and the windows it has now are the
+// snapshot this round expands from (merges during the round don't change it). Also: how many of x's next portals are
+// in the base's flood (the items).
+#extension GL_GOOGLE_include_directive : require
+#include "pipe_common.glsl"
+#define MERGE_HULL_CAP int(pc.hullcap)
+#define MERGE_CAPDIR_BINDING 4
+#include "merge_core.glsl"
+layout(local_size_x = 64) in;
+
+void main() {
+    uint id = gid();
+    if (id >= cnt[C_N]) return;
+    uint lo = 0u, hi = pc.nslots - 1u;          // the slot: the last one starting at or before id
+    while (lo < hi) { uint mid = (lo + hi + 1u) / 2u; if (slots[mid].slotoff <= id) lo = mid; else hi = mid - 1u; }
+    uint s = lo, f = id - slots[s].slotoff;
+    uint x = front[s * pc.fmax + f], base = slots[s].base;
+    uint r = rank_of(s, x), i = s * pc.fmax + r;
+    ivec4 h = st[i].h;
+    int grows = h.y + 1;
+    bool opened = h.z != 0;
+    int nS = h.w & 255, nW = (h.w >> 8) & 255;
+    if (grows > int(pc.saturate) && !opened) {
+        M_n[0] = portals[base].plane.xyz; M_ccw[0] = int(portals[base].ccw);
+        M_n[1] = portals[x].plane.xyz; M_ccw[1] = int(portals[x].ccw);
+        [[dont_unroll]] for (int side = 0; side < 2; side++) {
+            uint p = side == 0 ? base : x;
+            MC_n[side] = int(portals[p].count);
+            for (int k = 0; k < MC_n[side]; k++) MC[side][k] = pts[portals[p].first + uint(k)].xyz;
+            merge_side(side, MERGE_SET);
+        }
+        nS = MS_n[0]; nW = MS_n[1];
+        opened = true;
+        for (int k = 0; k < nS; k++) st[i].S[k] = vec4(MS[0][k], 0.0);
+        for (int k = 0; k < nW; k++) st[i].W[k] = vec4(MS[1][k], 0.0);
+    }
+    for (int k = 0; k < nS; k++) st[i].PS[k] = st[i].S[k];
+    for (int k = 0; k < nW; k++) st[i].PW[k] = st[i].W[k];
+    st[i].h = ivec4(h.x, grows, opened ? 1 : 0, nS | (nW << 8) | (nS << 16) | (nW << 24));
+    uvec2 L = leaves[portals[x].leaf];
+    uint c = 0u;
+    for (uint k = 0u; k < L.y; k++) if (in_flood(s, lflist[L.x + k])) c++;
+    pairs[id] = uvec4(c, 0u, s, r);
+}

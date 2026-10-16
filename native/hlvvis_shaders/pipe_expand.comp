@@ -1,0 +1,60 @@
+#version 460
+// hlvvis -jacobi GPU pipeline: per item (slot, frontier portal x, x's k-th next portal q in the flood), the expansion
+// step (expand_lib.glsl, the CPU's to the bit) from x's snapshot; what comes through is stored and linked to the
+// (slot, q) list for the merge. Items from pc.item_start on (a pass that ran out of room goes on from the first item
+// that found none: the merge takes only the items before it).
+#extension GL_GOOGLE_include_directive : require
+#include "pipe_common.glsl"
+#include "expand_lib.glsl"
+layout(local_size_x = 64) in;
+
+void main() {
+    uint id = gid() + pc.item_start;
+    if (id >= cnt[C_T]) return;
+    uint lo = 0u, hi = cnt[C_N] - 1u;           // the pair: the last one starting at or before id
+    while (lo < hi) { uint mid = (lo + hi + 1u) / 2u; if (pairs[mid].y <= id) lo = mid; else hi = mid - 1u; }
+    uvec4 pa = pairs[lo];
+    uint s = pa.z, k = id - pa.y, xi = s * pc.fmax + pa.w;
+    uint base = slots[s].base;
+    uint x = front[s * pc.fmax + (lo - slots[s].slotoff)];
+    uvec2 L = leaves[portals[x].leaf];
+    uint qn = 0u;
+    for (uint j = 0u, m = 0u; j < L.y; j++) {
+        uint c = lflist[L.x + j];
+        if (!in_flood(s, c)) continue;
+        if (m == k) { qn = c; break; }
+        m++;
+    }
+    Portal b = portals[base], q = portals[qn];
+    // pass: q's winding chopped by the base's plane
+    precise float dq = dot3(q.origin.xyz, b.plane.xyz) - b.plane.w;
+    if (dq < -q.origin.w) return;
+    nA = int(q.count);
+    for (int i = 0; i < nA; i++) A[i] = pts[q.first + uint(i)].xyz;
+    if (!(dq > q.origin.w)) { if (chopA(b.plane.xyz, b.plane.w) == 0) return; }
+    // source: the snapshot's S chopped by q's back plane
+    int hw = st[xi].h.w;
+    nS = (hw >> 16) & 255;
+    nW = (hw >> 24) & 255;
+    for (int i = 0; i < nS; i++) Sr[i] = st[xi].PS[i].xyz;
+    for (int i = 0; i < nW; i++) Wp[i] = st[xi].PW[i].xyz;
+    precise float db = dot3(b.origin.xyz, q.plane.xyz) - q.plane.w;
+    if (db > b.origin.w) return;
+    if (!(db < -b.origin.w)) {
+        vec3 bn = -q.plane.xyz; float bd = -q.plane.w;
+        if (chopS(bn, bd) == 0) return;
+    }
+    if (clip_seps(true) == 0) return;
+    if (clip_seps(false) == 0) return;
+    uint np = uint(nS + nA);
+    uint c = atomicAdd(cnt[C_CAND], 1u);
+    uint pt = atomicAdd(cnt[C_PTS], np);
+    if (c >= pc.candcap || pt + np > pc.ptcap) { atomicMin(cnt[C_FAIL], id); return; }
+    for (int i = 0; i < nS; i++) cpts[pt + uint(i)] = vec4(Sr[i], 0.0);
+    for (int i = 0; i < nA; i++) cpts[pt + uint(nS + i)] = vec4(A[i], 0.0);
+    uint idx = s * pc.fmax + rank_of(s, qn);
+    pr[idx].w = qn;
+    uint old = atomicExchange(pr[idx].x, c);
+    cands[c] = uvec4(old, id, pt, uint(nS) | (uint(nA) << 16));
+    if (old == EMPTY) touched[atomicAdd(cnt[C_TOUCH], 1u)] = idx;
+}

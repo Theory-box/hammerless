@@ -1,0 +1,12 @@
+#version 460
+// hlvvis -jacobi GPU pipeline: frontier offsets of the slots (pair = (slot, frontier portal)), the snap dispatch size.
+#extension GL_GOOGLE_include_directive : require
+#include "pipe_common.glsl"
+layout(local_size_x = 1) in;
+
+void main() {
+    uint run = 0u;
+    for (uint s = 0u; s < pc.nslots; s++) { slots[s].slotoff = run; run += slots[s].nfront; }
+    cnt[C_N] = run;
+    set_args(C_ARGS1, run);
+}

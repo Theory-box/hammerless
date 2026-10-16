@@ -1,0 +1,7 @@
+#version 460
+// hlvvis -jacobi GPU pipeline: the merge's dispatch size (one invocation per (slot, portal) list started).
+#extension GL_GOOGLE_include_directive : require
+#include "pipe_common.glsl"
+layout(local_size_x = 1) in;
+
+void main() { set_args(C_ARGS4, cnt[C_TOUCH]); }

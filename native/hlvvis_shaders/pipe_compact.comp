@@ -1,0 +1,39 @@
+#version 460
+// hlvvis -jacobi GPU pipeline: each slot's dirty portals (asked to be expanded by the last merge or the refill) become
+// its frontier, in portal order (the CPU sorts its list), and the dirty bits are cleared. A slot stays live while it
+// has a frontier and has not yet seen its whole flood (the CPU's loop condition). One workgroup per slot.
+#extension GL_GOOGLE_include_directive : require
+#include "pipe_common.glsl"
+layout(local_size_x = 256) in;
+
+shared uint part[256];
+
+void main() {
+    uint s = gl_WorkGroupID.x, lid = gl_LocalInvocationID.x;
+    if (slots[s].live == 0u) return;           // (dead: nothing dirty, nothing to do until a refill)
+    uint chunk = (pc.pw32 + 255u) / 256u, w0 = lid * chunk, w1 = min(w0 + chunk, pc.pw32);
+    uint sum = 0u;
+    for (uint w = w0; w < w1; w++) sum += uint(bitCount(dirty[s * pc.pw32 + w]));
+    part[lid] = sum;
+    barrier();
+    if (lid == 0u) {
+        uint run = 0u;
+        for (uint i = 0u; i < 256u; i++) { uint v = part[i]; part[i] = run; run += v; }
+        bool live = run > 0u && slots[s].seen < slots[s].floodn;
+        slots[s].nfront = live ? run : 0u;
+        slots[s].live = live ? 1u : 0u;
+    }
+    barrier();
+    uint at = part[lid];
+    for (uint w = w0; w < w1; w++) {
+        uint d = dirty[s * pc.pw32 + w];
+        if (d == 0u) continue;
+        dirty[s * pc.pw32 + w] = 0u;
+        while (d != 0u) {
+            int b = findLSB(d);
+            d &= d - 1u;
+            front[s * pc.fmax + at] = w * 32u + uint(b);
+            at++;
+        }
+    }
+}

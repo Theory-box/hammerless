@@ -1003,11 +1003,9 @@ static int gpu_expand_setup(void) {
 
 static int cmp_int(const void *a, const void *b) { int x = *(const int *)a, y = *(const int *)b; return (x > y) - (x < y); }
 
-static void jacobi_flow(int pi) {
-    Portal *b = &P[pi];
-    LARGE_INTEGER t0, t1;
-    QueryPerformanceCounter(&t0);
-    b->status = 1;
+/* the start of base portal b's flow: its first openings (no separators yet), merged (t_next: the portals to expand
+   first, t_js their windows). Returns the size of its flood; *seen: how many of those it already sees */
+static int j_begin(Portal *b, int *seen_out) {
     if (!t_js) {
         t_js = calloc(NPD, sizeof(JState));
         t_front = malloc(((size_t)NPD + 1) * sizeof(int)); t_next = malloc(((size_t)NPD + 1) * sizeof(int));
@@ -1037,6 +1035,18 @@ static void jacobi_flow(int pi) {
         j_add(pnum, source, pass);
     }
     j_merge_all(b, &seen);
+    *seen_out = seen;
+    return floodn;
+}
+
+static void jacobi_flow(int pi) {
+    Portal *b = &P[pi];
+    LARGE_INTEGER t0, t1;
+    QueryPerformanceCounter(&t0);
+    b->status = 1;
+    int seen, floodn = j_begin(b, &seen);
+    const uint64_t *bf = (const uint64_t *)b->flood;
+    Plane bplane = b->pl;
     while (t_nnext && seen < floodn) {
         InterlockedIncrement64(&g_jrounds);
         if (g_jbase_rounds) { g_jbase_rounds[pi]++; if (t_nnext > g_jbase_maxfront[pi]) g_jbase_maxfront[pi] = t_nnext; }
@@ -1109,6 +1119,151 @@ static void jacobi_flow(int pi) {
     QueryPerformanceCounter(&t1);
     g_pdur[pi] = (double)(t1.QuadPart - t0.QuadPart) / g_freq.QuadPart;
     InterlockedIncrement(&g_done);
+}
+
+
+/* -gpu -jacobi: the whole flow on the GPU (hlvvis_gpu.c, hlvvis_shaders/pipe_*.comp), many base portals at once, one
+   per slot, every live slot a round per call; the same results as the CPU's -jacobi to the bit (the same steps in the
+   same order). The CPU does each base's first openings (when it fills a slot) and the bases those settle. */
+static int g_gpu_pipe, g_gpu_pipe_slots;
+static int *g_pipe_order;
+static int cmp_flood_desc(const void *a, const void *b) {
+    int x = P[*(const int *)a].nmight, y = P[*(const int *)b].nmight;
+    return (x < y) - (x > y);
+}
+static int gpu_pipe_setup(void) {
+    if (JACOBI_WIDEN > 0 || JACOBI_NOISE != 1e-4 || JACOBI_SATURATE != 16 || g_mtest_cap || g_jbase_rounds) return 0;
+    int npts = 0, fmax = 0, nlf = 0;
+    for (int i = 0; i < NPD; i++) {
+        if (P[i].w->n > VGPU_MAXW) return 0;
+        npts += P[i].w->n;
+        int n = 0;
+        for (int k = 0; k < PW; k++) n += (int)__builtin_popcountll(((const uint64_t *)P[i].flood)[k]);
+        if (n > fmax) fmax = n;
+    }
+    for (int c = 0; c < NCL; c++) if (lf_first[c] + lf_count[c] > nlf) nlf = lf_first[c] + lf_count[c];
+    float *pts = xmalloc((size_t)npts * 16 + 16);
+    vgpu_pportal_t *pp = xmalloc((size_t)NPD * sizeof(vgpu_pportal_t) + 16);
+    uint32_t *leaves = xmalloc((size_t)NCL * 8 + 16), *lfl = xmalloc((size_t)nlf * 4 + 16);
+    int at = 0;
+    for (int i = 0; i < NPD; i++) {
+        Portal *p = &P[i];
+        pp[i].plane[0] = p->pl.n.x; pp[i].plane[1] = p->pl.n.y; pp[i].plane[2] = p->pl.n.z; pp[i].plane[3] = p->pl.d;
+        pp[i].origin[0] = p->origin.x; pp[i].origin[1] = p->origin.y; pp[i].origin[2] = p->origin.z; pp[i].origin[3] = p->radius;
+        pp[i].first = (uint32_t)at; pp[i].count = (uint32_t)p->w->n;
+        pp[i].ccw = (uint32_t)winding_ccw(p->w, p->pl.n); pp[i].leaf = (uint32_t)p->leaf;
+        for (int k = 0; k < p->w->n; k++, at++) {
+            pts[4 * at] = p->w->p[k].x; pts[4 * at + 1] = p->w->p[k].y; pts[4 * at + 2] = p->w->p[k].z; pts[4 * at + 3] = 0;
+        }
+    }
+    for (int c = 0; c < NCL; c++) { leaves[2 * c] = (uint32_t)lf_first[c]; leaves[2 * c + 1] = (uint32_t)lf_count[c]; }
+    for (int i = 0; i < nlf; i++) lfl[i] = (uint32_t)lf_list[i];
+    vgpu_pipe_info_t info = {0};
+    int want = getenv("HL_GPU_SLOTS") ? atoi(getenv("HL_GPU_SLOTS")) : 0;
+    int ns = vgpu_pipe_setup(NPD, pts, npts, pp, NCL, leaves, nlf, lfl, &g_cap_dir[0][0], g_hull_cap, fmax, PW * 2, EPS_UP,
+                             LEN_LO, g_robust_sep, g_maxpts, JACOBI_SATURATE, JACOBI_MAX_ARRIVALS, want, &info);
+    free(pts); free(pp); free(leaves); free(lfl);
+    if (ns) printf("(the flow on the GPU: %d at once, largest flood %d, %.1f GB) ", ns, fmax, info.bytes / 1e9);
+    g_gpu_pipe_slots = ns;
+    return ns > 0;
+}
+
+/* returns 0 if the GPU failed on the way (the caller then does it all on the CPU) */
+static int gpu_pipe_flow(double total_w) {
+    int ns = g_gpu_pipe_slots, pw32 = PW * 2;
+    g_pipe_order = xmalloc((size_t)NPD * sizeof(int) + 4);
+    for (int i = 0; i < NPD; i++) g_pipe_order[i] = i;
+    qsort(g_pipe_order, NPD, sizeof(int), cmp_flood_desc);     /* the longest first: a short tail */
+    int *slot_base = xmalloc((size_t)ns * sizeof(int) + 4), *visq = xmalloc((size_t)ns * sizeof(int) + 4);
+    int *visq_base = xmalloc((size_t)ns * sizeof(int) + 4);
+    for (int k = 0; k < ns; k++) slot_base[k] = -1;
+    uint32_t *visout = xmalloc((size_t)ns * pw32 * 4 + 16);
+    vgpu_slot_t *so = xmalloc((size_t)ns * sizeof(vgpu_slot_t) + 16);
+    size_t capw = (size_t)ns + 4096;
+    uint32_t *rf = xmalloc(capw * 4);
+    int next = 0, active = 0, nvisq = 0, last_pct = -1;
+    uint32_t round = 0;
+    long long passes = 0;
+    double done_w = 0;
+    LARGE_INTEGER fs, fn, r0, r1;
+    QueryPerformanceCounter(&fs);
+    r0 = fs;
+    int max_rounds = getenv("HL_PIPE_ROUNDS") ? atoi(getenv("HL_PIPE_ROUNDS")) : 0;   /* (dev) stop after n rounds */
+    while (next < NPD || active > 0 || nvisq > 0) {
+        if (max_rounds && (int)round >= max_rounds) break;
+        round++;
+        /* fill the free slots: each new base's first openings on the CPU (some bases end there) */
+        int nrec = 0;
+        size_t nw = (size_t)ns;
+        for (int k = 0; k < ns && next < NPD; k++) {
+            if (slot_base[k] >= 0) continue;
+            while (next < NPD) {
+                int pi = g_pipe_order[next++];
+                Portal *b = &P[pi];
+                b->status = 1;
+                int seen, floodn = j_begin(b, &seen);
+                if (!t_nnext || seen >= floodn) {
+                    b->status = 2; g_done++;
+                    done_w += (double)b->nmight * b->nmight + 1;
+                    continue;
+                }
+                size_t need = nw + 4 + (size_t)pw32 + (size_t)t_nnext * 132;
+                if (need > capw) { capw = need * 2; rf = realloc(rf, capw * 4); if (!rf) fail("out of memory%s", ""); }
+                rf[nrec++] = (uint32_t)nw;
+                rf[nw] = (uint32_t)k; rf[nw + 1] = (uint32_t)pi; rf[nw + 2] = (uint32_t)t_nnext; rf[nw + 3] = (uint32_t)floodn;
+                memcpy(rf + nw + 4, b->flood, (size_t)pw32 * 4);
+                nw += 4 + (size_t)pw32;
+                for (int e = 0; e < t_nnext; e++) {
+                    int q = t_next[e];
+                    JState *js = &t_js[q];
+                    uint32_t *o = rf + nw;
+                    memset(o, 0, 132 * 4);
+                    o[0] = (uint32_t)q; o[1] = (uint32_t)js->S.n; o[2] = (uint32_t)js->W.n;
+                    if (js->S.n > VGPU_SNAPCAP || js->W.n > VGPU_SNAPCAP) fail("a window with more corners than the GPU holds%s", "");
+                    for (int i = 0; i < js->S.n; i++) memcpy(o + 4 + 4 * i, &js->S.p[i], 12);
+                    for (int i = 0; i < js->W.n; i++) memcpy(o + 68 + 4 * i, &js->W.p[i], 12);
+                    nw += 132;
+                }
+                slot_base[k] = pi; active++;
+                break;
+            }
+        }
+        long long np, ni; int npass;
+        if (!vgpu_pipe_round(round, nrec, rf, (int)nw, nvisq, visq, visout, so, &np, &ni, &npass)) {
+            free(slot_base); free(visq); free(visq_base); free(visout); free(so); free(rf);
+            return 0;
+        }
+        for (int i = 0; i < nvisq; i++) {
+            Portal *b = &P[visq_base[i]];
+            memcpy(b->vis, visout + (size_t)i * pw32, (size_t)PW * 8);
+            MemoryBarrier();
+            b->status = 2; g_done++;
+            done_w += (double)b->nmight * b->nmight + 1;
+        }
+        nvisq = 0;
+        QueryPerformanceCounter(&r1);
+        double dt = (double)(r1.QuadPart - r0.QuadPart) / g_freq.QuadPart;
+        r0 = r1;
+        int live = 0;
+        for (int k = 0; k < ns; k++) if (slot_base[k] >= 0 && so[k].live) live++;
+        for (int k = 0; k < ns; k++) {
+            if (slot_base[k] < 0) continue;
+            g_pdur[slot_base[k]] += live ? dt / live : 0;      /* (the round's time shared by the flows in it) */
+            if (!so[k].live) { visq[nvisq] = k; visq_base[nvisq++] = slot_base[k]; slot_base[k] = -1; active--; }
+        }
+        g_jrounds += live; g_jexp += np; g_gpu_items += ni; passes += npass;
+        QueryPerformanceCounter(&fn);
+        double el = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
+        int pct = (int)(100.0 * done_w / total_w);
+        if (pct != last_pct && pct < 100 && done_w > 0 && el > 0.5) {
+            double left = el * (total_w - done_w) / done_w;
+            printf("vis %d%%, about %.0f s left\n", pct, left < 1 ? 1 : left);
+            last_pct = pct;
+        }
+    }
+    printf("GPU flow: %u rounds of up to %d flows (%lld passes)\n", round, ns, passes);
+    free(slot_base); free(visq); free(visq_base); free(visout); free(so); free(rf);
+    return 1;
 }
 
 
@@ -1682,10 +1837,16 @@ int main(int argc, char **argv) {
         g_mtest_rec = xmalloc((size_t)g_mtest_cap * sizeof(vgpu_mrec_t) + 16);
         g_mtest_res = xmalloc((size_t)g_mtest_cap * sizeof(vgpu_mres_t) + 16);
     }
-    if (g_gpu && g_jacobi) {
-        g_gpu_check = getenv("HL_GPU_CHECK") != NULL;
-        g_gpu_expand = gpu_expand_setup();
-        if (!g_gpu_expand) printf("(the GPU couldn't take the expansion steps: the CPU does them) ");
+    if (g_gpu && g_jacobi && !fast) {
+        if (getenv("HL_GPU_STEPS") || getenv("HL_GPU_CHECK")) {
+            /* (dev) only the expansion steps on the GPU, a round at a time (HL_GPU_CHECK=1: each checked on the CPU) */
+            g_gpu_check = getenv("HL_GPU_CHECK") != NULL;
+            g_gpu_expand = gpu_expand_setup();
+            if (!g_gpu_expand) printf("(the GPU couldn't take the expansion steps: the CPU does them) ");
+        } else {
+            g_gpu_pipe = gpu_pipe_setup();
+            if (!g_gpu_pipe) printf("\nWarning: the GPU couldn't take the flow: the CPU does it\n");
+        }
     }
     printf("done\n");
     if (fast) {
@@ -1727,13 +1888,20 @@ int main(int argc, char **argv) {
         QueryPerformanceFrequency(&g_freq);
         double total_w = 0;
         for (int i = 0; i < NPD; i++) total_w += (double)P[i].nmight * P[i].nmight + 1;
+        LARGE_INTEGER fs, fn;
+        QueryPerformanceCounter(&fs);
+        if (g_gpu_pipe && !gpu_pipe_flow(total_w)) {
+            printf("Warning: the GPU failed during the flow: the CPU does it all\n");
+            for (int i = 0; i < NPD; i++) { P[i].status = 0; g_pdur[i] = 0; }
+            g_done = 0; g_gpu_pipe = 0;
+            g_jrounds = g_jexp = g_gpu_items = 0;
+        }
+        if (!g_gpu_pipe) {
         HANDLE *hs = xmalloc(threads * sizeof(HANDLE));
         for (int t = 0; t < threads; t++) {
             hs[t] = CreateThread(NULL, 64 << 20, flow_worker, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
             if (!hs[t]) fail("couldn't start a thread%s", "");
         }
-        LARGE_INTEGER fs, fn;
-        QueryPerformanceCounter(&fs);
         int last_pct = -1;
         while (g_done < NPD) {
             Sleep(250);
@@ -1751,6 +1919,7 @@ int main(int argc, char **argv) {
         for (int t = 0; t < threads; t += 64) WaitForMultipleObjects(threads - t < 64 ? threads - t : 64, hs + t, TRUE, INFINITE);
         for (int t = 0; t < threads; t++) CloseHandle(hs[t]);
         free(hs);
+        }
         QueryPerformanceCounter(&fn);
         double flow_wall = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
         printf("PortalFlow:          done (%.1f s)\n", flow_wall);
