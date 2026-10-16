@@ -72,6 +72,10 @@ bool merge_outside(int side) {
     for (int i = 0; i < nh; i++) {
         vec3 p = MS[side][i], q = MS[side][(i + 1) % nh];
         precise double ex = double(q.x) - double(p.x), ey = double(q.y) - double(p.y), ez = double(q.z) - double(p.z);
+        precise double el2 = ex * ex + ey * ey;      // (the edge's: once, not per point)
+        el2 = el2 + ez * ez;
+        precise double el = sqrt(el2);
+        precise double lim = MERGE_JACOBI_NOISE * el;
         for (int k = 0; k < na; k++) {
             vec3 a = MC[side][k];
             precise double ax = double(a.x) - double(p.x), ay = double(a.y) - double(p.y), az = double(a.z) - double(p.z);
@@ -79,10 +83,6 @@ bool merge_outside(int side) {
             precise double c2 = ez * ax - ex * az;
             precise double c3 = ex * ay - ey * ax;
             precise double c = merge_dot_dn(c1, c2, c3, n);
-            precise double el2 = ex * ex + ey * ey;
-            el2 = el2 + ez * ez;
-            precise double el = sqrt(el2);
-            precise double lim = MERGE_JACOBI_NOISE * el;
             if ((o > 0.0lf && c < -lim) || (o < 0.0lf && c > lim)) return true;
         }
     }

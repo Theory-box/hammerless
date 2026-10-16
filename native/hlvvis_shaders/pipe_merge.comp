@@ -52,8 +52,10 @@ void main() {
     bool inited = h.x == int(gen), opened = inited && (h.z & 1) != 0, wgrew = inited && (h.z & 2) != 0;
     int grows = inited ? h.y : 0;
     MS_n[0] = inited ? h.w & 255 : 0; MS_n[1] = inited ? (h.w >> 8) & 255 : 0;
-    for (int k = 0; k < MS_n[0]; k++) MS[0][k] = stS[idx].p[k].xyz;
-    for (int k = 0; k < MS_n[1]; k++) MS[1][k] = stW[idx].p[k].xyz;
+    if (!opened) {
+        for (int k = 0; k < MS_n[0]; k++) MS[0][k] = stS[idx].p[k].xyz;
+        for (int k = 0; k < MS_n[1]; k++) MS[1][k] = stW[idx].p[k].xyz;
+    }
     M_n[0] = portals[base].plane.xyz; M_ccw[0] = int(portals[base].ccw);
     M_n[1] = portals[qn].plane.xyz; M_ccw[1] = int(portals[qn].ccw);
     bool over = arr > pc.maxarr, req = false;
@@ -70,7 +72,8 @@ void main() {
     // the steps: windows merged in item order; past pc.maxarr arrivals in the round, the round's first window (if it
     // is in this pass) as usual, then opening fully
     uint nsteps;
-    if (over) { n = 0u; if (prev == 0u) { li[0] = first_item; lc[0] = first_c; n = 1u; } nsteps = n + 1u; }
+    if (opened) nsteps = 0u;                 // (opened: its windows are whole; only the bits above count)
+    else if (over) { n = 0u; if (prev == 0u) { li[0] = first_item; lc[0] = first_c; n = 1u; } nsteps = n + 1u; }
     else {
         for (uint i = 1u; i < n; i++) {        // item order
             uint a = li[i], b = lc[i]; int j = int(i) - 1;
@@ -104,8 +107,10 @@ void main() {
         else if (grew) { req = true; wgrew = true; }
     }
     int nS = MS_n[0], nW = MS_n[1];
-    for (int k = 0; k < nS; k++) stS[idx].p[k] = vec4(MS[0][k], 0.0);
-    for (int k = 0; k < nW; k++) stW[idx].p[k] = vec4(MS[1][k], 0.0);
+    if (nsteps != 0u) {
+        for (int k = 0; k < nS; k++) stS[idx].p[k] = vec4(MS[0][k], 0.0);
+        for (int k = 0; k < nW; k++) stW[idx].p[k] = vec4(MS[1][k], 0.0);
+    }
     sth[idx] = ivec4(int(gen), grows, (opened ? 1 : 0) | (wgrew ? 2 : 0), nS | (nW << 8) | (h.w & int(0xffff0000u)));
     if (req) atomicOr(dirty[w], bit);
 }
