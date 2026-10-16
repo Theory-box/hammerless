@@ -241,7 +241,10 @@ def _draw():
     gpu.state.blend_set("ALPHA")
     gpu.state.depth_test_set("LESS_EQUAL")
     gpu.state.depth_mask_set(False)
-    fill, lines = _state["batches"]
+    batches = _state["batches"]               # (once: the export's thread may replace them meanwhile)
+    if batches is None:
+        return
+    fill, lines = batches
     fill[0].bind()
     fill[0].uniform_float("ModelViewProjectionMatrix", mvp)
     fill[1].draw(fill[0])
@@ -321,12 +324,20 @@ def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
     bpy.app.handlers.load_post.append(_forget_on_load)
+    from .extract import forget_packed_digests
+    for hs in (bpy.app.handlers.load_post, bpy.app.handlers.undo_post, bpy.app.handlers.redo_post):
+        if forget_packed_digests not in hs:
+            hs.append(forget_packed_digests)
     _handlers.append(bpy.types.SpaceView3D.draw_handler_add(_draw, (), "WINDOW", "POST_VIEW"))
 
 
 def unregister():
     if _forget_on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_forget_on_load)
+    from .extract import forget_packed_digests
+    for hs in (bpy.app.handlers.load_post, bpy.app.handlers.undo_post, bpy.app.handlers.redo_post):
+        if forget_packed_digests in hs:
+            hs.remove(forget_packed_digests)
     for h in _handlers:
         bpy.types.SpaceView3D.draw_handler_remove(h, "WINDOW")
     _handlers.clear()

@@ -378,7 +378,8 @@ class HL_OT_nav_predict(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return not _state["busy"]
+        from .ops import _BUILDING, export_running
+        return not _state["busy"] and not export_running() and not _BUILDING
 
     def execute(self, context):
         import threading
@@ -412,6 +413,8 @@ class HL_OT_nav_predict(bpy.types.Operator):
                 box["error"] = str(ex)
         self._thread = threading.Thread(target=work, daemon=True)
         self._thread.start()
+        from .ops import _EXPORT_THREADS
+        _EXPORT_THREADS.append(self._thread)      # (it makes the map's text: no other export meanwhile)
         _state["busy"] = "build"
         _state["cancel"] = False
         _redraw()
@@ -475,7 +478,8 @@ class HL_OT_nav_analyze(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return not _state["busy"]
+        from .ops import _BUILDING, export_running
+        return not _state["busy"] and not export_running() and not _BUILDING
 
     def execute(self, context):
         import threading
@@ -514,6 +518,8 @@ class HL_OT_nav_analyze(bpy.types.Operator):
                 self._export_out = (None, root, rr)
         self._export_thread = threading.Thread(target=export_work, daemon=True)
         self._export_thread.start()
+        from .ops import _EXPORT_THREADS
+        _EXPORT_THREADS.append(self._export_thread)
         _state["busy"] = "analyze"
         _state["cancel"] = False
         _redraw()
@@ -532,6 +538,10 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         from ..core.navworker import analyze, predict
         from .ops import compile_options, export_after, surface_report
         out, self._export_thread = self._export_out, None
+        if context.scene.name != self._prep.scene_name:
+            self.report({"ERROR"}, "The scene changed while the map was being exported: show its scene and Build Nav "
+                                   "Mesh again")
+            return False
         export_after(context, self._prep, out)
         path, _root, rep = out
         surface_report(self, rep)
@@ -737,7 +747,8 @@ class HL_OT_nav_clear(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return not _state["busy"]
+        from .ops import _BUILDING, export_running
+        return not _state["busy"] and not export_running() and not _BUILDING
 
     def invoke(self, context, event):
         return context.window_manager.invoke_confirm(self, event)
@@ -769,7 +780,8 @@ class HL_OT_nav_clear_analysis(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return not _state["busy"]
+        from .ops import _BUILDING, export_running
+        return not _state["busy"] and not export_running() and not _BUILDING
 
     def execute(self, context):
         m = _state["mesh"]

@@ -493,6 +493,16 @@ def export_vmf(op, context, defer_scripts: bool = False) -> tuple[str | None, st
     return out
 
 
+_EXPORT_THREADS: list = []     # export_finish threads running (Build & Play, Build Nav Mesh, the nav preview)
+
+
+def export_running() -> bool:
+    """An export's thread is still writing the map's files: another export must wait (they'd write the same
+    textures, models and map file at once)."""
+    _EXPORT_THREADS[:] = [t for t in _EXPORT_THREADS if t.is_alive()]
+    return bool(_EXPORT_THREADS)
+
+
 class ExportPrep:
     """What export_vmf read from the scene (Blender's thread) for export_finish (any thread)."""
     def __init__(self, **kw):
@@ -516,6 +526,7 @@ def export_prepare(op, context, defer_scripts: bool = False):
     unsaved = not bpy.data.filepath and not os.path.isabs(bpy.path.abspath(s.output_dir or "//"))
     from . import vmfimport
     return ExportPrep(root=root, margs=margs, path=path, unsaved=unsaved, map_name=s.map_name,
+                      scene_name=context.scene.name,
                       imported=vmfimport.imported(context.scene), defer_scripts=defer_scripts,
                       own_models=context_scene_setting("model_compiler", "HAMMERLESS") == "HAMMERLESS")
 
@@ -525,7 +536,10 @@ def export_after(context, prep, out) -> None:
     path, root, rep2 = out
     if path and prep.imported and getattr(prep, "has_instances", False):
         from . import vmfimport
-        vmfimport.copy_instances(context.scene, os.path.dirname(path), rep2)
+        scene = bpy.data.scenes.get(prep.scene_name) or context.scene
+        vmfimport.copy_instances(scene, os.path.dirname(path), rep2)
+    from .sound import _redraw as _sound_redraw
+    _sound_redraw()                            # (the Sound view: the export's thread may have traced again)
 
 
 def export_finish(prep) -> tuple[str | None, str | None, Report]:
@@ -1351,6 +1365,11 @@ class HL_OT_build(bpy.types.Operator):
         import time
         self._t0 = time.time()
         vmf = os.path.join(work_dir(context), f"{context.scene.hammerless.map_name}.vmf")
+        from .navview import _state as _nav_state
+        if export_running() or _nav_state["busy"]:
+            self.report({"ERROR"}, "The map is being exported or its navmesh built: wait for it to finish, then build "
+                                   "again")
+            return {"CANCELLED"}
         if cc.compile_running(vmf) or _build_key(vmf) in _BUILDING:     # (the compile, or the nav / analysis /
             #                                                             bake after it, still uses the files)
             self.report({"ERROR"}, "This map is still compiling: wait for it to finish (see the hammerless_log "
@@ -1377,6 +1396,7 @@ class HL_OT_build(bpy.types.Operator):
                 self._export_out = (None, prep.root, r)
         self._export_thread = threading.Thread(target=work, daemon=True)
         self._export_thread.start()
+        _EXPORT_THREADS.append(self._export_thread)
         self._job = None
         self._key = _build_key(vmf)
         _BUILDING.add(self._key)
@@ -1388,8 +1408,14 @@ class HL_OT_build(bpy.types.Operator):
     def _export_done(self, context):
         """The export's thread finished (modal): the rest of the build starts."""
         out, self._export_thread = self._export_out, None
-        export_after(context, self._prep, out)
-        r = self._after_export(context, *out)
+        if context.scene.name != self._prep.scene_name:
+            # (the scene shown changed while it exported: the rest of the build reads the scene's settings)
+            self.report({"ERROR"}, f"The scene changed while '{self._prep.map_name}' was being exported: show its scene "
+                                   "and build again")
+            r = {"CANCELLED"}
+        else:
+            export_after(context, self._prep, out)
+            r = self._after_export(context, *out)
         if r != {"RUNNING_MODAL"}:           # (stopped before compiling: the timer and status go)
             if self._timer is not None:
                 context.window_manager.event_timer_remove(self._timer)

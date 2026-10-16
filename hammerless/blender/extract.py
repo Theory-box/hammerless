@@ -170,6 +170,11 @@ class MaterialResolver:
         out = os.path.join(self.game_dir, "materials", *path.split("/"))
         try:
             if not _texture_current(out, sig):
+                if sig is not None and img.packed_file is None:
+                    try:                              # (its file may have changed: Blender keeps the old pixels until
+                        img.reload()                  # Image > Reload, so read the file again first)
+                    except RuntimeError:
+                        pass
                 rgba = image_to_rgba8(img)            # (Blender's image: read here, on Blender's thread)
                 if mode != "OPAQUE" and int(rgba[..., 3].min()) == 255:
                     mode = "OPAQUE"                  # an alpha channel with nothing see-through
@@ -186,6 +191,12 @@ class MaterialResolver:
 
 _TEXTURE_CACHE: dict[str, tuple] = {}     # output file -> what it was made from (skips re-converting)
 _PACKED_DIGESTS: dict[tuple, str] = {}   # (image, packed data block, size) -> its bytes' sha1
+
+
+@bpy.app.handlers.persistent
+def forget_packed_digests(*_args):
+    """(load_post, undo_post, redo_post: packed images' memory can be reused, their digests are worked out again)"""
+    _PACKED_DIGESTS.clear()
 
 
 def _texture_current(out: str, sig) -> bool:
@@ -210,6 +221,9 @@ def write_textures(writes: list, report) -> None:
     export's second half runs it on another thread)."""
     for game_dir, path, rgba, surfaceprop, translucent, extra, out, sig, mat_name in writes:
         try:
+            _TEXTURE_CACHE.pop(out, None)
+            if os.path.exists(out + ".hlsig"):
+                os.remove(out + ".hlsig")
             textures.write_material(game_dir, path, rgba, surfaceprop=surfaceprop, translucent=translucent,
                                     extra=extra)
             _TEXTURE_CACHE[out] = sig
@@ -251,7 +265,7 @@ def _image_signature(img, *extra):
         pf = img.packed_file
         # (hashed once per session: packing again makes new packed data, so the same data block and size are the
         # same bytes; edits to a packed image's pixels show as is_dirty, handled above)
-        mem = (img.name, pf.as_pointer(), pf.size)
+        mem = (img.session_uid, img.filepath_raw, pf.as_pointer(), pf.size)
         digest = _PACKED_DIGESTS.get(mem)
         if digest is None:
             try:
@@ -259,13 +273,13 @@ def _image_signature(img, *extra):
             except (AttributeError, RuntimeError):
                 return None
             digest = _PACKED_DIGESTS[mem] = hashlib.sha1(data).hexdigest()
-        return (("packed", img.name, digest), tuple(img.size), img.colorspace_settings.name) + extra
-    path = bpy.path.abspath(img.filepath)
+        return (("packed", img.name, digest), tuple(img.size), img.colorspace_settings.name, img.alpha_mode) + extra
+    path = bpy.path.abspath(img.filepath, library=img.library)
     try:
         st = os.stat(path)
     except OSError:
         return None
-    return (path, st.st_mtime, st.st_size, tuple(img.size), img.colorspace_settings.name) + extra
+    return (path, st.st_mtime, st.st_size, tuple(img.size), img.colorspace_settings.name, img.alpha_mode) + extra
 
 
 def _alpha_mode(mat) -> str:
@@ -1055,7 +1069,7 @@ def _mesh_fingerprint(ir, obj) -> str:
     import numpy as np
     me = obj.data
     cache = ir.__dict__.setdefault("_mesh_prints", {})
-    key = (me.name, tuple(obj.vertex_groups.keys()))
+    key = (me.name_full, tuple(obj.vertex_groups.keys()))
     if key in cache:
         return cache[key]
     if me.shape_keys is not None or me.has_custom_normals:   # (shape keys, custom normals: kept per mesh, as before)
@@ -1071,6 +1085,8 @@ def _mesh_fingerprint(ir, obj) -> str:
         a = np.empty(len(coll) * n, kind)
         coll.foreach_get(attr, a)
         h.update(a.tobytes())
+    h.update(repr((me.uv_layers.active_index, getattr(me, "use_auto_smooth", None),
+                   round(getattr(me, "auto_smooth_angle", 0.0), 6))).encode())
     for layer in me.uv_layers:
         uv = np.empty(len(me.loops) * 2, np.float32)
         layer.data.foreach_get("uv", uv)
