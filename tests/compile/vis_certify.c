@@ -36,6 +36,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <windows.h>
 
 #define MAXW 256                 /* points of a cut window; a cut needing more keeps its input (a superset) */
 #define MAXDEPTH 4096
@@ -112,7 +113,15 @@ static int clip_separators(const Win *src, const Win *pas, Win *target) {
 }
 
 /* ---- the rough pass: which portals a portal can reach at all (vvis's BasePortalVis + flood), conservative */
+static CRITICAL_SECTION g_flood_lock;
+static void ensure_flood_locked(int q);
 static void ensure_flood(int q) {
+    if (*(uint64_t *volatile *)&P[q].flood) return;
+    EnterCriticalSection(&g_flood_lock);
+    ensure_flood_locked(q);
+    LeaveCriticalSection(&g_flood_lock);
+}
+static void ensure_flood_locked(int q) {
     Portal *p = &P[q];
     if (p->flood) return;
     uint64_t *front = calloc(PW, 8);
@@ -142,22 +151,25 @@ static void ensure_flood(int q) {
         }
     }
     free(front); free(stack); free(seen);
+    MemoryBarrier();
     p->flood = fl;
 }
 
 /* ---- the search ---------------------------------------------------------------------------------------- */
-static Win *g_src, *g_pass;              /* per depth */
-static uint64_t *g_might;                /* per depth, PW words */
-static int *g_chain;                     /* portal at each depth */
-static char *g_onpath;                   /* clusters on the current chain */
-static uint64_t *g_targets, *g_mask;
-static long long g_steps, g_budget;
-static double g_deadline;
-static Plane g_base;                     /* the base portal's plane */
-static V g_base_origin; static double g_base_radius;
-static int g_found_depth;
+/* (per thread: the pairs are shared out over the CPU cores) */
+static _Thread_local Win *g_src, *g_pass;              /* per depth */
+static _Thread_local uint64_t *g_might;                /* per depth, PW words */
+static _Thread_local int *g_chain;                     /* portal at each depth */
+static _Thread_local char *g_onpath;                   /* clusters on the current chain */
+static _Thread_local uint64_t *g_targets, *g_mask;
+static _Thread_local long long g_steps, g_budget;
+static _Thread_local double g_deadline;
+static _Thread_local Plane g_base;                     /* the base portal's plane */
+static _Thread_local V g_base_origin; static _Thread_local double g_base_radius;
+static _Thread_local int g_found_depth;
 /* -all N: every surviving chain (distinct portal sequences, at most N) is recorded and the search goes on */
-static int g_all, g_nchains, *g_chains, *g_chainlen;
+static int g_all;
+static _Thread_local int g_nchains, *g_chains, *g_chainlen;
 static int record_chain(int depth) {
     for (int i = 0; i < g_nchains; i++)
         if (g_chainlen[i] == depth + 1 && !memcmp(g_chains + (size_t)i * MAXDEPTH, g_chain, (depth + 1) * sizeof(int))) return 0;
@@ -311,6 +323,71 @@ static int certify_dir(int A, int B) {
     return result;
 }
 
+static int g_np, (*g_pairs)[2], *g_proven;
+static double g_seconds; static long long g_budget0;
+static char **g_res;
+static volatile LONG g_nextpair;
+#define PR(...) (len += snprintf(buf + len, cap - len > 0 ? cap - len : 0, __VA_ARGS__))
+static DWORD WINAPI pair_worker(LPVOID arg) {
+    (void)arg;
+    g_src = malloc((size_t)MAXDEPTH * sizeof(Win)); g_pass = malloc((size_t)MAXDEPTH * sizeof(Win));
+    g_might = calloc((size_t)MAXDEPTH * PW, 8); g_chain = malloc(MAXDEPTH * sizeof(int));
+    g_onpath = calloc(NCL, 1); g_targets = calloc(PW, 8); g_mask = calloc(PW, 8);
+    int cap = 1 << 16; char *buf = malloc(cap);
+    for (;;) {
+        int k = (int)InterlockedIncrement(&g_nextpair) - 1;
+        if (k >= g_np) return 0;
+        int len = 0;
+        buf[0] = 0;
+        int A = g_pairs[k][0], B = g_pairs[k][1];
+        if (A < 0 || B < 0 || A >= NCL || B >= NCL || A == B) { PR("pair %d-%d: bad clusters\n", A, B); goto next; }
+        double t0 = now();
+        /* a sight line reversed is a sight line: a proof in either direction is a proof of the pair. Both
+           directions are tried (their windows differ); the chain reported is the forward one. */
+        g_deadline = t0 + g_seconds; g_steps = 0; g_budget = g_budget0;
+        if (g_all) {
+            g_nchains = 0;
+            if (!g_chains) { g_chains = malloc((size_t)g_all * MAXDEPTH * sizeof(int)); g_chainlen = malloc(g_all * sizeof(int)); }
+            int r = certify_dir(A, B);
+            PR("pair %d-%d: %s, %d chains%s   (%lld steps, %.2f s)\n", A, B,
+                   r == NOTHING ? "PROVEN HIDDEN" : "UNDECIDED", g_nchains, g_nchains >= g_all ? " (cap)" : "", g_steps, now() - t0);
+            for (int c = 0; c < g_nchains; c++) {
+                PR("  chain:");
+                for (int i = 0; i < g_chainlen[c]; i++) PR(" %d", g_chains[(size_t)c * MAXDEPTH + i]);
+                PR("\n");
+            }
+            
+            goto next;
+        }
+        int fwd = certify_dir(A, B), found_depth = g_found_depth;
+        int chain[MAXDEPTH]; long long steps = g_steps;
+        if (fwd == FOUND) memcpy(chain, g_chain, (found_depth + 1) * sizeof(int));
+        int result = fwd;
+        if (fwd != NOTHING) {
+            g_deadline = now() + g_seconds; g_steps = 0;
+            int back = certify_dir(B, A);
+            steps += g_steps;
+            if (back == NOTHING) result = NOTHING;
+            else if (fwd == BUDGET && back == FOUND) { result = FOUND; found_depth = g_found_depth; memcpy(chain, g_chain, (found_depth + 1) * sizeof(int)); }
+        }
+        double dt = now() - t0;
+        if (result == FOUND) {
+            PR("pair %d-%d: UNDECIDED chain", A, B);
+            for (int i = 0; i <= found_depth; i++) PR(" %d", chain[i]);
+            PR("   (%lld steps, %.2f s)\n", steps, dt);
+        } else if (result == BUDGET) {
+            PR("pair %d-%d: UNDECIDED budget   (%lld steps, %.2f s)\n", A, B, steps, dt);
+        } else {
+            PR("pair %d-%d: PROVEN HIDDEN%s   (%lld steps, %.2f s)\n", A, B, fwd == NOTHING ? "" : " (from the far side)", steps, dt);
+            g_proven[k] = 1;
+        }
+        
+    
+      next:
+        g_res[k] = _strdup(buf);
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc < 4) { printf("vis_certify <map.prt> a b [a b ...] [-budget STEPS] [-seconds S]\n"); return 2; }
     long long budget = 20000000; double seconds = 120;
@@ -322,55 +399,19 @@ int main(int argc, char **argv) {
         else if (i + 1 < argc && np < 1024) { pairs[np][0] = atoi(argv[i]); pairs[np][1] = atoi(argv[++i]); np++; }
     }
     load(argv[1]);
-    g_src = malloc((size_t)MAXDEPTH * sizeof(Win)); g_pass = malloc((size_t)MAXDEPTH * sizeof(Win));
-    g_might = calloc((size_t)MAXDEPTH * PW, 8); g_chain = malloc(MAXDEPTH * sizeof(int));
-    g_onpath = calloc(NCL, 1); g_targets = calloc(PW, 8); g_mask = calloc(PW, 8);
+    InitializeCriticalSection(&g_flood_lock);
+    g_np = np; g_pairs = pairs; g_seconds = seconds; g_budget0 = budget;
+    g_res = calloc(np > 0 ? np : 1, sizeof(char *)); g_proven = calloc(np > 0 ? np : 1, sizeof(int));
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    int nt = g_all ? 1 : (int)si.dwNumberOfProcessors;
+    if (getenv("VIS_CERTIFY_THREADS")) nt = atoi(getenv("VIS_CERTIFY_THREADS"));
+    if (nt < 1) nt = 1;
+    if (nt > 64) nt = 64;
+    HANDLE th[64];
+    for (int t = 0; t < nt; t++) th[t] = CreateThread(NULL, 0, pair_worker, NULL, 0, NULL);
+    WaitForMultipleObjects(nt, th, TRUE, INFINITE);
     int proven = 0;
-    for (int k = 0; k < np; k++) {
-        int A = pairs[k][0], B = pairs[k][1];
-        if (A < 0 || B < 0 || A >= NCL || B >= NCL || A == B) { printf("pair %d-%d: bad clusters\n", A, B); continue; }
-        double t0 = now();
-        /* a sight line reversed is a sight line: a proof in either direction is a proof of the pair. Both
-           directions are tried (their windows differ); the chain reported is the forward one. */
-        g_deadline = t0 + seconds; g_steps = 0; g_budget = budget;
-        if (g_all) {
-            g_nchains = 0;
-            if (!g_chains) { g_chains = malloc((size_t)g_all * MAXDEPTH * sizeof(int)); g_chainlen = malloc(g_all * sizeof(int)); }
-            int r = certify_dir(A, B);
-            printf("pair %d-%d: %s, %d chains%s   (%lld steps, %.2f s)\n", A, B,
-                   r == NOTHING ? "PROVEN HIDDEN" : "UNDECIDED", g_nchains, g_nchains >= g_all ? " (cap)" : "", g_steps, now() - t0);
-            for (int c = 0; c < g_nchains; c++) {
-                printf("  chain:");
-                for (int i = 0; i < g_chainlen[c]; i++) printf(" %d", g_chains[(size_t)c * MAXDEPTH + i]);
-                printf("\n");
-            }
-            fflush(stdout);
-            continue;
-        }
-        int fwd = certify_dir(A, B), found_depth = g_found_depth;
-        int chain[MAXDEPTH]; long long steps = g_steps;
-        if (fwd == FOUND) memcpy(chain, g_chain, (found_depth + 1) * sizeof(int));
-        int result = fwd;
-        if (fwd != NOTHING) {
-            g_deadline = now() + seconds; g_steps = 0;
-            int back = certify_dir(B, A);
-            steps += g_steps;
-            if (back == NOTHING) result = NOTHING;
-            else if (fwd == BUDGET && back == FOUND) { result = FOUND; found_depth = g_found_depth; memcpy(chain, g_chain, (found_depth + 1) * sizeof(int)); }
-        }
-        double dt = now() - t0;
-        if (result == FOUND) {
-            printf("pair %d-%d: UNDECIDED chain", A, B);
-            for (int i = 0; i <= found_depth; i++) printf(" %d", chain[i]);
-            printf("   (%lld steps, %.2f s)\n", steps, dt);
-        } else if (result == BUDGET) {
-            printf("pair %d-%d: UNDECIDED budget   (%lld steps, %.2f s)\n", A, B, steps, dt);
-        } else {
-            printf("pair %d-%d: PROVEN HIDDEN%s   (%lld steps, %.2f s)\n", A, B, fwd == NOTHING ? "" : " (from the far side)", steps, dt);
-            proven++;
-        }
-        fflush(stdout);
-    }
+    for (int k = 0; k < np; k++) { if (g_res[k]) fputs(g_res[k], stdout); proven += g_proven[k]; }
     printf("%d of %d pairs proven hidden\n", proven, np);
     return 0;
 }

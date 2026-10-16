@@ -1,5 +1,7 @@
 /* vis_rays: proves cluster pairs visible with random sight lines (never proves hidden); used by vis_check.py.
  *   vis_rays <map.bsp> <map.prt> <rays per pair> a1 b1 [a2 b2 ...]
+ * The pairs are shared out over every CPU core (each pair its own random stream, so a run's output doesn't depend
+ * on the thread count); results are printed in the pairs' order.
  * Each ray joins a random point on a portal of cluster a to a random point on a portal of cluster b; it is a
  * real sight line when every leaf it passes through has a cluster (solid leaves have cluster -1). */
 #include <math.h>
@@ -7,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <windows.h>
 
 typedef struct { double x, y, z; } V;
 static int *nplane, *nchild, *lclus; static float *pn, *pd;
@@ -20,16 +23,16 @@ static int open_seg(int node, V a, V b) {
         if (da < 0 && db < 0) { node = nchild[2 * node + 1]; continue; }
         double t = da / (da - db);
         V m = {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
-        int near = da >= 0 ? 0 : 1;
-        if (!open_seg(nchild[2 * node + near], a, m)) return 0;
-        a = m; node = nchild[2 * node + 1 - near];
+        int side = da >= 0 ? 0 : 1;
+        if (!open_seg(nchild[2 * node + side], a, m)) return 0;
+        a = m; node = nchild[2 * node + 1 - side];
     }
     return lclus[-node - 1] >= 0;
 }
 
 typedef struct { int n; V p[64]; } W;
 static W *pw; static int *pc0, *pc1, NP, NCL;
-static uint64_t rng = 88172645463325252ull;
+static _Thread_local uint64_t rng = 88172645463325252ull;
 static double rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return (rng >> 11) * (1.0 / 9007199254740992.0); }
 
 static V rand_on(const W *w) {
@@ -55,6 +58,35 @@ static V rand_on(const W *w) {
     return p;
 }
 
+static long long g_rays;
+static char **g_argv, **g_out;
+static int g_npairs;
+static volatile LONG g_next;
+
+static DWORD WINAPI worker(LPVOID arg) {
+    (void)arg;
+    for (;;) {
+        int k = (int)InterlockedIncrement(&g_next) - 1;
+        if (k >= g_npairs) return 0;
+        int A = atoi(g_argv[4 + 2 * k]), B = atoi(g_argv[5 + 2 * k]);
+        rng = 88172645463325252ull ^ ((uint64_t)(k + 1) * 0x9E3779B97F4A7C15ull);   /* (each pair its own stream) */
+        for (int i = 0; i < 8; i++) rnd();
+        int pa[512], na = 0, pb[512], nb = 0;
+        for (int i = 0; i < NP; i++) {
+            if ((pc0[i] == A || pc1[i] == A) && na < 512) pa[na++] = i;
+            if ((pc0[i] == B || pc1[i] == B) && nb < 512) pb[nb++] = i;
+        }
+        char *buf = malloc(512); int len = 0;
+        long long hits = 0;
+        for (long long r = 0; r < g_rays && !hits; r++) {
+            V p = rand_on(&pw[pa[(int)(rnd() * na)]]), q = rand_on(&pw[pb[(int)(rnd() * nb)]]);
+            if (open_seg(0, p, q)) { hits++; len += sprintf(buf + len, "  %d-%d SEEN: (%.2f %.2f %.2f) -> (%.2f %.2f %.2f)\n", A, B, p.x, p.y, p.z, q.x, q.y, q.z); }
+        }
+        sprintf(buf + len, "pair %d-%d: %s (%d and %d portals, up to %lld rays)\n", A, B, hits ? "VISIBLE (a ray got through)" : "no ray got through", na, nb, g_rays);
+        g_out[k] = buf;
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc < 6) { printf("vis_rays <map.bsp> <map.prt> <rays> a b [a b ...]\n"); return 2; }
     FILE *f = fopen(argv[1], "rb"); fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
@@ -75,21 +107,17 @@ int main(int argc, char **argv) {
         fscanf(pf, "%d %d %d", &pw[i].n, &pc0[i], &pc1[i]);
         for (int j = 0; j < pw[i].n; j++) fscanf(pf, " (%lf %lf %lf )", &pw[i].p[j].x, &pw[i].p[j].y, &pw[i].p[j].z);
     }
-    long long rays = atoll(argv[3]);
-    for (int a = 4; a + 1 < argc; a += 2) {
-        int A = atoi(argv[a]), B = atoi(argv[a + 1]);
-        int pa[512], na = 0, pb[512], nb = 0;
-        for (int i = 0; i < NP; i++) {
-            if ((pc0[i] == A || pc1[i] == A) && na < 512) pa[na++] = i;
-            if ((pc0[i] == B || pc1[i] == B) && nb < 512) pb[nb++] = i;
-        }
-        long long hits = 0;
-        for (long long r = 0; r < rays && !hits; r++) {
-            V p = rand_on(&pw[pa[(int)(rnd() * na)]]), q = rand_on(&pw[pb[(int)(rnd() * nb)]]);
-            if (open_seg(0, p, q)) { hits++; printf("  %d-%d SEEN: (%.2f %.2f %.2f) -> (%.2f %.2f %.2f)\n", A, B, p.x, p.y, p.z, q.x, q.y, q.z); }
-        }
-        printf("pair %d-%d: %s (%d and %d portals, up to %lld rays)\n", A, B, hits ? "VISIBLE (a ray got through)" : "no ray got through", na, nb, rays);
-        fflush(stdout);
-    }
+    g_rays = atoll(argv[3]);
+    g_argv = argv;
+    g_npairs = (argc - 4) / 2;
+    g_out = calloc(g_npairs, sizeof(char *));
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    int nt = (int)si.dwNumberOfProcessors;
+    if (getenv("VIS_RAYS_THREADS")) nt = atoi(getenv("VIS_RAYS_THREADS"));
+    if (nt < 1) nt = 1;
+    HANDLE *th = malloc(nt * sizeof(HANDLE));
+    for (int t = 0; t < nt; t++) th[t] = CreateThread(NULL, 0, worker, NULL, 0, NULL);
+    WaitForMultipleObjects(nt, th, TRUE, INFINITE);       /* (at most 64 handles: enough for this machine) */
+    for (int k = 0; k < g_npairs; k++) fputs(g_out[k], stdout);
     return 0;
 }
