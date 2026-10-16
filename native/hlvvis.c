@@ -38,6 +38,7 @@
 #include <string.h>
 #include <windows.h>
 #include <emmintrin.h>
+#include "hlvvis_gpu.h"
 
 static void fail(const char *fmt, const char *arg) {
     printf("Error: ");
@@ -752,6 +753,8 @@ static _Thread_local WinBuf *t_snapS, *t_snapW;
 static _Thread_local JCand *t_cand; static _Thread_local int t_ncand, t_capcand;
 static _Thread_local int *t_order;
 static volatile LONG64 g_jrounds, g_jexp, g_jreach, g_jopened;
+/* (GPU planning) per base portal: its rounds and its widest round; how many bases took how many rounds */
+static int *g_jbase_rounds, *g_jbase_maxfront;
 
 static void j_add(int pnum, const Win *source, const Win *pass) {
     if (t_ncand == t_capcand) {
@@ -845,6 +848,7 @@ static void jacobi_flow(int pi) {
     j_merge_all(b, &seen);
     while (t_nnext && seen < floodn) {
         InterlockedIncrement64(&g_jrounds);
+        if (g_jbase_rounds) { g_jbase_rounds[pi]++; if (t_nnext > g_jbase_maxfront[pi]) g_jbase_maxfront[pi] = t_nnext; }
         int *tmp = t_front; t_front = t_next; t_next = tmp;
         t_nfront = t_nnext; t_nnext = 0;
         qsort(t_front, t_nfront, sizeof(int), cmp_int);
@@ -1061,6 +1065,8 @@ static DWORD WINAPI flow_worker(LPVOID arg) {
    from its first point (the second one's fan wraps all the way round, as vvis's does) and points are
    taken on every pair of triangles at barycentric steps of 0.25: the smallest squared distance found */
 static int g_radial;
+static int g_gpu;                 /* -gpu: the rough pass's plane tests on the graphics card (hlvvis_gpu.c) */
+static int g_front_done;          /* the front bits are already in (from the GPU) */
 static double g_vis_radius2;      /* farz squared */
 static float tri_dist2(const V *a, const V *b) {
     float best = FLT_MAX;
@@ -1142,7 +1148,7 @@ static DWORD WINAPI rough_worker(LPVOID arg) {
         int i = InterlockedIncrement(&g_rough_next) - 1;
         if (i >= NPD) break;
         Portal *p = &P[i];
-        for (int j = 0; j < NPD; j++) {
+        for (int j = 0; j < NPD && !g_front_done; j++) {
             if (j == i) continue;
             Portal *t = &P[j];
             int k;
@@ -1165,6 +1171,33 @@ static DWORD WINAPI rough_worker(LPVOID arg) {
         p->nmight = c;
     }
     return 0;
+}
+
+
+/* the GPU's rows of "in front" bits into each portal's front bitset */
+static void store_front(int row, const uint32_t *words, void *ctx) {
+    (void)ctx;
+    memcpy(P[row].front, words, (size_t)PW * 8);
+}
+/* -gpu: the rough pass's plane tests on the graphics card; 0 if it couldn't (the CPU does them then) */
+static int gpu_front(void) {
+    int npts = 0;
+    for (int i = 0; i < NPD; i++) npts += P[i].w->n;
+    float *pts = xmalloc((size_t)npts * 16 + 16);
+    vgpu_portal_t *gp = xmalloc((size_t)NPD * sizeof(vgpu_portal_t) + 16);
+    int at = 0;
+    for (int i = 0; i < NPD; i++) {
+        Portal *p = &P[i];
+        gp[i].plane[0] = p->pl.n.x; gp[i].plane[1] = p->pl.n.y; gp[i].plane[2] = p->pl.n.z; gp[i].plane[3] = p->pl.d;
+        gp[i].first = (uint32_t)at; gp[i].count = (uint32_t)p->w->n; gp[i].pad0 = gp[i].pad1 = 0;
+        for (int k = 0; k < p->w->n; k++, at++) {
+            pts[4 * at] = p->w->p[k].x; pts[4 * at + 1] = p->w->p[k].y; pts[4 * at + 2] = p->w->p[k].z; pts[4 * at + 3] = 0;
+        }
+    }
+    int ok = vgpu_front(NPD, pts, npts, gp, EPS_UP, PW * 2, store_front, NULL);
+    free(pts); free(gp);
+    if (!ok) for (int i = 0; i < NPD; i++) memset(P[i].front, 0, (size_t)PW * 8);    /* (a part may have arrived) */
+    return ok;
 }
 
 static void run_threads(LPTHREAD_START_ROUTINE fn, int nt) {
@@ -1348,6 +1381,7 @@ int main(int argc, char **argv) {
         else if (!_stricmp(argv[i], "-fast")) fast = 1;
         else if (!_stricmp(argv[i], "-exact")) g_merge = 0;
         else if (!_stricmp(argv[i], "-jacobi")) g_jacobi = 1;
+        else if (!_stricmp(argv[i], "-gpu")) g_gpu = 1;
         else if (!_stricmp(argv[i], "-game") && i + 1 < argc) i++;
         else if (!_stricmp(argv[i], "-radius_override") && i + 1 < argc) radius_override = argv[++i];
         else if (argv[i][0] == '-') { printf("Error: unsupported option %s\n", argv[i]); return 2; }
@@ -1425,11 +1459,20 @@ int main(int argc, char **argv) {
     snprintf(path, sizeof path, "%s.prt", base);
     printf("reading %s\n", path);
     load_portals(path);
+    if (getenv("HL_ROUND_STATS")) { g_jbase_rounds = xcalloc(NPD, sizeof(int)); g_jbase_maxfront = xcalloc(NPD, sizeof(int)); }
     printf("%d portalclusters\n%d numportals\n", NCL, NP_PRT);
 
     /* ---- rough pass, then the exact one */
     printf("BasePortalVis:       ");
     g_rough_next = 0;
+    if (g_gpu && !g_radial) {
+        LARGE_INTEGER f0, f1, fq; QueryPerformanceCounter(&f0); QueryPerformanceFrequency(&fq);
+        g_front_done = gpu_front();
+        QueryPerformanceCounter(&f1);
+        if (g_front_done) printf("(rough pass's plane tests on the GPU, %s: %.2f s) ", vgpu_name(),
+                                 (double)(f1.QuadPart - f0.QuadPart) / fq.QuadPart);
+        else printf("(the GPU couldn't: the CPU does it) ");
+    }
     run_threads(rough_worker, threads);
     printf("done\n");
     if (fast) {
@@ -1498,6 +1541,16 @@ int main(int argc, char **argv) {
         QueryPerformanceCounter(&fn);
         double flow_wall = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
         printf("PortalFlow:          done (%.1f s)\n", flow_wall);
+        if (g_jacobi && g_jbase_rounds) {
+            /* (GPU planning) rounds per base portal and frontier widths, as percentiles */
+            int *r = xmalloc(NPD * sizeof(int) + 4), *w = xmalloc(NPD * sizeof(int) + 4);
+            memcpy(r, g_jbase_rounds, NPD * sizeof(int)); memcpy(w, g_jbase_maxfront, NPD * sizeof(int));
+            qsort(r, NPD, sizeof(int), cmp_int); qsort(w, NPD, sizeof(int), cmp_int);
+            printf("rounds per base portal: median %d, 90%% %d, 99%% %d, max %d; widest round per base: median %d, 90%% %d, "
+                   "99%% %d, max %d; average round width %.1f\n", r[NPD / 2], r[NPD * 9 / 10], r[NPD * 99 / 100], r[NPD - 1],
+                   w[NPD / 2], w[NPD * 9 / 10], w[NPD * 99 / 100], w[NPD - 1], g_jrounds ? (double)g_jexp / g_jrounds : 0);
+            free(r); free(w);
+        }
         if (g_jacobi) printf("rounds: %lld rounds, %lld expansions, %lld portals reached, %lld opened fully\n",
                              (long long)g_jrounds, (long long)g_jexp, (long long)g_jreach, (long long)g_jopened);
         else if (g_merge) printf("merged windows: %lld steps, %lld pushes, %lld portals opened fully, %lld sweep rounds re-expanding %lld\n",

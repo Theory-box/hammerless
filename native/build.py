@@ -26,7 +26,7 @@ FLAGS = ["-O2", "-ffp-contract=off", "-fno-fast-math", "-target", "x86_64-window
 FLAGS32 = ["-O2", "-ffp-contract=off", "-fno-fast-math", "-target", "x86-windows-gnu", "-mcpu=pentium4", "-mfpmath=sse"]
 TARGETS = {
     "hlnav": (["-shared"], "_hlnav.dll", "hlnav.c"),
-    "hlvvis": ([], "hlvvis.exe", "hlvvis.c"),
+    "hlvvis": (["-I" + os.path.join(HERE, "third_party", "vulkan")], "hlvvis.exe", ["hlvvis.c", "hlvvis_gpu.c"]),
     "hlvbsp": (["32bit"], "hlvbsp.exe", ["hlvbsp/main.c", "hlvbsp/poly.c", "hlvbsp/map.c", "hlvbsp/instance.c", "hlvbsp/brush.c", "hlvbsp/csg.c",
                                   "hlvbsp/portals.c", "hlvbsp/faces.c", "hlvbsp/detail.c", "hlvbsp/write.c",
                                   "hlvbsp/phys.c", "hlvbsp/disp.c", "hlvbsp/pak.c", "hlvbsp/staticprop.c", "hlvbsp/detail_props.c", "hlvbsp/overlay.c", "hlvbsp/water.c", "hlvbsp/cubemap.c", "hlvbsp/occluder.c", "hlvbsp/onlyents.c"]),
@@ -41,9 +41,9 @@ TARGETS = {
 def build_shaders():
     """hlvrad's GPU programs (hlvrad/shaders/*.comp) into C headers (*.spv.h), with Khronos's glslang (set GLSLANG to
     its glslang.exe, or have it on the PATH). The headers are committed: without glslang they're used as they are."""
-    sdir = os.path.join(HERE, "hlvrad", "shaders")
     tool = os.environ.get("GLSLANG") or shutil.which("glslang") or shutil.which("glslangValidator")
-    for comp in sorted(glob.glob(os.path.join(sdir, "*.comp"))):
+    for sdir, comp in [(d, c) for d in (os.path.join(HERE, "hlvrad", "shaders"), os.path.join(HERE, "hlvvis_shaders"))
+                       for c in sorted(glob.glob(os.path.join(d, "*.comp")))]:
         name = os.path.splitext(os.path.basename(comp))[0]
         header = os.path.join(sdir, name + ".spv.h")
         newest = max(os.path.getmtime(f) for f in glob.glob(os.path.join(sdir, "*.comp")) + glob.glob(os.path.join(sdir, "*.glsl")))
@@ -67,7 +67,7 @@ def build_shaders():
 
 
 for name in sys.argv[1:] or list(TARGETS):
-    if name.startswith("hlvrad"):
+    if name.startswith("hlvrad") or name == "hlvvis":
         build_shaders()
     extra, out_name, src = TARGETS[name]
     out = os.path.abspath(os.path.join(CORE, out_name))

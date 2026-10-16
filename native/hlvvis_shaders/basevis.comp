@@ -1,0 +1,43 @@
+#version 460
+// hlvvis's rough pass on the GPU (BasePortalVis's plane tests): portal j is "in front" of portal i when some point of
+// j lies in front of i's plane by more than 0.01 and some point of i lies behind j's plane by more than 0.01. One
+// invocation per (row i, 32 columns j): one 32-bit word of the row, bit j & 31, as the CPU's byte bitsets read.
+// The arithmetic is the CPU's, operation for operation (no fused multiply-adds: `precise`): d > 0.01 (double) is
+// d >= eps_up, the first float above 0.01, so the bits are the CPU's bits.
+layout(local_size_x = 64) in;
+
+struct Portal { vec4 plane; uint first; uint count; uint pad0; uint pad1; };
+layout(std430, binding = 0) readonly buffer Points { vec4 pts[]; };
+layout(std430, binding = 1) readonly buffer Portals { Portal portals[]; };
+layout(std430, binding = 2) writeonly buffer Front { uint words[]; };
+
+layout(push_constant) uniform PC { uint npd; uint row0; uint rows; uint w32; float eps_up; } pc;
+
+precise float dist(vec3 p, vec4 pl) {
+    precise float d = p.x * pl.x + p.y * pl.y;
+    d = d + p.z * pl.z;
+    return d - pl.w;
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= pc.rows * pc.w32) return;
+    uint r = id / pc.w32, w = id % pc.w32;
+    uint i = pc.row0 + r;
+    Portal p = portals[i];
+    uint bits = 0u;
+    for (uint b = 0u; b < 32u; b++) {
+        uint j = w * 32u + b;
+        if (j >= pc.npd || j == i) continue;
+        Portal t = portals[j];
+        bool front = false;
+        for (uint k = 0u; k < t.count && !front; k++)
+            if (dist(pts[t.first + k].xyz, p.plane) >= pc.eps_up) front = true;
+        if (!front) continue;
+        bool behind = false;
+        for (uint k = 0u; k < p.count && !behind; k++)
+            if (dist(pts[p.first + k].xyz, t.plane) <= -pc.eps_up) behind = true;
+        if (behind) bits |= 1u << b;
+    }
+    words[id] = bits;
+}
