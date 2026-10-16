@@ -109,9 +109,11 @@ class HL_OT_make_collision(bpy.types.Operator):
         old = _outputs(src.name, False)
         material = None
         for o in old:
-            if o.data is not None and len(o.data.materials) and o.data.materials[0] is not None:
-                material = o.data.materials[0]
-                break
+            me = o.data
+            if me is not None and len(me.polygons) and me.polygons[0].material_index < len(me.materials):
+                material = me.materials[me.polygons[0].material_index]      # (what its faces wear: a texture
+                if material is not None:                                      # applied adds a slot)
+                    break
         material = material or game_material("tools/toolsnodraw")
         colls = list(old[0].users_collection) if old else []
         _remove(old)

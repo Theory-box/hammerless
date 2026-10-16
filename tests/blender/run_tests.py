@@ -1915,8 +1915,21 @@ def test_make_collision_modes():
     assert sum(len(o.data.polygons) for o in p) == faces
     assert all(o.hammerless.role == "MODEL" and o.hammerless.model_kind == "STATIC"
                and o.hammerless.model_collision == "HULLS" and o.data.materials[0] == mat for o in p)
+    # Apply to Selected on one collision prop (a Custom Model) gives the whole set the texture; pressing again keeps it
+    from hammerless.blender.texturing import paint_faces, selected_targets
+    nd = game_material("tools/toolsnodraw")
+    for o in p:
+        o.data.materials[0] = nd
+    bpy.ops.object.select_all(action="DESELECT")
+    p[0].select_set(True)
+    targets = selected_targets(bpy.context)
+    assert len(targets) == 4, targets
+    for o, f in targets:
+        paint_faces(bpy.context, o, f, mat)
+    assert all(o.data.materials[o.data.polygons[0].material_index] == mat for o in p)
     house.hammerless.collision_mode = "BRUSHES"
-    assert len(press()) == 1
+    b = press()
+    assert len(b) == 1 and b[0].data.materials[0] == mat
     # tools/toolsinvisible on a model: a see-through alpha-tested material with its own texture (decals stick)
     d = os.path.join(TMP, "game_inv")
     written = write_model_materials(d, "models/hammerless/x", {

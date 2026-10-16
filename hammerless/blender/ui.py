@@ -337,7 +337,8 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                 col.prop(hs, "model_mass")
             else:
                 col.prop(hs, "model_collision")
-                if hs.model_kind == "STATIC":     # (brushes don't move with a dynamic prop)
+                if hs.model_kind == "STATIC" and obj.get("hl_collision_of") is None:   # (brushes don't move
+                                                                                        # with a dynamic prop)
                     row = col.row(align=True)
                     row.operator("hammerless.make_collision", icon="MOD_SOLIDIFY")
                     row.prop(hs, "collision_min_area", text="")

@@ -176,6 +176,8 @@ def _slot(obj, mat) -> int:
 
 def _paintable(obj) -> bool:
     hs = obj.hammerless
+    if obj.type == "MESH" and obj.get("hl_collision_of") is not None:     # (Make Collision's brushes or props)
+        return hs.role != "IGNORE"
     return (obj.type == "MESH" and not obj.data.name.startswith("HL_") and hs.role not in ("ENTITY", "MODEL")
             and obj.get("hl_vmf_kind") != "disp")
 
@@ -257,6 +259,11 @@ def selected_targets(context) -> list[tuple]:
                 out.append((obj, sel))
     else:
         out = [(o, None) for o in context.selected_objects if _paintable(o)]
+        srcs = {o.get("hl_collision_of") for o, _f in out} - {None}
+        if srcs:                        # (one collision prop picked: the texture goes on the whole set)
+            have = {o for o, _f in out}
+            out += [(o, None) for o in bpy.data.objects
+                    if o.get("hl_collision_of") in srcs and o not in have and _paintable(o)]
     return out
 
 
