@@ -501,6 +501,13 @@ def asset_print(rep, root: str, map_name: str, tops=("materials", "models")) -> 
     return cc.asset_fingerprint(cc.Tools(root).gamedir, map_name, tops)
 
 
+def export_thread(target):
+    """A thread for an export's work, started and counted (export_running)."""
+    import threading
+    t = threading.Thread(target=target, daemon=True)
+    _EXPORT_THREADS.append(t)
+    t.start()
+    return t
 _EXPORT_THREADS: list = []     # export_finish threads running (Build & Play, Build Nav Mesh, the nav preview)
 
 
@@ -1407,9 +1414,7 @@ class HL_OT_build(bpy.types.Operator):
                 r = Report()
                 r.errors.append(f"The export failed: {ex}")
                 self._export_out = (None, prep.root, r)
-        self._export_thread = threading.Thread(target=work, daemon=True)
-        self._export_thread.start()
-        _EXPORT_THREADS.append(self._export_thread)
+        self._export_thread = export_thread(work)
         self._job = None
         self._key = _build_key(vmf)
         _BUILDING.add(self._key)

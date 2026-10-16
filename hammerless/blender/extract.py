@@ -862,7 +862,10 @@ def _triangles_from(t_loops, t_verts, t_mat, co, nrm, uvs, mat_names, sca, size,
     lo, ve, ma = t_loops.tolist(), t_verts.tolist(), t_mat.tolist()
     cl, nl_ = co.tolist(), nrm.tolist()
     ul = uvs.tolist() if uvs is not None else None
+    import time
     for t in range(len(ma)):
+        if not t & 2047:
+            time.sleep(0)                      # (lets Blender's own thread have the interpreter: it draws the UI)
         verts = []
         for k in range(3):
             li, vi = lo[3 * t + k], ve[3 * t + k]

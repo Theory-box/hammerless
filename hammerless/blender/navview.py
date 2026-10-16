@@ -411,10 +411,8 @@ class HL_OT_nav_predict(bpy.types.Operator):
                                       wall_climbs, lambda: box["stop"], roofs)  # (its own process: Blender stays quick)
             except Exception as ex:          # shown to the user
                 box["error"] = str(ex)
-        self._thread = threading.Thread(target=work, daemon=True)
-        self._thread.start()
-        from .ops import _EXPORT_THREADS
-        _EXPORT_THREADS.append(self._thread)      # (it makes the map's text: no other export meanwhile)
+        from .ops import export_thread
+        self._thread = export_thread(work)        # (it makes the map's text: no other export meanwhile)
         _state["busy"] = "build"
         _state["cancel"] = False
         _redraw()
@@ -516,10 +514,8 @@ class HL_OT_nav_analyze(bpy.types.Operator):
                 rr = Report()
                 rr.errors.append(f"The export failed: {ex}")
                 self._export_out = (None, root, rr)
-        self._export_thread = threading.Thread(target=export_work, daemon=True)
-        self._export_thread.start()
-        from .ops import _EXPORT_THREADS
-        _EXPORT_THREADS.append(self._export_thread)
+        from .ops import export_thread
+        self._export_thread = export_thread(export_work)
         _state["busy"] = "analyze"
         _state["cancel"] = False
         _redraw()
