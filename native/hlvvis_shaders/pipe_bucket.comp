@@ -1,0 +1,20 @@
+#version 460
+// hlvvis -jacobi GPU pipeline: the merge's lists by length (each list is merged on its own, in item order, so their
+// order doesn't change any result; similar lengths side by side keep a subgroup's invocations busy together).
+// pc.item_start 0: count each class; 1: each class's first place; 2: place each list.
+#extension GL_GOOGLE_include_directive : require
+#include "pipe_common.glsl"
+layout(local_size_x = 64) in;
+
+void main() {
+    uint id = gid();
+    if (pc.item_start == 1u) {
+        if (id == 0u) { uint run = 0u; for (uint k = 0u; k < MERGE_CLASSES; k++) { cnt[C_CLSPOS + k] = run; run += cnt[C_CLS + k]; } }
+        return;
+    }
+    if (id >= cnt[C_TOUCH]) return;
+    uvec2 tc = touched[id];
+    uint c = list_class(tc);
+    if (pc.item_start == 0u) atomicAdd(cnt[C_CLS + c], 1u);
+    else touched2[atomicAdd(cnt[C_CLSPOS + c], 1u)] = tc;
+}

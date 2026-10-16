@@ -18,7 +18,7 @@ uint orsm[MW_MAX];
 void main() {
     uint id = gid();
     if (id >= cnt[C_TOUCH]) return;
-    uvec2 tc = touched[id];
+    uvec2 tc = touched2[id];
     uint idx = tc.x, s = tc.y, fail = cnt[C_FAIL];
     uvec4 p = pr[idx];
     uint qn = p.w, mw = MW != 0u ? slots[s].mw : 0u;
@@ -37,6 +37,7 @@ void main() {
     }
     uint prev = p.z == pc.round ? p.y : 0u, arr = prev + total;
     pr[idx] = uvec4(EMPTY, arr, pc.round, qn);
+    tlen[idx] = 0u;
     if (total == 0u) return;
     uint base = slots[s].base, gen = slots[s].gen;
     uint w = s * pc.pw32 + (qn >> 5), bit = 1u << (qn & 31u);

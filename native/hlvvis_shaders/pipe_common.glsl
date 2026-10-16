@@ -68,6 +68,8 @@ layout(std430, binding = 25) buffer MightPT { uint jmPT[]; };
 layout(std430, binding = 26) readonly buffer V1Cl { uint v1cl[]; };
 layout(std430, binding = 27) coherent buffer RMap { uint rmap[]; };
 layout(std430, binding = 28) buffer CandX { uint candx[]; };                     // per candidate: the frontier entry it came from
+layout(std430, binding = 29) buffer TLen { uint tlen[]; };                       // per entry: candidates linked this pass
+layout(std430, binding = 30) buffer Touched2 { uvec2 touched2[]; };              // touched[], longest lists first
 #define MW pc.mw
 uint jm_at(uint s, uint i) { return slots[s].woff + (i - slots[s].off) * slots[s].mw; }   // entry i's set
 #define MW_MAX 256
@@ -79,6 +81,9 @@ uint jm_at(uint s, uint i) { return slots[s].woff + (i - slots[s].off) * slots[s
 #define C_FAIL 4       // first item that found no room (this pass), EMPTY if none
 #define C_TOUCH 5      // (slot, portal) lists started (this pass)
 #define C_ERR 6        // the round's item count didn't fit 32 bits
+#define C_CLS 24       // the merge's lists per length class (MERGE_CLASSES), then from 32 each class's next place
+#define C_CLSPOS 32
+#define MERGE_CLASSES 6
 #define C_NCL 48       // (set once) clusters
 #define C_CW32 49      // (set once) 32-bit words per cluster set
 #define PASS_RESERVED_PTS 128u   // (a pass's first item has candidate 0 and points 0 .. 127 of its own: every pass gets on)
@@ -121,6 +126,14 @@ void make_pt(uint s, uint i, uint q) {
             uint r = rmap[s * ncl + k * 32u + uint(findLSB(b2))];
             jmPT[a + (r >> 5)] |= 1u << (r & 31u);
         }
+}
+
+// a merge list's length class: 0 longest (16 and more) .. 4 one window, 5 opened (no window work)
+uint list_class(uvec2 tc) {
+    ivec4 h = sth[tc.x];
+    if (h.x == int(slots[tc.y].gen) && (h.z & 1) != 0) return 5u;
+    uint n = tlen[tc.x];
+    return n >= 16u ? 0u : n >= 8u ? 1u : n >= 4u ? 2u : n >= 2u ? 3u : 4u;
 }
 
 void load_win(uint p, out vec3 w[MAXW], out int n) {

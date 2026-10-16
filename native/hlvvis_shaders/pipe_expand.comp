@@ -60,5 +60,6 @@ void main() {
     uint old = atomicExchange(pr[idx].x, c);
     cands[c] = uvec4(old, id, pt, uint(nS) | (uint(nA) << 16));
     candx[c] = xi;
+    atomicAdd(tlen[idx], 1u);
     if (old == EMPTY) touched[atomicAdd(cnt[C_TOUCH], 1u)] = uvec2(idx, s);
 }

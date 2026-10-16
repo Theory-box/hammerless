@@ -1596,7 +1596,7 @@ static int g_radial;
 static int g_gpu;                 /* -gpu: the rough pass's plane tests on the graphics card (hlvvis_gpu.c) */
 /* the default (no -exact / -jacobi / -gpu / -cpu): on a graphics card that can, -jacobi on it twice, the second
    pass with might-see sets pruned by the first's vis (g_two); else the merged windows on the CPU */
-static int g_auto = 1;
+static int g_auto = 0;     /* (-gpu2 turns it on; the default is the merged windows on the CPU) */
 static int g_front_done;          /* the front bits are already in (from the GPU) */
 static double g_vis_radius2;      /* farz squared */
 static float tri_dist2(const V *a, const V *b) {
@@ -1915,6 +1915,7 @@ int main(int argc, char **argv) {
         else if (!_stricmp(argv[i], "-jacobi")) g_jacobi = 1, g_auto = 0;
         else if (!_stricmp(argv[i], "-gpu")) g_gpu = 1, g_auto = 0;
         else if (!_stricmp(argv[i], "-cpu")) g_auto = 0;       /* (the merged windows on the CPU, no graphics card) */
+        else if (!_stricmp(argv[i], "-gpu2")) g_auto = 1;      /* (the two GPU passes; still being tested) */
         else if (!_stricmp(argv[i], "-gpuselftest")) return vgpu_fp64_selftest(4000000) == 0 ? 0 : 1;
         else if (!_stricmp(argv[i], "-game") && i + 1 < argc) i++;
         else if (!_stricmp(argv[i], "-radius_override") && i + 1 < argc) radius_override = argv[++i];
