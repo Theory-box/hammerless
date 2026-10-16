@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import sys
 import queue
 import re
@@ -167,6 +168,27 @@ def _opts_rest(text: str) -> str:
 
 
 HLVVIS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hlvvis.exe")
+
+
+HISTORY_MAX = 8 << 20     # (bytes of <map>.buildhistory.log kept: the newest)
+
+
+def build_history(base: str, lines: list[str]) -> None:
+    """Appends to <map>.buildhistory.log, which every build adds to (the .lastbuild.log is only the last one): the
+    whole compile log, and the add-on's own warnings (fallbacks, the nav mesh's), so a problem seen once can be read
+    back later. Trimmed to its newest HISTORY_MAX bytes."""
+    path = base + ".buildhistory.log"
+    try:
+        with open(path, "a", encoding="utf-8", errors="replace") as f:
+            f.write("\n".join(lines) + "\n")
+        if os.path.getsize(path) > HISTORY_MAX * 2:
+            with open(path, "rb") as f:
+                f.seek(-HISTORY_MAX, os.SEEK_END)
+                tail = f.read()
+            with open(path, "wb") as f:
+                f.write(tail[tail.find(b"\n") + 1:])
+    except OSError:
+        pass
 
 
 def use_hlvvis(opts: "CompileOptions") -> bool:
@@ -1373,6 +1395,7 @@ class CompileJob:
                         f.write("\n".join(self.log) + "\n")
                 except OSError:
                     pass
+                build_history(self.base, ["=== build " + time.strftime("%Y-%m-%d %H:%M:%S")] + self.log)
             else:
                 self.log.append(item)
                 new.append(item)

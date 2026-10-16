@@ -1596,6 +1596,7 @@ class HL_OT_build(bpy.types.Operator):
             if self._nav["mesh"] is None:
                 self.report({"WARNING"}, f"Nav mesh couldn't be built in Blender ({self._nav['error']}); "
                                          "the game will make it")
+                cc.build_history(self._job.base, [f"warning: nav mesh couldn't be built in Blender ({self._nav['error']})"])
                 self._nav = None
             elif s.nav_analysis == "BLENDER" and not self._nav.get("analysis_finished"):
                 an = self._nav.get("analysis")
@@ -1614,6 +1615,7 @@ class HL_OT_build(bpy.types.Operator):
                 if not an["done"]:
                     self.report({"WARNING"}, f"Nav analysis in Blender failed ({an['error']}); the game will "
                                              "analyze the nav mesh")
+                    cc.build_history(self._job.base, [f"warning: nav analysis in Blender failed ({an['error']})"])
                 return {"PASS_THROUGH"}
             else:
                 analyzed = bool(self._nav.get("analysis") and self._nav["analysis"]["done"])
@@ -1653,6 +1655,7 @@ class HL_OT_build(bpy.types.Operator):
                 cc.set_nav_inputs(cc.Tools(self._root), self._owner[1], None)
                 self.report({"WARNING"}, f"Couldn't update the nav mesh for the new map ({ex}): the next build makes it")
         write_log([timing], append=True)       # (once: the waits above return before this)
+        cc.build_history(self._job.base, [timing] + [f"warning: {m}" for m in self._job.fallbacks])
         try:
             with open(self._job.base + ".lastbuild.log", "a", encoding="utf-8") as f:
                 f.write(timing + "\n")
