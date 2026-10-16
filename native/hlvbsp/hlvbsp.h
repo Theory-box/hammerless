@@ -177,6 +177,7 @@ typedef struct side_s {
     int *overlays, noverlays;  /* info_overlays on this side (shared by the side's copies) */
     int *wateroverlays, nwateroverlays;   /* water overlays (info_overlay_transition's shore strips) on it */
     int no_dynamic_shadows;    /* listed by an info_no_dynamic_shadow */
+    int vis_only;              /* a side of a func_hl_visblock brush (never drawn) */
 } side_t;
 
 typedef struct {

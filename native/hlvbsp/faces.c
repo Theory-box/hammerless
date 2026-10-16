@@ -215,6 +215,9 @@ static void Triangulate_r(int *out, int *nout, const int *in, int nin, const ver
 static void FixFaceEdges(face_t **list, face_t *f) {
     int count[MAX_SUPERVERTS], start[MAX_SUPERVERTS];
     if (f->merged || f->split[0] || f->split[1]) return;
+    /* a Vis Only brush's face is never drawn: no t-junction fixing (its triangles would only fill the 65536
+       primitive indices; on a map with five houses they took 41,439 of them) */
+    if (f->originalface && f->originalface->vis_only) return;
     numsuperverts = 0;
     int original_points = f->numpoints;
     for (int i = 0; i < f->numpoints; i++) {
