@@ -2,6 +2,13 @@
 
 ## 0.17.0 (test release, 2026-10-13)
 
+- **Make Collision** (a Custom Model's panel, Static props): smart collision for a big model like a house. It finds the mesh's flat areas (walls, floors, roof, stairs) and puts one thin slab just behind each: players stand exactly on the floors and doorways keep their width. Walls are covered by a few rectangles, a wall with two faces is one piece, closed boxy parts are one piece each, and nothing is thinner than one game unit. **Collision As**: invisible brushes, or invisible props of up to 20 pieces each (as fast as brushes with a horde, measured; they use none of the map's 8,192 brushes). **Blocks Vis**: the walls also hide what's behind them, as world walls do; with props this uses Hammerless's new Vis Only brushes, so it still costs no brushes. The collision is parented to the model, so it moves with it and a duplicated house keeps its own; press again after editing the mesh. Smallest Face leaves out small details.
+- **Vis Only brushes** (a brush's Detail: Vis Only): block visibility like a world brush, but nothing collides with them and they don't count toward the 8,192 brushes. Hammerless's map compiler puts them in the map's tree and leaves them out of its brush list (checked: the same visibility as a world wall, byte for byte).
+- **Invisible Custom Models**: a material set to `tools/toolsnodraw` is never drawn but still collides; `tools/toolsinvisible` is drawn fully see-through, so bullet holes can stick to it.
+- **Apply to Selected** in Object Mode gives each selected object just that one texture (its other material slots go) instead of adding a slot; it also works on Make Collision's props.
+- Build & Play freezes less on maps with many textures: each file's hash is remembered, and unchanged textures aren't written again.
+- Top-Down Camera: Cursor Light (a light riding the cursor), and full Move Speed is reached with Move Acceleration on.
+
 - **Self-lit model materials**: a Custom Model material with Emission turned on (Principled BSDF Emission Strength above 0, or an Emission shader) shows full bright in the game (UnlitGeneric), glowing in the dark.
 - **Top-Down Camera**: bots are never touched (no camera, their aim and walking as usual); the cursor is a glowing red ring (Example 62 adds it, hidden in the map, and reads its model) and glides after the mouse (Cursor Smoothing). The ring is drawn smoothly between ticks, the camera follows every tick, and screen movement speeds up gradually (Move Acceleration) instead of jumping to full speed.
 
