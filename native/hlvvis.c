@@ -384,6 +384,18 @@ static double poly_area(const Win *w, V n) {
     return fabs(sx * n.x + sy * n.y + sz * n.z) * 0.5;
 }
 
+/* the most corners a merged hull keeps (more: the polygon of supporting lines in that many directions around it, a
+   superset). 64 for the default; -jacobi uses 16 (what the GPU holds per window), set before the flow */
+static int g_hull_cap = MAXPTS;
+static double g_cap_dir[MAXPTS][2];       /* the cap's directions (one table, so the GPU needs no sin / cos of its own) */
+static void set_hull_cap(int cap) {
+    g_hull_cap = cap;
+    for (int k = 0; k < cap; k++) {
+        double a = 2 * 3.14159265358979323846 * k / cap;
+        g_cap_dir[k][0] = cos(a); g_cap_dir[k][1] = sin(a);
+    }
+}
+
 /* convex hull of a's and b's points (coplanar, plane normal n), wound like `like` (around n the same way) */
 static void hull2(const Win *a, const Win *b, V n, int ccw, WinBuf *out) {
     V pts[2 * MAXPTS]; int np = 0;
@@ -412,13 +424,12 @@ static void hull2(const Win *a, const Win *b, V n, int ccw, WinBuf *out) {
         }
         m--;
     }
-    if (m > MAXPTS) {
-        /* too many corners: the 64-gon of supporting lines in 64 directions around the hull (contains it) */
-        static const int K = MAXPTS;
+    if (m > g_hull_cap) {
+        /* too many corners: the K-gon of supporting lines in K directions around the hull (contains it) */
+        const int K = g_hull_cap;
         double lx[MAXPTS], ly[MAXPTS], ld[MAXPTS];
         for (int k = 0; k < K; k++) {
-            double a = 2 * 3.14159265358979323846 * k / K;
-            lx[k] = cos(a); ly[k] = sin(a); ld[k] = -1e300;
+            lx[k] = g_cap_dir[k][0]; ly[k] = g_cap_dir[k][1]; ld[k] = -1e300;
             for (int i = 0; i < m; i++) { double d = px[h[i]] * lx[k] + py[h[i]] * ly[k]; if (d > ld[k]) ld[k] = d; }
             ld[k] += 1e-2;                                   /* (outside by more than float corners can drift) */
         }
@@ -787,6 +798,8 @@ static void j_merge(Portal *b, const JCand *c, int *seen) {
     if (js->gen != t_jgen) {
         js->gen = t_jgen; js->grows = 0; js->opened = 0; js->expanded = 0; js->dirty = 0;
         js->S = c->src; js->W = c->pass;
+        if (js->S.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->S, (Win *)&js->S, b->pl.n, winding_ccw(b->w, b->pl.n), &t); js->S = t; }
+        if (js->W.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->W, (Win *)&js->W, p->pl.n, winding_ccw(p->w, p->pl.n), &t); js->W = t; }
     } else {
         if (js->opened) return;
         int grew = 0;
@@ -803,10 +816,40 @@ static void j_merge(Portal *b, const JCand *c, int *seen) {
     if (!js->dirty) { js->dirty = 1; t_next[t_nnext++] = pnum; }
 }
 
+#define JACOBI_MAX_ARRIVALS 64   /* windows reaching one portal in one round, at most (the GPU's list); more: it opens */
+static volatile LONG64 g_joverflow;
+
+/* open portal pnum fully (the whole base and the whole portal, capped): a superset, so always safe */
+static void j_open(Portal *b, int pnum) {
+    JState *js = &t_js[pnum];
+    Portal *q = &P[pnum];
+    memcpy(&js->S, b->w, sizeof(int) + b->w->n * sizeof(V));
+    memcpy(&js->W, q->w, sizeof(int) + q->w->n * sizeof(V));
+    if (js->S.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->S, (Win *)&js->S, b->pl.n, winding_ccw(b->w, b->pl.n), &t); js->S = t; }
+    if (js->W.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->W, (Win *)&js->W, q->pl.n, winding_ccw(q->w, q->pl.n), &t); js->W = t; }
+    js->opened = 1;
+    InterlockedIncrement64(&g_jopened);
+}
+
 static void j_merge_all(Portal *b, int *seen) {
     for (int i = 0; i < t_ncand; i++) t_order[i] = i;
     qsort(t_order, t_ncand, sizeof(int), cmp_cand);
-    for (int i = 0; i < t_ncand; i++) j_merge(b, &t_cand[t_order[i]], seen);
+    for (int i = 0; i < t_ncand;) {
+        int j = i;
+        while (j < t_ncand && t_cand[t_order[j]].p == t_cand[t_order[i]].p) j++;
+        if (j - i > JACOBI_MAX_ARRIVALS) {
+            /* (more windows than the GPU holds for one portal in a round: the first one sets it up as usual, then
+               it opens fully; the same on CPU and GPU) */
+            int pnum = t_cand[t_order[i]].p;
+            j_merge(b, &t_cand[t_order[i]], seen);
+            if (!t_js[pnum].opened) {
+                j_open(b, pnum);
+                if (!t_js[pnum].dirty) { t_js[pnum].dirty = 1; t_next[t_nnext++] = pnum; }
+            }
+            InterlockedIncrement64(&g_joverflow);
+        } else for (int k = i; k < j; k++) j_merge(b, &t_cand[t_order[k]], seen);
+        i = j;
+    }
     t_ncand = 0;
 }
 
@@ -858,6 +901,11 @@ static void jacobi_flow(int pi) {
             if (++js->grows > JACOBI_SATURATE && !js->opened) {    /* (it keeps creeping: open it fully) */
                 memcpy(&js->S, b->w, sizeof(int) + b->w->n * sizeof(V));
                 memcpy(&js->W, P[t_front[f]].w, sizeof(int) + P[t_front[f]].w->n * sizeof(V));
+                if (js->S.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->S, (Win *)&js->S, b->pl.n, winding_ccw(b->w, b->pl.n), &t); js->S = t; }
+                if (js->W.n > g_hull_cap) {
+                    WinBuf t; Portal *q = &P[t_front[f]];
+                    hull2((Win *)&js->W, (Win *)&js->W, q->pl.n, winding_ccw(q->w, q->pl.n), &t); js->W = t;
+                }
                 js->opened = 1;
                 InterlockedIncrement64(&g_jopened);
             }
@@ -1396,6 +1444,8 @@ int main(int argc, char **argv) {
     if (getenv("HL_SWEEPS")) g_max_sweeps = atoi(getenv("HL_SWEEPS"));
     if (getenv("HL_JACOBI_NOISE")) JACOBI_NOISE = atof(getenv("HL_JACOBI_NOISE"));
     if (g_jacobi) g_robust_sep = 1;
+    set_hull_cap(g_jacobi ? 16 : MAXPTS);
+    if (getenv("HL_HULL_CAP")) set_hull_cap(atoi(getenv("HL_HULL_CAP")));
     if (getenv("HL_ROBUST_SEP")) g_robust_sep = atoi(getenv("HL_ROBUST_SEP"));
     if (getenv("HL_JACOBI_SATURATE")) JACOBI_SATURATE = atoi(getenv("HL_JACOBI_SATURATE"));
     if (getenv("HL_JACOBI_WIDEN")) JACOBI_WIDEN = atof(getenv("HL_JACOBI_WIDEN"));
@@ -1552,8 +1602,9 @@ int main(int argc, char **argv) {
                    w[NPD / 2], w[NPD * 9 / 10], w[NPD * 99 / 100], w[NPD - 1], g_jrounds ? (double)g_jexp / g_jrounds : 0);
             free(r); free(w);
         }
-        if (g_jacobi) printf("rounds: %lld rounds, %lld expansions, %lld portals reached, %lld opened fully\n",
-                             (long long)g_jrounds, (long long)g_jexp, (long long)g_jreach, (long long)g_jopened);
+        if (g_jacobi) printf("rounds: %lld rounds, %lld expansions, %lld portals reached, %lld opened fully (%lld by too "
+                             "many arrivals in a round)\n", (long long)g_jrounds, (long long)g_jexp, (long long)g_jreach,
+                             (long long)g_jopened, (long long)g_joverflow);
         else if (g_merge) printf("merged windows: %lld steps, %lld pushes, %lld portals opened fully, %lld sweep rounds re-expanding %lld\n",
                             (long long)g_msteps, (long long)g_mpush, (long long)g_capped, (long long)g_sweeps, (long long)g_sweep_pops);
         /* where the time went, per portal (both directions), for Hammerless's vis cost view */
