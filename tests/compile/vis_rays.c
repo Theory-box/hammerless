@@ -58,6 +58,24 @@ static V rand_on(const W *w) {
     return p;
 }
 
+static double g_thick;        /* VIS_RAYS_THICK: a sight line counts only if rays this far to its sides pass too */
+/* the line widened: four more rays, offset by g_thick across it (a gap thinner than 2 x g_thick is closed) */
+static int thick_open(V p, V q) {
+    if (g_thick <= 0) return 1;
+    V d = {q.x - p.x, q.y - p.y, q.z - p.z};
+    V a = fabs(d.x) < fabs(d.y) ? (fabs(d.x) < fabs(d.z) ? (V){1, 0, 0} : (V){0, 0, 1}) : (fabs(d.y) < fabs(d.z) ? (V){0, 1, 0} : (V){0, 0, 1});
+    V u = {d.y * a.z - d.z * a.y, d.z * a.x - d.x * a.z, d.x * a.y - d.y * a.x};
+    double ul = sqrt(u.x * u.x + u.y * u.y + u.z * u.z); u.x /= ul; u.y /= ul; u.z /= ul;
+    V w = {d.y * u.z - d.z * u.y, d.z * u.x - d.x * u.z, d.x * u.y - d.y * u.x};
+    double wl = sqrt(w.x * w.x + w.y * w.y + w.z * w.z); w.x /= wl; w.y /= wl; w.z /= wl;
+    for (int k = 0; k < 4; k++) {
+        V o = k == 0 ? u : k == 1 ? (V){-u.x, -u.y, -u.z} : k == 2 ? w : (V){-w.x, -w.y, -w.z};
+        V a2 = {p.x + o.x * g_thick, p.y + o.y * g_thick, p.z + o.z * g_thick};
+        V b2 = {q.x + o.x * g_thick, q.y + o.y * g_thick, q.z + o.z * g_thick};
+        if (!open_seg(0, a2, b2)) return 0;
+    }
+    return 1;
+}
 static long long g_rays;
 static char **g_argv, **g_out;
 static int g_npairs;
@@ -80,7 +98,7 @@ static DWORD WINAPI worker(LPVOID arg) {
         long long hits = 0;
         for (long long r = 0; r < g_rays && !hits; r++) {
             V p = rand_on(&pw[pa[(int)(rnd() * na)]]), q = rand_on(&pw[pb[(int)(rnd() * nb)]]);
-            if (open_seg(0, p, q)) { hits++; len += sprintf(buf + len, "  %d-%d SEEN: (%.2f %.2f %.2f) -> (%.2f %.2f %.2f)\n", A, B, p.x, p.y, p.z, q.x, q.y, q.z); }
+            if (open_seg(0, p, q) && thick_open(p, q)) { hits++; len += sprintf(buf + len, "  %d-%d SEEN: (%.2f %.2f %.2f) -> (%.2f %.2f %.2f)\n", A, B, p.x, p.y, p.z, q.x, q.y, q.z); }
         }
         sprintf(buf + len, "pair %d-%d: %s (%d and %d portals, up to %lld rays)\n", A, B, hits ? "VISIBLE (a ray got through)" : "no ray got through", na, nb, g_rays);
         g_out[k] = buf;
@@ -108,6 +126,7 @@ int main(int argc, char **argv) {
         for (int j = 0; j < pw[i].n; j++) fscanf(pf, " (%lf %lf %lf )", &pw[i].p[j].x, &pw[i].p[j].y, &pw[i].p[j].z);
     }
     g_rays = atoll(argv[3]);
+    if (getenv("VIS_RAYS_THICK")) g_thick = atof(getenv("VIS_RAYS_THICK"));
     g_argv = argv;
     g_npairs = (argc - 4) / 2;
     g_out = calloc(g_npairs, sizeof(char *));

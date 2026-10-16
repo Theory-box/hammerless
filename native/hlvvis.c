@@ -157,6 +157,7 @@ static inline __m128 dot4(__m128 nx, __m128 ny, __m128 nz, V p) {
     return _mm_add_ps(_mm_add_ps(_mm_mul_ps(_mm_set1_ps(p.x), nx), _mm_mul_ps(_mm_set1_ps(p.y), ny)),
                       _mm_mul_ps(_mm_set1_ps(p.z), nz));
 }
+static int g_robust_sep = 0;     /* merged / round-based modes: check every source point (see sep_planes) */
 static int sep_planes(const Win *source, const Win *pass, int flipclip, Plane *out) {
     int n = 0;
     const __m128 up = _mm_set1_ps(EPS_UP), dn = _mm_set1_ps(-EPS_UP), signbit = _mm_set1_ps(-0.0f);
@@ -201,8 +202,19 @@ static int sep_planes(const Win *source, const Win *pass, int flipclip, Plane *o
             __m128 fsign = _mm_and_ps(fm, signbit);
             nx = _mm_xor_ps(nx, fsign); ny = _mm_xor_ps(ny, fsign); nz = _mm_xor_ps(nz, fsign);
             dist = _mm_xor_ps(dist, fsign);
-            /* every other pass point on or in front, at least one in front */
             int bad = 0, front = 0;
+            if (g_robust_sep) {
+                /* (merged windows) every source point behind or on the plane, not just the first decisive one: a merged
+                   hull's near-duplicate corners make hair-length edges whose planes tilt anyhow and can cut the source,
+                   and such a plane would clip away real sight lines. Dropping it only clips less (vvis's own -exact
+                   path keeps the one-point test, for its output) */
+                for (int k = 0; k < source->n; k++) {
+                    if (k == i || k == l) continue;
+                    __m128 d = _mm_sub_ps(dot4(nx, ny, nz, source->p[k]), dist);
+                    bad |= _mm_movemask_ps(_mm_cmpge_ps(d, up));
+                }
+            }
+            /* every other pass point on or in front, at least one in front */
             for (int k = 0; k < pass->n; k++) {
                 __m128 d = _mm_sub_ps(dot4(nx, ny, nz, pass->p[k]), dist);
                 int self = (k >= j0 && k < j0 + 4) ? (1 << (k - j0)) : 0;
@@ -718,12 +730,329 @@ static void merged_flow(int pi) {
     InterlockedIncrement(&g_done);
 }
 
+
+/* ================================================================== round-based merged flow (-jacobi)
+   The merged-window idea without might-see sets, in rounds: every portal whose windows grew is expanded once per
+   round with the windows it had when the round began, and everything the round reaches is merged afterwards in a
+   fixed order (by portal, then by the portal it came through). Each base portal's result depends only on its own
+   flow (no other portal's result is read), so it is the same on any number of threads, and the rounds are the
+   shape a GPU runs. Pruning comes only from the base's rough flood and the clipping.
+   No growth thresholds: a window that grows by any amount past float noise is expanded again (a hair of growth near
+   the base can swing a separator a long way off, so a threshold would hide real openings). A portal expanded
+   JACOBI_SATURATE times opens to the whole base and the whole portal (a superset: still safe), so it ends. */
+static int g_jacobi = 0;
+static double JACOBI_NOISE = 1e-4;   /* float noise in the windings (coordinates of thousands of units) */
+static int JACOBI_SATURATE = 16;
+static double JACOBI_WIDEN = 0;      /* (dev) windows widened before separators; 0: off (widening made things worse, measured) */
+typedef struct { int gen, grows, opened, expanded, dirty; WinBuf S, W, PS, PW; } JState;   /* PS/PW: last expansion's */
+typedef struct { int p, seq; WinBuf src, pass; } JCand;
+static _Thread_local JState *t_js;
+static _Thread_local int *t_front, *t_next, t_nfront, t_nnext, t_jgen;
+static _Thread_local WinBuf *t_snapS, *t_snapW;
+static _Thread_local JCand *t_cand; static _Thread_local int t_ncand, t_capcand;
+static _Thread_local int *t_order;
+static volatile LONG64 g_jrounds, g_jexp, g_jreach, g_jopened;
+
+static void j_add(int pnum, const Win *source, const Win *pass) {
+    if (t_ncand == t_capcand) {
+        t_capcand = t_capcand ? t_capcand * 2 : 4096;
+        t_cand = realloc(t_cand, (size_t)t_capcand * sizeof(JCand));
+        t_order = realloc(t_order, (size_t)t_capcand * sizeof(int));
+        if (!t_cand || !t_order) fail("out of memory%s", "");
+    }
+    JCand *c = &t_cand[t_ncand];
+    c->p = pnum; c->seq = t_ncand;
+    memcpy(&c->src, source, sizeof(int) + source->n * sizeof(V));
+    memcpy(&c->pass, pass, sizeof(int) + pass->n * sizeof(V));
+    t_ncand++;
+}
+
+static int cmp_cand(const void *a, const void *b) {
+    const JCand *x = &t_cand[*(const int *)a], *y = &t_cand[*(const int *)b];
+    if (x->p != y->p) return (x->p > y->p) - (x->p < y->p);
+    return (x->seq > y->seq) - (x->seq < y->seq);
+}
+
+/* merge one candidate into its portal's stored windows; returns 1 if the portal must be expanded (again) */
+static void j_merge(Portal *b, const JCand *c, int *seen) {
+    int pnum = c->p;
+    JState *js = &t_js[pnum];
+    Portal *p = &P[pnum];
+    uint8_t *vis = b->vis;
+    InterlockedIncrement64(&g_jreach);
+    if (!(vis[pnum >> 3] & (1 << (pnum & 7)))) { vis[pnum >> 3] |= 1 << (pnum & 7); (*seen)++; }
+    if (js->gen != t_jgen) {
+        js->gen = t_jgen; js->grows = 0; js->opened = 0; js->expanded = 0; js->dirty = 0;
+        js->S = c->src; js->W = c->pass;
+    } else {
+        if (js->opened) return;
+        int grew = 0;
+        if (outside_hull((const Win *)&c->src, (Win *)&js->S, b->pl.n, JACOBI_NOISE)) {
+            WinBuf ns; hull2((Win *)&js->S, (const Win *)&c->src, b->pl.n, winding_ccw(b->w, b->pl.n), &ns);
+            js->S = ns; grew = 1;
+        }
+        if (outside_hull((const Win *)&c->pass, (Win *)&js->W, p->pl.n, JACOBI_NOISE)) {
+            WinBuf nw; hull2((Win *)&js->W, (const Win *)&c->pass, p->pl.n, winding_ccw(p->w, p->pl.n), &nw);
+            js->W = nw; grew = 1;
+        }
+        if (!grew) return;
+    }
+    if (!js->dirty) { js->dirty = 1; t_next[t_nnext++] = pnum; }
+}
+
+static void j_merge_all(Portal *b, int *seen) {
+    for (int i = 0; i < t_ncand; i++) t_order[i] = i;
+    qsort(t_order, t_ncand, sizeof(int), cmp_cand);
+    for (int i = 0; i < t_ncand; i++) j_merge(b, &t_cand[t_order[i]], seen);
+    t_ncand = 0;
+}
+
+static int cmp_int(const void *a, const void *b) { int x = *(const int *)a, y = *(const int *)b; return (x > y) - (x < y); }
+
+static void jacobi_flow(int pi) {
+    Portal *b = &P[pi];
+    LARGE_INTEGER t0, t1;
+    QueryPerformanceCounter(&t0);
+    b->status = 1;
+    if (!t_js) {
+        t_js = calloc(NPD, sizeof(JState));
+        t_front = malloc(((size_t)NPD + 1) * sizeof(int)); t_next = malloc(((size_t)NPD + 1) * sizeof(int));
+        t_snapS = malloc(((size_t)NPD + 1) * sizeof(WinBuf)); t_snapW = malloc(((size_t)NPD + 1) * sizeof(WinBuf));
+    }
+    t_jgen++;
+    t_nnext = 0; t_ncand = 0;
+    const uint64_t *bf = (const uint64_t *)b->flood;
+    int floodn = 0, seen = 0;
+    for (int k = 0; k < PW; k++) floodn += (int)__builtin_popcountll(bf[k]);
+    Plane bplane = b->pl;
+    /* first openings: no separators yet */
+    for (int i = 0; i < lf_count[b->leaf]; i++) {
+        int pnum = lf_list[lf_first[b->leaf] + i];
+        Portal *p = &P[pnum];
+        if (!((bf[pnum >> 6] >> (pnum & 63)) & 1)) continue;
+        Stack st; memset(&st, 0, sizeof st); st.freew[0] = st.freew[1] = st.freew[2] = 1;
+        Plane back = {{-p->pl.n.x, -p->pl.n.y, -p->pl.n.z}, -p->pl.d};
+        float d = dotv(p->origin, bplane.n) - bplane.d;
+        if (d < -p->radius) continue;
+        Win *pass = d > p->radius ? p->w : chop(p->w, &st, &bplane);
+        if (!pass) continue;
+        d = dotv(b->origin, p->pl.n) - p->pl.d;
+        if (d > b->radius) continue;
+        Win *source = d < -b->radius ? b->w : chop(b->w, &st, &back);
+        if (!source) continue;
+        j_add(pnum, source, pass);
+    }
+    j_merge_all(b, &seen);
+    while (t_nnext && seen < floodn) {
+        InterlockedIncrement64(&g_jrounds);
+        int *tmp = t_front; t_front = t_next; t_next = tmp;
+        t_nfront = t_nnext; t_nnext = 0;
+        qsort(t_front, t_nfront, sizeof(int), cmp_int);
+        for (int f = 0; f < t_nfront; f++) {
+            JState *js = &t_js[t_front[f]];
+            js->dirty = 0;
+            if (++js->grows > JACOBI_SATURATE && !js->opened) {    /* (it keeps creeping: open it fully) */
+                memcpy(&js->S, b->w, sizeof(int) + b->w->n * sizeof(V));
+                memcpy(&js->W, P[t_front[f]].w, sizeof(int) + P[t_front[f]].w->n * sizeof(V));
+                js->opened = 1;
+                InterlockedIncrement64(&g_jopened);
+            }
+            js->expanded = 1;
+            js->PS = js->S; js->PW = js->W;
+            if (JACOBI_WIDEN > 0 && !js->opened) {     /* (the hulls ignore growth under the noise: widen by it, safe side) */
+                inflate((Win *)&js->S, b->pl.n, JACOBI_WIDEN, &t_snapS[f]);
+                inflate((Win *)&js->W, P[t_front[f]].pl.n, JACOBI_WIDEN, &t_snapW[f]);
+            } else { t_snapS[f] = js->S; t_snapW[f] = js->W; }
+        }
+        for (int f = 0; f < t_nfront; f++) {
+            int xn = t_front[f];
+            Portal *x = &P[xn];
+            WinBuf *S = &t_snapS[f], *W = &t_snapW[f];
+            InterlockedIncrement64(&g_jexp);
+            Plane sep0[4 * MAXPTS * MAXPTS / 4 + 8], sep1[4 * MAXPTS * MAXPTS / 4 + 8];
+            int nsep0 = -1, nsep1 = 0;
+            int leaf = x->leaf;
+            for (int i = 0; i < lf_count[leaf]; i++) {
+                int pnum = lf_list[lf_first[leaf] + i];
+                Portal *p = &P[pnum];
+                if (!((bf[pnum >> 6] >> (pnum & 63)) & 1)) continue;
+                Stack st; memset(&st, 0, sizeof st); st.freew[0] = st.freew[1] = st.freew[2] = 1;
+                Plane back = {{-p->pl.n.x, -p->pl.n.y, -p->pl.n.z}, -p->pl.d};
+                float d = dotv(p->origin, bplane.n) - bplane.d;
+                if (d < -p->radius) continue;
+                Win *pass = d > p->radius ? p->w : chop(p->w, &st, &bplane);
+                if (!pass) continue;
+                d = dotv(b->origin, p->pl.n) - p->pl.d;
+                if (d > b->radius) continue;
+                Win *source = d < -b->radius ? (Win *)S : chop((Win *)S, &st, &back);
+                if (!source) continue;
+                if (source == (Win *)S) {
+                    if (nsep0 < 0) {
+                        nsep0 = sep_planes((Win *)S, (Win *)W, 0, sep0);
+                        nsep1 = sep_planes((Win *)W, (Win *)S, 1, sep1);
+                    }
+                    pass = apply_planes(sep0, nsep0, pass, &st); if (!pass) continue;
+                    pass = apply_planes(sep1, nsep1, pass, &st); if (!pass) continue;
+                } else {
+                    pass = clip_sep(source, (Win *)W, pass, 0, &st); if (!pass) continue;
+                    pass = clip_sep((Win *)W, source, pass, 1, &st); if (!pass) continue;
+                }
+                j_add(pnum, source, pass);
+            }
+        }
+        j_merge_all(b, &seen);
+    }
+    MemoryBarrier();
+    b->status = 2;
+    QueryPerformanceCounter(&t1);
+    g_pdur[pi] = (double)(t1.QuadPart - t0.QuadPart) / g_freq.QuadPart;
+    InterlockedIncrement(&g_done);
+}
+
+
+/* (dev) how far point q lies outside convex polygon h on its plane (normal n): <= 0 inside */
+static double out_dist(V q, const Win *h, V n) {
+    double sx = 0, sy = 0, sz = 0;
+    for (int i = 0; i < h->n; i++) {
+        V p = h->p[i], r = h->p[(i + 1) % h->n];
+        sx += (double)p.y * r.z - (double)p.z * r.y; sy += (double)p.z * r.x - (double)p.x * r.z; sz += (double)p.x * r.y - (double)p.y * r.x;
+    }
+    double o = sx * n.x + sy * n.y + sz * n.z, worst = -1e30;
+    if (o == 0 || h->n < 3) return 1e30;
+    for (int i = 0; i < h->n; i++) {
+        V p = h->p[i], r = h->p[(i + 1) % h->n];
+        double ex = (double)r.x - p.x, ey = (double)r.y - p.y, ez = (double)r.z - p.z;
+        double ax = (double)q.x - p.x, ay = (double)q.y - p.y, az = (double)q.z - p.z;
+        double c = (ey * az - ez * ay) * n.x + (ez * ax - ex * az) * n.y + (ex * ay - ey * ax) * n.z;
+        double el = sqrt(ex * ex + ey * ey + ez * ez);
+        double dist = -(o > 0 ? c : -c) / (el > 0 ? el : 1);     /* > 0: outside this edge */
+        if (dist > worst) worst = dist;
+    }
+    return worst;
+}
+
+/* (dev) HL_REPLAY=file: a sight line's portal chain (tests/compile chain_walk.py): exact one-chain clipping along it,
+   then the merged / round-based flow of its base portal, and where the line first falls outside the stored windows */
+static void replay(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) fail("can't read %s", path);
+    int base, chain[512], n = 0; V pt[512], start = {0, 0, 0};
+    char word[64];
+    fscanf(f, "%d", &base);
+    while (fscanf(f, "%63s", word) == 1) {
+        if (!strcmp(word, "start")) { fscanf(f, "%f %f %f", &start.x, &start.y, &start.z); break; }
+        chain[n] = atoi(word); fscanf(f, "%f %f %f", &pt[n].x, &pt[n].y, &pt[n].z); n++;
+    }
+    fclose(f);
+    Portal *b = &P[base];
+    printf("replay: base %d (into cluster %d), %d portals, start outside base winding by %.5f\n", base, b->leaf, n,
+           out_dist(start, b->w, b->pl.n));
+    /* exact single-chain clipping, as the path search does it */
+    {
+        WinBuf srcb, passb; Win *source = b->w, *prevpass = NULL; WinBuf prevb;
+        for (int k = 0; k < n; k++) {
+            Portal *p = &P[chain[k]];
+            int okleaf = k == 0 ? (P[base].leaf == P[chain[0]].leaf ? 0 : 1) : 1;
+            (void)okleaf;
+            Stack st; memset(&st, 0, sizeof st); st.freew[0] = st.freew[1] = st.freew[2] = 1;
+            Plane back = {{-p->pl.n.x, -p->pl.n.y, -p->pl.n.z}, -p->pl.d};
+            Win *pass = chop(p->w, &st, &b->pl);
+            if (!pass) { printf("  exact %2d portal %d: pass chopped away by the base plane\n", k, chain[k]); break; }
+            Win *src = chop(source, &st, &back);
+            if (!src) { printf("  exact %2d portal %d: source chopped away by its back plane\n", k, chain[k]); break; }
+            if (prevpass) {
+                pass = clip_sep(src, prevpass, pass, 0, &st);
+                if (pass) pass = clip_sep(prevpass, src, pass, 1, &st);
+                if (!pass) { printf("  exact %2d portal %d: CLIPPED AWAY by separators\n", k, chain[k]); break; }
+            }
+            printf("  exact %2d portal %d: point outside pass by %.5f, start outside source by %.5f\n", k, chain[k],
+                   out_dist(pt[k], pass, p->pl.n), out_dist(start, src, b->pl.n));
+            memcpy(&srcb, src, sizeof(int) + src->n * sizeof(V)); memcpy(&passb, pass, sizeof(int) + pass->n * sizeof(V));
+            prevb = passb; prevpass = (Win *)&prevb;
+            WinBuf *keep = malloc(sizeof(WinBuf)); *keep = srcb; source = (Win *)keep;
+        }
+    }
+    /* the flow, then each chain portal's stored windows */
+    memset(b->vis, 0, (size_t)PW * 8);
+    if (g_jacobi) jacobi_flow(base); else merged_flow(base);
+    printf("  %s flow of the base:\n", g_jacobi ? "round-based" : "merged");
+    for (int k = 0; k < n; k++) {
+        int q = chain[k];
+        int reached = (b->vis[q >> 3] >> (q & 7)) & 1;
+        printf("  flood %2d portal %d: in the base's flood %d, in front of the base %d\n", k, q, (b->flood[q >> 3] >> (q & 7)) & 1,
+               (b->front[q >> 3] >> (q & 7)) & 1);
+        if (g_jacobi) {
+            JState *js = &t_js[q];
+            if (js->gen != t_jgen) {
+                printf("  flow  %2d portal %d: NEVER REACHED (vis bit %d)\n", k, q, reached);
+                if (k > 0 && t_js[chain[k - 1]].gen == t_jgen) {
+                    /* the step from the previous chain portal, as an expansion does it, with its last windows */
+                    JState *px = &t_js[chain[k - 1]];
+                    Portal *p = &P[q], *x = &P[chain[k - 1]];
+                    int inleaf = 0;
+                    for (int i = 0; i < lf_count[x->leaf]; i++) if (lf_list[lf_first[x->leaf] + i] == q) inleaf = 1;
+                    printf("    step from %d: %d is %sa portal leaving cluster %d\n", chain[k - 1], q, inleaf ? "" : "NOT ", x->leaf);
+                    Stack st; memset(&st, 0, sizeof st); st.freew[0] = st.freew[1] = st.freew[2] = 1;
+                    Plane back = {{-p->pl.n.x, -p->pl.n.y, -p->pl.n.z}, -p->pl.d};
+                    float d = dotv(p->origin, b->pl.n) - b->pl.d;
+                    printf("    portal origin %.3f in front of the base plane (radius %.3f)\n", d, p->radius);
+                    Win *pass = d > p->radius ? p->w : chop(p->w, &st, &b->pl);
+                    if (!pass) { printf("    pass: chopped away by the base plane\n"); continue; }
+                    printf("    pass after the base plane: point outside by %.5f (%d points)\n", out_dist(pt[k], pass, p->pl.n), pass->n);
+                    d = dotv(b->origin, p->pl.n) - p->pl.d;
+                    printf("    base origin %.3f in front of the portal plane (base radius %.3f)\n", d, b->radius);
+                    Win *S = (Win *)&px->PS, *W = (Win *)&px->PW;
+                    Win *source = d < -b->radius ? S : chop(S, &st, &back);
+                    if (!source) { printf("    source: chopped away by the portal's back plane\n"); continue; }
+                    printf("    source: start outside by %.5f (%d points, %s)\n", out_dist(start, source, b->pl.n), source->n,
+                           source == S ? "whole S" : "chopped");
+                    Win *p1 = clip_sep(source, W, pass, 0, &st);
+                    if (!p1) { printf("    separators source->pass: CLIPPED AWAY\n"); continue; }
+                    printf("    after separators source->pass: point outside by %.5f\n", out_dist(pt[k], p1, p->pl.n));
+                    {
+                        printf("    S (%d points):", source->n);
+                        for (int i = 0; i < source->n; i++) printf(" (%.3f %.3f %.3f)", source->p[i].x, source->p[i].y, source->p[i].z);
+                        printf("\n    W (%d points):", W->n);
+                        for (int i = 0; i < W->n; i++) printf(" (%.3f %.3f %.3f)", W->p[i].x, W->p[i].y, W->p[i].z);
+                        printf("\n    point (%.3f %.3f %.3f), start (%.3f %.3f %.3f)\n", pt[k].x, pt[k].y, pt[k].z, start.x, start.y, start.z);
+                        Plane *pl = malloc(((size_t)source->n * W->n + 8) * sizeof(Plane));
+                        int np_ = sep_planes(W, source, 1, pl);
+                        for (int i = 0; i < np_; i++) {
+                            float dp = dotv(pt[k], pl[i].n) - pl[i].d, ds = dotv(start, pl[i].n) - pl[i].d;
+                            if (dp < 0.01f) printf("    plane %d (%.5f %.5f %.5f | %.3f): point %.4f, start %.4f\n", i, pl[i].n.x,
+                                                   pl[i].n.y, pl[i].n.z, pl[i].d, dp, ds);
+                        }
+                        free(pl);
+                    }
+                    Win *p2 = clip_sep(W, source, p1, 1, &st);
+                    if (!p2) { printf("    separators pass->source: CLIPPED AWAY\n"); continue; }
+                    printf("    after separators pass->source: point outside by %.5f\n", out_dist(pt[k], p2, p->pl.n));
+                }
+                continue;
+            }
+            printf("  flow  %2d portal %d: point outside W %.5f (at last expansion %.5f), start outside S %.5f "
+                   "(at last expansion %.5f)%s%s\n", k, q, out_dist(pt[k], (Win *)&js->W, P[q].pl.n),
+                   js->expanded ? out_dist(pt[k], (Win *)&js->PW, P[q].pl.n) : 99.0,
+                   out_dist(start, (Win *)&js->S, b->pl.n), js->expanded ? out_dist(start, (Win *)&js->PS, b->pl.n) : 99.0,
+                   js->opened ? " OPENED" : "", js->expanded ? "" : " (never expanded)");
+        } else {
+            MState *ms = &t_ms[q];
+            if (ms->gen != t_mgen) { printf("  flow  %2d portal %d: NEVER REACHED (vis bit %d)\n", k, q, reached); continue; }
+            printf("  flow  %2d portal %d: point outside W %.5f (at last pop %.5f), start outside S %.5f "
+                   "(at last pop %.5f)%s\n", k, q, out_dist(pt[k], (Win *)&ms->W, P[q].pl.n),
+                   ms->popped ? out_dist(pt[k], (Win *)&ms->PW_, P[q].pl.n) : 99.0, out_dist(start, (Win *)&ms->S, b->pl.n),
+                   ms->popped ? out_dist(start, (Win *)&ms->PS, b->pl.n) : 99.0, ms->grows >= 1000000 ? " OPENED" : "");
+        }
+    }
+}
+
 static DWORD WINAPI flow_worker(LPVOID arg) {
     (void)arg;
     for (;;) {
         LONG k = InterlockedIncrement(&g_next) - 1;
         if (k >= NPD) break;
-        if (g_merge) merged_flow(g_order[k]); else portal_flow(g_order[k]);
+        if (g_jacobi) jacobi_flow(g_order[k]);
+        else if (g_merge) merged_flow(g_order[k]); else portal_flow(g_order[k]);
     }
     return 0;
 }
@@ -1018,6 +1347,7 @@ int main(int argc, char **argv) {
         if (!_stricmp(argv[i], "-threads") && i + 1 < argc) threads = atoi(argv[++i]);
         else if (!_stricmp(argv[i], "-fast")) fast = 1;
         else if (!_stricmp(argv[i], "-exact")) g_merge = 0;
+        else if (!_stricmp(argv[i], "-jacobi")) g_jacobi = 1;
         else if (!_stricmp(argv[i], "-game") && i + 1 < argc) i++;
         else if (!_stricmp(argv[i], "-radius_override") && i + 1 < argc) radius_override = argv[++i];
         else if (argv[i][0] == '-') { printf("Error: unsupported option %s\n", argv[i]); return 2; }
@@ -1029,6 +1359,11 @@ int main(int argc, char **argv) {
     if (getenv("HL_GROW_EPS")) g_grow_eps = atof(getenv("HL_GROW_EPS"));
     if (getenv("HL_INFLATE")) g_inflate = atof(getenv("HL_INFLATE"));
     if (getenv("HL_SWEEPS")) g_max_sweeps = atoi(getenv("HL_SWEEPS"));
+    if (getenv("HL_JACOBI_NOISE")) JACOBI_NOISE = atof(getenv("HL_JACOBI_NOISE"));
+    if (g_jacobi) g_robust_sep = 1;
+    if (getenv("HL_ROBUST_SEP")) g_robust_sep = atoi(getenv("HL_ROBUST_SEP"));
+    if (getenv("HL_JACOBI_SATURATE")) JACOBI_SATURATE = atoi(getenv("HL_JACOBI_SATURATE"));
+    if (getenv("HL_JACOBI_WIDEN")) JACOBI_WIDEN = atof(getenv("HL_JACOBI_WIDEN"));
     printf(g_merge ? "visibility: merged windows\n"
                    : "visibility: exact (vvis's path search, its output)\n");
     if (threads <= 0) {
@@ -1099,6 +1434,31 @@ int main(int argc, char **argv) {
     printf("done\n");
     if (fast) {
         for (int i = 0; i < NPD; i++) { memcpy(P[i].vis, P[i].flood, (size_t)PW * 8); P[i].status = 2; }
+    } else if (getenv("HL_REPLAY")) {
+        g_pdur = xcalloc(NPD, sizeof(double));
+        QueryPerformanceFrequency(&g_freq);
+        replay(getenv("HL_REPLAY"));
+        return 0;
+    } else if (getenv("HL_DEBUG_PAIR")) {
+        /* (dev) only the flows of the portals leaving clusters A and B: does each side reach the other? (the pair is
+           visible only if both do) */
+        int A, B;
+        sscanf(getenv("HL_DEBUG_PAIR"), "%d %d", &A, &B);
+        g_pdur = xcalloc(NPD, sizeof(double));
+        QueryPerformanceFrequency(&g_freq);
+        int sides[2] = {0, 0};
+        for (int side = 0; side < 2; side++) {
+            int from = side ? B : A, to = side ? A : B;
+            for (int i = 0; i < lf_count[from]; i++) {
+                int pi = lf_list[lf_first[from] + i];
+                if (g_jacobi) jacobi_flow(pi); else if (g_merge) merged_flow(pi); else portal_flow(pi);
+                for (int q = 0; q < NPD; q++)
+                    if (P[q].leaf == to && (P[pi].vis[q >> 3] & (1 << (q & 7)))) sides[side] = 1;
+            }
+        }
+        printf("pair %d-%d: %s (%d sees %d: %s, %d sees %d: %s)\n", A, B, sides[0] && sides[1] ? "VISIBLE" : "hidden",
+               A, B, sides[0] ? "yes" : "no", B, A, sides[1] ? "yes" : "no");
+        return 0;
     } else {
         g_order = xmalloc(NPD * sizeof(int) + 1);
         for (int i = 0; i < NPD; i++) g_order[i] = i;
@@ -1138,7 +1498,9 @@ int main(int argc, char **argv) {
         QueryPerformanceCounter(&fn);
         double flow_wall = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
         printf("PortalFlow:          done (%.1f s)\n", flow_wall);
-        if (g_merge) printf("merged windows: %lld steps, %lld pushes, %lld portals opened fully, %lld sweep rounds re-expanding %lld\n",
+        if (g_jacobi) printf("rounds: %lld rounds, %lld expansions, %lld portals reached, %lld opened fully\n",
+                             (long long)g_jrounds, (long long)g_jexp, (long long)g_jreach, (long long)g_jopened);
+        else if (g_merge) printf("merged windows: %lld steps, %lld pushes, %lld portals opened fully, %lld sweep rounds re-expanding %lld\n",
                             (long long)g_msteps, (long long)g_mpush, (long long)g_capped, (long long)g_sweeps, (long long)g_sweep_pops);
         /* where the time went, per portal (both directions), for Hammerless's vis cost view */
         snprintf(path, sizeof path, "%s.viscost", base);
