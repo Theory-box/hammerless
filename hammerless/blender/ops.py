@@ -493,6 +493,14 @@ def export_vmf(op, context, defer_scripts: bool = False) -> tuple[str | None, st
     return out
 
 
+def asset_print(rep, root: str, map_name: str, tops=("materials", "models")) -> str:
+    """cc.asset_fingerprint of the map's exported files: the one export_finish made (on its thread), else now."""
+    made = getattr(rep, "asset_prints", None) or {}
+    if tops in made:
+        return made[tops]
+    return cc.asset_fingerprint(cc.Tools(root).gamedir, map_name, tops)
+
+
 _EXPORT_THREADS: list = []     # export_finish threads running (Build & Play, Build Nav Mesh, the nav preview)
 
 
@@ -616,6 +624,11 @@ def export_finish(prep) -> tuple[str | None, str | None, Report]:
             rep2.errors.append(f"Can't write the map's scripts into the game folder ({ex}). Is Left 4 Dead 2 "
                                "installed somewhere that needs administrator rights?")
             return None, root, rep2
+        try:
+            rep2.asset_prints = {tops: cc.asset_fingerprint(gamedir, s_map, tops)
+                                 for tops in (("materials", "models"), ("models",))}
+        except OSError:
+            pass
         regions, _ = collect_regions(ir)
         rep2.nav_regions = regions
         rep2.nav_climbs = collect_climbs(ir)[0]
@@ -1184,7 +1197,7 @@ def _nav_key(vmf_path: str, rep, s, opts) -> str | None:
         extra = f"{o.vis}|{o.vis_tool}|{o.vis_exact}|{o.vis_gpu}|{s.nav_analysis}|{not s.nav_culling}"   # (analysis reads the vis)
         # (instance files and the map's own models: props' collision)
         root = game_root(bpy.context)        # (models only: a repainted texture doesn't change the nav)
-        models = cc.asset_fingerprint(cc.Tools(root).gamedir, s.map_name, ("models",)) if root else ""
+        models = asset_print(rep, root, s.map_name, ("models",)) if root else ""
         extra += "|" + models + "|" + cc.instances_hash(vmf_path, text.encode())
         return inputs_key(text, rep.nav_regions, rep.nav_climbs, s.wall_climbs, extra)
     except Exception:
@@ -1521,8 +1534,7 @@ class HL_OT_build(bpy.types.Operator):
         try:
             import dataclasses
             opts = cc.PRESETS[opts] if isinstance(opts, str) else opts
-            opts = dataclasses.replace(opts, assets=cc.asset_fingerprint(cc.Tools(root).gamedir,
-                                                                         context.scene.hammerless.map_name))
+            opts = dataclasses.replace(opts, assets=asset_print(rep, root, context.scene.hammerless.map_name))
         except OSError:
             pass
         if no_bake and opts.rad != "SKIP":

@@ -536,7 +536,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         from ..core import compile as cc
         from ..core.navpredict import cached
         from ..core.navworker import analyze, predict
-        from .ops import compile_options, export_after, surface_report
+        from .ops import asset_print, compile_options, export_after, surface_report
         out, self._export_thread = self._export_out, None
         if context.scene.name != self._prep.scene_name:
             self.report({"ERROR"}, "The scene changed while the map was being exported: show its scene and Build Nav "
@@ -555,7 +555,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         import dataclasses
         opts = compile_options(context.scene.hammerless)
         opts = dataclasses.replace(cc.PRESETS[opts] if isinstance(opts, str) else opts, rad="SKIP",
-                                   assets=cc.asset_fingerprint(tools.gamedir, context.scene.hammerless.map_name))
+                                   assets=asset_print(rep, root, context.scene.hammerless.map_name))
         job = cc.CompileJob(tools, path, opts, copy_to_game=False, skip_if_unchanged=True)   # (as Build: same options)
         self._job = None
         if not job.up_to_date():
