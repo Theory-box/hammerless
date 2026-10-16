@@ -2176,6 +2176,11 @@ int main(int argc, char **argv) {
             if (g_jv1) goto passes_done;
             g_jv1 = xmalloc((size_t)NPD * PW * 8 + 8);
             for (int i = 0; i < NPD; i++) { memcpy(g_jv1 + (size_t)i * PW * 8, P[i].vis, (size_t)PW * 8); memset(P[i].vis, 0, (size_t)PW * 8); P[i].status = 0; }
+            if (getenv("HL_V1_FILE")) {          /* (dev) the tests from a file (HL_DUMP_PVIS's layout) */
+                FILE *f = fopen(getenv("HL_V1_FILE"), "rb");
+                if (!f || fread(g_jv1, 8, (size_t)NPD * PW, f) != (size_t)NPD * PW) fail("can't read HL_V1_FILE%s", "");
+                fclose(f);
+            }
             if (g_jcl) {
                 g_jv1cl = xcalloc((size_t)NPD * g_jw, 8);
                 for (int i = 0; i < NPD; i++) {
@@ -2196,6 +2201,10 @@ int main(int argc, char **argv) {
             for (int t = 0; t < threads; t++) CloseHandle(hs[t]);
             free(hs);
             passes_done:;
+        }
+        if (getenv("HL_DUMP_PVIS")) {         /* (dev) every portal's vis row, PW 64-bit words each */
+            FILE *f = fopen(getenv("HL_DUMP_PVIS"), "wb");
+            if (f) { for (int i = 0; i < NPD; i++) fwrite(P[i].vis, 8, (size_t)PW, f); fclose(f); }
         }
         QueryPerformanceCounter(&fn);
         double flow_wall = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
