@@ -177,7 +177,8 @@ SWELLING_POD = dict(
           "When Near on and a survivor within Radius, it rises in Swell Time (Near); left alone, it falls back to 0 "
           "in Shrink Time. Show "
           "Swelling shows it. At 1 it bursts: an Explosion (the group), every survivor within Burst Radius takes "
-          "Damage and gets a green flash of spores, and the pod is removed.",
+          "Damage and gets a green flash of spores, every common infected within Burst Radius dies, and the pod is "
+          "removed.",
     inputs=[("run", "Run", "event"), ("pod", "Pod", "thing"), ("name_has", "Model Name Has", "text"),
             ("near_on", "Burst When Near", "bool"), ("radius", "Radius", "num"),
             ("near_time", "Swell Time (Near)", "num"), ("shrink_time", "Shrink Time", "num"),
@@ -223,6 +224,12 @@ SWELLING_POD = dict(
            fn("hurt", "entity:TakeDamage", 6, 1, {"p1": 0.0}),
            fn("spores", "ScreenFade", 7, 1, {"p1": 70.0, "p2": 150.0, "p3": 40.0, "p4": 230.0, "p5": 1.5,
                                              "p6": 0.4, "p7": 1.0}),
+           N("each_common", "HL_NodeForEach", 4, 12, what="COMMONS"),
+           fn("their_at", "entity:GetOrigin", 5, 13),
+           N("common_dist", "HL_NodeVectorMath", 6, 13, op="DISTANCE"),
+           N("common_close", "HL_NodeCompare", 7, 13, label="Within Burst Radius?", op="LESS_EQUAL"),
+           N("if_common", "HL_NodeIf", 5, 12),
+           fn("kill_common", "entity:TakeDamage", 6, 12, {"p0": 10000.0, "p1": 64.0}),
            N("forget", "HL_NodeSetVariable", 5, 0, label="Forget its charge (entity numbers are used again)",
              var_name="pod_charge", scope="PLAYER", sockets={"value": 0.0}),
            N("forget_shot", "HL_NodeSetVariable", 6, 0, label="And that it was shot", var_name="pod_shot",
@@ -252,7 +259,12 @@ SWELLING_POD = dict(
            ("in.burst_radius", "close.b"), ("close.result", "if_close.condition"),
            ("if_close.true", "hurt.run"), ("each.item", "hurt.target"), ("in.damage", "hurt.p0"),
            ("in.pod", "hurt.p2"), ("hurt.then", "spores.run"), ("each.item", "spores.p0"),
-           ("each.done", "forget.run"), ("in.pod", "forget.player"), ("forget.then", "forget_shot.run"),
+           ("each.done", "each_common.run"), ("each_common.each", "if_common.in"),
+           ("each_common.item", "their_at.target"), ("their_at.result", "common_dist.a"), ("at.result", "common_dist.b"),
+           ("common_dist.value", "common_close.a"), ("in.burst_radius", "common_close.b"),
+           ("common_close.result", "if_common.condition"), ("if_common.true", "kill_common.run"),
+           ("each_common.item", "kill_common.target"), ("in.pod", "kill_common.p2"),
+           ("each_common.done", "forget.run"), ("in.pod", "forget.player"), ("forget.then", "forget_shot.run"),
            ("in.pod", "forget_shot.player"), ("forget_shot.then", "gone.run"),
            ("in.pod", "gone.entity"), ("gone.then", "out.then")],
     steps=[("A pod?", ["model", "is_pod", "if_pod"]),
@@ -263,9 +275,11 @@ SWELLING_POD = dict(
             ["charge", "near_min", "near_up", "shot_min", "shot_up", "shrink_min", "shrink_step", "down", "near_rate",
              "signed", "sum", "low", "new", "full", "if_full"]),
            ("Not full yet: show it, keep it", ["show", "keep"]),
-           ("Full: it bursts (explosion, damage and spores close by, removed)",
-            ["up", "boom", "each", "them", "dist", "close", "if_close", "hurt", "spores", "forget", "forget_shot",
-             "gone"])])
+           ("Full: it bursts (explosion, damage and spores for survivors close by)",
+            ["up", "boom", "each", "them", "dist", "close", "if_close", "hurt", "spores"]),
+           ("And the common infected within Burst Radius die; the pod is removed",
+            ["each_common", "their_at", "common_dist", "common_close", "if_common", "kill_common", "forget",
+             "forget_shot", "gone"])])
 
 SWELLING_PODS = dict(
     about="Every pod in the map (the prop_dynamic entities whose model name has Model Name Has in it) behaves: five "
@@ -273,8 +287,8 @@ SWELLING_PODS = dict(
           "Radius (Swell Time (Near) to swell fully, when it bursts) and shrinks back when left alone (Shrink Time). "
           "With Shooting Sets It Off on, a shot pod always bursts: it swells (Swell Time (Shot), Shot: Swell First) or "
           "bursts at once. A "
-          "burst: an explosion, Damage and a green flash of spores for survivors within Burst Radius, and the pod is "
-          "gone.",
+          "burst: an explosion, Damage and a green flash of spores for survivors within Burst Radius, the common "
+          "infected within it killed, and the pod is gone.",
     inputs=[("name_has", "Model Name Has", "text"), ("near_on", "Burst When Near", "bool"), ("radius", "Radius", "num"),
             ("near_time", "Swell Time (Near)", "num"), ("shrink_time", "Shrink Time", "num"),
             ("shot_on", "Shooting Sets It Off", "bool"), ("shot_swells", "Shot: Swell First", "bool"),
@@ -1411,7 +1425,7 @@ EXAMPLES_3 = [
                "Radius, Swell Time (Near) to swell fully; with Shooting Sets It Off on, a shot, Swell Time (Shot)) and, "
                "unless it was shot, shrinks back when left alone (Shrink Time): its 'swell' animation and size follow "
                "how far it has got. Full, it bursts: an explosion, Damage and a green flash of spores for survivors "
-               "within Burst Radius. A shot pod always bursts: it swells first (Shot: Swell First) or bursts at once. "
+               "within Burst Radius, and every common infected within it dies. A shot pod always bursts: it swells first (Shot: Swell First) or bursts at once. "
                "Duplicate the pod "
                "and its armature together (Shift+D) for more; keep 'pod' in their names. "
                "(The shot needs Hammerless's own game mode: Build & Play starts the map in it.)",

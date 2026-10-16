@@ -363,14 +363,32 @@ def check(run: Run, n: int, b: Bench):
         b.run(away); time.sleep(0.8)
         left = b.value(state)
         assert left != "gone" and left[0] < near[0] - 0.15, f"charge {near[0]:.2f} -> {left} after leaving"
+        # commons around it: three within Burst Radius (220), one well outside; the burst kills only the three
+        # (frozen in place, nb_stop: else they run off to the survivors while it swells)
+        b.console("nb_stop 1", wait=0.2)
+        b.run(f'local pod = {find}, o = pod.GetOrigin(); '
+              'foreach (i, d in [Vector(90, 0, 0), Vector(0, 100, 0), Vector(-60, -80, 0)]) '
+              'SpawnEntityFromTable("infected", { targetname = "hlt_pod_near", origin = o + d + Vector(0, 0, 4) }); '
+              'SpawnEntityFromTable("infected", { targetname = "hlt_pod_far", origin = o + Vector(600, 0, 4) }); '
+              'return true;')
+        alive = ('(function(name) { local n = 0; for (local e = null; e = Entities.FindByName(e, name);) '
+                 'if (e.IsValid() && e.GetHealth() > 0) n++; return n; })')
+        time.sleep(0.5)
+        before = b.value(f'[{alive}("hlt_pod_near"), {alive}("hlt_pod_far")]')
         b.run(f'local pod = {find}; pod.TakeDamage(10.0, 2, GetListenServerHost()); return true;')   # (a shot)
         time.sleep(1.0)
         shot = b.value(state)
         assert shot != "gone" and shot[0] > left[0], f"charge {left[0]:.2f} -> {shot} after the shot"
         time.sleep(3.0)
         assert b.value(f"{find} == null"), f"still there after the shot: {b.value(state)}"
+        after = b.value(f'[{alive}("hlt_pod_near"), {alive}("hlt_pod_far")]')
+        b.run('foreach (n in ["hlt_pod_near", "hlt_pod_far"]) for (local e = null; e = Entities.FindByName(e, n);) '
+              'e.Kill(); return true;')
+        b.console("nb_stop 0", wait=0.2)
+        assert before == [3, 1] and after == [0, 1], f"commons near / far alive: {before} before, {after} after"
         return (f"near: charge {near[0]:.2f} (swell held at {near[3]:.2f}); left alone: {left[0]:.2f}; "
-                f"shot: kept swelling ({shot[0]:.2f}), burst and gone")
+                f"shot: kept swelling ({shot[0]:.2f}), burst and gone; commons within its radius killed (3 of 3), "
+                f"the one outside alive")
     if n == 54:
         lights = b.value('(function() { local n = 0; for (local e = null; e = Entities.FindByName(e, "tank_lights");) '
                          'if (e.GetClassname() == "light") n++; return n; })()')
