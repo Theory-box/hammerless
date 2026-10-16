@@ -341,6 +341,7 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                     row = col.row(align=True)
                     row.operator("hammerless.make_collision", icon="MOD_SOLIDIFY")
                     row.prop(hs, "collision_min_area", text="")
+                    col.prop(hs, "collision_mode", expand=True)
             if hs.model_kind == "DYNAMIC":
                 col.label(text="Name it (Keyvalues: targetname) to use it from logic", icon="INFO")
 

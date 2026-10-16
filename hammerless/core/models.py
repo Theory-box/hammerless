@@ -139,6 +139,18 @@ def base_texture_of(vmt_text: str) -> str | None:
     return m.group(1).replace("\\", "/") if m else None
 
 
+INVISIBLE_TEXTURE = "hl_invisible"
+
+
+def _invisible_vmt(folder: str, materials_dir: str) -> str:
+    """A 4x4 fully transparent texture beside the model materials, and a material that alpha-tests it all away."""
+    import numpy as np
+    from .textures import write_vtf
+    write_vtf(os.path.join(folder, INVISIBLE_TEXTURE + ".vtf"), np.zeros((4, 4, 4), np.uint8))
+    tex = f"{materials_dir.strip('/')}/{INVISIBLE_TEXTURE}"
+    return f'"VertexLitGeneric"\n{{\n\t"$basetexture" "{tex}"\n\t"$alphatest" "1"\n}}\n'
+
+
 def write_model_materials(game_dir: str, materials_dir: str, materials: dict[str, tuple[str, bool, bool]]) -> list[str]:
     """materials: model material name -> (base texture, translucent, alphatest[, keep_colour[, unlit]]). Writes their VMTs under
     materials/<materials_dir>. Returns the files written (relative to game_dir)."""
@@ -151,7 +163,10 @@ def write_model_materials(game_dir: str, materials_dir: str, materials: dict[str
         unlit = len(spec) > 4 and spec[4]
         nodraw = len(spec) > 5 and spec[5]
         path = os.path.join(folder, name + ".vmt")
-        if nodraw:                             # (tools/toolsnodraw on a model: never drawn, still collides)
+        if nodraw == "invisible":              # (tools/toolsinvisible on a model: drawn but fully see-through,
+            text = _invisible_vmt(folder, materials_dir)   # alpha-tested away: bullet holes still stick to it)
+            written.append(f"materials/{materials_dir.strip('/')}/{INVISIBLE_TEXTURE}.vtf")
+        elif nodraw:                           # (tools/toolsnodraw on a model: never drawn, still collides)
             text = '"VertexLitGeneric"\n{\n\t"$basetexture" "tools/toolsnodraw"\n\t"$no_draw" "1"\n}\n'
         elif tex.startswith("include:"):         # (one of the game's model materials, used as it is)
             text = f'"patch"\n{{\n\t"include" "materials/{tex[8:]}.vmt"\n}}\n'

@@ -384,6 +384,12 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
         name="Smallest Face", default=0.05, min=0.0, soft_max=1.0, precision=3,
         description="Make Collision Brushes: flat areas smaller than this (square metres) get no brush (trim, "
                     "small details); they're shown in the skipped-faces object")
+    collision_mode: EnumProperty(name="Collision As", default="BRUSHES", items=[
+        ("BRUSHES", "Brushes", "Invisible brushes: the engine's cheapest collision, but they count toward the map's "
+                               "8,192 brushes"),
+        ("PROPS", "Props", "Invisible static props of up to 20 pieces each (as fast as brushes, measured): no brushes "
+                           "used. Their material is tools/toolsnodraw; set it to tools/toolsinvisible so bullet holes "
+                           "stick to them")])
     physics_class_name: StringProperty(options={"HIDDEN"})
     physics_class: EnumProperty(name="Physics Class", items=lambda self, context: _physics_classes(),
                                 get=_physics_class_get, set=_physics_class_set,

@@ -1877,6 +1877,59 @@ def test_example_groups_dont_pile_up():
     del mine
 
 
+def test_make_collision_modes():
+    # Make Collision: brushes as one object, or invisible static props of <= 20 pieces; pressing again replaces
+    # the last result (either mode) and keeps a material set by hand on it
+    import bmesh
+    from mathutils import Matrix
+    from hammerless.blender.collisiontool import OF, MAX_PROP_PIECES
+    from hammerless.blender.ops import game_material
+    from hammerless.core.models import write_model_materials
+    reset_scene()
+    bm = bmesh.new()
+    for i in range(8):                              # 64 separate boxes: one brush each
+        for j in range(8):
+            bmesh.ops.create_cube(bm, size=0.5, matrix=Matrix.Translation((i * 1.2, j * 1.2, 0)))
+    me = bpy.data.meshes.new("boxes")
+    bm.to_mesh(me)
+    house = bpy.data.objects.new("Boxes", me)
+    bpy.context.collection.objects.link(house)
+    house.hammerless.role = "MODEL"
+    house.hammerless.model_collision = "NONE"
+    house.hammerless.collision_min_area = 0.0
+
+    def press():
+        bpy.context.view_layer.objects.active = house
+        assert bpy.ops.hammerless.make_collision() == {"FINISHED"}
+        return [o for o in bpy.data.objects if o.get(OF) == house.name]
+
+    b = press()
+    assert len(b) == 1 and b[0].hammerless.role == "BRUSH", [o.name for o in b]
+    faces = len(b[0].data.polygons)
+    assert faces == 64 * 6, faces
+    mat = game_material("tools/toolsinvisible")
+    b[0].data.materials[0] = mat
+    house.hammerless.collision_mode = "PROPS"
+    p = press()
+    assert len(p) == 4 and all(len(o.data.polygons) <= MAX_PROP_PIECES * 6 for o in p), [o.name for o in p]
+    assert sum(len(o.data.polygons) for o in p) == faces
+    assert all(o.hammerless.role == "MODEL" and o.hammerless.model_kind == "STATIC"
+               and o.hammerless.model_collision == "HULLS" and o.data.materials[0] == mat for o in p)
+    house.hammerless.collision_mode = "BRUSHES"
+    assert len(press()) == 1
+    # tools/toolsinvisible on a model: a see-through alpha-tested material with its own texture (decals stick)
+    d = os.path.join(TMP, "game_inv")
+    written = write_model_materials(d, "models/hammerless/x", {
+        "a": ("tools/toolsinvisible", False, False, False, False, "invisible"),
+        "b": ("tools/toolsnodraw", False, False, False, False, "nodraw")})
+    folder = os.path.join(d, "materials", "models", "hammerless", "x")
+    a = open(os.path.join(folder, "a.vmt")).read()
+    assert '"$alphatest" "1"' in a and "models/hammerless/x/hl_invisible" in a and "$no_draw" not in a, a
+    assert "$no_draw" in open(os.path.join(folder, "b.vmt")).read()
+    assert os.path.exists(os.path.join(folder, "hl_invisible.vtf"))
+    assert any(w.endswith("hl_invisible.vtf") for w in written)
+
+
 # ---------------------------------------------------------------- runner
 
 def main():
