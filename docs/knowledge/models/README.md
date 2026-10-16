@@ -4,7 +4,12 @@ What Hammerless knows about L4D2's model and texture files: the own writer for s
 
 Code: `hammerless/core/models.py` (Custom Models, fingerprints), `mdlwrite.py` (`.mdl`/`.vvd`/`.vtx`), `phywrite.py` (`.phy`), `skeletal.py` (SMD/QC), `gamemodel.py` (reads `.mdl`/`.ani`), `gamemesh.py` (reads `.vvd`/`.vtx`), `textures.py` (VTF/VMT), `vtf_read.py`, `vpk.py`, `content.py` (`GameContent`), `hammerless/blender/extract.py`, `texturing.py`, `preview.py`, `gameskeleton.py`, `placedchar.py`, `examplemodels.py`. Tests: `tests/ingame/test_models.py` (the reference run for the writer), unit tests for the skeletal writer and the pod export (8237803).
 
-Timeline (2026): Custom Models through studiomdl, then the own `.mdl`/`.vvd`/`.vtx` writer and `.phy` (default since) 10-08 (842e605, 619b9d9, 7855d1e); animated models 10-11/12 (93a5952, branch anim-models, 0.14.0); game model reader 9c9a8ff, game skeletons 2b60362, Import Game Mesh 105b828, placed characters (0.14.1, 2026-10-12); loose-material fix 500a493 (2026-10-13); 63-character model names, Check the Map without sampling, the pose cache and shared rig copies e88a0f4 / f57eadf / c29bd02 / 10ea8d0 (0.17.0, 2026-10-13); studiomdl runs in parallel 5865e70 (2026-10-13); copies of a rigged model share one model by content 5d40ae4 (2026-10-14).
+Timeline (2026): Custom Models through studiomdl, then the own `.mdl`/`.vvd`/`.vtx` writer and `.phy` (default since) 10-08 (842e605, 619b9d9, 7855d1e); animated models 10-11/12 (93a5952, branch anim-models, 0.14.0); game model reader 9c9a8ff, game skeletons 2b60362, Import Game Mesh 105b828, placed characters (0.14.1, 2026-10-12); loose-material fix 500a493 (2026-10-13); 63-character model names, Check the Map without sampling, the pose cache and shared rig copies e88a0f4 / f57eadf / c29bd02 / 10ea8d0 (0.17.0, 2026-10-13); studiomdl runs in parallel 5865e70 (2026-10-13); copies of a rigged model share one model by content 5d40ae4 (2026-10-14); Make Collision for big models, invisible model materials and Vis Only brushes 0c5a776 .. 43c3707 (2026-10-15, see [collision.md](collision.md)).
+
+| Page | What it covers |
+|---|---|
+| this README | The model writer, animated models, the game's models decoded, skeletons and placed characters, textures and materials, limits |
+| [collision.md](collision.md) | Collision for big Custom Models (Make Collision: the slab method, Brushes or Props, the measured frame rates, what was tried and dropped), invisible model materials (`toolsnodraw` / `toolsinvisible`), Vis Only brushes, why Source worlds are brushes |
 
 ## The own model writer (static, dynamic, physics props)
 
@@ -104,6 +109,7 @@ Placed characters (`placedchar.py`): a `prop_dynamic` of the game's model loopin
 | Material resolution order: Game Material field or a name that looks like a game path; a game material with another Surface = a patch changing `$surfaceprop`; own image; else the default material with a warning. Custom Models get VertexLitGeneric materials in the model's folder (own image, a world material's `$basetexture` following patches, or a patch including a game model material) | `done` |
 | Terrain vertex colour: the red channel becomes the displacement alpha; byte and float attributes blend the same | `done` |
 | `GameContent.has_material` looked only in VPKs: Custom Models' materials showed untextured in the Textured view and hand-installed materials were reported missing | fixed 500a493 (2026-10-13): loose files in the game folder count |
+| Invisible model materials: a slot set to `tools/toolsnodraw` is written as `VertexLitGeneric` with `$no_draw 1` (never drawn, still collides); `tools/toolsinvisible` as a 4 x 4 fully transparent VTF (`hl_invisible.vtf`) with `$alphatest 1` (drawn see-through, so decals can stick; the in-game decal result is not yet reported) | `done` fd84885 / 7c8b601 (2026-10-15); details in [collision.md](collision.md) |
 | Parallax: `stdshader_dx9.dll` lists `$parallaxmap` / `$height_scale` on LightmappedGeneric, but a split-wall test in game (height scale 0.15) showed no effect: the PC shaders ignore it | measured 2026-10-13; `not done` by design (alternatives noted: auto-ssbump from height maps, baked geometry) |
 | Game content: VPKs read directly (`left4dead2`, `update`, DLC, newer first), plus loose files; damaged VPKs skipped; VTFs decoded in Python (DXT1/3/5 and common uncompressed formats), one mip up to 512 px; game models drawn from `.mdl`/`.vvd`/`.vtx` LOD 0 first skin; previews rebuilt from the install, not stored in the .blend | `done` |
 | Where files go: `models/hammerless/<map>/`, `materials/models/hammerless/<map>/`, `materials/hammerless/<map>/`, fingerprinted with the map | `done`; packing into the map or an addon VPK `not done` |
@@ -116,6 +122,7 @@ Placed characters (`placedchar.py`): a `prop_dynamic` of the game's model loopin
 | Packing models and textures with the map | not done |
 | `.phy` ragdoll per bone (a common-skeleton model gets the commons' ragdoll from the game's library) | not done |
 | Collision of animated models = rest shape or none | known |
+| Collision of a big static model (a house): Make Collision, as brushes or props of <= 20 pieces | done (2026-10-15); see [collision.md](collision.md) |
 | Flexes (faces) | not done |
 | Survivor puppet trick as a feature | not done |
 | Meshes without UVs get zero texture coordinates | known |
@@ -124,4 +131,4 @@ Placed characters (`placedchar.py`): a `prop_dynamic` of the game's model loopin
 | Animation sampling of rigs with constraints or drivers (not cached): ~0.6 s per model per frame set on a big map | known (by design; see the pose cache above) |
 | Enemies on bot bodies (precache rule: the map must precache any model given with `SetModel`) | see [../logic/](../logic/README.md) |
 
-Last checked: 2026-10-14 against branch light-layers, commit e16ef85.
+Last checked: 2026-10-15 against branch light-layers, commit a2d00a3.

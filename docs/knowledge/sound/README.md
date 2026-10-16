@@ -12,7 +12,7 @@ Why: L4D2's engine does reverb at runtime through soundscape `dsp "1"` (its auto
 
 Ideas not built: more themes (rural...), map-placed sounds (alarms, generators) played from the doorways they'd be heard through.
 
-The trace is cached between builds (`blender/sound.py` `_TRACE_CACHE`, d82f2ad / c29bd02, 2026-10-13): key = the solid geometry as arrays (`scene_geometry`: float32 vertices, each polygon's corners and corner counts), the starts rounded to 3 places and the Sound volumes; a build where only logic changed reuses the spots and zones. Measured on the way: `scene_geometry` must reproduce mathutils' `matrix_world @ co * scale` to the last bit (single-precision products summed in double, the sum scaled in single), because `sample_spots` starts its 128-unit grid at the geometry's bounds: a last-bit change in the bounds moved every spot and a map's count went from 650 to 616 listening spots. The BVH (`scene_bvh`) is built from the same arrays.
+The trace is cached between builds (`blender/sound.py` `_TRACE_CACHE`, d82f2ad / c29bd02, 2026-10-13): key = the solid geometry as arrays (`scene_geometry`: float32 vertices, each polygon's corners and corner counts), the starts rounded to 3 places and the Sound volumes; a build where only logic changed reuses the spots and zones. Measured on the way: `scene_geometry` must reproduce mathutils' `matrix_world @ co * scale` to the last bit (single-precision products summed in double, the sum scaled in single), because `sample_spots` starts its 128-unit grid at the geometry's bounds: a last-bit change in the bounds moved every spot and a map's count went from 650 to 616 listening spots. The BVH (`scene_bvh`) is built from the same arrays. What counts as solid (`_solid`): any object with the `BRUSH` or `TERRAIN` role, and brush entities of a solid class; a brush's Detail choice doesn't matter, so **Vis Only brushes** (`func_hl_visblock`, 2026-10-15, [../models/collision.md](../models/collision.md)) count as walls although nothing collides with them: a house's collision pieces with *Blocks Vis* made 5 automatic soundscape triggers (104 trigger brushes) for one house (measured 2026-10-15). A side effect, not a bug as such (the walls do shape the sound), recorded because the trigger count surprises.
 
 ## What a map can control (measured 2026-10-10 with the bench on a test map)
 
@@ -63,4 +63,4 @@ Status: `shelved` by the user 2026-10-10 (the blocker was shipping custom tails;
 | Soundscape brush counts on huge maps | open (needs the game) |
 | Stale `soundscapes_<map>.txt` after Sound is turned off | known issue (audit 6) |
 
-Last checked: 2026-10-13 against branch light-layers, commit 10ea8d0 (0.17.0).
+Last checked: 2026-10-15 against branch light-layers, commit a2d00a3 (the Vis Only note; the rest re-read 2026-10-13 against 10ea8d0).

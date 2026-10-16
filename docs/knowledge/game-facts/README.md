@@ -67,6 +67,8 @@ The original text is kept (a Text block, `scene["hl_vmf_source"]`); objects are 
 |---|---|
 | `script_help` prints nothing unless the game was started with `-dev +developer 1` (the `developer` cvar is hidden in retail) | logic/ |
 | Modes come only from VPKs read at startup; loose `modes/*.txt` and `mp_gamemode` / a mode on the command line are ignored; `map <map> <mode>` works | logic/ |
+| Collision cost is per object entered, not per ray: one static prop holding ~1,200-4,000 convex pieces drops a map to 14-17 fps with 20 commons, while the same pieces as ~60 props of <= 20 pieces or as brushes run ~100-117 fps (per-ray cost of a prop 5-8 microseconds against 0.1-2.6 for brushes); `vprof` prints nothing in retail L4D2 (2026-10-15) | models/collision.md |
+| Decals (bullet holes) don't draw on nodraw brush faces nor on a model with `$no_draw 1`; an alpha-tested fully transparent model material is the workaround (its decal result untested) (2026-10-15) | models/collision.md |
 | Entities run their scripts in BSP entity order as created; the VScript root table persists across map loads | logic/ |
 | `func_timescale` works with `sv_cheats 0` (`Time()` rate 0.499 at 0.5, 0.319 at 0.3) | example 43 |
 | Spawning a model not precached crashes with "UTIL_SetModel: not precached" (any `SetModel` too): precache with a hidden `prop_dynamic` per model | logic/ |
@@ -102,6 +104,7 @@ The original text is kept (a Text block, `scene["hl_vmf_source"]`); objects are 
 | Model bones | 128 (127 usable); 3 weights per vertex; 53 bones per hardware strip; 65,535 vertices per mesh; `.phy` triangles 4,096 per piece (12-bit index) | models/ |
 | Brush sides | more than 64 corners crashes vbsp without a message (caught at export) | compilers/ |
 | Map limits (brushes, sides, materials, areas, area portals, leaf faces, primitives...) | hlvbsp stops with vbsp's message | compilers/ |
+| Brushes | 8,192 (`MAX_MAP_BRUSHES`; world, detail and brush-entity brushes alike); a house's collision is ~1,000-1,300 of them as brushes, none as props or Vis Only brushes | models/collision.md |
 | Bench request | 64 KB (`ScriptFileRead`) | logic/ |
 | Native nav memory | capped per current map with a ceiling (it once grew to ~1 GB after a huge build) | nav/ |
 
@@ -118,4 +121,4 @@ The original text is kept (a Text block, `scene["hl_vmf_source"]`); objects are 
 - Python 3.12's `sum()` (Neumaier) differs from 3.11's: exactness tests run with Blender's Python.
 - Quick in-game tests: QUICK preset, no lighting, ~30 s build + load; wait for `HAMMERLESS_FLOW` after "Map: <name>"; don't probe the instant a map loads.
 
-Last checked: 2026-10-13 against branch light-layers, commit 46f75ac.
+Last checked: 2026-10-15 against branch light-layers, commit a2d00a3 (the collision-cost, decal and brush-limit rows; the rest re-read 2026-10-13 against 46f75ac).

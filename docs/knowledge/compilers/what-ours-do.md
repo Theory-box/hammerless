@@ -43,6 +43,7 @@ Bytes vbsp itself doesn't determine (masked by `bspdump.py`): padding and unused
 | Stops at the game's limits with vbsp's message | brushes, brush sides, materials, areas, area portals, leaf faces, primitives and more, instead of writing a map the game rejects. |
 | Export-side checks | a brush side with more than 64 corners (crashes vbsp without a message) is caught before the compile; near-coplanar faces snapped with a note. |
 | `-onlyents` is exact and auditable | the same file as vbsp's; the smart build then strips `stale.txt`. |
+| Vis Only brushes (`func_hl_visblock`, 569f938, 2026-10-15) | A Hammerless-only brush entity: its brushes go into the world as structural brushes (same tree, leaves, portals and vis as World) but are left out of `dbrushes`, `dbrushsides`, `dleafbrushes` and the physics lump (`map.c` flags `vis_only`; `write.c` numbers the output brushes through `g_brush_out` / `g_brush_src`; `phys.c` builds from that list). Their leaves stay `CONTENTS_SOLID` with 0 leaf brushes: nothing collides, nothing counts toward `MAX_MAP_BRUSHES` 8,192. Checked by `tests/compile/vis_only_suite.py`: against the same wall as World, planes / nodes / faces / vis / portal file identical, leaves identical apart from brush fields, 3 fewer brushes. With Valve's vbsp the entity is an unknown brush entity (a brush model; no vis effect; untested). Made for Make Collision's props ([../models/collision.md](../models/collision.md)). |
 
 ### Not done yet
 
@@ -254,4 +255,4 @@ History: the first wired-in version was single-threaded, 81 s (2026-10-08, commi
 
 The release gate for the vis compiler is the suite plus `vis_certify -all` on every pair merged hides and exact shows, plus a sight-line search over each of those chains.
 
-Last checked: 2026-10-13 against branch light-layers, commit 41dc861.
+Last checked: 2026-10-15 against branch light-layers, commit a2d00a3 (the Vis Only row; the rest re-read 2026-10-13 against 41dc861).

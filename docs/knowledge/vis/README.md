@@ -86,6 +86,20 @@ VVIS++ (ficool2) claims the same results as vvis; measured: hides 82 pairs vvis 
 | Exact from-region methods (Teller, Nirenstein, Bittner), Plücker, GPU core | slower than vvis's search; GPU kept only as an idea for a validation ray oracle | 2026-10-10 |
 | Merged-window fixpoint per base flow (Fable consult, 2026-10-10) | **adopted**: see merged-windows.md | 2026-10-11 |
 
+## Vis Only brushes and the cost of a house as a vis blocker (2026-10-15)
+
+A brush with Detail *Vis Only* (`func_hl_visblock`; exported by `core/build.py`, handled by hlvbsp) shapes the tree, leaves, portals and vis exactly as a World brush would, but collides with nothing and uses none of the 8,192 brushes (compiler details in [../compilers/what-ours-do.md](../compilers/what-ours-do.md); the reason it exists, Make Collision's props, in [../models/collision.md](../models/collision.md)). For vis it is simply more structural geometry, and a house's collision pieces are a lot of it:
+
+| Measurement | Value | How |
+|---|---|---|
+| One house, collision as props with *Blocks Vis* (its ~1,000 pieces as Vis Only brushes) | map compile 2.8 s, hlvvis 4.7 s, 4,242 leaves, 2,073 clusters | build log, 2026-10-15 |
+| The same map without the vis blockers | 29 leaves, 4 clusters, vis 0.03 s | build log, 2026-10-15 |
+| The house as World collision brushes, earlier in the day | about 20 s of vis | user report (tool and settings not recorded) |
+| Five houses | hlvvis's progress line read "vis 6%, about 635 s left" | user screenshot, 2026-10-15; the estimate, not a finished run |
+| The five-house map in game | "extremely smooth, everything worked" | user test, 2026-10-15 |
+
+So Blocks Vis on a whole house trades vis time for the game drawing less; the per-wall cost grows with the number of walls that become portals. Not yet measured: the frame-rate gain in game from the blockers against the same map without them, and whether only the outer walls as Vis Only (the interior pieces as plain collision) gives most of the gain for a fraction of the leaves.
+
 ## Views and the Vis Cost file
 
 `blender/visview.py` draws over the viewport from the last build; nothing is added to the scene. **Portals**: the openings (slivers under 16 square units red: usually two brushes that almost line up). **Rendering Load**: faces coloured by how many faces the game draws from there, a button puts the 3D cursor on the heaviest spot (works whichever compiler built the map). **Vis Cost**: portals coloured by the time hlvvis spent on them, mapped back to the Blender objects whose brushes those portals were split along, with their share and a Select button; needs hlvvis (it writes `<map>.viscost`). hlvvis also prints one progress line per percent, weighting each portal by an estimated cost, which Blender shows as "Vis 42%, about 3 s left".
@@ -102,5 +116,6 @@ Detail facts measured: in a test room, 36 overlapping boxes made `func_detail` c
 | Switching vis compiler doesn't trigger a rebuild (same map) | by design |
 | Per-thread memory NPD x PW x 8 bytes (~50 MB/thread on a 20k-portal map), never freed | fine (audit 3) |
 | hlvvis options: `-fast`, `-exact`, `-threads`, `-radius_override`, `-game`, `-v` | done |
+| A house's every collision piece as a Vis Only blocker: 4,242 leaves / 2,073 clusters / 4.7 s for one, ~635 s estimated for five | known (2026-10-15); outer-walls-only not tried |
 
-Last checked: 2026-10-13 against branch light-layers, commit 41dc861.
+Last checked: 2026-10-15 against branch light-layers, commit a2d00a3 (the Vis Only section; the rest re-read 2026-10-13 against 41dc861).
