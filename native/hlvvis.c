@@ -1382,6 +1382,7 @@ int main(int argc, char **argv) {
         else if (!_stricmp(argv[i], "-exact")) g_merge = 0;
         else if (!_stricmp(argv[i], "-jacobi")) g_jacobi = 1;
         else if (!_stricmp(argv[i], "-gpu")) g_gpu = 1;
+        else if (!_stricmp(argv[i], "-gpuselftest")) return vgpu_fp64_selftest(4000000) == 0 ? 0 : 1;
         else if (!_stricmp(argv[i], "-game") && i + 1 < argc) i++;
         else if (!_stricmp(argv[i], "-radius_override") && i + 1 < argc) radius_override = argv[++i];
         else if (argv[i][0] == '-') { printf("Error: unsupported option %s\n", argv[i]); return 2; }

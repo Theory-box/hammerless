@@ -12,6 +12,8 @@
 #include <string.h>
 #include <vulkan/vulkan.h>
 #include "hlvvis_shaders/basevis.spv.h"
+#include "hlvvis_shaders/fp64test.spv.h"
+#include <math.h>
 
 #include "hlvvis_gpu.h"
 
@@ -19,7 +21,7 @@ static PFN_vkGetInstanceProcAddr gipa;
 #define VK_DECLARE(f) static PFN_##f f;
 #define VK_INSTANCE_FUNCS(X) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties) \
     X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkGetPhysicalDeviceMemoryProperties) X(vkCreateDevice) \
-    X(vkGetDeviceProcAddr)
+    X(vkGetDeviceProcAddr) X(vkGetPhysicalDeviceFeatures)
 #define VK_DEVICE_FUNCS(X) X(vkGetDeviceQueue) X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) \
     X(vkAllocateMemory) X(vkFreeMemory) X(vkBindBufferMemory) X(vkMapMemory) \
     X(vkCreateCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkQueueSubmit) \
@@ -156,7 +158,8 @@ static void bind_buffers(program_t *p, gbuf_t *const *bufs) {
 }
 
 /* ------------------------------------------------------------------ start */
-static program_t prog_basevis;
+static program_t prog_basevis, prog_fp64;
+static int g_fp64;
 
 int vgpu_init(void) {
     static int tried, ok;
@@ -204,8 +207,13 @@ int vgpu_init(void) {
     float prio = 1;
     VkDeviceQueueCreateInfo qci = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     qci.queueFamilyIndex = qfam, qci.queueCount = 1, qci.pQueuePriorities = &prio;
+    VkPhysicalDeviceFeatures have, want;
+    vkGetPhysicalDeviceFeatures(phys, &have);
+    memset(&want, 0, sizeof want);
+    want.shaderFloat64 = have.shaderFloat64;             /* (the clipping's doubles) */
+    g_fp64 = have.shaderFloat64;
     VkDeviceCreateInfo dci = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-    dci.queueCreateInfoCount = 1, dci.pQueueCreateInfos = &qci;
+    dci.queueCreateInfoCount = 1, dci.pQueueCreateInfos = &qci, dci.pEnabledFeatures = &want;
     if (vkCreateDevice(phys, &dci, NULL, &dev) != VK_SUCCESS) { printf("Warning: the graphics card didn't start: vis on the CPU\n"); return 0; }
 #define VK_LOAD_D(f) if (!(f = (PFN_##f)vkGetDeviceProcAddr(dev, #f))) { printf("Warning: Vulkan has no " #f ": vis on the CPU\n"); return 0; }
     VK_DEVICE_FUNCS(VK_LOAD_D)
@@ -219,6 +227,7 @@ int vgpu_init(void) {
     TRYR(vkAllocateCommandBuffers(dev, &cai, &cmd), 0);
     prog_basevis = program(spv_basevis, sizeof(spv_basevis), 3, 20);
     if (!prog_basevis.ok) { printf("Warning: the graphics card's driver didn't take hlvvis's GPU programs: vis on the CPU\n"); return 0; }
+    if (g_fp64) prog_fp64 = program(spv_fp64test, sizeof(spv_fp64test), 4, 4);
     ok = 1;
     return 1;
 }
@@ -262,4 +271,56 @@ int vgpu_front(int npd, const float *pts, int npts, const vgpu_portal_t *portals
     }
     free_buffer(&gpts); free_buffer(&gportals); free_buffer(&out); free_buffer(&back);
     return !g_failed;
+}
+
+/* (self-test) the GPU's double a / b, sqrt(a) and (float)(1 / sqrt(len)) against the CPU's, bit for bit, over n random
+   inputs; prints the mismatches. Returns the number of mismatches, -1 if it couldn't run. */
+int vgpu_fp64_selftest(int n) {
+    if (!vgpu_init()) return -1;
+    if (!g_fp64 || !prog_fp64.ok) { printf("GPU self-test: no double precision on this card\n"); return -1; }
+    double *ab = malloc((size_t)n * 16);
+    float *lens = malloc((size_t)n * 4);
+    uint64_t x = 88172645463325252ull;
+    for (int i = 0; i < n; i++) {
+        #define RND() (x ^= x << 13, x ^= x >> 7, x ^= x << 17, x)
+        double a = ldexp((double)(RND() >> 11) / 9007199254740992.0 + 0.5, (int)(RND() % 40) - 20);
+        double b = ldexp((double)(RND() >> 11) / 9007199254740992.0 + 0.5, (int)(RND() % 40) - 20);
+        if (RND() & 1) b = -b;
+        ab[2 * i] = a, ab[2 * i + 1] = b;
+        lens[i] = (float)ldexp((double)(RND() >> 40) / 16777216.0 + 0.01, (int)(RND() % 30) - 10);
+    }
+    gbuf_t gin, ginf, gout, goutf, back, backf;
+    if (!upload(&gin, ab, (VkDeviceSize)n * 16) || !upload(&ginf, lens, (VkDeviceSize)n * 4) ||
+        !new_buffer(&gout, (VkDeviceSize)n * 16, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+        !new_buffer(&goutf, (VkDeviceSize)n * 4, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
+        !new_buffer(&back, (VkDeviceSize)n * 16, HOST) || !new_buffer(&backf, (VkDeviceSize)n * 4, HOST)) return -1;
+    gbuf_t *bufs[4] = {&gin, &ginf, &gout, &goutf};
+    bind_buffers(&prog_fp64, bufs);
+    uint32_t pc = (uint32_t)n;
+    if (!begin()) return -1;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prog_fp64.pipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prog_fp64.pl, 0, 1, &prog_fp64.ds, 0, NULL);
+    vkCmdPushConstants(cmd, prog_fp64.pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &pc);
+    vkCmdDispatch(cmd, ((uint32_t)n + 63) / 64, 1, 1);
+    VkMemoryBarrier mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT, mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+    VkBufferCopy c1 = {0, 0, (VkDeviceSize)n * 16}, c2 = {0, 0, (VkDeviceSize)n * 4};
+    vkCmdCopyBuffer(cmd, gout.buf, back.buf, 1, &c1);
+    vkCmdCopyBuffer(cmd, goutf.buf, backf.buf, 1, &c2);
+    if (!submit()) return -1;
+    const double *q = back.map; const float *inv = backf.map;
+    long long bad_div = 0, bad_sqrt = 0, bad_inv = 0;
+    for (int i = 0; i < n; i++) {
+        double d = ab[2 * i] / ab[2 * i + 1], sq = sqrt(ab[2 * i]);
+        float iv = (float)(1.0 / sqrt((double)lens[i]));
+        if (memcmp(&d, &q[2 * i], 8)) { if (bad_div++ < 3) printf("  div %.17g / %.17g: CPU %.17g GPU %.17g\n", ab[2*i], ab[2*i+1], d, q[2*i]); }
+        if (memcmp(&sq, &q[2 * i + 1], 8)) { if (bad_sqrt++ < 3) printf("  sqrt %.17g: CPU %.17g GPU %.17g\n", ab[2*i], sq, q[2*i+1]); }
+        if (memcmp(&iv, &inv[i], 4)) { if (bad_inv++ < 3) printf("  1/sqrt %.9g: CPU %.9g GPU %.9g\n", lens[i], iv, inv[i]); }
+    }
+    printf("GPU self-test (%s), %d random inputs: a / b %lld differ, sqrt %lld differ, (float)(1 / sqrt(len)) %lld differ\n",
+           g_name, n, bad_div, bad_sqrt, bad_inv);
+    free_buffer(&gin); free_buffer(&ginf); free_buffer(&gout); free_buffer(&goutf); free_buffer(&back); free_buffer(&backf);
+    free(ab); free(lens);
+    return (int)(bad_div + bad_sqrt + bad_inv);
 }
