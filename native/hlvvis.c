@@ -86,6 +86,7 @@ typedef struct {
 
 static int NPD, NCL, PW;   /* one-way portals, clusters, 64-bit words per portal bitset */
 static Portal *P;
+static int g_two;           /* the default's two GPU passes are running (see g_auto) */
 static uint8_t *g_jv1;      /* (experiment, HL_JACOBI_X=2 / HL_TWO) a first pass's vis rows, PW words per portal */
 static int *lf_first, *lf_count, *lf_list;   /* portals leaving each cluster */
 
@@ -1420,9 +1421,14 @@ static int gpu_pipe_flow(double total_w) {
         g_jrounds += live; g_jexp += np; g_gpu_items += ni; passes += npass;
         QueryPerformanceCounter(&fn);
         double el = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
-        int pct = (int)(100.0 * done_w / total_w);
+        /* (the default's two passes show as one: the first about 38% of the time, the second, about 1.6 times
+           as long, the rest) */
+        double fr = done_w / total_w, lo = 0, span = 100, after = 0;
+        if (g_two && !g_jm) span = 38, after = 1.6;
+        else if (g_two) lo = 38, span = 62;
+        int pct = (int)(lo + span * fr);
         if (pct != last_pct && pct < 100 && done_w > 0 && el > 0.5) {
-            double left = el * (total_w - done_w) / done_w;
+            double left = el * (1 - fr) / fr + after * el / fr;
             printf("vis %d%%, about %.0f s left\n", pct, left < 1 ? 1 : left);
             last_pct = pct;
         }
@@ -1590,7 +1596,7 @@ static int g_radial;
 static int g_gpu;                 /* -gpu: the rough pass's plane tests on the graphics card (hlvvis_gpu.c) */
 /* the default (no -exact / -jacobi / -gpu / -cpu): on a graphics card that can, -jacobi on it twice, the second
    pass with might-see sets pruned by the first's vis (g_two); else the merged windows on the CPU */
-static int g_auto = 1, g_two;
+static int g_auto = 1;
 static int g_front_done;          /* the front bits are already in (from the GPU) */
 static double g_vis_radius2;      /* farz squared */
 static float tri_dist2(const V *a, const V *b) {
