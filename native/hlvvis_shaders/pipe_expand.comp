@@ -21,7 +21,7 @@ void main() {
     uint qn = 0u;
     for (uint j = 0u, m = 0u; j < L.y; j++) {
         uint c = lflist[L.x + j];
-        if (!in_flood(s, c)) continue;
+        if (!in_flood(s, c) || !jm_step(s, xi, c)) continue;
         if (m == k) { qn = c; break; }
         m++;
     }

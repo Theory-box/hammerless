@@ -20,8 +20,8 @@ void main() {
     uint x = front[off + f], base = slots[s].base;
     uint r = rank_of(s, x), i = off + r;
     ivec4 h = sth[i];
-    int grows = h.y + 1;
-    bool opened = h.z != 0;
+    bool opened = (h.z & 1) != 0;
+    int grows = MW == 0u || (h.z & 2) != 0 ? h.y + 1 : h.y;      // (with sets: only expansions after window growth count)
     int nS = h.w & 255, nW = (h.w >> 8) & 255;
     if (grows > int(pc.saturate) && !opened) {
         M_n[0] = portals[base].plane.xyz; M_ccw[0] = int(portals[base].ccw);
@@ -40,8 +40,9 @@ void main() {
     for (int k = 0; k < nS; k++) stPS[i].p[k] = stS[i].p[k];
     for (int k = 0; k < nW; k++) stPW[i].p[k] = stW[i].p[k];
     sth[i] = ivec4(h.x, grows, opened ? 1 : 0, nS | (nW << 8) | (nS << 16) | (nW << 24));
+    if (MW != 0u) { uint a = jm_at(s, i), mws = slots[s].mw; for (uint k = 0u; k < mws; k++) jmSM[a + k] = jmM[a + k]; }
     uvec2 L = leaves[portals[x].leaf];
     uint c = 0u;
-    for (uint k = 0u; k < L.y; k++) if (in_flood(s, lflist[L.x + k])) c++;
+    for (uint k = 0u; k < L.y; k++) { uint q = lflist[L.x + k]; if (in_flood(s, q) && jm_step(s, i, q)) c++; }
     pairs[id] = uvec4(c, 0u, s, r);
 }

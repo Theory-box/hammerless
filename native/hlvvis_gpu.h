@@ -33,7 +33,7 @@ int vgpu_merge_test(int n, const vgpu_mrec_t *recs, vgpu_mres_t *out, const doub
    every live slot per call. Portals: plane, origin + radius, points, winding_ccw of their own winding, the cluster
    they lead into. Leaves: (first, count) into lflist, the portals leaving each cluster. */
 typedef struct { float plane[4], origin[4]; uint32_t first, count, ccw, leaf; } vgpu_pportal_t;
-typedef struct { uint32_t base, gen, floodn, seen, nfront, live, slotoff, off; } vgpu_slot_t;
+typedef struct { uint32_t base, gen, floodn, seen, nfront, live, slotoff, off, mw, woff, pad0, pad1; } vgpu_slot_t;
 typedef struct { int nslots, fmax; long long bytes, entries; } vgpu_pipe_info_t;   /* entries: for the running flows' floods */
 /* returns the number of slots (0: couldn't); fmax: the largest flood (portals), pw32: 32-bit words per bitset. Each
    running flow takes entries off .. off + its flood - 1 of info->entries (the caller hands them out: pipe_refill.comp) */
@@ -47,3 +47,5 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
                     uint32_t *vis_out, vgpu_slot_t *slots_out, long long *n_pairs, long long *n_items, int *n_passes);
 /* (dev) HL_GPU_PROFILE=1: prints the GPU's time per kernel of the flow */
 void vgpu_pipe_report(void);
+/* the second pass's might-see sets: see hlvvis_gpu.c */
+long long vgpu_pipe_jm(int mw, const uint32_t *v1cl, int npd, int cw32, int ncl);

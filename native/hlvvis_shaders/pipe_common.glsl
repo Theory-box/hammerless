@@ -21,15 +21,17 @@ spirv_execution_mode(4461, 64);
 #define EMPTY 0xffffffffu
 
 layout(push_constant) uniform PC {
-    uint nslots; uint item_end; uint pw32; uint npd;
+    uint nslots; uint item_end; uint pw32; uint mw;
     uint round; uint item_start; float eps_up; float len_lo;
     uint robust; uint maxchop; uint hullcap; uint nrefill;
     uint candcap; uint ptcap; uint saturate; uint maxarr;
 } pc;
 
 struct Portal { vec4 plane; vec4 origin; uint first; uint count; uint ccw; uint leaf; };   // origin.w = radius
-struct Slot { uint base; uint gen; uint floodn; uint seen; uint nfront; uint live; uint slotoff; uint off; };   // off: its entries
-// per entry (a slot's entries: off + rank in its base's flood): sth = (gen, grows, opened, counts: S | W << 8 |
+struct Slot { uint base; uint gen; uint floodn; uint seen; uint nfront; uint live; uint slotoff; uint off;
+              uint mw; uint woff; uint pad0; uint pad1; };   // off: its entries; mw, woff: its sets' words each, from
+// per entry (a slot's entries: off + rank in its base's flood): sth = (gen, grows, opened | grew since expanded << 1,
+// counts: S | W << 8 |
 // snapshot S << 16 | snapshot W << 24); the windows S, W and the snapshot PS, PW the round expands from
 struct Win16 { vec4 p[SNAP]; };
 
@@ -56,6 +58,18 @@ layout(std430, binding = 19) buffer StateS { Win16 stS[]; };
 layout(std430, binding = 20) buffer StateW { Win16 stW[]; };
 layout(std430, binding = 21) buffer StatePS { Win16 stPS[]; };
 layout(std430, binding = 22) buffer StatePW { Win16 stPW[]; };
+// might-see sets (the second pass, pc.mw != 0; a slot's sets are its mw words each, from its woff): over the clusters the base's first pass sees, by
+// their rank among them (rmap per slot: cluster -> rank, EMPTY if the base doesn't see it). Per entry: M, the round's
+// snapshot SM, and PT = the entry's portal's first-pass vis in that rank space. V1cl: per portal, its first-pass vis
+// as clusters (cnt[C_CW32] words)
+layout(std430, binding = 23) buffer MightM { uint jmM[]; };
+layout(std430, binding = 24) buffer MightSM { uint jmSM[]; };
+layout(std430, binding = 25) buffer MightPT { uint jmPT[]; };
+layout(std430, binding = 26) readonly buffer V1Cl { uint v1cl[]; };
+layout(std430, binding = 27) coherent buffer RMap { uint rmap[]; };
+#define MW pc.mw
+uint jm_at(uint s, uint i) { return slots[s].woff + (i - slots[s].off) * slots[s].mw; }   // entry i's set
+#define MW_MAX 256
 
 #define C_N 0          // pairs this round
 #define C_T 1          // items this round
@@ -64,6 +78,8 @@ layout(std430, binding = 22) buffer StatePW { Win16 stPW[]; };
 #define C_FAIL 4       // first item that found no room (this pass), EMPTY if none
 #define C_TOUCH 5      // (slot, portal) lists started (this pass)
 #define C_ERR 6        // the round's item count didn't fit 32 bits
+#define C_NCL 48       // (set once) clusters
+#define C_CW32 49      // (set once) 32-bit words per cluster set
 #define PASS_RESERVED_PTS 128u   // (a pass's first item has candidate 0 and points 0 .. 127 of its own: every pass gets on)
 #define C_ARGS1 8      // dispatch sizes: snap
 #define C_ARGS3 12     //                 expand
@@ -84,6 +100,13 @@ bool in_flood(uint s, uint q) { return ((flood[s * pc.pw32 + (q >> 5)] >> (q & 3
 uint rank_of(uint s, uint q) {
     uint w = s * pc.pw32 + (q >> 5);
     return prefix[w] + uint(bitCount(flood[w] & ((1u << (q & 31u)) - 1u)));
+}
+
+// a step from entry xi (its snapshot set) into portal q is allowed (always without sets)
+bool jm_step(uint s, uint xi, uint q) {
+    if (MW == 0u) return true;
+    uint r = rmap[s * cnt[C_NCL] + portals[q].leaf];
+    return r != EMPTY && ((jmSM[jm_at(s, xi) + (r >> 5)] >> (r & 31u)) & 1u) != 0u;
 }
 
 void load_win(uint p, out vec3 w[MAXW], out int n) {

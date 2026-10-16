@@ -1,0 +1,42 @@
+#version 460
+// hlvvis -jacobi GPU pipeline (the second pass): after pipe_refill, every new flow's flood portals' PT = the portal's
+// first-pass vis (as clusters) among the base's clusters, by rank. One invocation per (new flow, flood word); the
+// base's cluster words, their ranks and which are non-zero are shared by the workgroup.
+#extension GL_GOOGLE_include_directive : require
+#include "pipe_common.glsl"
+layout(local_size_x = 64) in;
+
+shared uint bw[1024], bpre[1024], nzw[1024];
+shared uint nnz;
+
+void main() {
+    uint lid = gl_LocalInvocationID.x, wf = gl_GlobalInvocationID.x, ri = gl_WorkGroupID.y;
+    if (ri >= pc.nrefill || MW == 0u) return;
+    uint rec = refill[ri];
+    uint s = refill[rec], base = refill[rec + 1u], mws = refill[rec + 6u], woff = refill[rec + 7u];
+    uint fo = rec + 8u, cw = cnt[C_CW32], bo = base * cw;
+    for (uint k = lid; k < cw; k += 64u) bw[k] = v1cl[bo + k];
+    barrier();
+    if (lid == 0u) {
+        uint run = 0u, m = 0u;
+        for (uint k = 0u; k < cw; k++) { bpre[k] = run; run += uint(bitCount(bw[k])); if (bw[k] != 0u) nzw[m++] = k; }
+        nnz = m;
+    }
+    barrier();
+    if (wf >= pc.pw32) return;
+    uint fwd = refill[fo + wf], r0 = prefix[s * pc.pw32 + wf], nz = nnz;
+    for (uint fw = fwd; fw != 0u; fw &= fw - 1u) {
+        uint q = wf * 32u + uint(findLSB(fw));
+        uint ea = woff + (r0 + uint(bitCount(fwd & ((1u << (q & 31u)) - 1u)))) * mws;
+        for (uint k = 0u; k < mws; k++) jmPT[ea + k] = 0u;
+        uint qo = q * cw;
+        for (uint j = 0u; j < nz; j++) {
+            uint k = nzw[j], bk = bw[k];
+            for (uint b2 = v1cl[qo + k] & bk; b2 != 0u; b2 &= b2 - 1u) {
+                uint bit = uint(findLSB(b2));
+                uint r = bpre[k] + uint(bitCount(bk & ((1u << bit) - 1u)));
+                jmPT[ea + (r >> 5)] |= 1u << (r & 31u);
+            }
+        }
+    }
+}

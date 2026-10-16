@@ -1,27 +1,30 @@
 #version 460
 // hlvvis -jacobi GPU pipeline: new base portals into free slots, one workgroup per slot. A record (refill[] words, at
-// the offset refill[i] for record i): slot, base, first openings n, flood count, entries' offset, the base's flood (pw32
-// words), then per
-// first opening: portal, S n, W n, 0, S (16 vec4), W (16 vec4), as the CPU's first openings and merge left them.
+// the offset refill[i] for record i): slot, base, first openings n, flood count, entries' offset, portals seen, the
+// base's flood (pw32 words), its vis so far (pw32 words), then per
+// first opening: portal, S n, W n, 0, S (16 vec4), W (16 vec4), its might-see set (MW words), as the CPU's first
+// openings and merge left them. With sets: the slot's cluster ranks.
 // The slot's dirty bits and lists are clean (pipe_compact and pipe_merge leave them so).
 #extension GL_GOOGLE_include_directive : require
 #include "pipe_common.glsl"
 layout(local_size_x = 256) in;
 
 shared uint part[256];
+shared uint clpre[1024];
 
 void main() {
     if (gl_WorkGroupID.x >= pc.nrefill) return;
     uint lid = gl_LocalInvocationID.x;
     uint rec = refill[gl_WorkGroupID.x];
     uint s = refill[rec], base = refill[rec + 1u], nf = refill[rec + 2u], fl = refill[rec + 3u], off = refill[rec + 4u];
-    uint fo = rec + 5u, eo = fo + pc.pw32;
+    uint seen0 = refill[rec + 5u], mws = refill[rec + 6u], woff = refill[rec + 7u];
+    uint fo = rec + 8u, vo = fo + pc.pw32, eo = vo + pc.pw32, esz = 132u + (MW != 0u ? mws : 0u);
     uint chunk = (pc.pw32 + 255u) / 256u, w0 = lid * chunk, w1 = min(w0 + chunk, pc.pw32);
     uint sum = 0u;
     for (uint w = w0; w < w1; w++) {
         uint f = refill[fo + w];
         flood[s * pc.pw32 + w] = f;
-        vis[s * pc.pw32 + w] = 0u;
+        vis[s * pc.pw32 + w] = refill[vo + w];
         sum += uint(bitCount(f));
     }
     part[lid] = sum;
@@ -34,23 +37,35 @@ void main() {
     uint run = part[lid];
     for (uint w = w0; w < w1; w++) { prefix[s * pc.pw32 + w] = run; run += uint(bitCount(refill[fo + w])); }
     if (lid == 0u) {
-        slots[s].base = base; slots[s].gen = base + 1u; slots[s].floodn = fl; slots[s].seen = nf;
-        slots[s].nfront = 0u; slots[s].live = 1u; slots[s].slotoff = 0u; slots[s].off = off;
+        slots[s].base = base; slots[s].gen = base + 1u; slots[s].floodn = fl; slots[s].seen = seen0;
+        slots[s].nfront = 0u; slots[s].live = 1u; slots[s].slotoff = 0u; slots[s].off = off; slots[s].mw = mws; slots[s].woff = woff;
+    }
+    if (MW != 0u) {
+        // the base's clusters by rank (pipe_pt then makes every flood portal's PT)
+        uint ncl = cnt[C_NCL], cw = cnt[C_CW32], bo = base * cw;
+        if (lid == 0u) { uint run2 = 0u; for (uint k = 0u; k < cw; k++) { clpre[k] = run2; run2 += uint(bitCount(v1cl[bo + k])); } }
+        barrier();
+        for (uint c = lid; c < ncl; c += 256u) {
+            uint wd = v1cl[bo + (c >> 5)];
+            rmap[s * ncl + c] = ((wd >> (c & 31u)) & 1u) != 0u ? clpre[c >> 5] + uint(bitCount(wd & ((1u << (c & 31u)) - 1u))) : EMPTY;
+        }
+        memoryBarrierBuffer();
+        barrier();
     }
     memoryBarrierBuffer();
     barrier();
     for (uint e = lid; e < nf; e += 256u) {
-        uint at = eo + e * 132u;
+        uint at = eo + e * esz;
         uint q = refill[at], nS = refill[at + 1u], nW = refill[at + 2u];
         uint w = s * pc.pw32 + (q >> 5);
         uint r = prefix[w] + uint(bitCount(refill[fo + (q >> 5)] & ((1u << (q & 31u)) - 1u)));
         uint i = off + r;
-        sth[i] = ivec4(int(base + 1u), 0, 0, int(nS | (nW << 8)));
+        sth[i] = ivec4(int(base + 1u), 0, 2, int(nS | (nW << 8)));      // (new: grown since expanded)
+        if (MW != 0u) for (uint k = 0u; k < mws; k++) jmM[woff + r * mws + k] = refill[at + 132u + k];
         for (uint k = 0u; k < SNAP; k++) {
             stS[i].p[k] = uintBitsToFloat(uvec4(refill[at + 4u + 4u * k], refill[at + 5u + 4u * k], refill[at + 6u + 4u * k], 0u));
             stW[i].p[k] = uintBitsToFloat(uvec4(refill[at + 68u + 4u * k], refill[at + 69u + 4u * k], refill[at + 70u + 4u * k], 0u));
         }
-        atomicOr(vis[w], 1u << (q & 31u));
         atomicOr(dirty[w], 1u << (q & 31u));
     }
 }

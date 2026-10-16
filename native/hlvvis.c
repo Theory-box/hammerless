@@ -775,11 +775,20 @@ static _Thread_local JCand *t_cand; static _Thread_local int t_ncand, t_capcand;
    candidate's (t_cmight), the snapshot's (t_snapM); a window that brings nothing the base doesn't already see (as the
    round began: t_visr) isn't merged */
 static int g_jm;
-static _Thread_local uint64_t *t_jm, *t_cmight, *t_snapM, *t_visr;
+/* (HL_JM_CL=1) the sets over clusters instead of portals: g_jw words each; a portal q stands for the cluster it leads
+   into (if a portal p sees q, p's cluster set has q's cluster: a superset, safe) */
+static int g_jcl, g_jw, g_jnofilter, g_jnomore, g_jmw;   /* (g_jmw: the GPU's words per set) */
+static int *g_jclrank;      /* (the GPU pass: a base's clusters' ranks) */
+static uint64_t *g_jv1cl;   /* per portal: its first pass's vis as clusters */
+static _Thread_local uint64_t *t_jm, *t_cmight, *t_snapM, *t_visr, *t_seencl;
+static inline int j_bit(int q) { return g_jcl ? P[q].leaf : q; }
 static _Thread_local const uint64_t *t_addmight; static _Thread_local int t_addnomerge;
-static inline const uint64_t *j_test(int q) { return (const uint64_t *)(g_jv1 ? g_jv1 + (size_t)q * PW * 8 : P[q].flood); }
+static inline const uint64_t *j_test(int q) {
+    if (g_jcl) return g_jv1cl + (size_t)q * g_jw;
+    return (const uint64_t *)(g_jv1 ? g_jv1 + (size_t)q * PW * 8 : P[q].flood);
+}
 static _Thread_local int *t_order;
-static volatile LONG64 g_jrounds, g_jexp, g_jreach, g_jopened;
+static volatile LONG64 g_jrounds, g_jexp, g_jreach, g_jopened, g_jbitsonly;
 /* (GPU planning) per base portal: its rounds and its widest round; how many bases took how many rounds */
 static int *g_jbase_rounds, *g_jbase_maxfront;
 
@@ -788,12 +797,13 @@ static void j_add(int pnum, const Win *source, const Win *pass) {
         t_capcand = t_capcand ? t_capcand * 2 : 4096;
         t_cand = realloc(t_cand, (size_t)t_capcand * sizeof(JCand));
         t_order = realloc(t_order, (size_t)t_capcand * sizeof(int));
-        if (g_jm) t_cmight = realloc(t_cmight, (size_t)t_capcand * PW * 8);
+        if (g_jm) t_cmight = realloc(t_cmight, (size_t)t_capcand * g_jw * 8);
         if (!t_cand || !t_order) fail("out of memory%s", "");
     }
+    if (g_jm && !t_cmight && t_capcand) t_cmight = xmalloc((size_t)t_capcand * g_jw * 8);   /* (sets came after the list) */
     JCand *c = &t_cand[t_ncand];
     c->p = pnum; c->seq = t_ncand; c->nomerge = 0;
-    if (g_jm) { memcpy(t_cmight + (size_t)t_ncand * PW, t_addmight, (size_t)PW * 8); c->nomerge = t_addnomerge; }
+    if (g_jm) { memcpy(t_cmight + (size_t)t_ncand * g_jw, t_addmight, (size_t)g_jw * 8); c->nomerge = t_addnomerge; }
     memcpy(&c->src, source, sizeof(int) + source->n * sizeof(V));
     memcpy(&c->pass, pass, sizeof(int) + pass->n * sizeof(V));
     t_ncand++;
@@ -816,15 +826,15 @@ static int j_merge_core(Portal *b, const JCand *c, int *seen) {
     if (g_jm && c->nomerge) return 0;
     if (js->gen != t_jgen) {
         js->gen = t_jgen; js->grows = 0; js->opened = 0; js->expanded = 0; js->dirty = 0; js->wgrew = 1;
-        if (g_jm) memcpy(t_jm + (size_t)pnum * PW, t_cmight + (size_t)c->seq * PW, (size_t)PW * 8);
+        if (g_jm) memcpy(t_jm + (size_t)pnum * g_jw, t_cmight + (size_t)c->seq * g_jw, (size_t)g_jw * 8);
         js->S = c->src; js->W = c->pass;
         if (js->S.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->S, (Win *)&js->S, b->pl.n, winding_ccw(b->w, b->pl.n), &t); js->S = t; }
         if (js->W.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->W, (Win *)&js->W, p->pl.n, winding_ccw(p->w, p->pl.n), &t); js->W = t; }
     } else {
         int bits = 0;
         if (g_jm) {
-            uint64_t *mm = t_jm + (size_t)pnum * PW; const uint64_t *mi = t_cmight + (size_t)c->seq * PW;
-            for (int k = 0; k < PW; k++) { uint64_t nb = mi[k] & ~mm[k]; if (nb) { mm[k] |= nb; bits = 1; } }
+            uint64_t *mm = t_jm + (size_t)pnum * g_jw; const uint64_t *mi = t_cmight + (size_t)c->seq * g_jw;
+            for (int k = 0; k < g_jw; k++) { uint64_t nb = mi[k] & ~mm[k]; if (nb) { mm[k] |= nb; bits = 1; } }
         }
         if (js->opened && !bits) return 0;
         int grew = 0;
@@ -1039,7 +1049,10 @@ static int j_begin(Portal *b, int *seen_out) {
         t_js = calloc(NPD, sizeof(JState));
         t_front = malloc(((size_t)NPD + 1) * sizeof(int)); t_next = malloc(((size_t)NPD + 1) * sizeof(int));
         t_snapS = malloc(((size_t)NPD + 1) * sizeof(WinBuf)); t_snapW = malloc(((size_t)NPD + 1) * sizeof(WinBuf));
-        if (g_jm) { t_jm = malloc((size_t)NPD * PW * 8); t_snapM = malloc(((size_t)NPD + 1) * PW * 8); t_visr = malloc((size_t)PW * 8 * 2 + 16); }
+    }
+    if (g_jm && !t_jm) {
+        t_jm = malloc((size_t)NPD * g_jw * 8); t_snapM = malloc(((size_t)NPD + 1) * g_jw * 8);
+        t_visr = malloc((size_t)(PW + g_jw) * 8 + 16); t_seencl = malloc((size_t)g_jw * 8 + 8);
     }
     t_jgen++;
     t_nnext = 0; t_ncand = 0;
@@ -1063,9 +1076,10 @@ static int j_begin(Portal *b, int *seen_out) {
         Win *source = d < -b->radius ? b->w : chop(b->w, &st, &back);
         if (!source) continue;
         if (g_jm) {
-            const uint64_t *tq = j_test(pnum), *bs = g_jv1 ? (const uint64_t *)(g_jv1 + (size_t)(b - P) * PW * 8) : bf;
+            const uint64_t *tq = j_test(pnum), *bs = g_jcl ? g_jv1cl + (size_t)(b - P) * g_jw :
+                                                     g_jv1 ? (const uint64_t *)(g_jv1 + (size_t)(b - P) * PW * 8) : bf;
             uint64_t more = 0;
-            for (int k = 0; k < PW; k++) { t_visr[k] = bs[k] & tq[k]; more |= t_visr[k]; }
+            for (int k = 0; k < g_jw; k++) { t_visr[k] = bs[k] & tq[k]; more |= t_visr[k]; }
             t_addmight = t_visr; t_addnomerge = !more;
         }
         j_add(pnum, source, pass);
@@ -1092,7 +1106,8 @@ static void jacobi_flow(int pi) {
         for (int f = 0; f < t_nfront; f++) {
             JState *js = &t_js[t_front[f]];
             js->dirty = 0;
-            if (g_jm) memcpy(t_snapM + (size_t)f * PW, t_jm + (size_t)t_front[f] * PW, (size_t)PW * 8);
+            if (g_jm) memcpy(t_snapM + (size_t)f * g_jw, t_jm + (size_t)t_front[f] * g_jw, (size_t)g_jw * 8);
+            if (g_jm && !js->wgrew) InterlockedIncrement64(&g_jbitsonly);
             if ((!g_jm || js->wgrew) && ++js->grows > JACOBI_SATURATE && !js->opened) {    /* (it keeps creeping: open it fully) */
                 memcpy(&js->S, b->w, sizeof(int) + b->w->n * sizeof(V));
                 memcpy(&js->W, P[t_front[f]].w, sizeof(int) + P[t_front[f]].w->n * sizeof(V));
@@ -1111,8 +1126,16 @@ static void jacobi_flow(int pi) {
                 inflate((Win *)&js->W, P[t_front[f]].pl.n, JACOBI_WIDEN, &t_snapW[f]);
             } else { t_snapS[f] = js->S; t_snapW[f] = js->W; }
         }
-        uint64_t *visr = t_visr + PW, *jmight = t_visr;
-        if (g_jm) memcpy(visr, b->vis, (size_t)PW * 8);
+        uint64_t *visr = t_visr + g_jw, *jmight = t_visr, *seen_m = visr;
+        if (g_jm) {
+            memcpy(visr, b->vis, (size_t)PW * 8);
+            if (g_jcl) {                    /* (the clusters the base sees as the round begins) */
+                memset(t_seencl, 0, (size_t)g_jw * 8);
+                for (int k = 0; k < PW; k++)
+                    for (uint64_t w = visr[k]; w; w &= w - 1) { int q = k * 64 + __builtin_ctzll(w); t_seencl[P[q].leaf >> 6] |= 1ull << (P[q].leaf & 63); }
+                seen_m = t_seencl;
+            }
+        }
         if (g_gpu_expand) j_expand_gpu(b, bf);
         else
         for (int f = 0; f < t_nfront; f++) {
@@ -1128,10 +1151,13 @@ static void jacobi_flow(int pi) {
                 Portal *p = &P[pnum];
                 if (!((bf[pnum >> 6] >> (pnum & 63)) & 1) || !j_xok(xn, pnum)) continue;
                 if (g_jm) {
-                    const uint64_t *cur = t_snapM + (size_t)f * PW, *tq = j_test(pnum);
-                    if (!((cur[pnum >> 6] >> (pnum & 63)) & 1)) continue;
+                    const uint64_t *cur = t_snapM + (size_t)f * g_jw, *tq = j_test(pnum);
+                    int jb = j_bit(pnum);
+                    int nofilter = g_jnofilter, nomore = g_jnomore;
+                    if (!nofilter && !((cur[jb >> 6] >> (jb & 63)) & 1)) continue;
                     uint64_t more = 0;
-                    for (int k = 0; k < PW; k++) { jmight[k] = cur[k] & tq[k]; more |= jmight[k] & ~visr[k]; }
+                    for (int k = 0; k < g_jw; k++) { jmight[k] = cur[k] & tq[k]; more |= jmight[k] & ~seen_m[k]; }
+                    if (nomore) more = 1;
                     if (!more && ((visr[pnum >> 6] >> (pnum & 63)) & 1)) continue;
                     t_addmight = jmight; t_addnomerge = !more;
                 }
@@ -1174,34 +1200,35 @@ static void jacobi_flow(int pi) {
    same order). The CPU does each base's first openings (when it fills a slot) and the bases those settle. */
 static int g_gpu_pipe, g_gpu_pipe_slots;
 static long long g_gpu_pipe_entries;
+static int g_gpu_pipe_fmax;
 /* the entries for the running flows: blocks of powers of two (a flow takes the smallest that holds its flood), split
    from bigger free ones when none is free (the flows come biggest first, so no merging back is needed); all of them
    back at once when nothing runs */
 #define POOL_CLASSES 40
-static long long pool_top, *pool_free[POOL_CLASSES];
-static int pool_nfree[POOL_CLASSES], pool_capfree[POOL_CLASSES];
+typedef struct { long long top, cap, *free[POOL_CLASSES]; int nfree[POOL_CLASSES], capfree[POOL_CLASSES]; } Pool;
+static Pool g_epool, g_wpool;            /* the entries; (the second pass) the sets' words */
 static int pool_class(long long n) { int k = 0; while ((1ll << k) < n) k++; return k; }
-static void pool_put(int k, long long off) {
-    if (pool_nfree[k] == pool_capfree[k]) {
-        pool_capfree[k] = pool_capfree[k] ? pool_capfree[k] * 2 : 64;
-        pool_free[k] = realloc(pool_free[k], (size_t)pool_capfree[k] * sizeof(long long));
-        if (!pool_free[k]) fail("out of memory%s", "");
+static void pool_put(Pool *pl, int k, long long off) {
+    if (pl->nfree[k] == pl->capfree[k]) {
+        pl->capfree[k] = pl->capfree[k] ? pl->capfree[k] * 2 : 64;
+        pl->free[k] = realloc(pl->free[k], (size_t)pl->capfree[k] * sizeof(long long));
+        if (!pl->free[k]) fail("out of memory%s", "");
     }
-    pool_free[k][pool_nfree[k]++] = off;
+    pl->free[k][pl->nfree[k]++] = off;
 }
-static long long pool_get(long long n) {
+static long long pool_get(Pool *pl, long long n) {
     int k = pool_class(n);
-    if (pool_nfree[k]) return pool_free[k][--pool_nfree[k]];
-    if (pool_top + (1ll << k) <= g_gpu_pipe_entries) { long long off = pool_top; pool_top += 1ll << k; return off; }
+    if (pl->nfree[k]) return pl->free[k][--pl->nfree[k]];
+    if (pl->top + (1ll << k) <= pl->cap) { long long off = pl->top; pl->top += 1ll << k; return off; }
     for (int j = k + 1; j < POOL_CLASSES; j++)
-        if (pool_nfree[j]) {
-            long long off = pool_free[j][--pool_nfree[j]];
-            for (int i = j - 1; i >= k; i--) pool_put(i, off + (1ll << i));   /* (the upper halves) */
+        if (pl->nfree[j]) {
+            long long off = pl->free[j][--pl->nfree[j]];
+            for (int i = j - 1; i >= k; i--) pool_put(pl, i, off + (1ll << i));   /* (the upper halves) */
             return off;
         }
     return -1;
 }
-static void pool_reset(void) { pool_top = 0; for (int k = 0; k < POOL_CLASSES; k++) pool_nfree[k] = 0; }
+static void pool_reset(Pool *pl) { pl->top = 0; for (int k = 0; k < POOL_CLASSES; k++) pl->nfree[k] = 0; }
 static int *g_pipe_order;
 static int cmp_flood_desc(const void *a, const void *b) {
     int x = P[*(const int *)a].nmight, y = P[*(const int *)b].nmight;
@@ -1244,6 +1271,7 @@ static int gpu_pipe_setup(void) {
                    info.entries, info.bytes / 1e9);
     g_gpu_pipe_slots = ns;
     g_gpu_pipe_entries = info.entries;
+    g_gpu_pipe_fmax = fmax;
     if (ns && (1ll << pool_class(fmax)) > info.entries) { printf("(the GPU has too little room for the largest flow) "); ns = 0; }
     g_gpu_pipe_slots = ns;
     return ns > 0;
@@ -1258,11 +1286,15 @@ static int gpu_pipe_flow(double total_w) {
     int *slot_base = xmalloc((size_t)ns * sizeof(int) + 4), *visq = xmalloc((size_t)ns * sizeof(int) + 4);
     int *visq_base = xmalloc((size_t)ns * sizeof(int) + 4);
     long long *slot_off = xmalloc((size_t)ns * sizeof(long long) + 8);
-    int *slot_class = xmalloc((size_t)ns * sizeof(int) + 4);
+    int *slot_class = xmalloc((size_t)ns * sizeof(int) + 4), *slot_wclass = xmalloc((size_t)ns * sizeof(int) + 4);
+    long long *slot_woff = xmalloc((size_t)ns * sizeof(long long) + 8);
     for (int k = 0; k < ns; k++) slot_base[k] = -1;
-    pool_reset();
+    pool_reset(&g_epool); pool_reset(&g_wpool);
+    g_epool.cap = g_gpu_pipe_entries;
     int pending = -1;                       /* a base whose first openings are done but found no room yet */
-    int pending_floodn = 0;
+    int pending_floodn = 0, pending_seen = 0;
+    int mw = g_jm ? g_jmw : 0;
+    if (g_jm && !g_jclrank) g_jclrank = xmalloc((size_t)NCL * sizeof(int) + 4);
     uint32_t *visout = xmalloc((size_t)ns * pw32 * 4 + 16);
     vgpu_slot_t *so = xmalloc((size_t)ns * sizeof(vgpu_slot_t) + 16);
     size_t capw = (size_t)ns + 4096;
@@ -1282,17 +1314,16 @@ static int gpu_pipe_flow(double total_w) {
         int nrec = 0;
         size_t nw = (size_t)ns;
         memset(rf, 0, (size_t)ns * 4);
-        if (!active && pending >= 0) pool_reset();      /* (nothing runs: every entry is free) */
+        if (!active && pending >= 0) { pool_reset(&g_epool); pool_reset(&g_wpool); }   /* (nothing runs: all free) */
         for (int k = 0; k < ns && (next < NPD || pending >= 0) && nrec < 1024; k++) {   /* (a share per round) */
             if (slot_base[k] >= 0) continue;
             int placed = 0;
             while (next < NPD || pending >= 0) {
-                int pi, floodn;
-                if (pending >= 0) pi = pending, floodn = pending_floodn;
+                int pi, floodn, seen;
+                if (pending >= 0) pi = pending, floodn = pending_floodn, seen = pending_seen;
                 else {
                     pi = g_pipe_order[next++];
                     P[pi].status = 1;
-                    int seen;
                     floodn = j_begin(&P[pi], &seen);
                     if (!t_nnext || seen >= floodn) {
                         P[pi].status = 2; g_done++;
@@ -1301,27 +1332,55 @@ static int gpu_pipe_flow(double total_w) {
                     }
                 }
                 Portal *b = &P[pi];
-                long long off = pool_get(floodn);
-                if (off < 0) { pending = pi, pending_floodn = floodn; break; }   /* (waits for room; t_js keeps it) */
+                int mws = 0;
+                long long woff = 0;
+                if (mw) {                           /* (its sets: as many words as its clusters need) */
+                    const uint64_t *bc = g_jv1cl + (size_t)pi * g_jw;
+                    int ncl_b = 0;
+                    for (int k2 = 0; k2 < g_jw; k2++) ncl_b += (int)__builtin_popcountll(bc[k2]);
+                    mws = (ncl_b + 31) / 32;
+                    if (mws < 1) mws = 1;
+                }
+                long long off = pool_get(&g_epool, floodn);
+                if (off >= 0 && mw) {
+                    woff = pool_get(&g_wpool, (long long)floodn * mws);
+                    if (woff < 0) { pool_put(&g_epool, pool_class(floodn), off); off = -1; }
+                }
+                if (off < 0) { pending = pi, pending_floodn = floodn, pending_seen = seen; break; }   /* (waits for room; t_js keeps it) */
                 pending = -1;
                 slot_off[k] = off; slot_class[k] = pool_class(floodn);
-                size_t need = nw + 5 + (size_t)pw32 + (size_t)t_nnext * 132;
+                slot_woff[k] = woff; slot_wclass[k] = pool_class((long long)floodn * (mws ? mws : 1));
+                size_t need = nw + 8 + 2 * (size_t)pw32 + (size_t)t_nnext * (132 + (size_t)mws);
                 if (need > capw) { capw = need * 2; rf = realloc(rf, capw * 4); if (!rf) fail("out of memory%s", ""); }
                 rf[nrec++] = (uint32_t)nw;
                 rf[nw] = (uint32_t)k; rf[nw + 1] = (uint32_t)pi; rf[nw + 2] = (uint32_t)t_nnext; rf[nw + 3] = (uint32_t)floodn;
-                rf[nw + 4] = (uint32_t)off;
-                memcpy(rf + nw + 5, b->flood, (size_t)pw32 * 4);
-                nw += 5 + (size_t)pw32;
+                rf[nw + 4] = (uint32_t)off; rf[nw + 5] = (uint32_t)seen; rf[nw + 6] = (uint32_t)mws; rf[nw + 7] = (uint32_t)woff;
+                memcpy(rf + nw + 8, b->flood, (size_t)pw32 * 4);
+                memcpy(rf + nw + 8 + pw32, b->vis, (size_t)pw32 * 4);
+                nw += 8 + 2 * (size_t)pw32;
+                if (mw) {                           /* (the base's clusters by rank) */
+                    const uint64_t *bc = g_jv1cl + (size_t)pi * g_jw;
+                    for (int cl = 0, r = 0; cl < NCL; cl++) g_jclrank[cl] = (bc[cl >> 6] >> (cl & 63)) & 1 ? r++ : -1;
+                }
                 for (int e = 0; e < t_nnext; e++) {
                     int q = t_next[e];
                     JState *js = &t_js[q];
                     uint32_t *o = rf + nw;
-                    memset(o, 0, 132 * 4);
+                    memset(o, 0, (132 + (size_t)mws) * 4);
                     o[0] = (uint32_t)q; o[1] = (uint32_t)js->S.n; o[2] = (uint32_t)js->W.n;
                     if (js->S.n > VGPU_SNAPCAP || js->W.n > VGPU_SNAPCAP) fail("a window with more corners than the GPU holds%s", "");
                     for (int i = 0; i < js->S.n; i++) memcpy(o + 4 + 4 * i, &js->S.p[i], 12);
                     for (int i = 0; i < js->W.n; i++) memcpy(o + 68 + 4 * i, &js->W.p[i], 12);
-                    nw += 132;
+                    if (mw) {
+                        const uint64_t *m = t_jm + (size_t)q * g_jw;
+                        for (int k = 0; k < g_jw; k++)
+                            for (uint64_t wd = m[k]; wd; wd &= wd - 1) {
+                                int r = g_jclrank[k * 64 + __builtin_ctzll(wd)];
+                                if (r < 0) fail("a might-see bit outside the base's clusters%s", "");
+                                o[132 + (r >> 5)] |= 1u << (r & 31);
+                            }
+                    }
+                    nw += 132 + (size_t)mws;
                 }
                 slot_base[k] = pi; active++;
                 placed = 1;
@@ -1354,7 +1413,8 @@ static int gpu_pipe_flow(double total_w) {
             g_pdur[slot_base[k]] += live ? dt / live : 0;      /* (the round's time shared by the flows in it) */
             if (!so[k].live) {
                 visq[nvisq] = k; visq_base[nvisq++] = slot_base[k]; slot_base[k] = -1; active--;
-                pool_put(slot_class[k], slot_off[k]);
+                pool_put(&g_epool, slot_class[k], slot_off[k]);
+                if (mw) pool_put(&g_wpool, slot_wclass[k], slot_woff[k]);
             }
         }
         g_jrounds += live; g_jexp += np; g_gpu_items += ni; passes += npass;
@@ -1370,6 +1430,7 @@ static int gpu_pipe_flow(double total_w) {
     printf("GPU flow: %u rounds of up to %d flows (%lld passes)\n", round, ns, passes);
     vgpu_pipe_report();
     free(slot_base); free(visq); free(visq_base); free(visout); free(so); free(rf); free(slot_off); free(slot_class);
+    free(slot_woff); free(slot_wclass);
     return 1;
 }
 
@@ -1833,6 +1894,7 @@ static int compress_row(const uint8_t *vis, int rowbytes, uint8_t *dest) {
 
 /* ================================================================== main */
 int main(int argc, char **argv) {
+    if (getenv("HL_UNBUF")) setvbuf(stdout, NULL, _IONBF, 0);   /* (dev) every line out at once */
     setvbuf(stdout, NULL, _IONBF, 0);
     int threads = 0, fast = 0;
     const char *radius_override = NULL;
@@ -1863,6 +1925,8 @@ int main(int argc, char **argv) {
     if (getenv("HL_JACOBI_SATURATE")) JACOBI_SATURATE = atoi(getenv("HL_JACOBI_SATURATE"));
     if (getenv("HL_JACOBI_WIDEN")) JACOBI_WIDEN = atof(getenv("HL_JACOBI_WIDEN"));
     if (getenv("HL_JACOBI_X")) g_jx = atoi(getenv("HL_JACOBI_X"));
+    g_jnofilter = getenv("HL_JM_NOFILTER") != NULL; g_jnomore = getenv("HL_JM_NOMORE") != NULL;
+    if (getenv("HL_JMIGHT")) { g_jm = 1; g_jcl = getenv("HL_JM_CL") != NULL; }   /* (experiment) one pass, tests = floods */
     printf(g_merge ? "visibility: merged windows\n"
                    : "visibility: exact (vvis's path search, its output)\n");
     if (threads <= 0) {
@@ -1939,6 +2003,18 @@ int main(int argc, char **argv) {
         else printf("(the GPU couldn't: the CPU does it) ");
     }
     run_threads(rough_worker, threads);
+    if (g_jm) {
+        g_jw = g_jcl ? (NCL + 63) / 64 : PW;
+        if (g_jcl) {                /* (the floods as clusters) */
+            g_jv1cl = xcalloc((size_t)NPD * g_jw, 8);
+            for (int i = 0; i < NPD; i++) {
+                const uint64_t *r = (const uint64_t *)P[i].flood;
+                uint64_t *o = g_jv1cl + (size_t)i * g_jw;
+                for (int k = 0; k < PW; k++)
+                    for (uint64_t w = r[k]; w; w &= w - 1) { int q = k * 64 + __builtin_ctzll(w); o[P[q].leaf >> 6] |= 1ull << (P[q].leaf & 63); }
+            }
+        }
+    }
     if (getenv("HL_MERGE_TEST")) {
         if (threads != 1) fail("HL_MERGE_TEST needs -threads 1%s", "");
         g_mtest_cap = atoi(getenv("HL_MERGE_TEST"));
@@ -2033,16 +2109,82 @@ int main(int argc, char **argv) {
         for (int t = 0; t < threads; t++) CloseHandle(hs[t]);
         free(hs);
         }
+        if (g_gpu_pipe && getenv("HL_TWO") && atoi(getenv("HL_TWO")) == 4 && !g_jv1) {
+            /* (experiment) the second pass on the GPU: -jacobi with might-see sets over clusters, tests = the first
+               pass's vis (the CPU's: HL_TWO=2 HL_JM_CL=1 HL_JM_NOMORE=1) */
+            LARGE_INTEGER p1; QueryPerformanceCounter(&p1);
+            printf("first pass: %.1f s\n", (double)(p1.QuadPart - fs.QuadPart) / g_freq.QuadPart);
+            g_jv1 = xmalloc((size_t)NPD * PW * 8 + 8);
+            for (int i = 0; i < NPD; i++) memcpy(g_jv1 + (size_t)i * PW * 8, P[i].vis, (size_t)PW * 8);
+            g_jm = 1; g_jcl = 1; g_jnomore = 1; g_jw = (NCL + 63) / 64;
+            g_jv1cl = xcalloc((size_t)NPD * g_jw, 8);
+            int maxcl = 0;
+            for (int i = 0; i < NPD; i++) {
+                const uint64_t *r = (const uint64_t *)(g_jv1 + (size_t)i * PW * 8);
+                uint64_t *o = g_jv1cl + (size_t)i * g_jw;
+                for (int k = 0; k < PW; k++)
+                    for (uint64_t w = r[k]; w; w &= w - 1) { int q = k * 64 + __builtin_ctzll(w); o[P[q].leaf >> 6] |= 1ull << (P[q].leaf & 63); }
+                int n = 0;
+                for (int k = 0; k < g_jw; k++) n += (int)__builtin_popcountll(o[k]);
+                if (n > maxcl) maxcl = n;
+            }
+            g_jmw = (maxcl + 31) / 32;
+            if (g_jmw < 1) g_jmw = 1;
+            long long nwords = vgpu_pipe_jm(g_jmw, (const uint32_t *)g_jv1cl, NPD, g_jw * 2, NCL);
+            printf("second pass on the GPU (sets of up to %d words, room for %lld words)\n", g_jmw, nwords);
+            if (nwords <= 0 || (1ll << pool_class((long long)g_gpu_pipe_fmax * g_jmw)) > nwords) fail("the GPU couldn't take the second pass%s", "");
+            g_wpool.cap = nwords;
+            for (int i = 0; i < NPD; i++) { memset(P[i].vis, 0, (size_t)PW * 8); P[i].status = 0; g_pdur[i] = 0; }
+            g_done = 0;
+            if (!gpu_pipe_flow(total_w)) fail("the GPU failed in the second pass%s", "");
+            goto passes_done;
+        }
         if (getenv("HL_TWO") && !g_jv1) { g_jx = 2; }
         if (g_jacobi && g_jx == 2 && !g_jv1) {
             LARGE_INTEGER p1; QueryPerformanceCounter(&p1);
             printf("first pass: %.1f s\n", (double)(p1.QuadPart - fs.QuadPart) / g_freq.QuadPart);
-            if (getenv("HL_TWO") && atoi(getenv("HL_TWO")) == 2) g_jm = 1;
+            if (getenv("HL_TWO") && atoi(getenv("HL_TWO")) == 3) {
+                /* (experiment) plain -jacobi again, each base's flood = its first pass's vis; HL_PASSES=n times */
+                int npass = getenv("HL_PASSES") ? atoi(getenv("HL_PASSES")) : 1;
+                for (int ps = 0; ps < npass; ps++) {
+                    long long vis_bits = 0;
+                    for (int i = 0; i < NPD; i++) {
+                        memcpy(P[i].flood, P[i].vis, (size_t)PW * 8);
+                        for (int k = 0; k < PW; k++) vis_bits += __builtin_popcountll(((uint64_t *)P[i].vis)[k]);
+                        memset(P[i].vis, 0, (size_t)PW * 8); P[i].status = 0;
+                    }
+                    g_done = 0; g_next = 0;
+                    printf("pass %d (floods = the last pass's vis, %lld bits)\n", ps + 2, vis_bits);
+                    HANDLE *hs2 = xmalloc(threads * sizeof(HANDLE));
+                    for (int t = 0; t < threads; t++) hs2[t] = CreateThread(NULL, 64 << 20, flow_worker, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+                    for (int t = 0; t < threads; t += 64) WaitForMultipleObjects(threads - t < 64 ? threads - t : 64, hs2 + t, TRUE, INFINITE);
+                    for (int t = 0; t < threads; t++) CloseHandle(hs2[t]);
+                    free(hs2);
+                    LARGE_INTEGER p2; QueryPerformanceCounter(&p2);
+                    printf("  done at %.1f s\n", (double)(p2.QuadPart - fs.QuadPart) / g_freq.QuadPart);
+                }
+                g_jv1 = (uint8_t *)1;   /* (skip the generic second pass below) */
+            }
+            if (getenv("HL_TWO") && atoi(getenv("HL_TWO")) == 2) {
+                g_jm = 1;
+                g_jcl = getenv("HL_JM_CL") != NULL;
+                g_jw = g_jcl ? (NCL + 63) / 64 : PW;
+            }
             else if (getenv("HL_TWO")) { g_jacobi = 0; g_merge = 1; }
             g_gpu_pipe = 0;
             /* (experiment) the second pass, pruned by the first's vis */
+            if (g_jv1) goto passes_done;
             g_jv1 = xmalloc((size_t)NPD * PW * 8 + 8);
             for (int i = 0; i < NPD; i++) { memcpy(g_jv1 + (size_t)i * PW * 8, P[i].vis, (size_t)PW * 8); memset(P[i].vis, 0, (size_t)PW * 8); P[i].status = 0; }
+            if (g_jcl) {
+                g_jv1cl = xcalloc((size_t)NPD * g_jw, 8);
+                for (int i = 0; i < NPD; i++) {
+                    const uint64_t *r = (const uint64_t *)(g_jv1 + (size_t)i * PW * 8);
+                    uint64_t *o = g_jv1cl + (size_t)i * g_jw;
+                    for (int k = 0; k < PW; k++)
+                        for (uint64_t w = r[k]; w; w &= w - 1) { int q = k * 64 + __builtin_ctzll(w); o[P[q].leaf >> 6] |= 1ull << (P[q].leaf & 63); }
+                }
+            }
             g_done = 0; g_next = 0;
             printf("second pass (pruned by the first's vis)\n");
             HANDLE *hs = xmalloc(threads * sizeof(HANDLE));
@@ -2053,6 +2195,7 @@ int main(int argc, char **argv) {
             for (int t = 0; t < threads; t += 64) WaitForMultipleObjects(threads - t < 64 ? threads - t : 64, hs + t, TRUE, INFINITE);
             for (int t = 0; t < threads; t++) CloseHandle(hs[t]);
             free(hs);
+            passes_done:;
         }
         QueryPerformanceCounter(&fn);
         double flow_wall = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
@@ -2095,6 +2238,7 @@ int main(int argc, char **argv) {
         if (g_gpu_expand) printf("GPU expansion steps: %lld%s", (long long)g_gpu_items,
                                  g_gpu_check ? "" : "\n");
         if (g_gpu_expand && g_gpu_check) printf(", %lld differ from the CPU's\n", (long long)g_gpu_diff);
+        if (g_jm) printf("(might-see sets: %lld expansions with no window growth)\n", (long long)g_jbitsonly);
         if (g_jacobi) printf("rounds: %lld rounds, %lld expansions, %lld portals reached, %lld opened fully (%lld by too "
                              "many arrivals in a round)\n", (long long)g_jrounds, (long long)g_jexp, (long long)g_jreach,
                              (long long)g_jopened, (long long)g_joverflow);

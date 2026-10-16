@@ -2,7 +2,10 @@
 // hlvvis -jacobi GPU pipeline: per (slot, portal q) reached this pass, the windows that came through merged into q's
 // stored ones in item order (the CPU's order: by the portal they came from, then q's place in its list), by
 // merge_core.glsl's rule (the CPU's to the bit). More than pc.maxarr windows reaching q in one round (counted over the
-// round's passes): q opens fully (as the CPU). q joins the base's vis; if it must be expanded, its dirty bit is set.
+// round's passes): the round's first window merges as usual, then q opens fully (as the CPU). q joins the base's vis;
+// if it must be expanded, its dirty bit is set.
+// With might-see sets (MW > 0, the second pass): each window brings SM(x) & PT(q) (x: the portal it came through);
+// q's set takes them all (an OR: order-free); new bits ask for an expansion too, also of an opened q.
 #extension GL_GOOGLE_include_directive : require
 #include "pipe_common.glsl"
 #define MERGE_HULL_CAP int(pc.hullcap)
@@ -10,28 +13,43 @@
 #include "merge_core.glsl"
 layout(local_size_x = 64) in;
 
+uint orsm[MW_MAX];
+
+// the frontier entry an item came from (as pipe_expand finds it)
+uint item_entry(uint item) {
+    uint lo = 0u, hi = cnt[C_N] - 1u;
+    while (lo < hi) { uint mid = (lo + hi + 1u) / 2u; if (pairs[mid].y <= item) lo = mid; else hi = mid - 1u; }
+    return slots[pairs[lo].z].off + pairs[lo].w;
+}
+
 void main() {
     uint id = gid();
     if (id >= cnt[C_TOUCH]) return;
     uvec2 tc = touched[id];
     uint idx = tc.x, s = tc.y, fail = cnt[C_FAIL];
     uvec4 p = pr[idx];
-    uint qn = p.w;
-    uint li[64], lc[64]; uint n = 0u, total = 0u;
+    uint qn = p.w, mw = MW != 0u ? slots[s].mw : 0u;
+    for (uint k = 0u; k < mw; k++) orsm[k] = 0u;
+    uint li[64], lc[64]; uint n = 0u, total = 0u, first_item = EMPTY, first_c = EMPTY;
     for (uint c = p.x; c != EMPTY;) {
         uvec4 cd = cands[c];
         // (items from fail on: the next pass does them again)
-        if (cd.y < fail) { if (n < 64u) { li[n] = cd.y; lc[n] = c; n++; } total++; }
+        if (cd.y < fail) {
+            if (n < 64u) { li[n] = cd.y; lc[n] = c; n++; }
+            total++;
+            if (cd.y < first_item) { first_item = cd.y; first_c = c; }
+            if (mw != 0u) { uint xe = jm_at(s, item_entry(cd.y)); for (uint k = 0u; k < mw; k++) orsm[k] |= jmSM[xe + k]; }
+        }
         c = cd.x;
     }
-    uint arr = (p.z == pc.round ? p.y : 0u) + total;
+    uint prev = p.z == pc.round ? p.y : 0u, arr = prev + total;
     pr[idx] = uvec4(EMPTY, arr, pc.round, qn);
     if (total == 0u) return;
     uint base = slots[s].base, gen = slots[s].gen;
     uint w = s * pc.pw32 + (qn >> 5), bit = 1u << (qn & 31u);
     if ((atomicOr(vis[w], bit) & bit) == 0u) atomicAdd(slots[s].seen, 1u);
     ivec4 h = sth[idx];
-    bool inited = h.x == int(gen), opened = inited && h.z != 0;
+    bool inited = h.x == int(gen), opened = inited && (h.z & 1) != 0, wgrew = inited && (h.z & 2) != 0;
     int grows = inited ? h.y : 0;
     MS_n[0] = inited ? h.w & 255 : 0; MS_n[1] = inited ? (h.w >> 8) & 255 : 0;
     for (int k = 0; k < MS_n[0]; k++) MS[0][k] = stS[idx].p[k].xyz;
@@ -39,23 +57,37 @@ void main() {
     M_n[0] = portals[base].plane.xyz; M_ccw[0] = int(portals[base].ccw);
     M_n[1] = portals[qn].plane.xyz; M_ccw[1] = int(portals[qn].ccw);
     bool over = arr > pc.maxarr, req = false;
-    if (!over)
+    // the might-see bits (an entry new this flow takes them as they are)
+    if (mw != 0u) {
+        uint qe = jm_at(s, idx);
+        for (uint k = 0u; k < mw; k++) {
+            uint m = jmPT[qe + k] & orsm[k];
+            uint old = inited ? jmM[qe + k] : 0u;
+            if ((m & ~old) != 0u) req = true;
+            jmM[qe + k] = old | m;
+        }
+    }
+    // the steps: windows merged in item order; past pc.maxarr arrivals in the round, the round's first window (if it
+    // is in this pass) as usual, then opening fully
+    uint nsteps;
+    if (over) { n = 0u; if (prev == 0u) { li[0] = first_item; lc[0] = first_c; n = 1u; } nsteps = n + 1u; }
+    else {
         for (uint i = 1u; i < n; i++) {        // item order
             uint a = li[i], b = lc[i]; int j = int(i) - 1;
             while (j >= 0 && li[j] > a) { li[j + 1] = li[j]; lc[j + 1] = lc[j]; j--; }
             li[j + 1] = a; lc[j + 1] = b;
         }
-    // each step: a window merged in, or (more than pc.maxarr reached it this round) opening fully: the first window
-    // sets it up as usual, then the whole windings replace whatever it has
-    [[dont_unroll]] for (uint stp = 0u; stp < (over ? 1u : n); stp++) {
+        nsteps = n;
+    }
+    [[dont_unroll]] for (uint stp = 0u; stp < nsteps; stp++) {
         int op;
-        if (over) {
-            if (!inited) { inited = true; grows = 0; opened = false; req = true; }
+        bool open_step = over && stp == n;
+        if (open_step) {
             if (opened) break;
             for (int side = 0; side < 2; side++) {
-                uint p = side == 0 ? base : qn;
-                MC_n[side] = int(portals[p].count);
-                for (int k = 0; k < MC_n[side]; k++) MC[side][k] = pts[portals[p].first + uint(k)].xyz;
+                uint pp = side == 0 ? base : qn;
+                MC_n[side] = int(portals[pp].count);
+                for (int k = 0; k < MC_n[side]; k++) MC[side][k] = pts[portals[pp].first + uint(k)].xyz;
             }
             op = MERGE_SET;
         } else {
@@ -63,15 +95,17 @@ void main() {
             MC_n[0] = int(cd.w & 0xffffu); MC_n[1] = int(cd.w >> 16);
             for (int k = 0; k < MC_n[0]; k++) MC[0][k] = cpts[cd.z + uint(k)].xyz;
             for (int k = 0; k < MC_n[1]; k++) MC[1][k] = cpts[cd.z + uint(MC_n[0] + k)].xyz;
-            if (!inited) { op = MERGE_SET; inited = true; grows = 0; opened = false; }
+            if (!inited) { op = MERGE_SET; inited = true; grows = 0; opened = false; wgrew = false; }
             else op = opened ? 0 : MERGE_GROW;
         }
-        if (op != 0) [[dont_unroll]] for (int side = 0; side < 2; side++) if (merge_side(side, op)) req = true;
-        if (over) opened = true;
+        bool grew = false;
+        if (op != 0) [[dont_unroll]] for (int side = 0; side < 2; side++) if (merge_side(side, op)) grew = true;
+        if (open_step) { opened = true; req = true; }
+        else if (grew) { req = true; wgrew = true; }
     }
     int nS = MS_n[0], nW = MS_n[1];
     for (int k = 0; k < nS; k++) stS[idx].p[k] = vec4(MS[0][k], 0.0);
     for (int k = 0; k < nW; k++) stW[idx].p[k] = vec4(MS[1][k], 0.0);
-    sth[idx] = ivec4(int(gen), grows, opened ? 1 : 0, nS | (nW << 8) | (h.w & int(0xffff0000u)));
+    sth[idx] = ivec4(int(gen), grows, (opened ? 1 : 0) | (wgrew ? 2 : 0), nS | (nW << 8) | (h.w & int(0xffff0000u)));
     if (req) atomicOr(dirty[w], bit);
 }
