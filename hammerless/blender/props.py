@@ -731,6 +731,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                     "times faster than vvis, several times slower than the default). The default merges what each "
                     "opening shows: about 1% looser, never hides a view through an opening wider than vvis's "
                     "own 0.01-unit tolerance")
+    vis_gpu: BoolProperty(
+        name="Vis on the GPU", default=True,
+        description="Hammerless's vis compiler runs on the graphics card (about twice as fast as on the CPU on big "
+                    "maps, the same quality). Off: on the CPU. A card that can't, or a failure on the way, falls back "
+                    "to the CPU by itself")
     map_tool: EnumProperty(name="Map Compiler", default="HAMMERLESS", items=[
         ("HAMMERLESS", "Hammerless",
          "Hammerless's map compiler: the same map as vbsp, byte for byte on 132 of Valve's 134 sample maps. "

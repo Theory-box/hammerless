@@ -44,6 +44,7 @@ class CompileOptions:
     extra_vrad: str = ""
     vis_tool: str = "HAMMERLESS"  # VALVE: L4D2's vvis.exe / HAMMERLESS: hlvvis.exe (merged windows: much faster)
     vis_exact: bool = False       # with hlvvis: vvis's own path search (-exact), its output byte for byte
+    vis_gpu: bool = True          # with hlvvis: on the graphics card (else -cpu: the merged windows on the CPU)
     map_tool: str = "HAMMERLESS"  # HAMMERLESS: hlvbsp.exe (same map as vbsp) / VALVE: L4D2's vbsp.exe
     light_tool: str = "HAMMERLESS"  # VALVE: vrad's lightmaps / HAMMERLESS: hlvrad.exe (vrad's lighting, faster) /
                                 # CYCLES: Blender bakes them after vrad (bake_handler)
@@ -759,7 +760,8 @@ class CompileJob:
         if vvis is not None:
             valve = [tools.exe("vvis")] + vvis + game + [self.base]
             if use_hlvvis(opts):
-                self.steps.append(("vvis", [HLVVIS] + (["-exact"] if opts.vis_exact else []) + opts.vvis_args(True)
+                self.steps.append(("vvis", [HLVVIS] + (["-exact"] if opts.vis_exact else [] if opts.vis_gpu else ["-cpu"])
+                                   + opts.vvis_args(True)
                                    + game + [self.base]))
                 self._valve_vvis = valve
             else:

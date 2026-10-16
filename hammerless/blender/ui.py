@@ -808,6 +808,8 @@ class HL_PT_visibility(_Panel, bpy.types.Panel):
         col.prop(s, "vis_tool", text="Vis Compiler")
         if s.vis_tool == "HAMMERLESS":
             col.prop(s, "vis_exact")
+            if not s.vis_exact:
+                col.prop(s, "vis_gpu")
         col.prop(s, "extra_vvis", text="Extra vvis Options")
         if not _cancel_button(self.layout, 1.3):
             row = self.layout.row()
