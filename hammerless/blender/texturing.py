@@ -223,7 +223,12 @@ def paint_faces(context, obj, faces=None, material=None, al=None, fresh=True) ->
         pl = bm.faces.layers.int.get(PAINTED) or bm.faces.layers.int.new(PAINTED)
         bm.faces.ensure_lookup_table()
         idx = None
-        if material is not None:
+        if material is not None and faces is None and not edit:
+            obj.data.materials.clear()          # (a whole object in Object Mode: its one material now, the old
+                                                # slots go rather than pile up)
+            obj.data.materials.append(material)
+            idx = 0
+        elif material is not None:
             idx = _slot(obj, material)
         targets = [bm.faces[i] for i in faces if i < len(bm.faces)] if faces is not None else list(bm.faces)
         m = obj.matrix_world

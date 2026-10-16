@@ -1926,7 +1926,7 @@ def test_make_collision_modes():
     assert len(targets) == 4, targets
     for o, f in targets:
         paint_faces(bpy.context, o, f, mat)
-    assert all(o.data.materials[o.data.polygons[0].material_index] == mat for o in p)
+    assert all(list(o.data.materials) == [mat] for o in p), [list(o.data.materials) for o in p]
     house.hammerless.collision_mode = "BRUSHES"
     b = press()
     assert len(b) == 1 and b[0].data.materials[0] == mat
