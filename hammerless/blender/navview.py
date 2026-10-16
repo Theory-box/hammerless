@@ -35,6 +35,36 @@ COLORS = {
     "zombie_lost": (0.7, 0.3, 1.0, 0.9), "survivors": (1.0, 1.0, 1.0, 0.9),
 }
 LIFT = 2.0      # draw this many Hammer units above the floor so areas don't flicker
+# and a nudge towards the camera in depth, twice the lighting preview's (lightview: 2e-5): its faces are pulled
+# forward the same way, which far off is more than LIFT, so without it the lit floor hid the nav at a distance
+DEPTH_BIAS = 4e-5
+_SHADERS: dict = {}
+
+
+def _nav_shader(per_vertex: bool):
+    """The nav's colours (per vertex, or one 'color'), drawn a hair in front of the lighting preview."""
+    if per_vertex in _SHADERS:
+        return _SHADERS[per_vertex]
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant("MAT4", "ModelViewProjectionMatrix")
+    info.push_constant("FLOAT", "bias")
+    info.vertex_in(0, "VEC3", "pos")
+    if per_vertex:
+        iface = gpu.types.GPUStageInterfaceInfo("hl_navcol_iface")
+        iface.smooth("VEC4", "colInterp")
+        info.vertex_in(1, "VEC4", "color")
+        info.vertex_out(iface)
+        info.vertex_source("void main() { colInterp = color; gl_Position = ModelViewProjectionMatrix * vec4(pos, 1.0);"
+                           " gl_Position.z -= bias * gl_Position.w; }")
+        info.fragment_source("void main() { fragColor = colInterp; }")
+    else:
+        info.push_constant("VEC4", "color")
+        info.vertex_source("void main() { gl_Position = ModelViewProjectionMatrix * vec4(pos, 1.0);"
+                           " gl_Position.z -= bias * gl_Position.w; }")
+        info.fragment_source("void main() { fragColor = color; }")
+    info.fragment_out(0, "VEC4", "fragColor")
+    _SHADERS[per_vertex] = gpu.shader.create_from_info(info)
+    return _SHADERS[per_vertex]
 
 
 def nav_path(context) -> str | None:
@@ -282,8 +312,8 @@ def _build(scale: float, mode: str, links: bool, spots: bool = False, viewer=Non
             side = Vector((-d.y, d.x, 0)).normalized() * min(0.25, d.length * 0.2)
             tip = b - d.normalized() * min(0.4, d.length * 0.3)
             link_lines[l.kind] += [a, b, b, tip + side, b, tip - side]   # arrow towards b
-    flat = gpu.shader.from_builtin("SMOOTH_COLOR")
-    uni = gpu.shader.from_builtin("UNIFORM_COLOR")
+    flat = _nav_shader(True)
+    uni = _nav_shader(False)
     batches = {
         "fill": (flat, batch_for_shader(flat, "TRIS", {"pos": tris, "color": tri_cols})),
         "outline": (uni, batch_for_shader(uni, "LINES", {"pos": outline})),
@@ -320,9 +350,12 @@ def _draw():
     gpu.state.blend_set("ALPHA")
     gpu.state.depth_test_set("LESS_EQUAL" if not s.nav_xray else "NONE")
     gpu.state.depth_mask_set(False)
+    mvp = gpu.matrix.get_projection_matrix() @ gpu.matrix.get_model_view_matrix()
     for name, (shader, batch) in _state["batches"].items():
+        shader.bind()
+        shader.uniform_float("ModelViewProjectionMatrix", mvp)
+        shader.uniform_float("bias", 0.0 if s.nav_xray else DEPTH_BIAS)
         if name not in ("fill", "zombies"):
-            shader.bind()
             shader.uniform_float("color", COLORS[name])
             gpu.state.line_width_set(2.5 if name in ("drop", "jump", "ladder", "spot_cover", "spot_exposed") else 1.0)
         batch.draw(shader)
