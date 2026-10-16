@@ -673,8 +673,9 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
                 path, _ts, _lm = materials.resolve(mat)
                 mname = texture_file_name(mat.name) if mat is not None else "_empty_slot"
                 mode = _alpha_mode(mat) if mat is not None else "OPAQUE"
+                nodraw = path.lower().replace("\\", "/") in ("tools/toolsnodraw", "tools/toolsinvisible")
                 ir.model_materials[mname] = (_model_texture(mat, path, content), mode == "BLENDED", mode == "CUTOUT",
-                                             False, _emissive(mat))
+                                             False, _emissive(mat), nodraw)
                 mat_names[mi] = mname
             verts = []
             for li, vi in zip(tri.loops, tri.vertices):

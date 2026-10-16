@@ -149,8 +149,11 @@ def write_model_materials(game_dir: str, materials_dir: str, materials: dict[str
         tex, translucent, alphatest = spec[:3]
         keep_colour = len(spec) > 3 and spec[3]
         unlit = len(spec) > 4 and spec[4]
+        nodraw = len(spec) > 5 and spec[5]
         path = os.path.join(folder, name + ".vmt")
-        if tex.startswith("include:"):         # (one of the game's model materials, used as it is)
+        if nodraw:                             # (tools/toolsnodraw on a model: never drawn, still collides)
+            text = '"VertexLitGeneric"\n{\n\t"$basetexture" "tools/toolsnodraw"\n\t"$no_draw" "1"\n}\n'
+        elif tex.startswith("include:"):         # (one of the game's model materials, used as it is)
             text = f'"patch"\n{{\n\t"include" "materials/{tex[8:]}.vmt"\n}}\n'
         else:
             text = model_material_vmt(tex, translucent, alphatest, keep_colour, unlit)
