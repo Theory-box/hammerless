@@ -21,7 +21,7 @@ spirv_execution_mode(4461, 64);
 #define EMPTY 0xffffffffu
 
 layout(push_constant) uniform PC {
-    uint nslots; uint fmax; uint pw32; uint npd;
+    uint nslots; uint item_end; uint pw32; uint npd;
     uint round; uint item_start; float eps_up; float len_lo;
     uint robust; uint maxchop; uint hullcap; uint nrefill;
     uint candcap; uint ptcap; uint saturate; uint maxarr;
@@ -63,6 +63,8 @@ layout(std430, binding = 22) buffer StatePW { Win16 stPW[]; };
 #define C_PTS 3        // candidate points used (this pass)
 #define C_FAIL 4       // first item that found no room (this pass), EMPTY if none
 #define C_TOUCH 5      // (slot, portal) lists started (this pass)
+#define C_ERR 6        // the round's item count didn't fit 32 bits
+#define PASS_RESERVED_PTS 128u   // (a pass's first item has candidate 0 and points 0 .. 127 of its own: every pass gets on)
 #define C_ARGS1 8      // dispatch sizes: snap
 #define C_ARGS3 12     //                 expand
 #define C_ARGS4 16     //                 merge

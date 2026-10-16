@@ -38,6 +38,47 @@ TARGETS = {
 }
 
 
+def float_controls(words):
+    """glslang keeps one OpExecutionMode per mode: of spirv_execution_mode(4461, 32) and (4461, 64) only the last
+    survives, and it declares no capability for them. Each float-control mode a shader asks for (4459 DenormPreserve,
+    4461 SignedZeroInfNanPreserve, 4462 RoundingModeRTE) is written for both 32 and 64 bit floats here, with its
+    capability (4464, 4466, 4467): hlvvis's results must be the CPU's to the bit on any card, not only on cards whose
+    defaults happen to be these."""
+    caps_for = {4459: 4464, 4461: 4466, 4462: 4467}
+    out, i, modes, have_caps, last_cap, last_mode = list(words[:5]), 5, set(), set(), None, None
+    body = []
+    while i < len(words):
+        n = words[i] >> 16
+        op = words[i] & 0xffff
+        ins = list(words[i:i + n])
+        if op == 17:
+            have_caps.add(ins[1])
+            last_cap = len(body) + 1
+        if op == 16 and len(ins) == 4 and ins[2] in caps_for:
+            modes.add((ins[1], ins[2]))
+            body.append(ins)
+            last_mode = len(body)
+            i += n
+            continue
+        if op == 16:
+            last_mode = len(body) + 1
+        body.append(ins)
+        i += n
+    if not modes:
+        return list(words)
+    # the modes: both widths, after the other execution modes
+    ex = [ins for ins in body if (ins[0] & 0xffff) == 16 and len(ins) == 4 and ins[2] in caps_for]
+    rest = [ins for ins in body if not ((ins[0] & 0xffff) == 16 and len(ins) == 4 and ins[2] in caps_for)]
+    new_modes = [[(4 << 16) | 16, e, m, w] for (e, m) in sorted(modes) for w in (32, 64)]
+    at_mode = max(k for k, ins in enumerate(rest) if (ins[0] & 0xffff) in (15, 16)) + 1   # (after OpEntryPoint / modes)
+    rest[at_mode:at_mode] = new_modes
+    at_cap = max(k for k, ins in enumerate(rest) if (ins[0] & 0xffff) == 17) + 1
+    rest[at_cap:at_cap] = [[(2 << 16) | 17, caps_for[m]] for m in sorted({m for _, m in modes}) if caps_for[m] not in have_caps]
+    for ins in rest:
+        out += ins
+    return out
+
+
 def build_shaders():
     """hlvrad's GPU programs (hlvrad/shaders/*.comp) into C headers (*.spv.h), with Khronos's glslang (set GLSLANG to
     its glslang.exe, or have it on the PATH). The headers are committed: without glslang they're used as they are."""
@@ -57,6 +98,7 @@ def build_shaders():
         spv = header[:-2]
         subprocess.run([tool, "-V", "--target-env", "vulkan1.2", "-o", spv, comp], check=True, stdout=subprocess.DEVNULL)
         words = struct.unpack("<%dI" % (os.path.getsize(spv) // 4), open(spv, "rb").read())
+        words = float_controls(words)
         os.remove(spv)
         lines = ["/* %s.comp compiled by build.py (glslang): don't edit */" % name, "static const unsigned int spv_%s[] = {" % name]
         lines += ["    " + ", ".join("0x%08x" % w for w in words[i:i + 8]) + "," for i in range(0, len(words), 8)]

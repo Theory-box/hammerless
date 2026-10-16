@@ -86,6 +86,7 @@ typedef struct {
 
 static int NPD, NCL, PW;   /* one-way portals, clusters, 64-bit words per portal bitset */
 static Portal *P;
+static uint8_t *g_jv1;      /* (experiment, HL_JACOBI_X=2 / HL_TWO) a first pass's vis rows, PW words per portal */
 static int *lf_first, *lf_count, *lf_list;   /* portals leaving each cluster */
 
 typedef struct Stack Stack;
@@ -641,13 +642,13 @@ static void merged_flow(int pi) {
     uint64_t *might = malloc(PW * 8), *cur = malloc(PW * 8);
     /* first openings: as the path search (no separators yet) */
     {
-        const uint64_t *bf = (const uint64_t *)b->flood;
+        const uint64_t *bf = (const uint64_t *)(g_jv1 ? g_jv1 + (size_t)pi * PW * 8 : b->flood);
         int leaf = b->leaf;
         for (int i = 0; i < lf_count[leaf]; i++) {
             int pnum = lf_list[lf_first[leaf] + i];
             Portal *p = &P[pnum];
             if (!((bf[pnum >> 6] >> (pnum & 63)) & 1)) continue;
-            const uint64_t *test = (const uint64_t *)(p->status == 2 ? p->vis : p->flood);
+            const uint64_t *test = (const uint64_t *)(g_jv1 ? g_jv1 + (size_t)pnum * PW * 8 : p->status == 2 ? p->vis : p->flood);
             uint64_t more = 0;
             for (int k = 0; k < PW; k++) { might[k] = bf[k] & test[k]; more |= might[k] & ~vis64[k]; }
             Stack st; memset(&st, 0, sizeof st); st.freew[0] = st.freew[1] = st.freew[2] = 1;
@@ -704,7 +705,7 @@ static void merged_flow(int pi) {
             int pnum = lf_list[lf_first[leaf] + i];
             Portal *p = &P[pnum];
             if (!((cur[pnum >> 6] >> (pnum & 63)) & 1)) continue;
-            const uint64_t *test = (const uint64_t *)(p->status == 2 ? p->vis : p->flood);
+            const uint64_t *test = (const uint64_t *)(g_jv1 ? g_jv1 + (size_t)pnum * PW * 8 : p->status == 2 ? p->vis : p->flood);
             uint64_t more = 0;
             for (int k = 0; k < PW; k++) { might[k] = cur[k] & test[k]; more |= might[k] & ~vis64[k]; }
             if (!more && (vis[pnum >> 3] & (1 << (pnum & 7)))) continue;
@@ -753,15 +754,30 @@ static void merged_flow(int pi) {
    the base can swing a separator a long way off, so a threshold would hide real openings). A portal expanded
    JACOBI_SATURATE times opens to the whole base and the whole portal (a superset: still safe), so it ends. */
 static int g_jacobi = 0;
+/* (experiment) HL_JACOBI_X=1: a step from portal x into q needs q in x's own flood (any sight line through x then q
+   is one x sees); =2 (two passes): q in x's vis from a first pass (a superset of what x sees: still safe) */
+static int g_jx;
+static inline int j_xok(int x, int q) {
+    if (!g_jx) return 1;
+    const uint8_t *row = g_jx == 2 && g_jv1 ? g_jv1 + (size_t)x * PW * 8 : P[x].flood;
+    return (row[q >> 3] >> (q & 7)) & 1;
+}
 static double JACOBI_NOISE = 1e-4;   /* float noise in the windings (coordinates of thousands of units) */
 static int JACOBI_SATURATE = 16;
 static double JACOBI_WIDEN = 0;      /* (dev) windows widened before separators; 0: off (widening made things worse, measured) */
-typedef struct { int gen, grows, opened, expanded, dirty; WinBuf S, W, PS, PW; } JState;   /* PS/PW: last expansion's */
-typedef struct { int p, seq; WinBuf src, pass; } JCand;
+typedef struct { int gen, grows, opened, expanded, dirty, wgrew; WinBuf S, W, PS, PW; } JState;   /* PS/PW: last expansion's */
+typedef struct { int p, seq, nomerge; WinBuf src, pass; } JCand;
 static _Thread_local JState *t_js;
 static _Thread_local int *t_front, *t_next, t_nfront, t_nnext, t_jgen;
 static _Thread_local WinBuf *t_snapS, *t_snapW;
 static _Thread_local JCand *t_cand; static _Thread_local int t_ncand, t_capcand;
+/* (experiment, HL_JMIGHT / HL_TWO=2) might-see sets as the merged flow keeps them, in rounds: each portal's (t_jm), each
+   candidate's (t_cmight), the snapshot's (t_snapM); a window that brings nothing the base doesn't already see (as the
+   round began: t_visr) isn't merged */
+static int g_jm;
+static _Thread_local uint64_t *t_jm, *t_cmight, *t_snapM, *t_visr;
+static _Thread_local const uint64_t *t_addmight; static _Thread_local int t_addnomerge;
+static inline const uint64_t *j_test(int q) { return (const uint64_t *)(g_jv1 ? g_jv1 + (size_t)q * PW * 8 : P[q].flood); }
 static _Thread_local int *t_order;
 static volatile LONG64 g_jrounds, g_jexp, g_jreach, g_jopened;
 /* (GPU planning) per base portal: its rounds and its widest round; how many bases took how many rounds */
@@ -772,10 +788,12 @@ static void j_add(int pnum, const Win *source, const Win *pass) {
         t_capcand = t_capcand ? t_capcand * 2 : 4096;
         t_cand = realloc(t_cand, (size_t)t_capcand * sizeof(JCand));
         t_order = realloc(t_order, (size_t)t_capcand * sizeof(int));
+        if (g_jm) t_cmight = realloc(t_cmight, (size_t)t_capcand * PW * 8);
         if (!t_cand || !t_order) fail("out of memory%s", "");
     }
     JCand *c = &t_cand[t_ncand];
-    c->p = pnum; c->seq = t_ncand;
+    c->p = pnum; c->seq = t_ncand; c->nomerge = 0;
+    if (g_jm) { memcpy(t_cmight + (size_t)t_ncand * PW, t_addmight, (size_t)PW * 8); c->nomerge = t_addnomerge; }
     memcpy(&c->src, source, sizeof(int) + source->n * sizeof(V));
     memcpy(&c->pass, pass, sizeof(int) + pass->n * sizeof(V));
     t_ncand++;
@@ -795,14 +813,22 @@ static int j_merge_core(Portal *b, const JCand *c, int *seen) {
     uint8_t *vis = b->vis;
     InterlockedIncrement64(&g_jreach);
     if (!(vis[pnum >> 3] & (1 << (pnum & 7)))) { vis[pnum >> 3] |= 1 << (pnum & 7); (*seen)++; }
+    if (g_jm && c->nomerge) return 0;
     if (js->gen != t_jgen) {
-        js->gen = t_jgen; js->grows = 0; js->opened = 0; js->expanded = 0; js->dirty = 0;
+        js->gen = t_jgen; js->grows = 0; js->opened = 0; js->expanded = 0; js->dirty = 0; js->wgrew = 1;
+        if (g_jm) memcpy(t_jm + (size_t)pnum * PW, t_cmight + (size_t)c->seq * PW, (size_t)PW * 8);
         js->S = c->src; js->W = c->pass;
         if (js->S.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->S, (Win *)&js->S, b->pl.n, winding_ccw(b->w, b->pl.n), &t); js->S = t; }
         if (js->W.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->W, (Win *)&js->W, p->pl.n, winding_ccw(p->w, p->pl.n), &t); js->W = t; }
     } else {
-        if (js->opened) return 0;
+        int bits = 0;
+        if (g_jm) {
+            uint64_t *mm = t_jm + (size_t)pnum * PW; const uint64_t *mi = t_cmight + (size_t)c->seq * PW;
+            for (int k = 0; k < PW; k++) { uint64_t nb = mi[k] & ~mm[k]; if (nb) { mm[k] |= nb; bits = 1; } }
+        }
+        if (js->opened && !bits) return 0;
         int grew = 0;
+        if (!js->opened) {
         if (outside_hull((const Win *)&c->src, (Win *)&js->S, b->pl.n, JACOBI_NOISE)) {
             WinBuf ns; hull2((Win *)&js->S, (const Win *)&c->src, b->pl.n, winding_ccw(b->w, b->pl.n), &ns);
             js->S = ns; grew = 1;
@@ -811,7 +837,9 @@ static int j_merge_core(Portal *b, const JCand *c, int *seen) {
             WinBuf nw; hull2((Win *)&js->W, (const Win *)&c->pass, p->pl.n, winding_ccw(p->w, p->pl.n), &nw);
             js->W = nw; grew = 1;
         }
-        if (!grew) return 0;
+        }
+        if (grew) js->wgrew = 1;
+        if (!grew && !bits) return 0;
     }
     if (!js->dirty) { js->dirty = 1; t_next[t_nnext++] = pnum; }
     return 1;
@@ -878,6 +906,7 @@ static void j_merge_all(Portal *b, int *seen) {
                 j_open(b, pnum);
                 if (!t_js[pnum].dirty) { t_js[pnum].dirty = 1; t_next[t_nnext++] = pnum; }
             }
+            if (g_jm) for (int k = i + 1; k < j; k++) j_merge(b, &t_cand[t_order[k]], seen);   /* (opened: bits only) */
             InterlockedIncrement64(&g_joverflow);
         } else for (int k = i; k < j; k++) j_merge(b, &t_cand[t_order[k]], seen);
         i = j;
@@ -1010,6 +1039,7 @@ static int j_begin(Portal *b, int *seen_out) {
         t_js = calloc(NPD, sizeof(JState));
         t_front = malloc(((size_t)NPD + 1) * sizeof(int)); t_next = malloc(((size_t)NPD + 1) * sizeof(int));
         t_snapS = malloc(((size_t)NPD + 1) * sizeof(WinBuf)); t_snapW = malloc(((size_t)NPD + 1) * sizeof(WinBuf));
+        if (g_jm) { t_jm = malloc((size_t)NPD * PW * 8); t_snapM = malloc(((size_t)NPD + 1) * PW * 8); t_visr = malloc((size_t)PW * 8 * 2 + 16); }
     }
     t_jgen++;
     t_nnext = 0; t_ncand = 0;
@@ -1032,6 +1062,12 @@ static int j_begin(Portal *b, int *seen_out) {
         if (d > b->radius) continue;
         Win *source = d < -b->radius ? b->w : chop(b->w, &st, &back);
         if (!source) continue;
+        if (g_jm) {
+            const uint64_t *tq = j_test(pnum), *bs = g_jv1 ? (const uint64_t *)(g_jv1 + (size_t)(b - P) * PW * 8) : bf;
+            uint64_t more = 0;
+            for (int k = 0; k < PW; k++) { t_visr[k] = bs[k] & tq[k]; more |= t_visr[k]; }
+            t_addmight = t_visr; t_addnomerge = !more;
+        }
         j_add(pnum, source, pass);
     }
     j_merge_all(b, &seen);
@@ -1056,7 +1092,8 @@ static void jacobi_flow(int pi) {
         for (int f = 0; f < t_nfront; f++) {
             JState *js = &t_js[t_front[f]];
             js->dirty = 0;
-            if (++js->grows > JACOBI_SATURATE && !js->opened) {    /* (it keeps creeping: open it fully) */
+            if (g_jm) memcpy(t_snapM + (size_t)f * PW, t_jm + (size_t)t_front[f] * PW, (size_t)PW * 8);
+            if ((!g_jm || js->wgrew) && ++js->grows > JACOBI_SATURATE && !js->opened) {    /* (it keeps creeping: open it fully) */
                 memcpy(&js->S, b->w, sizeof(int) + b->w->n * sizeof(V));
                 memcpy(&js->W, P[t_front[f]].w, sizeof(int) + P[t_front[f]].w->n * sizeof(V));
                 if (js->S.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->S, (Win *)&js->S, b->pl.n, winding_ccw(b->w, b->pl.n), &t); js->S = t; }
@@ -1067,13 +1104,15 @@ static void jacobi_flow(int pi) {
                 js->opened = 1;
                 InterlockedIncrement64(&g_jopened);
             }
-            js->expanded = 1;
+            js->expanded = 1; js->wgrew = 0;
             js->PS = js->S; js->PW = js->W;
             if (JACOBI_WIDEN > 0 && !js->opened) {     /* (the hulls ignore growth under the noise: widen by it, safe side) */
                 inflate((Win *)&js->S, b->pl.n, JACOBI_WIDEN, &t_snapS[f]);
                 inflate((Win *)&js->W, P[t_front[f]].pl.n, JACOBI_WIDEN, &t_snapW[f]);
             } else { t_snapS[f] = js->S; t_snapW[f] = js->W; }
         }
+        uint64_t *visr = t_visr + PW, *jmight = t_visr;
+        if (g_jm) memcpy(visr, b->vis, (size_t)PW * 8);
         if (g_gpu_expand) j_expand_gpu(b, bf);
         else
         for (int f = 0; f < t_nfront; f++) {
@@ -1087,7 +1126,15 @@ static void jacobi_flow(int pi) {
             for (int i = 0; i < lf_count[leaf]; i++) {
                 int pnum = lf_list[lf_first[leaf] + i];
                 Portal *p = &P[pnum];
-                if (!((bf[pnum >> 6] >> (pnum & 63)) & 1)) continue;
+                if (!((bf[pnum >> 6] >> (pnum & 63)) & 1) || !j_xok(xn, pnum)) continue;
+                if (g_jm) {
+                    const uint64_t *cur = t_snapM + (size_t)f * PW, *tq = j_test(pnum);
+                    if (!((cur[pnum >> 6] >> (pnum & 63)) & 1)) continue;
+                    uint64_t more = 0;
+                    for (int k = 0; k < PW; k++) { jmight[k] = cur[k] & tq[k]; more |= jmight[k] & ~visr[k]; }
+                    if (!more && ((visr[pnum >> 6] >> (pnum & 63)) & 1)) continue;
+                    t_addmight = jmight; t_addnomerge = !more;
+                }
                 Stack st; memset(&st, 0, sizeof st); st.freew[0] = st.freew[1] = st.freew[2] = 1;
                 Plane back = {{-p->pl.n.x, -p->pl.n.y, -p->pl.n.z}, -p->pl.d};
                 float d = dotv(p->origin, bplane.n) - bplane.d;
@@ -1162,6 +1209,7 @@ static int cmp_flood_desc(const void *a, const void *b) {
 }
 static int gpu_pipe_setup(void) {
     if (JACOBI_WIDEN > 0 || JACOBI_NOISE != 1e-4 || JACOBI_SATURATE != 16 || g_mtest_cap || g_jbase_rounds) return 0;
+    if (g_hull_cap > VGPU_SNAPCAP || JACOBI_MAX_ARRIVALS != 64 || g_jx || g_jm) return 0;   /* (the GPU's fixed sizes) */
     int npts = 0, fmax = 0, nlf = 0;
     for (int i = 0; i < NPD; i++) {
         if (P[i].w->n > VGPU_MAXW) return 0;
@@ -1233,8 +1281,9 @@ static int gpu_pipe_flow(double total_w) {
         /* fill the free slots: each new base's first openings on the CPU (some bases end there) */
         int nrec = 0;
         size_t nw = (size_t)ns;
+        memset(rf, 0, (size_t)ns * 4);
         if (!active && pending >= 0) pool_reset();      /* (nothing runs: every entry is free) */
-        for (int k = 0; k < ns && (next < NPD || pending >= 0); k++) {
+        for (int k = 0; k < ns && (next < NPD || pending >= 0) && nrec < 1024; k++) {   /* (a share per round) */
             if (slot_base[k] >= 0) continue;
             int placed = 0;
             while (next < NPD || pending >= 0) {
@@ -1281,7 +1330,9 @@ static int gpu_pipe_flow(double total_w) {
             if (!placed) break;
         }
         long long np, ni; int npass;
-        if (!vgpu_pipe_round(round, nrec, rf, (int)nw, nvisq, visq, visout, so, &np, &ni, &npass)) {
+        static int fail_at = -1;                /* (dev) HL_GPU_FAIL_AT=n: act as if the GPU failed in round n */
+        if (fail_at < 0) fail_at = getenv("HL_GPU_FAIL_AT") ? atoi(getenv("HL_GPU_FAIL_AT")) : 0;
+        if ((fail_at && (int)round == fail_at) || !vgpu_pipe_round(round, nrec, rf, (int)nw, nvisq, visq, visout, so, &np, &ni, &npass)) {
             free(slot_base); free(visq); free(visq_base); free(visout); free(so); free(rf);
             return 0;
         }
@@ -1464,6 +1515,7 @@ static DWORD WINAPI flow_worker(LPVOID arg) {
     for (;;) {
         LONG k = InterlockedIncrement(&g_next) - 1;
         if (k >= NPD) break;
+        if (P[g_order[k]].status == 2) continue;          /* (done already: by the GPU before it failed) */
         if (g_jacobi) jacobi_flow(g_order[k]);
         else if (g_merge) merged_flow(g_order[k]); else portal_flow(g_order[k]);
     }
@@ -1810,6 +1862,7 @@ int main(int argc, char **argv) {
     if (getenv("HL_ROBUST_SEP")) g_robust_sep = atoi(getenv("HL_ROBUST_SEP"));
     if (getenv("HL_JACOBI_SATURATE")) JACOBI_SATURATE = atoi(getenv("HL_JACOBI_SATURATE"));
     if (getenv("HL_JACOBI_WIDEN")) JACOBI_WIDEN = atof(getenv("HL_JACOBI_WIDEN"));
+    if (getenv("HL_JACOBI_X")) g_jx = atoi(getenv("HL_JACOBI_X"));
     printf(g_merge ? "visibility: merged windows\n"
                    : "visibility: exact (vvis's path search, its output)\n");
     if (threads <= 0) {
@@ -1947,9 +2000,13 @@ int main(int argc, char **argv) {
         LARGE_INTEGER fs, fn;
         QueryPerformanceCounter(&fs);
         if (g_gpu_pipe && !gpu_pipe_flow(total_w)) {
-            printf("Warning: the GPU failed during the flow: the CPU does it all\n");
-            for (int i = 0; i < NPD; i++) { P[i].status = 0; g_pdur[i] = 0; memset(P[i].vis, 0, (size_t)PW * 8); }
-            g_done = 0; g_gpu_pipe = 0;
+            printf("Warning: the GPU failed during the flow: the CPU does the rest\n");
+            /* (the bases it finished are right; the rest start again) */
+            g_done = 0;
+            for (int i = 0; i < NPD; i++)
+                if (P[i].status == 2) g_done++;
+                else { P[i].status = 0; g_pdur[i] = 0; memset(P[i].vis, 0, (size_t)PW * 8); }
+            g_gpu_pipe = 0;
             g_jrounds = g_jexp = g_gpu_items = 0;
         }
         if (!g_gpu_pipe) {
@@ -1975,6 +2032,27 @@ int main(int argc, char **argv) {
         for (int t = 0; t < threads; t += 64) WaitForMultipleObjects(threads - t < 64 ? threads - t : 64, hs + t, TRUE, INFINITE);
         for (int t = 0; t < threads; t++) CloseHandle(hs[t]);
         free(hs);
+        }
+        if (getenv("HL_TWO") && !g_jv1) { g_jx = 2; }
+        if (g_jacobi && g_jx == 2 && !g_jv1) {
+            LARGE_INTEGER p1; QueryPerformanceCounter(&p1);
+            printf("first pass: %.1f s\n", (double)(p1.QuadPart - fs.QuadPart) / g_freq.QuadPart);
+            if (getenv("HL_TWO") && atoi(getenv("HL_TWO")) == 2) g_jm = 1;
+            else if (getenv("HL_TWO")) { g_jacobi = 0; g_merge = 1; }
+            g_gpu_pipe = 0;
+            /* (experiment) the second pass, pruned by the first's vis */
+            g_jv1 = xmalloc((size_t)NPD * PW * 8 + 8);
+            for (int i = 0; i < NPD; i++) { memcpy(g_jv1 + (size_t)i * PW * 8, P[i].vis, (size_t)PW * 8); memset(P[i].vis, 0, (size_t)PW * 8); P[i].status = 0; }
+            g_done = 0; g_next = 0;
+            printf("second pass (pruned by the first's vis)\n");
+            HANDLE *hs = xmalloc(threads * sizeof(HANDLE));
+            for (int t = 0; t < threads; t++) {
+                hs[t] = CreateThread(NULL, 64 << 20, flow_worker, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+                if (!hs[t]) fail("couldn't start a thread%s", "");
+            }
+            for (int t = 0; t < threads; t += 64) WaitForMultipleObjects(threads - t < 64 ? threads - t : 64, hs + t, TRUE, INFINITE);
+            for (int t = 0; t < threads; t++) CloseHandle(hs[t]);
+            free(hs);
         }
         QueryPerformanceCounter(&fn);
         double flow_wall = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;

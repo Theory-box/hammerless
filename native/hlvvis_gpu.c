@@ -199,7 +199,7 @@ static program_t prog_basevis, prog_fp64, prog_expand, prog_mtest;
 #define PIPE_NBIND 23
 enum { PK_REFILL, PK_COMPACT, PK_SCAN1, PK_SNAP, PK_SCAN2, PK_EXPAND, PK_ARGS, PK_MERGE, PK_N };
 static program_t prog_pipe[PK_N];
-static int g_fp64;
+static int g_fp64, g_floatctl;
 
 int vgpu_init(void) {
     static int tried, ok;
@@ -249,6 +249,22 @@ int vgpu_init(void) {
     qci.queueFamilyIndex = qfam, qci.queueCount = 1, qci.pQueuePriorities = &prio;
     VkPhysicalDeviceFeatures have, want;
     vkGetPhysicalDeviceFeatures(phys, &have);
+    /* the shaders pin float rounding (to nearest even) and keep -0 / inf / NaN as they are, for 32 and 64 bit floats, as
+       the CPU computes: a card that can't is left to the CPU (its answers would differ) */
+    {
+        PFN_vkGetPhysicalDeviceProperties2 gp2 = (PFN_vkGetPhysicalDeviceProperties2)gipa(inst, "vkGetPhysicalDeviceProperties2");
+        VkPhysicalDeviceVulkan12Properties p12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
+        VkPhysicalDeviceProperties2 p2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        p2.pNext = &p12;
+        if (gp2) gp2(phys, &p2);
+        g_floatctl = gp2 && p12.shaderRoundingModeRTEFloat32 && p12.shaderRoundingModeRTEFloat64 &&
+                     p12.shaderSignedZeroInfNanPreserveFloat32 && p12.shaderSignedZeroInfNanPreserveFloat64;
+        if (getenv("HL_GPU_STATS"))
+            printf("GPU float controls: RTE %d %d, signed zero / inf / NaN %d %d, denormals kept %d %d\n",
+                   p12.shaderRoundingModeRTEFloat32, p12.shaderRoundingModeRTEFloat64, p12.shaderSignedZeroInfNanPreserveFloat32,
+                   p12.shaderSignedZeroInfNanPreserveFloat64, p12.shaderDenormPreserveFloat32, p12.shaderDenormPreserveFloat64);
+        if (!g_floatctl) printf("Warning: the graphics card can't pin float rounding as the CPU does: vis on the CPU\n");
+    }
     memset(&want, 0, sizeof want);
     want.shaderFloat64 = have.shaderFloat64;             /* (the clipping's doubles) */
     if (getenv("HL_GPU_ROBUST")) want.robustBufferAccess = have.robustBufferAccess;   /* (dev) out-of-range reads 0, writes dropped */
@@ -281,16 +297,16 @@ int vgpu_init(void) {
     prog_basevis = program(spv_basevis, sizeof(spv_basevis), 3, 20);
     if (!prog_basevis.ok) { printf("Warning: the graphics card's driver didn't take hlvvis's GPU programs: vis on the CPU\n"); return 0; }
     if (g_fp64) prog_fp64 = program(spv_fp64test, sizeof(spv_fp64test), 4, 4);
-    if (g_fp64) prog_expand = program(spv_expand, sizeof(spv_expand), 8, 24);
-    if (g_fp64) prog_mtest = program(spv_mergetest, sizeof(spv_mergetest), 3, 8);
-    if (g_fp64) prog_pipe[PK_REFILL] = program(spv_pipe_refill, sizeof(spv_pipe_refill), PIPE_NBIND, 64);
-    if (g_fp64) prog_pipe[PK_COMPACT] = program(spv_pipe_compact, sizeof(spv_pipe_compact), PIPE_NBIND, 64);
-    if (g_fp64) prog_pipe[PK_SCAN1] = program(spv_pipe_scan1, sizeof(spv_pipe_scan1), PIPE_NBIND, 64);
-    if (g_fp64) prog_pipe[PK_SNAP] = program(spv_pipe_snap, sizeof(spv_pipe_snap), PIPE_NBIND, 64);
-    if (g_fp64) prog_pipe[PK_SCAN2] = program(spv_pipe_scan2, sizeof(spv_pipe_scan2), PIPE_NBIND, 64);
-    if (g_fp64) prog_pipe[PK_EXPAND] = program(spv_pipe_expand, sizeof(spv_pipe_expand), PIPE_NBIND, 64);
-    if (g_fp64) prog_pipe[PK_ARGS] = program(spv_pipe_args, sizeof(spv_pipe_args), PIPE_NBIND, 64);
-    if (g_fp64) prog_pipe[PK_MERGE] = program(spv_pipe_merge, sizeof(spv_pipe_merge), PIPE_NBIND, 64);
+    if (g_fp64 && g_floatctl) prog_expand = program(spv_expand, sizeof(spv_expand), 8, 24);
+    if (g_fp64 && g_floatctl) prog_mtest = program(spv_mergetest, sizeof(spv_mergetest), 3, 8);
+    if (g_fp64 && g_floatctl) prog_pipe[PK_REFILL] = program(spv_pipe_refill, sizeof(spv_pipe_refill), PIPE_NBIND, 64);
+    if (g_fp64 && g_floatctl) prog_pipe[PK_COMPACT] = program(spv_pipe_compact, sizeof(spv_pipe_compact), PIPE_NBIND, 64);
+    if (g_fp64 && g_floatctl) prog_pipe[PK_SCAN1] = program(spv_pipe_scan1, sizeof(spv_pipe_scan1), PIPE_NBIND, 64);
+    if (g_fp64 && g_floatctl) prog_pipe[PK_SNAP] = program(spv_pipe_snap, sizeof(spv_pipe_snap), PIPE_NBIND, 64);
+    if (g_fp64 && g_floatctl) prog_pipe[PK_SCAN2] = program(spv_pipe_scan2, sizeof(spv_pipe_scan2), PIPE_NBIND, 64);
+    if (g_fp64 && g_floatctl) prog_pipe[PK_EXPAND] = program(spv_pipe_expand, sizeof(spv_pipe_expand), PIPE_NBIND, 64);
+    if (g_fp64 && g_floatctl) prog_pipe[PK_ARGS] = program(spv_pipe_args, sizeof(spv_pipe_args), PIPE_NBIND, 64);
+    if (g_fp64 && g_floatctl) prog_pipe[PK_MERGE] = program(spv_pipe_merge, sizeof(spv_pipe_merge), PIPE_NBIND, 64);
     ok = 1;
     return 1;
 }
@@ -338,7 +354,9 @@ int vgpu_front(int npd, const float *pts, int npts, const vgpu_portal_t *portals
 
 /* (self-test) the GPU's double a / b, sqrt(a) and (float)(1 / sqrt(len)) against the CPU's, bit for bit, over n random
    inputs; prints the mismatches. Returns the number of mismatches, -1 if it couldn't run. */
-int vgpu_fp64_selftest(int n) {
+static int fp64_selftest(int n, int verbose);
+int vgpu_fp64_selftest(int n) { return fp64_selftest(n, 1); }
+static int fp64_selftest(int n, int verbose) {
     if (!vgpu_init()) return -1;
     if (!g_fp64 || !prog_fp64.ok) { printf("GPU self-test: no double precision on this card\n"); return -1; }
     double *ab = malloc((size_t)n * 16);
@@ -381,8 +399,9 @@ int vgpu_fp64_selftest(int n) {
         if (memcmp(&sq, &q[2 * i + 1], 8)) { if (bad_sqrt++ < 3) printf("  sqrt %.17g: CPU %.17g GPU %.17g\n", ab[2*i], sq, q[2*i+1]); }
         if (memcmp(&iv, &inv[i], 4)) { if (bad_inv++ < 3) printf("  1/sqrt %.9g: CPU %.9g GPU %.9g\n", lens[i], iv, inv[i]); }
     }
-    printf("GPU self-test (%s), %d random inputs: a / b %lld differ, sqrt %lld differ, (float)(1 / sqrt(len)) %lld differ\n",
-           g_name, n, bad_div, bad_sqrt, bad_inv);
+    if (verbose || bad_div + bad_sqrt + bad_inv)
+        printf("GPU self-test (%s), %d random inputs: a / b %lld differ, sqrt %lld differ, (float)(1 / sqrt(len)) %lld differ\n",
+               g_name, n, bad_div, bad_sqrt, bad_inv);
     free_buffer(&gin); free_buffer(&ginf); free_buffer(&gout); free_buffer(&goutf); free_buffer(&back); free_buffer(&backf);
     free(ab); free(lens);
     return (int)(bad_div + bad_sqrt + bad_inv);
@@ -463,11 +482,15 @@ enum { B_PTS, B_PORTALS, B_LEAVES, B_LFLIST, B_CAPDIR, B_SLOTS, B_FLOOD, B_PREFI
        B_FRONT, B_PAIRS, B_TOUCHED, B_CANDS, B_CPTS, B_COUNTERS, B_REFILL, B_SS, B_SW, B_SPS, B_SPW };
 static gbuf_t p_buf[PIPE_NBIND];
 static gbuf_t p_back;                                    /* (host) counters, slots, vis rows */
-static struct { uint32_t nslots, fmax, pw32, npd, round, item_start; float eps_up, len_lo;
+/* items per pass: a round's expansions go in passes of at most this many, each waited for (Windows resets a GPU
+   whose job runs over 2 seconds); about 70 ms a pass on an RTX 4090 */
+static uint32_t p_items_per_pass;
+static struct { uint32_t nslots, item_end, pw32, npd, round, item_start; float eps_up, len_lo;
                 uint32_t robust, maxchop, hullcap, nrefill, candcap, ptcap, saturate, maxarr; } p_pc;
 #define C_N 0
 #define C_T 1
 #define C_FAIL 4
+#define C_ERR 6
 #define C_ARGS1 8
 #define C_ARGS3 12
 #define C_ARGS4 16
@@ -482,11 +505,22 @@ static void p_bind_all(void) {
 int vgpu_pipe_setup(int npd, const float *pts, int npts, const vgpu_pportal_t *portals, int nleaves, const uint32_t *leaves,
                     int nlf, const uint32_t *lflist, const double *cap_dir, int cap, int fmax, int pw32, float eps_up,
                     float len_lo, int robust, int maxchop, int saturate, int maxarr, int want_slots, vgpu_pipe_info_t *info) {
-    if (!vgpu_init() || !g_fp64) return 0;
-    for (int k = 0; k < PK_N; k++) if (!prog_pipe[k].ok) return 0;
-    if (fmax < 1) fmax = 1;
+    if (!vgpu_init() || !g_fp64 || !g_floatctl) return 0;
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(phys, &props);
+    const VkPhysicalDeviceLimits *lim = &props.limits;
+    if (lim->maxPerStageDescriptorStorageBuffers < PIPE_NBIND || lim->maxDescriptorSetStorageBuffers < PIPE_NBIND ||
+        lim->maxComputeWorkGroupInvocations < 1024 || lim->maxComputeWorkGroupSize[0] < 1024 ||
+        lim->maxComputeWorkGroupCount[0] < 32768 || lim->maxComputeWorkGroupCount[1] < 2048 ||
+        lim->maxPushConstantsSize < 64 || lim->maxComputeSharedMemorySize < 16384) {
+        printf("Warning: GPU: the card's limits are too small for the flow (storage buffers %u, workgroup %u): the CPU does it\n",
+               lim->maxPerStageDescriptorStorageBuffers, lim->maxComputeWorkGroupInvocations);
+        return 0;
+    }
+    for (int k = 0; k < PK_N; k++) if (!prog_pipe[k].ok) return 0;
+    /* (the clipping's doubles must divide and take square roots as the CPU does: checked on this card) */
+    if (fp64_selftest(200000, 0) != 0) { printf("Warning: GPU: its doubles differ from the CPU's: the CPU does the flow\n"); return 0; }
+    if (fmax < 1) fmax = 1;
     /* entries (a flood portal of a running flow: its windows, snapshot, list, frontier place): as many as fit a memory
        budget and the biggest buffers (one window set per entry, 256 bytes); slots: as many flows as could run */
     VkDeviceSize heap = 0;
@@ -532,7 +566,9 @@ int vgpu_pipe_setup(int npd, const float *pts, int npts, const vgpu_pportal_t *p
         if (i != B_REFILL) vkCmdFillBuffer(cmd, p_buf[i].buf, 0, VK_WHOLE_SIZE, i == B_PERRANK ? 0xffffffffu : 0u);
     if (!submit()) return 0;
     p_bind_all();
-    p_pc.nslots = (uint32_t)ns, p_pc.fmax = (uint32_t)fmax, p_pc.pw32 = (uint32_t)pw32, p_pc.npd = (uint32_t)npd;
+    p_pc.nslots = (uint32_t)ns, p_pc.pw32 = (uint32_t)pw32, p_pc.npd = (uint32_t)npd;
+    p_items_per_pass = getenv("HL_GPU_PASS_ITEMS") ? (uint32_t)atoi(getenv("HL_GPU_PASS_ITEMS")) : 0;   /* (dev) */
+    if (p_items_per_pass < 1) p_items_per_pass = 4u << 20;
     p_pc.eps_up = eps_up, p_pc.len_lo = len_lo, p_pc.robust = (uint32_t)robust, p_pc.maxchop = (uint32_t)maxchop;
     p_pc.hullcap = (uint32_t)cap, p_pc.candcap = (uint32_t)candcap, p_pc.ptcap = (uint32_t)ptcap;
     p_pc.saturate = (uint32_t)saturate, p_pc.maxarr = (uint32_t)maxarr;
@@ -602,6 +638,7 @@ static void p_run_indirect(int k, int at) { p_use(k); vkCmdDispatchIndirect(cmd,
 /* the expansion (items from item_start on), its dispatch size, the merge, the counters back */
 static void p_expand_merge(uint32_t item_start, uint32_t nitems_direct) {
     p_pc.item_start = item_start;
+    p_pc.item_end = item_start + p_items_per_pass < item_start ? 0xffffffffu : item_start + p_items_per_pass;
     if (nitems_direct) {
         uint32_t gr = (nitems_direct + 63) / 64;
         p_run(PK_EXPAND, gr < 32768 ? gr : 32768, gr < 32768 ? 1 : (gr + 32767) / 32768);
@@ -635,6 +672,7 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
     p_run(PK_COMPACT, ns, 1);
     p_run(PK_SCAN1, 1, 1);
     p_run_indirect(PK_SNAP, C_ARGS1);
+    p_pc.item_end = p_items_per_pass;
     p_run(PK_SCAN2, 1, 1);
     p_expand_merge(0, 0);
     VkBufferCopy cs = {0, (VkDeviceSize)P_COUNTERS * 4, (VkDeviceSize)ns * 32};
@@ -651,19 +689,25 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
     *n_pairs = cn[C_N], *n_items = cn[C_T], *n_passes = 1;
     if (getenv("HL_PIPE_DEBUG")) printf("round %u: refill %d, pairs %u, items %u, candidates %u, points %u, fail %u, lists %u\n",
                                         round, nrefill, cn[C_N], cn[C_T], cn[2], cn[3], cn[C_FAIL], cn[5]);
-    /* out of room for what came through: the merge took the items before the first that found none; go on from it */
-    while (cn[C_FAIL] < cn[C_T]) {
-        uint32_t from = cn[C_FAIL], T = cn[C_T];
+    if (cn[C_ERR]) { printf("Warning: GPU: a round with more than 2^32 expansion steps\n"); return 0; }
+    /* the rest of the round in passes: from the pass's end, or from the first item that found no room for what came
+       through (the merge took the items before it); a pass's first item always has room, so each gets on */
+    uint32_t end = p_items_per_pass;
+    for (;;) {
+        uint32_t T = cn[C_T], from = cn[C_FAIL] < end ? cn[C_FAIL] : end;
+        if (from >= T) break;
+        uint32_t n = T - from < p_items_per_pass ? T - from : p_items_per_pass;
+        end = from + n;
         if (!begin()) return 0;
-        vkCmdFillBuffer(cmd, p_buf[B_COUNTERS].buf, 8, 8, 0u);              /* candidates, points used */
+        vkCmdFillBuffer(cmd, p_buf[B_COUNTERS].buf, 8, 4, 1u);              /* candidates used: the reserved one */
+        vkCmdFillBuffer(cmd, p_buf[B_COUNTERS].buf, 12, 4, 128u);           /* points used: the reserved ones */
         vkCmdFillBuffer(cmd, p_buf[B_COUNTERS].buf, 16, 4, 0xffffffffu);    /* no item failed */
         vkCmdFillBuffer(cmd, p_buf[B_COUNTERS].buf, 20, 4, 0u);             /* no list started */
         p_barrier();
-        p_expand_merge(from, T - from);
+        p_expand_merge(from, n);
         VkBufferCopy cs2 = {0, (VkDeviceSize)P_COUNTERS * 4, (VkDeviceSize)ns * 32};
         vkCmdCopyBuffer(cmd, p_buf[B_SLOTS].buf, p_back.buf, 1, &cs2);
         if (!submit()) return 0;
-        if (cn[C_FAIL] == from) { printf("Warning: GPU: one expansion's windows don't fit\n"); return 0; }
         (*n_passes)++;
     }
     memcpy(slots_out, (const char *)p_back.map + P_COUNTERS * 4, (size_t)ns * 32);

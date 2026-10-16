@@ -1,6 +1,7 @@
 #version 460
 // hlvvis -jacobi GPU pipeline: item offsets of the pairs (item = (pair, next portal), in the CPU's order: slot,
-// frontier portal, next portal), the expand dispatch size, and the pass's counters reset. One workgroup.
+// frontier portal, next portal), the expand dispatch size (the first pass: items up to pc.item_end), and the pass's
+// counters reset. One workgroup.
 #extension GL_GOOGLE_include_directive : require
 #include "pipe_common.glsl"
 layout(local_size_x = 1024) in;
@@ -11,15 +12,17 @@ void main() {
     uint lid = gl_LocalInvocationID.x, n = cnt[C_N];
     uint chunk = (n + 1023u) / 1024u, p0 = lid * chunk, p1 = min(p0 + chunk, n);
     uint sum = 0u;
-    for (uint p = p0; p < p1; p++) sum += pairs[p].x;
+    bool wrap = false;
+    for (uint p = p0; p < p1; p++) { uint t = sum + pairs[p].x; wrap = wrap || t < sum; sum = t; }
+    if (wrap) cnt[C_ERR] = 1u;
     part[lid] = sum;
     barrier();
     if (lid == 0u) {
         uint run = 0u;
-        for (uint i = 0u; i < 1024u; i++) { uint v = part[i]; part[i] = run; run += v; }
+        for (uint i = 0u; i < 1024u; i++) { uint v = part[i]; part[i] = run; if (run + v < run) cnt[C_ERR] = 1u; run += v; }
         cnt[C_T] = run;
-        set_args(C_ARGS3, run);
-        cnt[C_CAND] = 0u; cnt[C_PTS] = 0u; cnt[C_FAIL] = EMPTY; cnt[C_TOUCH] = 0u;
+        set_args(C_ARGS3, min(run, pc.item_end));
+        cnt[C_CAND] = 1u; cnt[C_PTS] = PASS_RESERVED_PTS; cnt[C_FAIL] = EMPTY; cnt[C_TOUCH] = 0u;
     }
     barrier();
     uint run = part[lid];

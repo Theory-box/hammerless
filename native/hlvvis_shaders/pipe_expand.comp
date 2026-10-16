@@ -2,7 +2,7 @@
 // hlvvis -jacobi GPU pipeline: per item (slot, frontier portal x, x's k-th next portal q in the flood), the expansion
 // step (expand_lib.glsl, the CPU's to the bit) from x's snapshot; what comes through is stored and linked to the
 // (slot, q) list for the merge. Items from pc.item_start on (a pass that ran out of room goes on from the first item
-// that found none: the merge takes only the items before it).
+// that found none: the merge takes only the items before it) up to pc.item_end (a pass's share: no single job runs long).
 #extension GL_GOOGLE_include_directive : require
 #include "pipe_common.glsl"
 #include "expand_lib.glsl"
@@ -10,7 +10,7 @@ layout(local_size_x = 64) in;
 
 void main() {
     uint id = gid() + pc.item_start;
-    if (id >= cnt[C_T]) return;
+    if (id >= cnt[C_T] || id >= pc.item_end) return;
     uint lo = 0u, hi = cnt[C_N] - 1u;           // the pair: the last one starting at or before id
     while (lo < hi) { uint mid = (lo + hi + 1u) / 2u; if (pairs[mid].y <= id) lo = mid; else hi = mid - 1u; }
     uvec4 pa = pairs[lo];
@@ -47,13 +47,16 @@ void main() {
     if (clip_seps(true) == 0) return;
     if (clip_seps(false) == 0) return;
     uint np = uint(nS + nA);
-    uint c = atomicAdd(cnt[C_CAND], 1u);
-    uint pt = atomicAdd(cnt[C_PTS], np);
-    if (c >= pc.candcap || pt + np > pc.ptcap) { atomicMin(cnt[C_FAIL], id); return; }
+    uint c = 0u, pt = 0u;                    // (the pass's first item: its own room)
+    if (id != pc.item_start) {
+        c = atomicAdd(cnt[C_CAND], 1u);
+        pt = atomicAdd(cnt[C_PTS], np);
+        if (c >= pc.candcap || pt + np > pc.ptcap) { atomicMin(cnt[C_FAIL], id); return; }
+    }
     for (int i = 0; i < nS; i++) cpts[pt + uint(i)] = vec4(Sr[i], 0.0);
     for (int i = 0; i < nA; i++) cpts[pt + uint(nS + i)] = vec4(A[i], 0.0);
     uint idx = off + rank_of(s, qn);
-    pr[idx].w = qn;
+    pr[idx].w = qn;                          // (every item into q writes the same value)
     uint old = atomicExchange(pr[idx].x, c);
     cands[c] = uvec4(old, id, pt, uint(nS) | (uint(nA) << 16));
     if (old == EMPTY) touched[atomicAdd(cnt[C_TOUCH], 1u)] = uvec2(idx, s);

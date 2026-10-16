@@ -20,6 +20,7 @@ void main() {
     uint li[64], lc[64]; uint n = 0u, total = 0u;
     for (uint c = p.x; c != EMPTY;) {
         uvec4 cd = cands[c];
+        // (items from fail on: the next pass does them again)
         if (cd.y < fail) { if (n < 64u) { li[n] = cd.y; lc[n] = c; n++; } total++; }
         c = cd.x;
     }
