@@ -38,6 +38,7 @@ VBSP = dict(_COMMON, **{
 
 VVIS = dict(_COMMON, **{
     "-fast": (0, OURS), "-radius_override": (1, OURS),
+    "-gpu2": (0, OURS), "-cpu": (0, OURS),   # (Hammerless's own: the vis on the graphics card / on the CPU)
     "-tmpin": (0, NO_EFFECT), "-mpi_listparams": (0, NO_EFFECT), "-trace": (2, NO_EFFECT),
     "-nosort": (0, NO_EFFECT),            # (the order vvis works through the portals in: speed, not the result)
 })
