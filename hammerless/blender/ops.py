@@ -52,7 +52,8 @@ def compile_options(s) -> "cc.CompileOptions":
                              sky_rays=s.light_sky_rays, supersample=s.light_supersample, bounces=s.light_bounces,
                              prop_polys=s.light_prop_polys, patch_size=s.light_patch_size,
                              extra_vbsp=s.extra_vbsp, extra_vvis=s.extra_vvis, extra_vrad=s.extra_vrad,
-                             vis_tool=s.vis_tool, vis_exact=s.vis_exact, vis_gpu=s.vis_gpu, light_tool=s.light_tool,
+                             vis_tool=s.vis_tool, vis_exact=s.vis_exact, vis_gpu=s.vis_gpu, vis_tight=s.vis_culling == "TIGHT",
+                             light_tool=s.light_tool,
                              map_tool=s.map_tool,
                              **_light_options(s))
 
@@ -1201,7 +1202,7 @@ def _nav_key(vmf_path: str, rep, s, opts) -> str | None:
         with open(vmf_path, encoding="utf-8", errors="replace") as f:
             text = f.read()
         o = cc.PRESETS[opts] if isinstance(opts, str) else opts
-        extra = f"{o.vis}|{o.vis_tool}|{o.vis_exact}|{o.vis_gpu}|{s.nav_analysis}|{not s.nav_culling}"   # (analysis reads the vis)
+        extra = f"{o.vis}|{o.vis_tool}|{o.vis_exact}|{o.vis_gpu}|{o.vis_tight}|{s.nav_analysis}|{not s.nav_culling}"   # (analysis reads the vis)
         # (instance files and the map's own models: props' collision)
         root = game_root(bpy.context)        # (models only: a repainted texture doesn't change the nav)
         models = asset_print(rep, root, s.map_name, ("models",)) if root else ""

@@ -87,6 +87,7 @@ typedef struct {
 static int NPD, NCL, PW;   /* one-way portals, clusters, 64-bit words per portal bitset */
 static Portal *P;
 static int g_two;           /* the default's two GPU passes are running (see g_auto) */
+static int g_onepass;       /* -onepass: the default's first GPU pass only (2-3x faster, ~10% looser: still safe) */
 static uint8_t *g_jv1;      /* (experiment, HL_JACOBI_X=2 / HL_TWO) a first pass's vis rows, PW words per portal */
 static int *lf_first, *lf_count, *lf_list;   /* portals leaving each cluster */
 
@@ -1425,7 +1426,7 @@ static int gpu_pipe_flow(double total_w) {
         /* (the default's two passes show as one: the first about 38% of the time, the second, about 1.6 times
            as long, the rest) */
         double fr = done_w / total_w, lo = 0, span = 100, after = 0;
-        if (g_two && !g_jm) span = 38, after = 1.6;
+        if (g_two && !g_jm && !g_onepass) span = 38, after = 1.6;
         else if (g_two) lo = 38, span = 62;
         int pct = (int)(lo + span * fr);
         if (pct != last_pct && pct < 100 && done_w > 0 && el > 0.5) {
@@ -1945,13 +1946,14 @@ int main(int argc, char **argv) {
         else if (!_stricmp(argv[i], "-gpu")) g_gpu = 1, g_auto = 0;
         else if (!_stricmp(argv[i], "-cpu")) g_auto = 0;       /* (the merged windows on the CPU, no graphics card) */
         else if (!_stricmp(argv[i], "-gpu2")) g_auto = 1;      /* (the default anyway: the two GPU passes) */
+        else if (!_stricmp(argv[i], "-onepass")) g_onepass = 1;   /* (the default's GPU passes: the first only) */
         else if (!_stricmp(argv[i], "-gpuselftest")) return vgpu_fp64_selftest(4000000) == 0 ? 0 : 1;
         else if (!_stricmp(argv[i], "-game") && i + 1 < argc) i++;
         else if (!_stricmp(argv[i], "-radius_override") && i + 1 < argc) radius_override = argv[++i];
         else if (argv[i][0] == '-') { printf("Error: unsupported option %s\n", argv[i]); return 2; }
         else map = argv[i];
     }
-    if (!map) { printf("usage: hlvvis [-fast] [-exact | -cpu | -jacobi [-gpu]] [-threads N] [-radius_override R] [-game dir] <map>\n"); return 2; }
+    if (!map) { printf("usage: hlvvis [-fast] [-exact | -cpu | -onepass | -jacobi [-gpu]] [-threads N] [-radius_override R] [-game dir] <map>\n"); return 2; }
     if (getenv("HL_TWO")) g_auto = 0;          /* (the experiments choose for themselves) */
     if (g_auto) g_gpu = 1;
     if (g_merge) g_maxpts = MAXPTS;
@@ -2142,7 +2144,7 @@ int main(int argc, char **argv) {
             g_jrounds = g_jexp = g_gpu_items = 0;
         }
         if (!g_gpu_pipe) cpu_flows(threads, total_w, fs);
-        if (g_gpu_pipe && (g_two || (getenv("HL_TWO") && atoi(getenv("HL_TWO")) == 4)) && !g_jv1) {
+        if (g_gpu_pipe && ((g_two && !g_onepass) || (getenv("HL_TWO") && atoi(getenv("HL_TWO")) == 4)) && !g_jv1) {
             /* (experiment) the second pass on the GPU: -jacobi with might-see sets over clusters, tests = the first
                pass's vis (the CPU's: HL_TWO=2 HL_JM_CL=1 HL_JM_NOMORE=1) */
             LARGE_INTEGER p1; QueryPerformanceCounter(&p1);

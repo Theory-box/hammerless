@@ -850,6 +850,8 @@ class HL_PT_visibility(_Panel, bpy.types.Panel):
             col.prop(s, "vis_exact")
             if not s.vis_exact:
                 col.prop(s, "vis_gpu")
+                if s.vis_gpu:
+                    col.row().prop(s, "vis_culling", expand=True)
         col.prop(s, "extra_vvis", text="Extra vvis Options")
         if not _cancel_button(self.layout, 1.3):
             row = self.layout.row()

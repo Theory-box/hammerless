@@ -736,6 +736,13 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         description="Hammerless's vis compiler runs on the graphics card (about twice as fast as on the CPU on big "
                     "maps, the same quality). Off: on the CPU. A card that can't, or a failure on the way, falls back "
                     "to the CPU by itself")
+    vis_culling: EnumProperty(
+        name="Vis", default="FAST",
+        description="How tightly the vis on the graphics card works out what each spot can see",
+        items=[("FAST", "Fast", "About twice as fast; the game draws about 10% more than Tight (measured on a big "
+                                "map). Never hides anything visible"),
+               ("TIGHT", "Tight", "A second pass that trims what Fast keeps: the least drawing, about twice the "
+                                  "time. For finished maps")])
     map_tool: EnumProperty(name="Map Compiler", default="HAMMERLESS", items=[
         ("HAMMERLESS", "Hammerless",
          "Hammerless's map compiler: the same map as vbsp, byte for byte on 132 of Valve's 134 sample maps. "

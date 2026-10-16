@@ -45,6 +45,7 @@ class CompileOptions:
     vis_tool: str = "HAMMERLESS"  # VALVE: L4D2's vvis.exe / HAMMERLESS: hlvvis.exe (merged windows: much faster)
     vis_exact: bool = False       # with hlvvis: vvis's own path search (-exact), its output byte for byte
     vis_gpu: bool = True          # with hlvvis: on the graphics card (else -cpu: the merged windows on the CPU)
+    vis_tight: bool = False       # on the GPU: both passes (else -onepass: the first only, ~2x faster, ~10% looser)
     map_tool: str = "HAMMERLESS"  # HAMMERLESS: hlvbsp.exe (same map as vbsp) / VALVE: L4D2's vbsp.exe
     light_tool: str = "HAMMERLESS"  # VALVE: vrad's lightmaps / HAMMERLESS: hlvrad.exe (vrad's lighting, faster) /
                                 # CYCLES: Blender bakes them after vrad (bake_handler)
@@ -326,6 +327,7 @@ def _serves(built: str, opts: "CompileOptions") -> bool:
     same lighting (rad SKIP asks for none: a compile for the nav analysis doesn't need it)."""
     vis, rad = _opts_vis(built), _opts_rad(built)
     return (vis in VIS_RANK and VIS_RANK[vis] >= VIS_RANK[opts.vis]
+            and not (opts.vis_tight and "vis_tight=False" in built)     # (Tight asked: a Fast vis won't do)
             and (opts.rad == "SKIP" or rad == _opts_rad(repr(opts))))
 
 
@@ -760,7 +762,7 @@ class CompileJob:
         if vvis is not None:
             valve = [tools.exe("vvis")] + vvis + game + [self.base]
             if use_hlvvis(opts):
-                self.steps.append(("vvis", [HLVVIS] + (["-exact"] if opts.vis_exact else [] if opts.vis_gpu else ["-cpu"])
+                self.steps.append(("vvis", [HLVVIS] + (["-exact"] if opts.vis_exact else (["-onepass"] if not opts.vis_tight else []) if opts.vis_gpu else ["-cpu"])
                                    + opts.vvis_args(True)
                                    + game + [self.base]))
                 self._valve_vvis = valve
