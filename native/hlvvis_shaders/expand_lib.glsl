@@ -90,6 +90,35 @@ int chopS(vec3 n, float d) {
 // The separating planes of (src, pas) (the CPU's sep_planes, one pass point at a time), each applied to the working
 // pass A at once, in the CPU's order (source edges i, then pass points j). srcIsS: src is the working source Sr and
 // pas is Wp; else src is Wp and pas is Sr (flipclip: the planes negated). Returns 0 if A is clipped away.
+// float(1.0 / sqrt(double(len))), the CPU's (double then rounded to float), bit for bit, mostly without doubles
+// (the card's FP64 is 1/64 rate: this was most of the expansion's time). r = inversesqrt(len) is within a few ulps;
+// e = 1 - len * r * r is worked out almost exactly with fused multiply-adds (r * r as hi + lo, then len times it), so
+// the true value is r + r * e / 2 to about 2^-20 of an ulp. When that lies clearly inside one float's rounding
+// interval (more than 1/64 of an ulp from a halfway point; the double result is within 2^-28 ulps of the true value)
+// the rounded double is that float. Otherwise (a hair from a halfway point, a power-of-two edge, or a poor estimate)
+// the double way, as before.
+float rsqrt_as_cpu(float len) {
+    float r = inversesqrt(len);
+    uint rb = floatBitsToUint(r);
+    uint mant = rb & 0x7fffffu;
+    if (mant > 8u && mant < 0x7ffff7u) {           // (not within 8 ulps of a power of two: one ulp size around r)
+        precise float hi = r * r;
+        precise float lo = fma(r, r, -hi);
+        precise float phi = len * hi;
+        precise float plo = fma(len, hi, -phi) + len * lo;
+        precise float e = (1.0 - phi) - plo;
+        precise float u = uintBitsToFloat(rb + 1u) - r;
+        precise float dd = (0.5 * r * e) / u;      // the true value - r, in ulps
+        if (abs(dd) < 4.0) {
+            float k = floor(dd + 0.5);
+            if (abs(dd - k) < 0.484375)            // (> 1/64 ulp from a halfway point)
+                return uintBitsToFloat(uint(int(rb) + int(k)));
+        }
+    }
+    precise double inv = 1.0lf / sqrt(double(len));
+    return float(inv);
+}
+
 int clip_seps(bool srcIsS) {
     int ns = srcIsS ? nS : nW, np = srcIsS ? nW : nS;
     for (int i = 0; i < ns; i++) {
@@ -106,8 +135,7 @@ int clip_seps(bool srcIsS) {
             precise float len = nx * nx + ny * ny;
             len = len + nz * nz;
             if (len <= pc.len_lo) continue;
-            precise double inv = 1.0lf / sqrt(double(len));
-            float invf = float(inv);
+            float invf = rsqrt_as_cpu(len);
             precise float fx = nx * invf, fy = ny * invf, fz = nz * invf;
             vec3 nrm = vec3(fx, fy, fz);
             precise float dist = dot3(P, nrm);
