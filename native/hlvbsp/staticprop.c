@@ -312,6 +312,9 @@ void EmitStaticProps(void) {
         p.diffuse[2] = (unsigned char)b; p.diffuse[3] = (unsigned char)a;
         p.disablex360 = (unsigned char)(IntForKey(e, "disableX360") != 0);
         const char *lo = ValueForKey(e, "lightingorigin");
+        /* Hammerless: Make Collision's invisible props only need one leaf (the leaves say when to draw a prop; all
+           props share 65,535 of them, and these are never drawn) */
+        int collision_only = IntForKey(e, "hl_collision_only") == 1;
 
         void *collide = GetCollisionModel(model);
         e->epairs = NULL;
@@ -326,6 +329,7 @@ void EmitStaticProps(void) {
             Warning("Static prop %s outside the map (%.2f, %.2f, %.2f)\n", model, origin[0], origin[1], origin[2]);
             continue;
         }
+        if (collision_only) leaves.n = 1;
         p.proptype = (unsigned short)AddDict(model);
         VectorCopy(origin, p.origin);
         VectorCopy(angles, p.angles);

@@ -611,6 +611,12 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
     elif spec.skeleton is not None and spec.skeleton.default_animation:
         kv["DefaultAnim"] = spec.skeleton.default_animation
     kv.update(object_keyvalues(obj))
+    if kind == "STATIC" and obj.get("hl_collision_of") is not None and obj.material_slots and all(
+            s.material is not None and materials.resolve(s.material)[0].lower().replace("\\", "/")
+            == "tools/toolsnodraw" for s in obj.material_slots):
+        # (Make Collision's prop, never drawn: our map compiler gives it one leaf, not every leaf it overlaps; the
+        # leaves only tell the engine when to draw a prop, and all props share 65,535 of them)
+        kv["hl_collision_only"] = "1"
     origin = tuple(c * scale for c in loc)
     turn = rot.to_matrix().to_4x4()
     if spec.skeleton is not None and spec.skeleton.valve_space:

@@ -1954,6 +1954,14 @@ def test_make_collision_modes():
     assert len(ents) == 1 and len(ents[0].blocks("solid")) == 64, len(ents)
     world = next(e for e in doc if e.name == "world")
     assert len(world.blocks("solid")) == 6, len(world.blocks("solid"))      # (only the automatic seal's)
+    # collision props get one leaf from our compiler only while they're nodraw (toolsinvisible ones are drawn)
+    props_kv = [e for e in doc if e.name == "entity" and e.get("classname") == "prop_static"]
+    assert len(props_kv) == 5 and not any(e.get("hl_collision_only") for e in props_kv)     # (the mesh + 4)
+    for o in props:
+        o.data.materials[0] = game_material("tools/toolsnodraw")
+    doc, log = export()
+    props_kv = [e for e in doc if e.name == "entity" and e.get("classname") == "prop_static"]
+    assert sum(e.get("hl_collision_only") == "1" for e in props_kv) == 4, log      # (not the mesh itself)
     house.hammerless.collision_blocks_vis = False
     assert not [o for o in press() if o.hammerless.brush_detail == "VIS"]
     # a duplicated house (with its collision): each one's Make Collision replaces only its own
