@@ -13,7 +13,8 @@ layout(local_size_x = 64) in;
 void main() {
     uint id = gid();
     if (id >= cnt[C_TOUCH]) return;
-    uint idx = touched[id], s = idx / pc.fmax, fail = cnt[C_FAIL];
+    uvec2 tc = touched[id];
+    uint idx = tc.x, s = tc.y, fail = cnt[C_FAIL];
     uvec4 p = pr[idx];
     uint qn = p.w;
     uint li[64], lc[64]; uint n = 0u, total = 0u;
@@ -28,12 +29,12 @@ void main() {
     uint base = slots[s].base, gen = slots[s].gen;
     uint w = s * pc.pw32 + (qn >> 5), bit = 1u << (qn & 31u);
     if ((atomicOr(vis[w], bit) & bit) == 0u) atomicAdd(slots[s].seen, 1u);
-    ivec4 h = st[idx].h;
+    ivec4 h = sth[idx];
     bool inited = h.x == int(gen), opened = inited && h.z != 0;
     int grows = inited ? h.y : 0;
     MS_n[0] = inited ? h.w & 255 : 0; MS_n[1] = inited ? (h.w >> 8) & 255 : 0;
-    for (int k = 0; k < MS_n[0]; k++) MS[0][k] = st[idx].S[k].xyz;
-    for (int k = 0; k < MS_n[1]; k++) MS[1][k] = st[idx].W[k].xyz;
+    for (int k = 0; k < MS_n[0]; k++) MS[0][k] = stS[idx].p[k].xyz;
+    for (int k = 0; k < MS_n[1]; k++) MS[1][k] = stW[idx].p[k].xyz;
     M_n[0] = portals[base].plane.xyz; M_ccw[0] = int(portals[base].ccw);
     M_n[1] = portals[qn].plane.xyz; M_ccw[1] = int(portals[qn].ccw);
     bool over = arr > pc.maxarr, req = false;
@@ -68,8 +69,8 @@ void main() {
         if (over) opened = true;
     }
     int nS = MS_n[0], nW = MS_n[1];
-    for (int k = 0; k < nS; k++) st[idx].S[k] = vec4(MS[0][k], 0.0);
-    for (int k = 0; k < nW; k++) st[idx].W[k] = vec4(MS[1][k], 0.0);
-    st[idx].h = ivec4(int(gen), grows, opened ? 1 : 0, nS | (nW << 8) | (h.w & int(0xffff0000u)));
+    for (int k = 0; k < nS; k++) stS[idx].p[k] = vec4(MS[0][k], 0.0);
+    for (int k = 0; k < nW; k++) stW[idx].p[k] = vec4(MS[1][k], 0.0);
+    sth[idx] = ivec4(int(gen), grows, opened ? 1 : 0, nS | (nW << 8) | (h.w & int(0xffff0000u)));
     if (req) atomicOr(dirty[w], bit);
 }

@@ -38,7 +38,8 @@ static PFN_vkGetInstanceProcAddr gipa;
     X(vkQueueWaitIdle) X(vkCmdCopyBuffer) X(vkResetCommandBuffer) X(vkCmdPipelineBarrier) X(vkCreateShaderModule) \
     X(vkCreateDescriptorSetLayout) X(vkCreatePipelineLayout) X(vkCreateComputePipelines) X(vkCreateDescriptorPool) \
     X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
-    X(vkCmdPushConstants) X(vkCmdDispatch) X(vkCmdDispatchIndirect) X(vkCmdFillBuffer)
+    X(vkCmdPushConstants) X(vkCmdDispatch) X(vkCmdDispatchIndirect) X(vkCmdFillBuffer) \
+    X(vkCreateQueryPool) X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp) X(vkGetQueryPoolResults)
 static PFN_vkCreateInstance vkCreateInstance_;
 VK_INSTANCE_FUNCS(VK_DECLARE)
 VK_DEVICE_FUNCS(VK_DECLARE)
@@ -195,7 +196,7 @@ static void bind_buffers(program_t *p, gbuf_t *const *bufs) {
 
 /* ------------------------------------------------------------------ start */
 static program_t prog_basevis, prog_fp64, prog_expand, prog_mtest;
-#define PIPE_NBIND 19
+#define PIPE_NBIND 23
 enum { PK_REFILL, PK_COMPACT, PK_SCAN1, PK_SNAP, PK_SCAN2, PK_EXPAND, PK_ARGS, PK_MERGE, PK_N };
 static program_t prog_pipe[PK_N];
 static int g_fp64;
@@ -459,7 +460,7 @@ int vgpu_merge_test(int n, const vgpu_mrec_t *recs, vgpu_mres_t *out, const doub
 
 /* ------------------------------------------------------------------ -jacobi's whole flow (pipe_*.comp) */
 enum { B_PTS, B_PORTALS, B_LEAVES, B_LFLIST, B_CAPDIR, B_SLOTS, B_FLOOD, B_PREFIX, B_VIS, B_DIRTY, B_STATE, B_PERRANK,
-       B_FRONT, B_PAIRS, B_TOUCHED, B_CANDS, B_CPTS, B_COUNTERS, B_REFILL };
+       B_FRONT, B_PAIRS, B_TOUCHED, B_CANDS, B_CPTS, B_COUNTERS, B_REFILL, B_SS, B_SW, B_SPS, B_SPW };
 static gbuf_t p_buf[PIPE_NBIND];
 static gbuf_t p_back;                                    /* (host) counters, slots, vis rows */
 static struct { uint32_t nslots, fmax, pw32, npd, round, item_start; float eps_up, len_lo;
@@ -486,27 +487,31 @@ int vgpu_pipe_setup(int npd, const float *pts, int npts, const vgpu_pportal_t *p
     if (fmax < 1) fmax = 1;
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(phys, &props);
-    /* slots: as many as fit the biggest buffer (the states: 1040 bytes per portal of the largest flood) and a memory budget */
+    /* entries (a flood portal of a running flow: its windows, snapshot, list, frontier place): as many as fit a memory
+       budget and the biggest buffers (one window set per entry, 256 bytes); slots: as many flows as could run */
     VkDeviceSize heap = 0;
     for (uint32_t i = 0; i < memprops.memoryHeapCount; i++)
         if ((memprops.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && memprops.memoryHeaps[i].size > heap) heap = memprops.memoryHeaps[i].size;
     long long candcap = 4 << 20, ptcap = 32 << 20;
-    long long per_slot = (long long)fmax * (1040 + 16 + 4 + 16 + 4) + (long long)pw32 * 16 + 64;
-    long long budget = (long long)(heap / 2) - (candcap * 16 + ptcap * 16);
     long long range = (long long)props.limits.maxStorageBufferRange;
     if (range > (1ll << 31) - 1) range = (1ll << 31) - 1;   /* (byte offsets stay in 31 bits) */
-    int ns = want_slots > 0 ? want_slots : 512;
-    if ((long long)ns * fmax * 1040 > range) ns = (int)(range / ((long long)fmax * 1040));
-    if ((long long)ns * per_slot > budget) ns = (int)(budget / per_slot);
-    if (ns < 1) { printf("Warning: GPU: not enough memory for one flow\n"); return 0; }
+    int ns = want_slots > 0 ? want_slots : 4096;
+    long long per_slot = (long long)pw32 * 16 + 64;
+    long long budget = (long long)(heap / 2) - (candcap * 16 + ptcap * 16) - (long long)ns * per_slot;
+    long long per_entry = 4 * 256 + 16 + 16 + 4 + 16 + 8;
+    long long ne = budget / per_entry;
+    if (ne > range / 256) ne = range / 256;
+    if (getenv("HL_GPU_ENTRIES")) ne = atoll(getenv("HL_GPU_ENTRIES"));
+    if (ne < fmax) { printf("Warning: GPU: not enough memory for the largest flow\n"); return 0; }
     VkDeviceSize sizes[PIPE_NBIND] = {0};
     sizes[B_SLOTS] = (VkDeviceSize)ns * 32;
     sizes[B_FLOOD] = sizes[B_PREFIX] = sizes[B_VIS] = sizes[B_DIRTY] = (VkDeviceSize)ns * pw32 * 4;
-    sizes[B_STATE] = (VkDeviceSize)ns * fmax * 1040;
-    sizes[B_PERRANK] = (VkDeviceSize)ns * fmax * 16;
-    sizes[B_FRONT] = (VkDeviceSize)ns * fmax * 4;
-    sizes[B_PAIRS] = (VkDeviceSize)ns * fmax * 16;
-    sizes[B_TOUCHED] = (VkDeviceSize)ns * fmax * 4;
+    sizes[B_STATE] = (VkDeviceSize)ne * 16;
+    sizes[B_SS] = sizes[B_SW] = sizes[B_SPS] = sizes[B_SPW] = (VkDeviceSize)ne * 256;
+    sizes[B_PERRANK] = (VkDeviceSize)ne * 16;
+    sizes[B_FRONT] = (VkDeviceSize)ne * 4;
+    sizes[B_PAIRS] = (VkDeviceSize)ne * 16;
+    sizes[B_TOUCHED] = (VkDeviceSize)ne * 8;
     sizes[B_CANDS] = (VkDeviceSize)candcap * 16;
     sizes[B_CPTS] = (VkDeviceSize)ptcap * 16;
     sizes[B_COUNTERS] = P_COUNTERS * 4;
@@ -514,7 +519,8 @@ int vgpu_pipe_setup(int npd, const float *pts, int npts, const vgpu_pportal_t *p
         !upload(&p_buf[B_LEAVES], leaves, (VkDeviceSize)nleaves * 8) || !upload(&p_buf[B_LFLIST], lflist, (VkDeviceSize)(nlf ? nlf : 1) * 4) ||
         !upload(&p_buf[B_CAPDIR], cap_dir, (VkDeviceSize)cap * 16)) return 0;
     long long total = 0;
-    for (int i = B_SLOTS; i <= B_COUNTERS; i++) {
+    for (int i = B_SLOTS; i < PIPE_NBIND; i++) {
+        if (i == B_REFILL) continue;
         if (!new_buffer(&p_buf[i], sizes[i], VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) return 0;
         total += (long long)sizes[i];
     }
@@ -522,15 +528,15 @@ int vgpu_pipe_setup(int npd, const float *pts, int npts, const vgpu_pportal_t *p
     if (!new_buffer(&p_back, (VkDeviceSize)P_COUNTERS * 4 + (VkDeviceSize)ns * 32 + (VkDeviceSize)ns * pw32 * 4, HOST)) return 0;
     /* clean start: no slot live, every list empty, nothing dirty */
     if (!begin()) return 0;
-    for (int i = B_SLOTS; i <= B_COUNTERS; i++)
-        vkCmdFillBuffer(cmd, p_buf[i].buf, 0, VK_WHOLE_SIZE, i == B_PERRANK ? 0xffffffffu : 0u);
+    for (int i = B_SLOTS; i < PIPE_NBIND; i++)
+        if (i != B_REFILL) vkCmdFillBuffer(cmd, p_buf[i].buf, 0, VK_WHOLE_SIZE, i == B_PERRANK ? 0xffffffffu : 0u);
     if (!submit()) return 0;
     p_bind_all();
     p_pc.nslots = (uint32_t)ns, p_pc.fmax = (uint32_t)fmax, p_pc.pw32 = (uint32_t)pw32, p_pc.npd = (uint32_t)npd;
     p_pc.eps_up = eps_up, p_pc.len_lo = len_lo, p_pc.robust = (uint32_t)robust, p_pc.maxchop = (uint32_t)maxchop;
     p_pc.hullcap = (uint32_t)cap, p_pc.candcap = (uint32_t)candcap, p_pc.ptcap = (uint32_t)ptcap;
     p_pc.saturate = (uint32_t)saturate, p_pc.maxarr = (uint32_t)maxarr;
-    if (info) info->nslots = ns, info->fmax = fmax, info->bytes = total;
+    if (info) info->nslots = ns, info->fmax = fmax, info->bytes = total, info->entries = ne;
     return ns;
 }
 
@@ -548,8 +554,51 @@ static void p_use(int k) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prog_pipe[k].pl, 0, 1, &prog_pipe[k].ds, 0, NULL);
     vkCmdPushConstants(cmd, prog_pipe[k].pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof p_pc, &p_pc);
 }
-static void p_run(int k, uint32_t gx, uint32_t gy) { p_use(k); if (gx && gy) vkCmdDispatch(cmd, gx, gy, 1); p_barrier(); }
-static void p_run_indirect(int k, int at) { p_use(k); vkCmdDispatchIndirect(cmd, p_buf[B_COUNTERS].buf, (VkDeviceSize)at * 4); p_barrier(); }
+/* (dev) HL_GPU_PROFILE=1: the GPU's time per kernel (timestamps after each), and the time the host waits */
+static int p_prof = -1, p_nq;
+static VkQueryPool p_qpool;
+static int p_qkind[64];
+static double p_ktime[PK_N + 1], p_wall, p_period;
+static long long p_kcount[PK_N + 1];
+static void p_stamp(int k) {
+    if (p_prof <= 0 || p_nq >= 64) return;
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, p_qpool, (uint32_t)p_nq);
+    p_qkind[p_nq++] = k;
+}
+static void p_prof_read(void) {
+    if (p_prof <= 0 || p_nq < 2) return;
+    uint64_t ts[64];
+    if (vkGetQueryPoolResults(dev, p_qpool, 0, (uint32_t)p_nq, sizeof ts, ts, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) != VK_SUCCESS) return;
+    for (int i = 1; i < p_nq; i++) { p_ktime[p_qkind[i]] += (double)(ts[i] - ts[i - 1]) * p_period * 1e-9; p_kcount[p_qkind[i]]++; }
+}
+static void p_prof_begin(void) {
+    if (p_prof < 0) {
+        p_prof = getenv("HL_GPU_PROFILE") != NULL;
+        if (p_prof) {
+            VkQueryPoolCreateInfo qi = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP, qi.queryCount = 64;
+            if (vkCreateQueryPool(dev, &qi, NULL, &p_qpool) != VK_SUCCESS) p_prof = 0;
+            VkPhysicalDeviceProperties props;
+            vkGetPhysicalDeviceProperties(phys, &props);
+            p_period = props.limits.timestampPeriod;
+        }
+    }
+    if (p_prof <= 0) return;
+    vkCmdResetQueryPool(cmd, p_qpool, 0, 64);
+    p_nq = 0;
+    p_stamp(PK_N);
+}
+void vgpu_pipe_report(void) {
+    if (p_prof <= 0) return;
+    static const char *names[PK_N + 1] = {"refill", "compact", "scan1", "snap", "scan2", "expand", "args", "merge", "copies"};
+    double sum = 0;
+    for (int k = 0; k <= PK_N; k++) sum += p_ktime[k];
+    printf("GPU time per kernel (total %.2f s, host waited %.2f s):", sum, p_wall);
+    for (int k = 0; k <= PK_N; k++) if (p_kcount[k]) printf(" %s %.2f s;", names[k], p_ktime[k]);
+    printf("\n");
+}
+static void p_run(int k, uint32_t gx, uint32_t gy) { p_use(k); if (gx && gy) vkCmdDispatch(cmd, gx, gy, 1); p_barrier(); p_stamp(k); }
+static void p_run_indirect(int k, int at) { p_use(k); vkCmdDispatchIndirect(cmd, p_buf[B_COUNTERS].buf, (VkDeviceSize)at * 4); p_barrier(); p_stamp(k); }
 /* the expansion (items from item_start on), its dispatch size, the merge, the counters back */
 static void p_expand_merge(uint32_t item_start, uint32_t nitems_direct) {
     p_pc.item_start = item_start;
@@ -576,6 +625,7 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
     p_pc.round = round, p_pc.nrefill = (uint32_t)nrefill;
     VkDeviceSize vis_at = (VkDeviceSize)P_COUNTERS * 4 + (VkDeviceSize)ns * 32;
     if (!begin()) return 0;
+    p_prof_begin();
     for (int i = 0; i < nvis; i++) {
         VkBufferCopy c = {(VkDeviceSize)vis_slots[i] * pw32 * 4, vis_at + (VkDeviceSize)i * pw32 * 4, (VkDeviceSize)pw32 * 4};
         vkCmdCopyBuffer(cmd, p_buf[B_VIS].buf, p_back.buf, 1, &c);
@@ -589,7 +639,13 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
     p_expand_merge(0, 0);
     VkBufferCopy cs = {0, (VkDeviceSize)P_COUNTERS * 4, (VkDeviceSize)ns * 32};
     vkCmdCopyBuffer(cmd, p_buf[B_SLOTS].buf, p_back.buf, 1, &cs);
+    p_stamp(PK_N);
+    LARGE_INTEGER w0, w1, wf;
+    QueryPerformanceCounter(&w0);
     if (!submit()) return 0;
+    QueryPerformanceCounter(&w1); QueryPerformanceFrequency(&wf);
+    p_wall += (double)(w1.QuadPart - w0.QuadPart) / wf.QuadPart;
+    p_prof_read();
     const uint32_t *cn = p_back.map;
     for (int i = 0; i < nvis; i++) memcpy(vis_out + (size_t)i * pw32, (const char *)p_back.map + vis_at + (size_t)i * pw32 * 4, (size_t)pw32 * 4);
     *n_pairs = cn[C_N], *n_items = cn[C_T], *n_passes = 1;

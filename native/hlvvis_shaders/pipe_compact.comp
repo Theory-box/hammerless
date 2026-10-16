@@ -24,7 +24,7 @@ void main() {
         slots[s].live = live ? 1u : 0u;
     }
     barrier();
-    uint at = part[lid];
+    uint at = part[lid], off = slots[s].off;
     for (uint w = w0; w < w1; w++) {
         uint d = dirty[s * pc.pw32 + w];
         if (d == 0u) continue;
@@ -32,7 +32,7 @@ void main() {
         while (d != 0u) {
             int b = findLSB(d);
             d &= d - 1u;
-            front[s * pc.fmax + at] = w * 32u + uint(b);
+            front[off + at] = w * 32u + uint(b);
             at++;
         }
     }

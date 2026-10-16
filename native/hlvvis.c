@@ -1126,6 +1126,35 @@ static void jacobi_flow(int pi) {
    per slot, every live slot a round per call; the same results as the CPU's -jacobi to the bit (the same steps in the
    same order). The CPU does each base's first openings (when it fills a slot) and the bases those settle. */
 static int g_gpu_pipe, g_gpu_pipe_slots;
+static long long g_gpu_pipe_entries;
+/* the entries for the running flows: blocks of powers of two (a flow takes the smallest that holds its flood), split
+   from bigger free ones when none is free (the flows come biggest first, so no merging back is needed); all of them
+   back at once when nothing runs */
+#define POOL_CLASSES 40
+static long long pool_top, *pool_free[POOL_CLASSES];
+static int pool_nfree[POOL_CLASSES], pool_capfree[POOL_CLASSES];
+static int pool_class(long long n) { int k = 0; while ((1ll << k) < n) k++; return k; }
+static void pool_put(int k, long long off) {
+    if (pool_nfree[k] == pool_capfree[k]) {
+        pool_capfree[k] = pool_capfree[k] ? pool_capfree[k] * 2 : 64;
+        pool_free[k] = realloc(pool_free[k], (size_t)pool_capfree[k] * sizeof(long long));
+        if (!pool_free[k]) fail("out of memory%s", "");
+    }
+    pool_free[k][pool_nfree[k]++] = off;
+}
+static long long pool_get(long long n) {
+    int k = pool_class(n);
+    if (pool_nfree[k]) return pool_free[k][--pool_nfree[k]];
+    if (pool_top + (1ll << k) <= g_gpu_pipe_entries) { long long off = pool_top; pool_top += 1ll << k; return off; }
+    for (int j = k + 1; j < POOL_CLASSES; j++)
+        if (pool_nfree[j]) {
+            long long off = pool_free[j][--pool_nfree[j]];
+            for (int i = j - 1; i >= k; i--) pool_put(i, off + (1ll << i));   /* (the upper halves) */
+            return off;
+        }
+    return -1;
+}
+static void pool_reset(void) { pool_top = 0; for (int k = 0; k < POOL_CLASSES; k++) pool_nfree[k] = 0; }
 static int *g_pipe_order;
 static int cmp_flood_desc(const void *a, const void *b) {
     int x = P[*(const int *)a].nmight, y = P[*(const int *)b].nmight;
@@ -1163,7 +1192,11 @@ static int gpu_pipe_setup(void) {
     int ns = vgpu_pipe_setup(NPD, pts, npts, pp, NCL, leaves, nlf, lfl, &g_cap_dir[0][0], g_hull_cap, fmax, PW * 2, EPS_UP,
                              LEN_LO, g_robust_sep, g_maxpts, JACOBI_SATURATE, JACOBI_MAX_ARRIVALS, want, &info);
     free(pts); free(pp); free(leaves); free(lfl);
-    if (ns) printf("(the flow on the GPU: %d at once, largest flood %d, %.1f GB) ", ns, fmax, info.bytes / 1e9);
+    if (ns) printf("(the flow on the GPU: up to %d at once, largest flood %d, room for %lld, %.1f GB) ", ns, fmax,
+                   info.entries, info.bytes / 1e9);
+    g_gpu_pipe_slots = ns;
+    g_gpu_pipe_entries = info.entries;
+    if (ns && (1ll << pool_class(fmax)) > info.entries) { printf("(the GPU has too little room for the largest flow) "); ns = 0; }
     g_gpu_pipe_slots = ns;
     return ns > 0;
 }
@@ -1176,7 +1209,12 @@ static int gpu_pipe_flow(double total_w) {
     qsort(g_pipe_order, NPD, sizeof(int), cmp_flood_desc);     /* the longest first: a short tail */
     int *slot_base = xmalloc((size_t)ns * sizeof(int) + 4), *visq = xmalloc((size_t)ns * sizeof(int) + 4);
     int *visq_base = xmalloc((size_t)ns * sizeof(int) + 4);
+    long long *slot_off = xmalloc((size_t)ns * sizeof(long long) + 8);
+    int *slot_class = xmalloc((size_t)ns * sizeof(int) + 4);
     for (int k = 0; k < ns; k++) slot_base[k] = -1;
+    pool_reset();
+    int pending = -1;                       /* a base whose first openings are done but found no room yet */
+    int pending_floodn = 0;
     uint32_t *visout = xmalloc((size_t)ns * pw32 * 4 + 16);
     vgpu_slot_t *so = xmalloc((size_t)ns * sizeof(vgpu_slot_t) + 16);
     size_t capw = (size_t)ns + 4096;
@@ -1189,30 +1227,42 @@ static int gpu_pipe_flow(double total_w) {
     QueryPerformanceCounter(&fs);
     r0 = fs;
     int max_rounds = getenv("HL_PIPE_ROUNDS") ? atoi(getenv("HL_PIPE_ROUNDS")) : 0;   /* (dev) stop after n rounds */
-    while (next < NPD || active > 0 || nvisq > 0) {
+    while (next < NPD || active > 0 || nvisq > 0 || pending >= 0) {
         if (max_rounds && (int)round >= max_rounds) break;
         round++;
         /* fill the free slots: each new base's first openings on the CPU (some bases end there) */
         int nrec = 0;
         size_t nw = (size_t)ns;
-        for (int k = 0; k < ns && next < NPD; k++) {
+        if (!active && pending >= 0) pool_reset();      /* (nothing runs: every entry is free) */
+        for (int k = 0; k < ns && (next < NPD || pending >= 0); k++) {
             if (slot_base[k] >= 0) continue;
-            while (next < NPD) {
-                int pi = g_pipe_order[next++];
-                Portal *b = &P[pi];
-                b->status = 1;
-                int seen, floodn = j_begin(b, &seen);
-                if (!t_nnext || seen >= floodn) {
-                    b->status = 2; g_done++;
-                    done_w += (double)b->nmight * b->nmight + 1;
-                    continue;
+            int placed = 0;
+            while (next < NPD || pending >= 0) {
+                int pi, floodn;
+                if (pending >= 0) pi = pending, floodn = pending_floodn;
+                else {
+                    pi = g_pipe_order[next++];
+                    P[pi].status = 1;
+                    int seen;
+                    floodn = j_begin(&P[pi], &seen);
+                    if (!t_nnext || seen >= floodn) {
+                        P[pi].status = 2; g_done++;
+                        done_w += (double)P[pi].nmight * P[pi].nmight + 1;
+                        continue;
+                    }
                 }
-                size_t need = nw + 4 + (size_t)pw32 + (size_t)t_nnext * 132;
+                Portal *b = &P[pi];
+                long long off = pool_get(floodn);
+                if (off < 0) { pending = pi, pending_floodn = floodn; break; }   /* (waits for room; t_js keeps it) */
+                pending = -1;
+                slot_off[k] = off; slot_class[k] = pool_class(floodn);
+                size_t need = nw + 5 + (size_t)pw32 + (size_t)t_nnext * 132;
                 if (need > capw) { capw = need * 2; rf = realloc(rf, capw * 4); if (!rf) fail("out of memory%s", ""); }
                 rf[nrec++] = (uint32_t)nw;
                 rf[nw] = (uint32_t)k; rf[nw + 1] = (uint32_t)pi; rf[nw + 2] = (uint32_t)t_nnext; rf[nw + 3] = (uint32_t)floodn;
-                memcpy(rf + nw + 4, b->flood, (size_t)pw32 * 4);
-                nw += 4 + (size_t)pw32;
+                rf[nw + 4] = (uint32_t)off;
+                memcpy(rf + nw + 5, b->flood, (size_t)pw32 * 4);
+                nw += 5 + (size_t)pw32;
                 for (int e = 0; e < t_nnext; e++) {
                     int q = t_next[e];
                     JState *js = &t_js[q];
@@ -1225,8 +1275,10 @@ static int gpu_pipe_flow(double total_w) {
                     nw += 132;
                 }
                 slot_base[k] = pi; active++;
+                placed = 1;
                 break;
             }
+            if (!placed) break;
         }
         long long np, ni; int npass;
         if (!vgpu_pipe_round(round, nrec, rf, (int)nw, nvisq, visq, visout, so, &np, &ni, &npass)) {
@@ -1249,7 +1301,10 @@ static int gpu_pipe_flow(double total_w) {
         for (int k = 0; k < ns; k++) {
             if (slot_base[k] < 0) continue;
             g_pdur[slot_base[k]] += live ? dt / live : 0;      /* (the round's time shared by the flows in it) */
-            if (!so[k].live) { visq[nvisq] = k; visq_base[nvisq++] = slot_base[k]; slot_base[k] = -1; active--; }
+            if (!so[k].live) {
+                visq[nvisq] = k; visq_base[nvisq++] = slot_base[k]; slot_base[k] = -1; active--;
+                pool_put(slot_class[k], slot_off[k]);
+            }
         }
         g_jrounds += live; g_jexp += np; g_gpu_items += ni; passes += npass;
         QueryPerformanceCounter(&fn);
@@ -1262,7 +1317,8 @@ static int gpu_pipe_flow(double total_w) {
         }
     }
     printf("GPU flow: %u rounds of up to %d flows (%lld passes)\n", round, ns, passes);
-    free(slot_base); free(visq); free(visq_base); free(visout); free(so); free(rf);
+    vgpu_pipe_report();
+    free(slot_base); free(visq); free(visq_base); free(visout); free(so); free(rf); free(slot_off); free(slot_class);
     return 1;
 }
 
@@ -1892,7 +1948,7 @@ int main(int argc, char **argv) {
         QueryPerformanceCounter(&fs);
         if (g_gpu_pipe && !gpu_pipe_flow(total_w)) {
             printf("Warning: the GPU failed during the flow: the CPU does it all\n");
-            for (int i = 0; i < NPD; i++) { P[i].status = 0; g_pdur[i] = 0; }
+            for (int i = 0; i < NPD; i++) { P[i].status = 0; g_pdur[i] = 0; memset(P[i].vis, 0, (size_t)PW * 8); }
             g_done = 0; g_gpu_pipe = 0;
             g_jrounds = g_jexp = g_gpu_items = 0;
         }

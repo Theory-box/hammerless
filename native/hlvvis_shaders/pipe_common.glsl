@@ -28,10 +28,10 @@ layout(push_constant) uniform PC {
 } pc;
 
 struct Portal { vec4 plane; vec4 origin; uint first; uint count; uint ccw; uint leaf; };   // origin.w = radius
-struct Slot { uint base; uint gen; uint floodn; uint seen; uint nfront; uint live; uint slotoff; uint pad; };
-// per (slot, rank in the base's flood): h = (gen, grows, opened, counts: S | W << 8 | snapshot S << 16 | snapshot W << 24),
-// the windows, and the snapshot the round expands from
-struct JS { ivec4 h; vec4 S[SNAP]; vec4 W[SNAP]; vec4 PS[SNAP]; vec4 PW[SNAP]; };
+struct Slot { uint base; uint gen; uint floodn; uint seen; uint nfront; uint live; uint slotoff; uint off; };   // off: its entries
+// per entry (a slot's entries: off + rank in its base's flood): sth = (gen, grows, opened, counts: S | W << 8 |
+// snapshot S << 16 | snapshot W << 24); the windows S, W and the snapshot PS, PW the round expands from
+struct Win16 { vec4 p[SNAP]; };
 
 layout(std430, binding = 0) readonly buffer Points { vec4 pts[]; };
 layout(std430, binding = 1) readonly buffer Portals { Portal portals[]; };
@@ -43,15 +43,19 @@ layout(std430, binding = 6) buffer Flood { uint flood[]; };                    /
 layout(std430, binding = 7) coherent buffer Prefix { uint prefix[]; };         // per slot: set bits before each word
 layout(std430, binding = 8) coherent buffer Vis { uint vis[]; };
 layout(std430, binding = 9) coherent buffer Dirty { uint dirty[]; };
-layout(std430, binding = 10) buffer State { JS st[]; };                         // per slot: fmax
-layout(std430, binding = 11) buffer PerRank { uvec4 pr[]; };                    // (list head, arrivals, round stamp, portal)
-layout(std430, binding = 12) buffer Front { uint front[]; };                    // per slot: fmax
+layout(std430, binding = 10) buffer StateH { ivec4 sth[]; };                     // per entry
+layout(std430, binding = 11) buffer PerRank { uvec4 pr[]; };                    // per entry: (list head, arrivals, round stamp, portal)
+layout(std430, binding = 12) buffer Front { uint front[]; };                    // per entry (a slot's frontier from its off)
 layout(std430, binding = 13) buffer Pairs { uvec4 pairs[]; };                   // (items, item offset, slot, rank)
-layout(std430, binding = 14) buffer Touched { uint touched[]; };
+layout(std430, binding = 14) buffer Touched { uvec2 touched[]; };               // (entry, slot)
 layout(std430, binding = 15) buffer Cands { uvec4 cands[]; };                   // (next, item, point offset, src n | pass n << 16)
 layout(std430, binding = 16) buffer CPts { vec4 cpts[]; };
 layout(std430, binding = 17) coherent buffer Counters { uint cnt[]; };
 layout(std430, binding = 18) readonly buffer Refill { uint refill[]; };
+layout(std430, binding = 19) buffer StateS { Win16 stS[]; };
+layout(std430, binding = 20) buffer StateW { Win16 stW[]; };
+layout(std430, binding = 21) buffer StatePS { Win16 stPS[]; };
+layout(std430, binding = 22) buffer StatePW { Win16 stPW[]; };
 
 #define C_N 0          // pairs this round
 #define C_T 1          // items this round

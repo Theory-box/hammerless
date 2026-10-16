@@ -33,9 +33,10 @@ int vgpu_merge_test(int n, const vgpu_mrec_t *recs, vgpu_mres_t *out, const doub
    every live slot per call. Portals: plane, origin + radius, points, winding_ccw of their own winding, the cluster
    they lead into. Leaves: (first, count) into lflist, the portals leaving each cluster. */
 typedef struct { float plane[4], origin[4]; uint32_t first, count, ccw, leaf; } vgpu_pportal_t;
-typedef struct { uint32_t base, gen, floodn, seen, nfront, live, slotoff, pad; } vgpu_slot_t;
-typedef struct { int nslots, fmax; long long bytes; } vgpu_pipe_info_t;
-/* returns the number of slots (0: couldn't); fmax: the largest flood (portals), pw32: 32-bit words per bitset */
+typedef struct { uint32_t base, gen, floodn, seen, nfront, live, slotoff, off; } vgpu_slot_t;
+typedef struct { int nslots, fmax; long long bytes, entries; } vgpu_pipe_info_t;   /* entries: for the running flows' floods */
+/* returns the number of slots (0: couldn't); fmax: the largest flood (portals), pw32: 32-bit words per bitset. Each
+   running flow takes entries off .. off + its flood - 1 of info->entries (the caller hands them out: pipe_refill.comp) */
 int vgpu_pipe_setup(int npd, const float *pts, int npts, const vgpu_pportal_t *portals, int nleaves, const uint32_t *leaves,
                     int nlf, const uint32_t *lflist, const double *cap_dir, int cap, int fmax, int pw32, float eps_up,
                     float len_lo, int robust, int maxchop, int saturate, int maxarr, int want_slots, vgpu_pipe_info_t *info);
@@ -44,3 +45,5 @@ int vgpu_pipe_setup(int npd, const float *pts, int npts, const vgpu_pportal_t *p
    slots_out: every slot's state after it (live == 0: done, or free); n_pairs / n_items / n_passes: the round's work */
 int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwords, int nvis, const int *vis_slots,
                     uint32_t *vis_out, vgpu_slot_t *slots_out, long long *n_pairs, long long *n_items, int *n_passes);
+/* (dev) HL_GPU_PROFILE=1: prints the GPU's time per kernel of the flow */
+void vgpu_pipe_report(void);

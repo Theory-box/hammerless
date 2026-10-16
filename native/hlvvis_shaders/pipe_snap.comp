@@ -16,9 +16,10 @@ void main() {
     uint lo = 0u, hi = pc.nslots - 1u;          // the slot: the last one starting at or before id
     while (lo < hi) { uint mid = (lo + hi + 1u) / 2u; if (slots[mid].slotoff <= id) lo = mid; else hi = mid - 1u; }
     uint s = lo, f = id - slots[s].slotoff;
-    uint x = front[s * pc.fmax + f], base = slots[s].base;
-    uint r = rank_of(s, x), i = s * pc.fmax + r;
-    ivec4 h = st[i].h;
+    uint off = slots[s].off;
+    uint x = front[off + f], base = slots[s].base;
+    uint r = rank_of(s, x), i = off + r;
+    ivec4 h = sth[i];
     int grows = h.y + 1;
     bool opened = h.z != 0;
     int nS = h.w & 255, nW = (h.w >> 8) & 255;
@@ -33,12 +34,12 @@ void main() {
         }
         nS = MS_n[0]; nW = MS_n[1];
         opened = true;
-        for (int k = 0; k < nS; k++) st[i].S[k] = vec4(MS[0][k], 0.0);
-        for (int k = 0; k < nW; k++) st[i].W[k] = vec4(MS[1][k], 0.0);
+        for (int k = 0; k < nS; k++) stS[i].p[k] = vec4(MS[0][k], 0.0);
+        for (int k = 0; k < nW; k++) stW[i].p[k] = vec4(MS[1][k], 0.0);
     }
-    for (int k = 0; k < nS; k++) st[i].PS[k] = st[i].S[k];
-    for (int k = 0; k < nW; k++) st[i].PW[k] = st[i].W[k];
-    st[i].h = ivec4(h.x, grows, opened ? 1 : 0, nS | (nW << 8) | (nS << 16) | (nW << 24));
+    for (int k = 0; k < nS; k++) stPS[i].p[k] = stS[i].p[k];
+    for (int k = 0; k < nW; k++) stPW[i].p[k] = stW[i].p[k];
+    sth[i] = ivec4(h.x, grows, opened ? 1 : 0, nS | (nW << 8) | (nS << 16) | (nW << 24));
     uvec2 L = leaves[portals[x].leaf];
     uint c = 0u;
     for (uint k = 0u; k < L.y; k++) if (in_flood(s, lflist[L.x + k])) c++;
