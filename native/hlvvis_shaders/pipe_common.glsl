@@ -67,6 +67,7 @@ layout(std430, binding = 24) buffer MightSM { uint jmSM[]; };
 layout(std430, binding = 25) buffer MightPT { uint jmPT[]; };
 layout(std430, binding = 26) readonly buffer V1Cl { uint v1cl[]; };
 layout(std430, binding = 27) coherent buffer RMap { uint rmap[]; };
+layout(std430, binding = 28) buffer CandX { uint candx[]; };                     // per candidate: the frontier entry it came from
 #define MW pc.mw
 uint jm_at(uint s, uint i) { return slots[s].woff + (i - slots[s].off) * slots[s].mw; }   // entry i's set
 #define MW_MAX 256
@@ -107,6 +108,19 @@ bool jm_step(uint s, uint xi, uint q) {
     if (MW == 0u) return true;
     uint r = rmap[s * cnt[C_NCL] + portals[q].leaf];
     return r != EMPTY && ((jmSM[jm_at(s, xi) + (r >> 5)] >> (r & 31u)) & 1u) != 0u;
+}
+
+// entry i's PT (portal q's first-pass vis as clusters, among the base's clusters by rank): made when the entry is
+// first reached (pipe_merge) or first opened (pipe_refill)
+void make_pt(uint s, uint i, uint q) {
+    uint a = jm_at(s, i), mws = slots[s].mw, ncl = cnt[C_NCL], cw = cnt[C_CW32];
+    uint qo = q * cw, bo = slots[s].base * cw;
+    for (uint k = 0u; k < mws; k++) jmPT[a + k] = 0u;
+    for (uint k = 0u; k < cw; k++)
+        for (uint b2 = v1cl[qo + k] & v1cl[bo + k]; b2 != 0u; b2 &= b2 - 1u) {
+            uint r = rmap[s * ncl + k * 32u + uint(findLSB(b2))];
+            jmPT[a + (r >> 5)] |= 1u << (r & 31u);
+        }
 }
 
 void load_win(uint p, out vec3 w[MAXW], out int n) {

@@ -41,7 +41,7 @@ void main() {
         slots[s].nfront = 0u; slots[s].live = 1u; slots[s].slotoff = 0u; slots[s].off = off; slots[s].mw = mws; slots[s].woff = woff;
     }
     if (MW != 0u) {
-        // the base's clusters by rank (pipe_pt then makes every flood portal's PT)
+        // the base's clusters by rank (each entry's PT is made when it is first reached)
         uint ncl = cnt[C_NCL], cw = cnt[C_CW32], bo = base * cw;
         if (lid == 0u) { uint run2 = 0u; for (uint k = 0u; k < cw; k++) { clpre[k] = run2; run2 += uint(bitCount(v1cl[bo + k])); } }
         barrier();
@@ -61,7 +61,7 @@ void main() {
         uint r = prefix[w] + uint(bitCount(refill[fo + (q >> 5)] & ((1u << (q & 31u)) - 1u)));
         uint i = off + r;
         sth[i] = ivec4(int(base + 1u), 0, 2, int(nS | (nW << 8)));      // (new: grown since expanded)
-        if (MW != 0u) for (uint k = 0u; k < mws; k++) jmM[woff + r * mws + k] = refill[at + 132u + k];
+        if (MW != 0u) { for (uint k = 0u; k < mws; k++) jmM[woff + r * mws + k] = refill[at + 132u + k]; make_pt(s, i, q); }
         for (uint k = 0u; k < SNAP; k++) {
             stS[i].p[k] = uintBitsToFloat(uvec4(refill[at + 4u + 4u * k], refill[at + 5u + 4u * k], refill[at + 6u + 4u * k], 0u));
             stW[i].p[k] = uintBitsToFloat(uvec4(refill[at + 68u + 4u * k], refill[at + 69u + 4u * k], refill[at + 70u + 4u * k], 0u));

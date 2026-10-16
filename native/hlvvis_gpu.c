@@ -23,7 +23,6 @@
 #include "hlvvis_shaders/pipe_expand.spv.h"
 #include "hlvvis_shaders/pipe_args.spv.h"
 #include "hlvvis_shaders/pipe_merge.spv.h"
-#include "hlvvis_shaders/pipe_pt.spv.h"
 #include <math.h>
 
 #include "hlvvis_gpu.h"
@@ -197,9 +196,9 @@ static void bind_buffers(program_t *p, gbuf_t *const *bufs) {
 
 /* ------------------------------------------------------------------ start */
 static program_t prog_basevis, prog_fp64, prog_expand, prog_mtest;
-#define PIPE_NBIND 28
+#define PIPE_NBIND 29
 _Static_assert(PIPE_NBIND <= 32, "program() and bind_buffers() hold 32 bindings");
-enum { PK_REFILL, PK_COMPACT, PK_SCAN1, PK_SNAP, PK_SCAN2, PK_EXPAND, PK_ARGS, PK_MERGE, PK_PT, PK_N };
+enum { PK_REFILL, PK_COMPACT, PK_SCAN1, PK_SNAP, PK_SCAN2, PK_EXPAND, PK_ARGS, PK_MERGE, PK_N };
 static program_t prog_pipe[PK_N];
 static int g_fp64, g_floatctl;
 
@@ -309,7 +308,6 @@ int vgpu_init(void) {
     if (g_fp64 && g_floatctl) prog_pipe[PK_EXPAND] = program(spv_pipe_expand, sizeof(spv_pipe_expand), PIPE_NBIND, 64);
     if (g_fp64 && g_floatctl) prog_pipe[PK_ARGS] = program(spv_pipe_args, sizeof(spv_pipe_args), PIPE_NBIND, 64);
     if (g_fp64 && g_floatctl) prog_pipe[PK_MERGE] = program(spv_pipe_merge, sizeof(spv_pipe_merge), PIPE_NBIND, 64);
-    if (g_fp64 && g_floatctl) prog_pipe[PK_PT] = program(spv_pipe_pt, sizeof(spv_pipe_pt), PIPE_NBIND, 64);
     ok = 1;
     return 1;
 }
@@ -483,7 +481,7 @@ int vgpu_merge_test(int n, const vgpu_mrec_t *recs, vgpu_mres_t *out, const doub
 /* ------------------------------------------------------------------ -jacobi's whole flow (pipe_*.comp) */
 enum { B_PTS, B_PORTALS, B_LEAVES, B_LFLIST, B_CAPDIR, B_SLOTS, B_FLOOD, B_PREFIX, B_VIS, B_DIRTY, B_STATE, B_PERRANK,
        B_FRONT, B_PAIRS, B_TOUCHED, B_CANDS, B_CPTS, B_COUNTERS, B_REFILL, B_SS, B_SW, B_SPS, B_SPW,
-       B_JM, B_JSM, B_JPT, B_V1CL, B_RMAP };
+       B_JM, B_JSM, B_JPT, B_V1CL, B_RMAP, B_CANDX };
 static gbuf_t p_buf[PIPE_NBIND];
 static gbuf_t p_back;                                    /* (host) counters, slots, vis rows */
 /* items per pass: a round's expansions go in passes of at most this many, each waited for (Windows resets a GPU
@@ -552,6 +550,7 @@ int vgpu_pipe_setup(int npd, const float *pts, int npts, const vgpu_pportal_t *p
     sizes[B_PAIRS] = (VkDeviceSize)ne * 16;
     sizes[B_TOUCHED] = (VkDeviceSize)ne * 8;
     sizes[B_CANDS] = (VkDeviceSize)candcap * 16;
+    sizes[B_CANDX] = (VkDeviceSize)candcap * 4;
     sizes[B_CPTS] = (VkDeviceSize)ptcap * 16;
     sizes[B_COUNTERS] = P_COUNTERS * 4;
     sizes[B_JM] = sizes[B_JSM] = sizes[B_JPT] = sizes[B_V1CL] = sizes[B_RMAP] = 16;   /* (the second pass's: vgpu_pipe_jm) */
@@ -633,7 +632,7 @@ static void p_prof_begin(void) {
 }
 void vgpu_pipe_report(void) {
     if (p_prof <= 0) return;
-    static const char *names[PK_N + 1] = {"refill", "compact", "scan1", "snap", "scan2", "expand", "args", "merge", "pt", "copies"};
+    static const char *names[PK_N + 1] = {"refill", "compact", "scan1", "snap", "scan2", "expand", "args", "merge", "copies"};
     double sum = 0;
     for (int k = 0; k <= PK_N; k++) sum += p_ktime[k];
     printf("GPU time per kernel (total %.2f s, host waited %.2f s):", sum, p_wall);
@@ -676,7 +675,6 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
     }
     p_barrier();
     if (nrefill) p_run(PK_REFILL, (uint32_t)nrefill, 1);
-    if (nrefill && p_pc.mw) p_run(PK_PT, (p_pc.pw32 + 63) / 64, (uint32_t)nrefill);
     p_run(PK_COMPACT, ns, 1);
     p_run(PK_SCAN1, 1, 1);
     p_run_indirect(PK_SNAP, C_ARGS1);

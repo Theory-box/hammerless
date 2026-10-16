@@ -59,5 +59,6 @@ void main() {
     pr[idx].w = qn;                          // (every item into q writes the same value)
     uint old = atomicExchange(pr[idx].x, c);
     cands[c] = uvec4(old, id, pt, uint(nS) | (uint(nA) << 16));
+    candx[c] = xi;
     if (old == EMPTY) touched[atomicAdd(cnt[C_TOUCH], 1u)] = uvec2(idx, s);
 }

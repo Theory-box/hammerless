@@ -15,13 +15,6 @@ layout(local_size_x = 64) in;
 
 uint orsm[MW_MAX];
 
-// the frontier entry an item came from (as pipe_expand finds it)
-uint item_entry(uint item) {
-    uint lo = 0u, hi = cnt[C_N] - 1u;
-    while (lo < hi) { uint mid = (lo + hi + 1u) / 2u; if (pairs[mid].y <= item) lo = mid; else hi = mid - 1u; }
-    return slots[pairs[lo].z].off + pairs[lo].w;
-}
-
 void main() {
     uint id = gid();
     if (id >= cnt[C_TOUCH]) return;
@@ -38,7 +31,7 @@ void main() {
             if (n < 64u) { li[n] = cd.y; lc[n] = c; n++; }
             total++;
             if (cd.y < first_item) { first_item = cd.y; first_c = c; }
-            if (mw != 0u) { uint xe = jm_at(s, item_entry(cd.y)); for (uint k = 0u; k < mw; k++) orsm[k] |= jmSM[xe + k]; }
+            if (mw != 0u) { uint xe = jm_at(s, candx[c]); for (uint k = 0u; k < mw; k++) orsm[k] |= jmSM[xe + k]; }
         }
         c = cd.x;
     }
@@ -61,6 +54,7 @@ void main() {
     bool over = arr > pc.maxarr, req = false;
     // the might-see bits (an entry new this flow takes them as they are)
     if (mw != 0u) {
+        if (!inited) make_pt(s, idx, qn);    // (first reached this flow)
         uint qe = jm_at(s, idx);
         for (uint k = 0u; k < mw; k++) {
             uint m = jmPT[qe + k] & orsm[k];
