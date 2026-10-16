@@ -48,6 +48,17 @@ def _remove(objs):
             bpy.data.meshes.remove(me)
 
 
+def _new_output(name, mesh, src):
+    """A made object: in the mesh's collections and parented to it (it moves with it; the world positions stay)."""
+    obj = bpy.data.objects.new(name, mesh)
+    obj[OF] = src.name
+    for c in src.users_collection:
+        c.objects.link(obj)
+    obj.parent = src
+    obj.matrix_parent_inverse = src.matrix_world.inverted()
+    return obj
+
+
 def _chunks(items, most):
     """Halve along the longest axis of the pieces' centres until each part has at most `most` (compact props)."""
     if len(items) <= most:
@@ -118,7 +129,6 @@ class HL_OT_make_collision(bpy.types.Operator):
                 if material is not None:                                      # applied adds a slot)
                     break
         material = material or game_material("tools/toolsnodraw")
-        colls = list(old[0].users_collection) if old else []
         _remove(old)
         props = src.hammerless.collision_mode == "PROPS"
         if props:
@@ -129,10 +139,7 @@ class HL_OT_make_collision(bpy.types.Operator):
         made = []
         for k, group in enumerate(groups):
             name = src.name + (f" Collision Prop {k + 1}" if props else " Collision")
-            obj = bpy.data.objects.new(name, _mesh(name, group, rcol, material))
-            obj[OF] = src.name
-            for c in colls or src.users_collection:
-                c.objects.link(obj)
+            obj = _new_output(name, _mesh(name, group, rcol, material), src)
             hs = obj.hammerless
             if props:
                 hs.role = "MODEL"
@@ -145,10 +152,7 @@ class HL_OT_make_collision(bpy.types.Operator):
             made.append(obj)
         if props and src.hammerless.collision_blocks_vis:      # the same pieces, blocking vis only
             name = src.name + VIS_SUFFIX
-            obj = bpy.data.objects.new(name, _mesh(name, r.brushes, rcol, game_material("tools/toolsnodraw")))
-            obj[OF] = src.name
-            for c in colls or src.users_collection:
-                c.objects.link(obj)
+            obj = _new_output(name, _mesh(name, r.brushes, rcol, game_material("tools/toolsnodraw")), src)
             obj.hammerless.role = "BRUSH"
             obj.hammerless.brush_detail = "VIS"
             obj.display_type = "WIRE"
@@ -160,23 +164,13 @@ class HL_OT_make_collision(bpy.types.Operator):
             used, inv = np.unique(st, return_inverse=True)
             sm.from_pydata([tuple(co[i]) for i in used], [], [tuple(t) for t in inv.reshape(-1, 3)])
             _remove(_outputs(src.name, True))
-            sobj = bpy.data.objects.new(src.name + " Collision" + SKIPPED_SUFFIX, sm)
-            sobj[OF] = src.name
-            for c in colls or src.users_collection:
-                c.objects.link(sobj)
+            sobj = _new_output(src.name + " Collision" + SKIPPED_SUFFIX, sm, src)
             sobj.hammerless.role = "IGNORE"
             sobj.display_type = "WIRE"
             sobj.color = (1.0, 0.0, 1.0, 1.0)
         else:
             _remove(_outputs(src.name, True))
-        if not colls:
-            try:
-                from .mapcollection import place
-                for o in made:
-                    place(context.scene, o, True)
-            except Exception:              # (it stays beside the mesh: still built)
-                pass
-        what = (f"{len(made)} invisible props of {len(r.brushes)} collision pieces" if props
+        what = (f"{len(groups)} invisible props of {len(r.brushes)} collision pieces" if props
                 else f"{len(r.brushes)} collision brushes")
         msg = (f"{what} from {r.kept_regions} flat areas "
                f"({100 * r.kept_share:.1f}% of the surface; {r.paired_walls} two-sided walls as one brush each); "

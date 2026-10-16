@@ -1907,6 +1907,14 @@ def test_make_collision_modes():
     assert len(b) == 1 and b[0].hammerless.role == "BRUSH", [o.name for o in b]
     faces = len(b[0].data.polygons)
     assert faces == 64 * 6, faces
+    assert b[0].parent == house and b[0].users_collection[0] == house.users_collection[0]
+    v0 = b[0].matrix_world @ b[0].data.vertices[0].co
+    house.location.x += 3.0                         # (parented: it moves with the mesh)
+    bpy.context.view_layer.update()
+    v1 = b[0].matrix_world @ b[0].data.vertices[0].co
+    assert abs(v1.x - v0.x - 3.0) < 1e-5, (v0, v1)
+    house.location.x -= 3.0
+    bpy.context.view_layer.update()
     mat = game_material("tools/toolsinvisible")
     b[0].data.materials[0] = mat
     house.hammerless.collision_mode = "PROPS"
