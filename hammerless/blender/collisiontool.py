@@ -93,7 +93,7 @@ class HL_OT_make_collision(bpy.types.Operator):
                       "behind each, so players stand exactly on the floors and doorways keep their width. For a big "
                       "Custom Model like a house: set its Collision to None so it doesn't collide twice. Collision As "
                       "picks brushes or invisible props for the pieces. Areas "
-                      "smaller than Smallest Face are left out and shown. Press again after editing the mesh")
+                      "smaller than Smallest Face are left out. Press again after editing the mesh")
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -157,19 +157,7 @@ class HL_OT_make_collision(bpy.types.Operator):
             obj.hammerless.brush_detail = "VIS"
             obj.display_type = "WIRE"
             made.append(obj)
-        # what got no brush, to look at (not exported)
-        if r.skipped:
-            sm = bpy.data.meshes.new(src.name + " Collision" + SKIPPED_SUFFIX)
-            st = tri[r.skipped]
-            used, inv = np.unique(st, return_inverse=True)
-            sm.from_pydata([tuple(co[i]) for i in used], [], [tuple(t) for t in inv.reshape(-1, 3)])
-            _remove(_outputs(src.name, True))
-            sobj = _new_output(src.name + " Collision" + SKIPPED_SUFFIX, sm, src)
-            sobj.hammerless.role = "IGNORE"
-            sobj.display_type = "WIRE"
-            sobj.color = (1.0, 0.0, 1.0, 1.0)
-        else:
-            _remove(_outputs(src.name, True))
+        _remove(_outputs(src.name, True))     # (the skipped-faces object older versions made)
         what = (f"{len(groups)} invisible props of {len(r.brushes)} collision pieces" if props
                 else f"{len(r.brushes)} collision brushes")
         msg = (f"{what} from {r.kept_regions} flat areas "

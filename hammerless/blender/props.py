@@ -386,7 +386,7 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
     collision_min_area: FloatProperty(
         name="Smallest Face", default=0.05, min=0.0, soft_max=1.0, precision=3,
         description="Make Collision Brushes: flat areas smaller than this (square metres) get no brush (trim, "
-                    "small details); they're shown in the skipped-faces object")
+                    "small details)")
     collision_mode: EnumProperty(name="Collision As", default="BRUSHES", items=[
         ("BRUSHES", "Brushes", "Invisible brushes: the engine's cheapest collision, but they count toward the map's "
                                "8,192 brushes"),
