@@ -285,8 +285,10 @@ def build_map_text(context, root: str | None):
 def map_text(ir, content, base, rep):
     """The second half of build_map_text (no Blender data: it can run on another thread)."""
     from .extract import fill_triangles, write_textures
+    from .sound import finish_acoustics
     write_textures(ir.__dict__.get("_texture_writes", []), rep)
     fill_triangles(ir)
+    finish_acoustics(ir, rep)
     text, rep2 = build_vmf(ir, content, base)
     rep2.errors[:0] = rep.errors
     rep2.warnings[:0] = rep.warnings
@@ -329,7 +331,7 @@ def read_map(context, root: str | None):
         # soundscape spots would land in the void and leak the map. The map has its own soundscapes)
         rep.info.append("Sound is off for an imported map (it keeps its own soundscapes)")
     else:
-        add_acoustics(context, ir, rep)
+        add_acoustics(context, ir, rep, defer=True)          # (its rays: map_text, on the export's other thread)
     base = None
     from . import vmfimport
     if vmfimport.imported(context.scene):

@@ -384,15 +384,13 @@ class HL_OT_nav_predict(bpy.types.Operator):
         import threading
         from ..core.nav import collect_climbs, collect_regions
         from ..core.navworker import predict
-        from .ops import build_map_text, game_root
+        from .ops import game_root, map_text, read_map
         # the map exactly as Build exports it (gates are movers, volumes triggers...), so Build & Play
-        # can reuse this navmesh
-        ir, text, rep2 = build_map_text(context, game_root(context))
-        if text is None:
-            self.report({"ERROR"}, rep2.errors[0] if rep2.errors else "The map doesn't build")
+        # can reuse this navmesh. The scene is read here; the map's text is made on the thread (no freeze)
+        ir, margs, rep0 = read_map(context, game_root(context))
+        if margs is None:
+            self.report({"ERROR"}, rep0.errors[0] if rep0.errors else "The map doesn't build")
             return {"CANCELLED"}
-        regions, _ = collect_regions(ir)
-        climbs, _ = collect_climbs(ir)
         box = {"stage": "Starting", "nodes": 0, "mesh": None, "error": None, "stop": False}
         self._box = box
         self._owner = _owner(context)
@@ -401,6 +399,13 @@ class HL_OT_nav_predict(bpy.types.Operator):
 
         def work():
             try:
+                box["stage"] = "Exporting the map"
+                ir2, text, rep2 = map_text(*margs)
+                if text is None:
+                    box["error"] = rep2.errors[0] if rep2.errors else "the map doesn't build"
+                    return
+                regions, _ = collect_regions(ir2)
+                climbs, _ = collect_climbs(ir2)
                 box["mesh"] = predict(text, regions, lambda stage, n: _progress(box, stage, nodes=n), climbs,
                                       wall_climbs, lambda: box["stop"], roofs)  # (its own process: Blender stays quick)
             except Exception as ex:          # shown to the user
@@ -477,7 +482,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         from ..core import compile as cc
         from ..core.navpredict import cached
         from ..core.navworker import analyze, predict
-        from .ops import compile_options, export_vmf, game_root, surface_report, work_dir
+        from .ops import ExportPrep, export_finish, export_prepare, game_root, surface_report, work_dir
         root = game_root(context)
         if not root:
             self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Game & Folders > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
@@ -491,10 +496,48 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         if cc.compile_running(base + ".vmf"):
             self.report({"ERROR"}, "This map is still compiling: wait for it to finish, then Build Nav Mesh again")
             return {"CANCELLED"}
-        path, _root, rep = export_vmf(self, context)         # exactly what Build exports
+        prep = export_prepare(self, context)                 # exactly what Build exports
+        if not isinstance(prep, ExportPrep):
+            surface_report(self, prep[2])
+            return {"CANCELLED"}
+        # (the export's second half on its own thread, as Build & Play: Blender doesn't freeze; modal() goes on)
+        self._prep, self._export_out, self._box, self._job, self._thread = prep, None, None, None, None
+        self._root, self._base, self._tools = root, base, tools
+
+        def export_work():
+            try:
+                self._export_out = export_finish(prep)
+            except Exception as ex:
+                from ..core.build import Report
+                rr = Report()
+                rr.errors.append(f"The export failed: {ex}")
+                self._export_out = (None, root, rr)
+        self._export_thread = threading.Thread(target=export_work, daemon=True)
+        self._export_thread.start()
+        _state["busy"] = "analyze"
+        _state["cancel"] = False
+        _redraw()
+        self._owner = _owner(context)
+        self._settings = (context.scene.hammerless.map_name, context.scene.hammerless.nav_source)
+        self._timer = context.window_manager.event_timer_add(0.2, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        context.workspace.status_text_set("Hammerless: exporting the map...")
+        return {"RUNNING_MODAL"}
+
+    def _after_export(self, context):
+        """The export's thread is done (modal): the compile for the analysis and the nav mesh start."""
+        import threading
+        from ..core import compile as cc
+        from ..core.navpredict import cached
+        from ..core.navworker import analyze, predict
+        from .ops import compile_options, export_after, surface_report
+        out, self._export_thread = self._export_out, None
+        export_after(context, self._prep, out)
+        path, _root, rep = out
         surface_report(self, rep)
         if not path:
-            return {"CANCELLED"}
+            return False
+        root, base, tools = self._root, self._base, self._tools
         with open(path, encoding="utf-8") as f:
             text = f.read()
         # the analysis looks through the compiled walls and visibility (never the lighting): compile
@@ -510,7 +553,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
                 self._job = job.start()
             except RuntimeError as ex:          # already compiling
                 self.report({"ERROR"}, str(ex))
-                return {"CANCELLED"}
+                return False
         regions, climbs = rep.nav_regions, rep.nav_climbs
         compiled = threading.Event()
         if self._job is None:
@@ -537,20 +580,16 @@ class HL_OT_nav_analyze(bpy.types.Operator):
                 box["error"] = str(ex)
         self._thread = threading.Thread(target=work, daemon=True)
         self._thread.start()
-        _state["busy"] = "analyze"
-        _state["cancel"] = False
-        _redraw()
-        self._owner = _owner(context)
-        self._settings = (context.scene.hammerless.map_name, context.scene.hammerless.nav_source)
-        self._timer = context.window_manager.event_timer_add(0.5, window=context.window)
-        context.window_manager.modal_handler_add(self)
-        return {"RUNNING_MODAL"}
+        return True
 
     def cancel(self, context):
         self._stop(context)
 
     def _stop(self, context):
         box = self._box
+        if box is None:                           # (still exporting: nothing else started yet)
+            _end_job(context, self._timer)
+            return
         box["stop"] = True
         if self._job is not None and not self._job.done:
             self._job.cancel()                    # (the compile it started stops too)
@@ -565,6 +604,20 @@ class HL_OT_nav_analyze(bpy.types.Operator):
             self.report({"WARNING"}, "Nav analysis cancelled")
             return {"CANCELLED"}
         if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+        if getattr(self, "_export_thread", None) is not None:
+            if self._export_thread.is_alive():
+                return {"PASS_THROUGH"}
+            try:
+                ok = self._after_export(context)
+            except Exception as ex:
+                import traceback
+                traceback.print_exc()
+                self.report({"ERROR"}, f"Build Nav Mesh stopped: {ex}")
+                ok = False
+            if not ok:
+                _end_job(context, self._timer)
+                return {"CANCELLED"}
             return {"PASS_THROUGH"}
         box = self._box
         job = self._job

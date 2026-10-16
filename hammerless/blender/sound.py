@@ -119,6 +119,13 @@ def scene_volumes(context, aspect: str) -> list:
 
 def trace(context, starts=None):
     """Run the analysis. Returns (spots, zones, spacing, summary) or raises ValueError."""
+    res = trace_work(trace_read(context, starts))
+    _redraw()
+    return res
+
+
+def trace_read(context, starts=None):
+    """The part of trace that reads the scene (Blender's thread): the geometry as arrays, the volumes, the starts."""
     import hashlib
     t0 = time.time()
     geometry = scene_geometry(context)
@@ -129,13 +136,17 @@ def trace(context, starts=None):
     h = hashlib.sha1(repr((sorted(tuple(round(c, 3) for c in p) for p in starts), repr(vols))).encode())
     for a in geometry:
         h.update(a.astype(np.float32 if a.dtype.kind == "f" else np.int32).tobytes())
-    key = h.hexdigest()
+    return geometry, vols, starts, h.hexdigest(), t0
+
+
+def trace_work(args):
+    """The rest of trace: the rays and the analysis (no Blender data: mathutils only, any thread)."""
+    geometry, vols, starts, key, t0 = args
     if _TRACE_CACHE["key"] == key:
         spots, zl, spacing, summary = _TRACE_CACHE["result"]
         _state.update(spots=spots, zones=zl, summary=summary, batches=None)
-        _redraw()
         return spots, zl, spacing, summary
-    bvh, bounds = scene_bvh(context, geometry)
+    bvh, bounds = scene_bvh(None, geometry)
 
     def cast(origin, direction, distance):
         hit = bvh.ray_cast(Vector(origin), Vector(direction), distance)
@@ -157,25 +168,41 @@ def trace(context, starts=None):
                f"sheltered, {counts['INDOOR'] * 100 // n}% indoors; {len(zl)} zones, "
                f"{sum(len(z.positions) for z in zl)} sound portals ({time.time() - t0:.1f} s)")
     _state.update(spots=spots, zones=zl, summary=summary, batches=None)
-    _redraw()
     _TRACE_CACHE.update(key=key, result=(spots, zl, spacing, summary))
     return spots, zl, spacing, summary
 
 
-def add_acoustics(context, ir, rep) -> None:
-    """On export: the soundscapes (file + entities) for the map, per the Sound panel's setting."""
+def add_acoustics(context, ir, rep, defer: bool = False) -> None:
+    """On export: the soundscapes (file + entities) for the map, per the Sound panel's setting. defer: only the
+    scene is read here; finish_acoustics (on the export's other thread) does the rest."""
     s = context.scene.hammerless
     if s.sound_mode == "OFF":
         return
     try:
         starts = [e.origin for e in ir.entities if e.classname in START_CLASSES and e.origin is not None]
-        _spots, zl, spacing, summary = trace(context, starts)
+        args = trace_read(context, starts)
     except ValueError as ex:
         rep.warnings.append(f"Sound: {ex}")
         return
-    theme = {"URBAN": "URBAN"}.get(s.sound_mode)
-    ir.entities += acoustics.entities(zl, s.map_name, spacing)
-    ir.extra_scripts[f"scripts/soundscapes_{s.map_name}.txt"] = acoustics.soundscape_file(s.map_name, theme, zl)
+    ir.__dict__["_acoustics"] = (args, s.map_name, {"URBAN": "URBAN"}.get(s.sound_mode))
+    if not defer:
+        finish_acoustics(ir, rep)
+        _redraw()
+
+
+def finish_acoustics(ir, rep) -> None:
+    """add_acoustics' rays and analysis, and the soundscapes they make (no Blender data: any thread)."""
+    job = ir.__dict__.pop("_acoustics", None)
+    if job is None:
+        return
+    args, map_name, theme = job
+    try:
+        _spots, zl, spacing, summary = trace_work(args)
+    except ValueError as ex:
+        rep.warnings.append(f"Sound: {ex}")
+        return
+    ir.entities += acoustics.entities(zl, map_name, spacing)
+    ir.extra_scripts[f"scripts/soundscapes_{map_name}.txt"] = acoustics.soundscape_file(map_name, theme, zl)
     rep.info.append("Sound: " + summary)
 
 

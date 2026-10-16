@@ -185,6 +185,7 @@ class MaterialResolver:
 
 
 _TEXTURE_CACHE: dict[str, tuple] = {}     # output file -> what it was made from (skips re-converting)
+_PACKED_DIGESTS: dict[tuple, str] = {}   # (image, packed data block, size) -> its bytes' sha1
 
 
 def _texture_current(out: str, sig) -> bool:
@@ -247,12 +248,18 @@ def _image_signature(img, *extra):
         return None
     if img.packed_file is not None:          # (packed in the .blend: its packed bytes)
         import hashlib
-        try:
-            data = img.packed_file.data
-        except (AttributeError, RuntimeError):
-            return None
-        return (("packed", img.name, hashlib.sha1(data).hexdigest()), tuple(img.size),
-                img.colorspace_settings.name) + extra
+        pf = img.packed_file
+        # (hashed once per session: packing again makes new packed data, so the same data block and size are the
+        # same bytes; edits to a packed image's pixels show as is_dirty, handled above)
+        mem = (img.name, pf.as_pointer(), pf.size)
+        digest = _PACKED_DIGESTS.get(mem)
+        if digest is None:
+            try:
+                data = pf.data
+            except (AttributeError, RuntimeError):
+                return None
+            digest = _PACKED_DIGESTS[mem] = hashlib.sha1(data).hexdigest()
+        return (("packed", img.name, digest), tuple(img.size), img.colorspace_settings.name) + extra
     path = bpy.path.abspath(img.filepath)
     try:
         st = os.stat(path)
