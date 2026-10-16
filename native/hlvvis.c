@@ -2028,7 +2028,7 @@ int main(int argc, char **argv) {
         g_mtest_rec = xmalloc((size_t)g_mtest_cap * sizeof(vgpu_mrec_t) + 16);
         g_mtest_res = xmalloc((size_t)g_mtest_cap * sizeof(vgpu_mres_t) + 16);
     }
-    if (g_auto && !fast && !g_radial && g_gpu) {
+    if (g_auto && !fast && g_gpu) {          /* (fog radius: only the rough pass knows it; the flows read its floods) */
         /* the default: the two GPU passes when the card takes them, else the merged windows on the CPU */
         g_jacobi = 1; g_robust_sep = 1; set_hull_cap(16);
         g_gpu_pipe = gpu_pipe_setup();
