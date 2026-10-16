@@ -1392,7 +1392,8 @@ static int gpu_pipe_flow(double total_w) {
         long long np, ni; int npass;
         static int fail_at = -1;                /* (dev) HL_GPU_FAIL_AT=n: act as if the GPU failed in round n */
         if (fail_at < 0) fail_at = getenv("HL_GPU_FAIL_AT") ? atoi(getenv("HL_GPU_FAIL_AT")) : 0;
-        if ((fail_at && (int)round == fail_at) || !vgpu_pipe_round(round, nrec, rf, (int)nw, nvisq, visq, visout, so, &np, &ni, &npass)) {
+        int fail_here = fail_at && (int)round == fail_at && (g_jm != 0) == (getenv("HL_GPU_FAIL_PASS2") != NULL);
+        if (fail_here || !vgpu_pipe_round(round, nrec, rf, (int)nw, nvisq, visq, visout, so, &np, &ni, &npass)) {
             free(slot_base); free(visq); free(visq_base); free(visout); free(so); free(rf);
             return 0;
         }
@@ -1902,6 +1903,34 @@ static int compress_row(const uint8_t *vis, int rowbytes, uint8_t *dest) {
 }
 
 /* ================================================================== main */
+/* every base portal's flow on the CPU's threads (those not done yet), with the progress lines Hammerless reads */
+static void cpu_flows(int threads, double total_w, LARGE_INTEGER fs) {
+    LARGE_INTEGER fn;
+    g_next = 0;
+    HANDLE *hs = xmalloc(threads * sizeof(HANDLE));
+    for (int t = 0; t < threads; t++) {
+        hs[t] = CreateThread(NULL, 64 << 20, flow_worker, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+        if (!hs[t]) fail("couldn't start a thread%s", "");
+    }
+    int last_pct = -1;
+    while (g_done < NPD) {
+        Sleep(250);
+        double done_w = 0;
+        for (int i = 0; i < NPD; i++) if (P[i].status == 2) done_w += (double)P[i].nmight * P[i].nmight + 1;
+        int pct = (int)(100.0 * done_w / total_w);
+        QueryPerformanceCounter(&fn);
+        double el = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
+        if (pct != last_pct && pct < 100 && done_w > 0 && el > 0.5) {
+            double left = el * (total_w - done_w) / done_w;
+            printf("vis %d%%, about %.0f s left\n", pct, left < 1 ? 1 : left);
+            last_pct = pct;
+        }
+    }
+    for (int t = 0; t < threads; t += 64) WaitForMultipleObjects(threads - t < 64 ? threads - t : 64, hs + t, TRUE, INFINITE);
+    for (int t = 0; t < threads; t++) CloseHandle(hs[t]);
+    free(hs);
+}
+
 int main(int argc, char **argv) {
     if (getenv("HL_UNBUF")) setvbuf(stdout, NULL, _IONBF, 0);   /* (dev) every line out at once */
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -2112,30 +2141,7 @@ int main(int argc, char **argv) {
             g_gpu_pipe = 0;
             g_jrounds = g_jexp = g_gpu_items = 0;
         }
-        if (!g_gpu_pipe) {
-        HANDLE *hs = xmalloc(threads * sizeof(HANDLE));
-        for (int t = 0; t < threads; t++) {
-            hs[t] = CreateThread(NULL, 64 << 20, flow_worker, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
-            if (!hs[t]) fail("couldn't start a thread%s", "");
-        }
-        int last_pct = -1;
-        while (g_done < NPD) {
-            Sleep(250);
-            double done_w = 0;
-            for (int i = 0; i < NPD; i++) if (P[i].status == 2) done_w += (double)P[i].nmight * P[i].nmight + 1;
-            int pct = (int)(100.0 * done_w / total_w);
-            QueryPerformanceCounter(&fn);
-            double el = (double)(fn.QuadPart - fs.QuadPart) / g_freq.QuadPart;
-            if (pct != last_pct && pct < 100 && done_w > 0 && el > 0.5) {
-                double left = el * (total_w - done_w) / done_w;
-                printf("vis %d%%, about %.0f s left\n", pct, left < 1 ? 1 : left);
-                last_pct = pct;
-            }
-        }
-        for (int t = 0; t < threads; t += 64) WaitForMultipleObjects(threads - t < 64 ? threads - t : 64, hs + t, TRUE, INFINITE);
-        for (int t = 0; t < threads; t++) CloseHandle(hs[t]);
-        free(hs);
-        }
+        if (!g_gpu_pipe) cpu_flows(threads, total_w, fs);
         if (g_gpu_pipe && (g_two || (getenv("HL_TWO") && atoi(getenv("HL_TWO")) == 4)) && !g_jv1) {
             /* (experiment) the second pass on the GPU: -jacobi with might-see sets over clusters, tests = the first
                pass's vis (the CPU's: HL_TWO=2 HL_JM_CL=1 HL_JM_NOMORE=1) */
@@ -2164,18 +2170,15 @@ int main(int argc, char **argv) {
             for (int i = 0; i < NPD; i++) { memset(P[i].vis, 0, (size_t)PW * 8); P[i].status = 0; g_pdur[i] = 0; }
             g_done = 0;
             if (!gpu_pipe_flow(total_w)) {
-                /* (the CPU does the rest of the second pass: the same steps, the same result) */
-                printf("Warning: the GPU failed in the second pass: the CPU does the rest\n");
+                /* (the merged windows on the CPU do it all: the fast, known path) */
+                printf("Warning: the GPU failed in the second pass: the merged windows on the CPU do the vis\n");
+                g_jm = 0; g_jcl = 0; g_jnomore = 0; g_two = 0; g_gpu_pipe = 0;
+                free(g_jv1); g_jv1 = NULL;
+                g_jacobi = 0; g_robust_sep = 0; set_hull_cap(MAXPTS);
+                for (int i = 0; i < NPD; i++) { P[i].status = 0; g_pdur[i] = 0; memset(P[i].vis, 0, (size_t)PW * 8); }
                 g_done = 0;
-                for (int i = 0; i < NPD; i++)
-                    if (P[i].status == 2) g_done++;
-                    else { P[i].status = 0; memset(P[i].vis, 0, (size_t)PW * 8); }
-                g_gpu_pipe = 0; g_next = 0;
-                HANDLE *hs3 = xmalloc(threads * sizeof(HANDLE));
-                for (int t = 0; t < threads; t++) hs3[t] = CreateThread(NULL, 64 << 20, flow_worker, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
-                for (int t = 0; t < threads; t += 64) WaitForMultipleObjects(threads - t < 64 ? threads - t : 64, hs3 + t, TRUE, INFINITE);
-                for (int t = 0; t < threads; t++) CloseHandle(hs3[t]);
-                free(hs3);
+                LARGE_INTEGER f2; QueryPerformanceCounter(&f2);
+                cpu_flows(threads, total_w, f2);
             }
             goto passes_done;
         }

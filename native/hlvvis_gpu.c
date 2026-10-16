@@ -490,6 +490,17 @@ static gbuf_t p_back;                                    /* (host) counters, slo
    whose job runs over 2 seconds); about 70 ms a pass on an RTX 4090 */
 static uint32_t p_items_per_pass;
 static VkDeviceSize p_heap; static long long p_total, p_entries;
+/* a pass of `items` took `secs`: the next ones aim at about 250 ms (the cost per item varies a lot: the second pass's
+   sets, bigger maps, a card shared with Blender), between 64K and 4M items */
+static int p_tuned_off;
+static void p_tune(double secs, uint32_t items) {
+    if (p_tuned_off || items < 4096 || secs <= 0.02) return;
+    double want = (double)items * 0.25 / secs;
+    if (want > (double)(4u << 20)) want = (double)(4u << 20);
+    if (want < 65536) want = 65536;
+    if (want < p_items_per_pass * 0.5) p_items_per_pass = (uint32_t)want;            /* (slower: at once) */
+    else p_items_per_pass = (uint32_t)(p_items_per_pass * 0.75 + want * 0.25);       /* (faster: slowly) */
+}
 static struct { uint32_t nslots, item_end, pw32, mw, round, item_start; float eps_up, len_lo;
                 uint32_t robust, maxchop, hullcap, nrefill, candcap, ptcap, saturate, maxarr; } p_pc;
 #define C_N 0
@@ -576,7 +587,8 @@ int vgpu_pipe_setup(int npd, const float *pts, int npts, const vgpu_pportal_t *p
     p_bind_all();
     p_pc.nslots = (uint32_t)ns, p_pc.pw32 = (uint32_t)pw32;
     p_items_per_pass = getenv("HL_GPU_PASS_ITEMS") ? (uint32_t)atoi(getenv("HL_GPU_PASS_ITEMS")) : 0;   /* (dev) */
-    if (p_items_per_pass < 1) p_items_per_pass = 4u << 20;
+    if (p_items_per_pass < 1) p_items_per_pass = 1u << 20;
+    else p_tuned_off = 1;                       /* (a given size stays) */
     p_pc.eps_up = eps_up, p_pc.len_lo = len_lo, p_pc.robust = (uint32_t)robust, p_pc.maxchop = (uint32_t)maxchop;
     p_pc.hullcap = (uint32_t)cap, p_pc.candcap = (uint32_t)candcap, p_pc.ptcap = (uint32_t)ptcap;
     p_pc.saturate = (uint32_t)saturate, p_pc.maxarr = (uint32_t)maxarr;
@@ -697,6 +709,7 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
     if (!submit()) return 0;
     QueryPerformanceCounter(&w1); QueryPerformanceFrequency(&wf);
     p_wall += (double)(w1.QuadPart - w0.QuadPart) / wf.QuadPart;
+    p_tune((double)(w1.QuadPart - w0.QuadPart) / wf.QuadPart, ((const uint32_t *)p_back.map)[C_T]);
     p_prof_read();
     const uint32_t *cn = p_back.map;
     for (int i = 0; i < nvis; i++) memcpy(vis_out + (size_t)i * pw32, (const char *)p_back.map + vis_at + (size_t)i * pw32 * 4, (size_t)pw32 * 4);
@@ -721,7 +734,11 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
         p_expand_merge(from, n);
         VkBufferCopy cs2 = {0, (VkDeviceSize)P_COUNTERS * 4, (VkDeviceSize)ns * sizeof(vgpu_slot_t)};
         vkCmdCopyBuffer(cmd, p_buf[B_SLOTS].buf, p_back.buf, 1, &cs2);
+        LARGE_INTEGER q0, q1, qf;
+        QueryPerformanceCounter(&q0);
         if (!submit()) return 0;
+        QueryPerformanceCounter(&q1); QueryPerformanceFrequency(&qf);
+        p_tune((double)(q1.QuadPart - q0.QuadPart) / qf.QuadPart, n);
         (*n_passes)++;
     }
     memcpy(slots_out, (const char *)p_back.map + P_COUNTERS * 4, (size_t)ns * sizeof(vgpu_slot_t));
@@ -733,8 +750,9 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
 long long vgpu_pipe_jm(int mw, const uint32_t *v1cl, int npd, int cw32, int ncl) {
     if (mw < 1 || mw > 256 || cw32 > 1024) return 0;
     long long range = (1ll << 31) - 1;
-    long long ne = range / 4;                                /* (words in each of the three set buffers) */
-    long long budget = (long long)(p_heap * 3 / 4) - p_total - (long long)npd * cw32 * 4 - (long long)p_pc.nslots * ncl * 4;
+    long long ne = (1ll << 30) / 4;                          /* (words in each of the three set buffers: 1 GB) */
+    (void)range;
+    long long budget = (long long)(p_heap * 5 / 8) - p_total - (long long)npd * cw32 * 4 - (long long)p_pc.nslots * ncl * 4;   /* (room for Blender's) */
     if (ne > budget / 12) ne = budget / 12;
     if (ne < mw) return 0;
     for (int i = B_JM; i <= B_RMAP; i++) free_buffer(&p_buf[i]);
