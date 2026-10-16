@@ -69,15 +69,39 @@ bool merge_outside(int side) {
     }
     precise double o = merge_dot_dn(sx, sy, sz, n);
     if (o == 0.0lf) return true;
+    // Each (edge, point) pair is first decided in float, with a bound on the float result's error (a multiple of
+    // float epsilon times the sum of the terms' magnitudes, generous): clearly inside / clearly outside by more than
+    // that bound gives the double test's answer for sure. Only pairs within the bound (points within a hair of the
+    // edge's noise line) run the double test as before, so the answer is the double test's, bit for bit.
+    // (The FP64 units are 1/64 of the FP32 ones on consumer cards: this test was most of the merge's time.)
+    float sgn = o > 0.0lf ? 1.0 : -1.0;
     for (int i = 0; i < nh; i++) {
         vec3 p = MS[side][i], q = MS[side][(i + 1) % nh];
-        precise double ex = double(q.x) - double(p.x), ey = double(q.y) - double(p.y), ez = double(q.z) - double(p.z);
-        precise double el2 = ex * ex + ey * ey;      // (the edge's: once, not per point)
-        el2 = el2 + ez * ez;
-        precise double el = sqrt(el2);
-        precise double lim = MERGE_JACOBI_NOISE * el;
+        vec3 ef = q - p;
+        float limf = 1e-4 * sqrt(dot(ef, ef));
+        bool have_lim = false;
+        precise double ex, ey, ez, lim;
         for (int k = 0; k < na; k++) {
             vec3 a = MC[side][k];
+            vec3 af = a - p;
+            float c1f = ef.y * af.z - ef.z * af.y;
+            float c2f = ef.z * af.x - ef.x * af.z;
+            float c3f = ef.x * af.y - ef.y * af.x;
+            float cf = (c1f * n.x + c2f * n.y) + c3f * n.z;
+            float mag = (abs(ef.y * af.z) + abs(ef.z * af.y)) * abs(n.x) + (abs(ef.z * af.x) + abs(ef.x * af.z)) * abs(n.y)
+                      + (abs(ef.x * af.y) + abs(ef.y * af.x)) * abs(n.z);
+            float bound = 4e-6 * (mag + abs(cf)) + 4e-6 * limf + 1e-30;
+            float sc = sgn * cf;
+            if (sc > bound - limf) continue;          // clearly not outside (by the noise): the double test says no
+            if (sc < -limf - bound) return true;      // clearly outside: the double test says yes
+            if (!have_lim) {
+                have_lim = true;
+                ex = double(q.x) - double(p.x); ey = double(q.y) - double(p.y); ez = double(q.z) - double(p.z);
+                precise double el2 = ex * ex + ey * ey;
+                el2 = el2 + ez * ez;
+                precise double el = sqrt(el2);
+                lim = MERGE_JACOBI_NOISE * el;
+            }
             precise double ax = double(a.x) - double(p.x), ay = double(a.y) - double(p.y), az = double(a.z) - double(p.z);
             precise double c1 = ey * az - ez * ay;
             precise double c2 = ez * ax - ex * az;
