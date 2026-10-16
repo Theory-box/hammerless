@@ -1,0 +1,41 @@
+#version 460
+// (self-test) j_merge's rule on the GPU (merge_lib.glsl) for merges recorded from a CPU run: one invocation per
+// record, the state after written back for the CPU to compare bit for bit.
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : require
+#extension GL_EXT_spirv_intrinsics : require
+#extension GL_GOOGLE_include_directive : require
+spirv_execution_mode(4462, 32);
+spirv_execution_mode(4462, 64);
+spirv_execution_mode(4461, 32);
+spirv_execution_mode(4461, 64);
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform PC { uint n; uint cap; } pc;
+#define MERGE_HULL_CAP int(pc.cap)
+#define MERGE_CAPDIR_BINDING 2
+#include "merge_lib.glsl"
+
+// a record: flags (inited, opened, grows, 0), base normal + ccw, portal normal + ccw, counts (S, W, src, pass), then
+// S[16], W[16], src[64], pass[64] points (vec4)
+struct Rec { ivec4 flags; vec4 bn; vec4 pn; ivec4 counts; vec4 S[16]; vec4 W[16]; vec4 src[64]; vec4 pas[64]; };
+struct Res { ivec4 flags; ivec4 counts; vec4 S[16]; vec4 W[16]; };     // flags: grew, opened, grows, inited
+layout(std430, binding = 0) readonly buffer Recs { Rec recs[]; };
+layout(std430, binding = 1) writeonly buffer Ress { Res ress[]; };
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.n) return;
+    vec3 S[MERGE_MAXW], W[MERGE_MAXW], src[MERGE_MAXW], pas[MERGE_MAXW];
+    int nS = recs[i].counts.x, nW = recs[i].counts.y, nsrc = recs[i].counts.z, npas = recs[i].counts.w;
+    for (int k = 0; k < nS; k++) S[k] = recs[i].S[k].xyz;
+    for (int k = 0; k < nW; k++) W[k] = recs[i].W[k].xyz;
+    for (int k = 0; k < nsrc; k++) src[k] = recs[i].src[k].xyz;
+    for (int k = 0; k < npas; k++) pas[k] = recs[i].pas[k].xyz;
+    bool inited = recs[i].flags.x != 0, opened = recs[i].flags.y != 0;
+    int grows = recs[i].flags.z;
+    bool grew = merge_candidate(inited, opened, grows, S, nS, W, nW, src, nsrc, pas, npas,
+                                recs[i].bn.xyz, int(recs[i].bn.w), recs[i].pn.xyz, int(recs[i].pn.w), MERGE_JACOBI_NOISE);
+    ress[i].flags = ivec4(grew ? 1 : 0, opened ? 1 : 0, grows, inited ? 1 : 0);
+    ress[i].counts = ivec4(nS, nW, 0, 0);
+    for (int k = 0; k < 16; k++) { ress[i].S[k] = vec4(k < nS ? S[k] : vec3(0), 0.0); ress[i].W[k] = vec4(k < nW ? W[k] : vec3(0), 0.0); }
+}

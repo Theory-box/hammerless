@@ -788,7 +788,7 @@ static int cmp_cand(const void *a, const void *b) {
 }
 
 /* merge one candidate into its portal's stored windows; returns 1 if the portal must be expanded (again) */
-static void j_merge(Portal *b, const JCand *c, int *seen) {
+static int j_merge_core(Portal *b, const JCand *c, int *seen) {
     int pnum = c->p;
     JState *js = &t_js[pnum];
     Portal *p = &P[pnum];
@@ -801,7 +801,7 @@ static void j_merge(Portal *b, const JCand *c, int *seen) {
         if (js->S.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->S, (Win *)&js->S, b->pl.n, winding_ccw(b->w, b->pl.n), &t); js->S = t; }
         if (js->W.n > g_hull_cap) { WinBuf t; hull2((Win *)&js->W, (Win *)&js->W, p->pl.n, winding_ccw(p->w, p->pl.n), &t); js->W = t; }
     } else {
-        if (js->opened) return;
+        if (js->opened) return 0;
         int grew = 0;
         if (outside_hull((const Win *)&c->src, (Win *)&js->S, b->pl.n, JACOBI_NOISE)) {
             WinBuf ns; hull2((Win *)&js->S, (const Win *)&c->src, b->pl.n, winding_ccw(b->w, b->pl.n), &ns);
@@ -811,9 +811,41 @@ static void j_merge(Portal *b, const JCand *c, int *seen) {
             WinBuf nw; hull2((Win *)&js->W, (const Win *)&c->pass, p->pl.n, winding_ccw(p->w, p->pl.n), &nw);
             js->W = nw; grew = 1;
         }
-        if (!grew) return;
+        if (!grew) return 0;
     }
     if (!js->dirty) { js->dirty = 1; t_next[t_nnext++] = pnum; }
+    return 1;
+}
+
+/* (self-test, HL_MERGE_TEST=n with -threads 1) the first n merges, before and after, for the GPU's merge to redo */
+static int g_mtest_cap, g_mtest_n, g_mtest_every;
+static vgpu_mrec_t *g_mtest_rec;
+static vgpu_mres_t *g_mtest_res;
+static void put_pts(float *o, const Win *w, int cap) {
+    for (int k = 0; k < cap; k++) {
+        V q = k < w->n ? w->p[k] : (V){0, 0, 0};
+        o[4 * k] = q.x; o[4 * k + 1] = q.y; o[4 * k + 2] = q.z; o[4 * k + 3] = 0;
+    }
+}
+static void j_merge(Portal *b, const JCand *c, int *seen) {
+    static long long every_n;
+    if (g_mtest_n >= g_mtest_cap || (g_mtest_every > 1 && every_n++ % g_mtest_every)) { j_merge_core(b, c, seen); return; }
+    JState *js = &t_js[c->p];
+    Portal *p = &P[c->p];
+    vgpu_mrec_t *r = &g_mtest_rec[g_mtest_n];
+    int inited = js->gen == t_jgen;
+    r->flags[0] = inited; r->flags[1] = inited ? js->opened : 0; r->flags[2] = inited ? js->grows : 0; r->flags[3] = 0;
+    r->bn[0] = b->pl.n.x; r->bn[1] = b->pl.n.y; r->bn[2] = b->pl.n.z; r->bn[3] = (float)winding_ccw(b->w, b->pl.n);
+    r->pn[0] = p->pl.n.x; r->pn[1] = p->pl.n.y; r->pn[2] = p->pl.n.z; r->pn[3] = (float)winding_ccw(p->w, p->pl.n);
+    r->counts[0] = inited ? js->S.n : 0; r->counts[1] = inited ? js->W.n : 0; r->counts[2] = c->src.n; r->counts[3] = c->pass.n;
+    if (inited) { put_pts(r->S, (Win *)&js->S, 16); put_pts(r->W, (Win *)&js->W, 16); }
+    else { memset(r->S, 0, sizeof r->S); memset(r->W, 0, sizeof r->W); }
+    put_pts(r->src, (const Win *)&c->src, 64); put_pts(r->pas, (const Win *)&c->pass, 64);
+    int req = j_merge_core(b, c, seen);
+    vgpu_mres_t *o = &g_mtest_res[g_mtest_n++];
+    o->flags[0] = req; o->flags[1] = js->opened; o->flags[2] = js->grows; o->flags[3] = 1;
+    o->counts[0] = js->S.n; o->counts[1] = js->W.n; o->counts[2] = o->counts[3] = 0;
+    put_pts(o->S, (Win *)&js->S, 16); put_pts(o->W, (Win *)&js->W, 16);
 }
 
 #define JACOBI_MAX_ARRIVALS 64   /* windows reaching one portal in one round, at most (the GPU's list); more: it opens */
@@ -851,6 +883,122 @@ static void j_merge_all(Portal *b, int *seen) {
         i = j;
     }
     t_ncand = 0;
+}
+
+
+/* one expansion step: what comes through the snapshot (S, W) of a frontier portal into portal pnum (the CPU's way,
+   and the GPU's reference): 1 with the source and pass windings, 0 if nothing gets through */
+static int j_expand_one(Portal *b, WinBuf *S, WinBuf *W, int pnum, WinBuf *src_out, WinBuf *pass_out) {
+    Portal *p = &P[pnum];
+    Plane bplane = b->pl;
+    Stack st; memset(&st, 0, sizeof st); st.freew[0] = st.freew[1] = st.freew[2] = 1;
+    Plane back = {{-p->pl.n.x, -p->pl.n.y, -p->pl.n.z}, -p->pl.d};
+    float d = dotv(p->origin, bplane.n) - bplane.d;
+    if (d < -p->radius) return 0;
+    Win *pass = d > p->radius ? p->w : chop(p->w, &st, &bplane);
+    if (!pass) return 0;
+    d = dotv(b->origin, p->pl.n) - p->pl.d;
+    if (d > b->radius) return 0;
+    Win *source = d < -b->radius ? (Win *)S : chop((Win *)S, &st, &back);
+    if (!source) return 0;
+    pass = clip_sep(source, (Win *)W, pass, 0, &st); if (!pass) return 0;
+    pass = clip_sep((Win *)W, source, pass, 1, &st); if (!pass) return 0;
+    memcpy(src_out, source, sizeof(int) + source->n * sizeof(V));
+    memcpy(pass_out, pass, sizeof(int) + pass->n * sizeof(V));
+    return 1;
+}
+
+/* -gpu: the round's expansion steps on the GPU (hlvvis_gpu.c, hlvvis_shaders/expand.comp), in the CPU's order;
+   HL_GPU_CHECK=1 also does each on the CPU and counts any difference (they must be the same to the bit) */
+static int g_gpu_expand, g_gpu_check;
+static volatile LONG64 g_gpu_items, g_gpu_diff;
+static CRITICAL_SECTION g_gpu_lock;
+static _Thread_local vgpu_item_t *t_items; static _Thread_local int t_capitems;
+static _Thread_local float *t_snappts; static _Thread_local uint32_t *t_snapn; static _Thread_local int t_capsnap;
+static _Thread_local float *t_osrc, *t_opass; static _Thread_local uint32_t *t_on;
+static void j_expand_gpu(Portal *b, const uint64_t *bf) {
+    int n = 0;
+    for (int f = 0; f < t_nfront; f++) {
+        Portal *x = &P[t_front[f]];
+        InterlockedIncrement64(&g_jexp);
+        for (int i = 0; i < lf_count[x->leaf]; i++) {
+            int pnum = lf_list[lf_first[x->leaf] + i];
+            if (!((bf[pnum >> 6] >> (pnum & 63)) & 1)) continue;
+            if (n == t_capitems) {
+                t_capitems = t_capitems ? t_capitems * 2 : 4096;
+                t_items = realloc(t_items, (size_t)t_capitems * sizeof(vgpu_item_t));
+                t_osrc = realloc(t_osrc, (size_t)t_capitems * VGPU_MAXW * 16);
+                t_opass = realloc(t_opass, (size_t)t_capitems * VGPU_MAXW * 16);
+                t_on = realloc(t_on, (size_t)t_capitems * 16);
+            }
+            t_items[n].base = (uint32_t)(b - P); t_items[n].snap = (uint32_t)f; t_items[n].q = (uint32_t)pnum; t_items[n].pad = 0;
+            n++;
+        }
+    }
+    if (!n) return;
+    if (t_nfront > t_capsnap) {
+        t_capsnap = t_nfront * 2;
+        t_snappts = realloc(t_snappts, (size_t)t_capsnap * 2 * VGPU_SNAPCAP * 16);
+        t_snapn = realloc(t_snapn, (size_t)t_capsnap * 2 * 4);
+    }
+    for (int f = 0; f < t_nfront; f++) {
+        WinBuf *ws[2] = {&t_snapS[f], &t_snapW[f]};
+        for (int h = 0; h < 2; h++) {
+            if (ws[h]->n > VGPU_SNAPCAP) fail("a window with more corners than the GPU holds%s", "");
+            t_snapn[2 * f + h] = (uint32_t)ws[h]->n;
+            float *o = t_snappts + ((size_t)f * 2 + h) * VGPU_SNAPCAP * 4;
+            for (int k = 0; k < ws[h]->n; k++) { o[4 * k] = ws[h]->p[k].x; o[4 * k + 1] = ws[h]->p[k].y; o[4 * k + 2] = ws[h]->p[k].z; o[4 * k + 3] = 0; }
+        }
+    }
+    EnterCriticalSection(&g_gpu_lock);
+    int ok = vgpu_expand(n, t_items, t_nfront, t_snappts, t_snapn, t_osrc, t_opass, t_on);
+    LeaveCriticalSection(&g_gpu_lock);
+    if (!ok) fail("the GPU's expansion step failed%s", "");
+    InterlockedAdd64(&g_gpu_items, n);
+    for (int k = 0; k < n; k++) {
+        int pnum = (int)t_items[k].q;
+        WinBuf src, pass;
+        int got = t_on[4 * k] != 0;
+        if (got) {
+            src.n = (int)t_on[4 * k + 1]; pass.n = (int)t_on[4 * k + 2];
+            for (int i = 0; i < src.n; i++) src.p[i] = (V){t_osrc[((size_t)k * VGPU_MAXW + i) * 4], t_osrc[((size_t)k * VGPU_MAXW + i) * 4 + 1], t_osrc[((size_t)k * VGPU_MAXW + i) * 4 + 2]};
+            for (int i = 0; i < pass.n; i++) pass.p[i] = (V){t_opass[((size_t)k * VGPU_MAXW + i) * 4], t_opass[((size_t)k * VGPU_MAXW + i) * 4 + 1], t_opass[((size_t)k * VGPU_MAXW + i) * 4 + 2]};
+        }
+        if (g_gpu_check) {
+            WinBuf cs, cp;
+            int cgot = j_expand_one(b, &t_snapS[t_items[k].snap], &t_snapW[t_items[k].snap], pnum, &cs, &cp);
+            int same = cgot == got && (!got || (cs.n == src.n && cp.n == pass.n && !memcmp(cs.p, src.p, src.n * sizeof(V)) &&
+                                                 !memcmp(cp.p, pass.p, pass.n * sizeof(V))));
+            if (!same && InterlockedIncrement64(&g_gpu_diff) <= 5)
+                printf("GPU/CPU differ: base %d, into %d: CPU %s (src %d, pass %d pts), GPU %s (src %d, pass %d pts)\n",
+                       (int)(b - P), pnum, cgot ? "through" : "blocked", cgot ? cs.n : 0, cgot ? cp.n : 0,
+                       got ? "through" : "blocked", got ? src.n : 0, got ? pass.n : 0);
+        }
+        if (got) j_add(pnum, (Win *)&src, (Win *)&pass);
+    }
+}
+
+/* -gpu: the portals for the expansion steps (once) */
+static int gpu_expand_setup(void) {
+    int npts = 0;
+    for (int i = 0; i < NPD; i++) npts += P[i].w->n;
+    float *pts = xmalloc((size_t)npts * 16 + 16);
+    vgpu_eportal_t *gp = xmalloc((size_t)NPD * sizeof(vgpu_eportal_t) + 16);
+    int at = 0;
+    for (int i = 0; i < NPD; i++) {
+        Portal *p = &P[i];
+        gp[i].plane[0] = p->pl.n.x; gp[i].plane[1] = p->pl.n.y; gp[i].plane[2] = p->pl.n.z; gp[i].plane[3] = p->pl.d;
+        gp[i].origin[0] = p->origin.x; gp[i].origin[1] = p->origin.y; gp[i].origin[2] = p->origin.z; gp[i].origin[3] = p->radius;
+        gp[i].first = (uint32_t)at; gp[i].count = (uint32_t)p->w->n; gp[i].pad0 = gp[i].pad1 = 0;
+        for (int k = 0; k < p->w->n; k++, at++) {
+            pts[4 * at] = p->w->p[k].x; pts[4 * at + 1] = p->w->p[k].y; pts[4 * at + 2] = p->w->p[k].z; pts[4 * at + 3] = 0;
+        }
+    }
+    InitializeCriticalSection(&g_gpu_lock);
+    if (g_maxpts > VGPU_MAXW) fail("the GPU holds fewer points per winding than the chop makes%s", "");
+    int ok = vgpu_expand_setup(NPD, pts, npts, gp, EPS_UP, LEN_LO, g_robust_sep, g_maxpts);
+    free(pts); free(gp);
+    return ok;
 }
 
 static int cmp_int(const void *a, const void *b) { int x = *(const int *)a, y = *(const int *)b; return (x > y) - (x < y); }
@@ -916,6 +1064,8 @@ static void jacobi_flow(int pi) {
                 inflate((Win *)&js->W, P[t_front[f]].pl.n, JACOBI_WIDEN, &t_snapW[f]);
             } else { t_snapS[f] = js->S; t_snapW[f] = js->W; }
         }
+        if (g_gpu_expand) j_expand_gpu(b, bf);
+        else
         for (int f = 0; f < t_nfront; f++) {
             int xn = t_front[f];
             Portal *x = &P[xn];
@@ -1525,6 +1675,18 @@ int main(int argc, char **argv) {
         else printf("(the GPU couldn't: the CPU does it) ");
     }
     run_threads(rough_worker, threads);
+    if (getenv("HL_MERGE_TEST")) {
+        if (threads != 1) fail("HL_MERGE_TEST needs -threads 1%s", "");
+        g_mtest_cap = atoi(getenv("HL_MERGE_TEST"));
+        if (getenv("HL_MERGE_TEST_EVERY")) g_mtest_every = atoi(getenv("HL_MERGE_TEST_EVERY"));
+        g_mtest_rec = xmalloc((size_t)g_mtest_cap * sizeof(vgpu_mrec_t) + 16);
+        g_mtest_res = xmalloc((size_t)g_mtest_cap * sizeof(vgpu_mres_t) + 16);
+    }
+    if (g_gpu && g_jacobi) {
+        g_gpu_check = getenv("HL_GPU_CHECK") != NULL;
+        g_gpu_expand = gpu_expand_setup();
+        if (!g_gpu_expand) printf("(the GPU couldn't take the expansion steps: the CPU does them) ");
+    }
     printf("done\n");
     if (fast) {
         for (int i = 0; i < NPD; i++) { memcpy(P[i].vis, P[i].flood, (size_t)PW * 8); P[i].status = 2; }
@@ -1602,6 +1764,34 @@ int main(int argc, char **argv) {
                    w[NPD / 2], w[NPD * 9 / 10], w[NPD * 99 / 100], w[NPD - 1], g_jrounds ? (double)g_jexp / g_jrounds : 0);
             free(r); free(w);
         }
+        if (g_mtest_cap) {
+            /* (self-test) the recorded merges redone on the GPU, compared bit for bit */
+            vgpu_mres_t *gres = xmalloc((size_t)g_mtest_n * sizeof(vgpu_mres_t) + 16);
+            if (!vgpu_merge_test(g_mtest_n, g_mtest_rec, gres, &g_cap_dir[0][0], g_hull_cap)) printf("merge test: the GPU couldn't run it\n");
+            else {
+                int bad = 0, firsts = 0, opens = 0, grows = 0, capped = 0;
+                for (int i = 0; i < g_mtest_n; i++) {
+                    vgpu_mres_t *a = &g_mtest_res[i], *b = &gres[i];
+                    if (!g_mtest_rec[i].flags[0]) firsts++;
+                    if (a->flags[0]) grows++;
+                    if (a->flags[1]) opens++;
+                    if (a->counts[0] == g_hull_cap || a->counts[1] == g_hull_cap) capped++;
+                    int same = a->flags[0] == b->flags[0] && a->flags[1] == b->flags[1] && a->flags[2] == b->flags[2] &&
+                               a->counts[0] == b->counts[0] && a->counts[1] == b->counts[1] &&
+                               !memcmp(a->S, b->S, (size_t)a->counts[0] * 16) && !memcmp(a->W, b->W, (size_t)a->counts[1] * 16);
+                    if (!same && bad++ < 5)
+                        printf("merge %d differs: CPU grew %d opened %d grows %d S %d W %d, GPU grew %d opened %d grows %d S %d W %d\n",
+                               i, a->flags[0], a->flags[1], a->flags[2], a->counts[0], a->counts[1],
+                               b->flags[0], b->flags[1], b->flags[2], b->counts[0], b->counts[1]);
+                }
+                printf("merge test: %d merges (%d first arrivals, %d asked to expand, %d opened, %d at the corner cap), "
+                       "%d differ from the CPU's\n", g_mtest_n, firsts, grows, opens, capped, bad);
+            }
+            free(gres);
+        }
+        if (g_gpu_expand) printf("GPU expansion steps: %lld%s", (long long)g_gpu_items,
+                                 g_gpu_check ? "" : "\n");
+        if (g_gpu_expand && g_gpu_check) printf(", %lld differ from the CPU's\n", (long long)g_gpu_diff);
         if (g_jacobi) printf("rounds: %lld rounds, %lld expansions, %lld portals reached, %lld opened fully (%lld by too "
                              "many arrivals in a round)\n", (long long)g_jrounds, (long long)g_jexp, (long long)g_jreach,
                              (long long)g_jopened, (long long)g_joverflow);

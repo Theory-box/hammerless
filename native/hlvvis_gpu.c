@@ -13,6 +13,8 @@
 #include <vulkan/vulkan.h>
 #include "hlvvis_shaders/basevis.spv.h"
 #include "hlvvis_shaders/fp64test.spv.h"
+#include "hlvvis_shaders/expand.spv.h"
+#include "hlvvis_shaders/mergetest.spv.h"
 #include <math.h>
 
 #include "hlvvis_gpu.h"
@@ -158,7 +160,7 @@ static void bind_buffers(program_t *p, gbuf_t *const *bufs) {
 }
 
 /* ------------------------------------------------------------------ start */
-static program_t prog_basevis, prog_fp64;
+static program_t prog_basevis, prog_fp64, prog_expand, prog_mtest;
 static int g_fp64;
 
 int vgpu_init(void) {
@@ -228,6 +230,8 @@ int vgpu_init(void) {
     prog_basevis = program(spv_basevis, sizeof(spv_basevis), 3, 20);
     if (!prog_basevis.ok) { printf("Warning: the graphics card's driver didn't take hlvvis's GPU programs: vis on the CPU\n"); return 0; }
     if (g_fp64) prog_fp64 = program(spv_fp64test, sizeof(spv_fp64test), 4, 4);
+    if (g_fp64) prog_expand = program(spv_expand, sizeof(spv_expand), 8, 24);
+    if (g_fp64) prog_mtest = program(spv_mergetest, sizeof(spv_mergetest), 3, 8);
     ok = 1;
     return 1;
 }
@@ -323,4 +327,74 @@ int vgpu_fp64_selftest(int n) {
     free_buffer(&gin); free_buffer(&ginf); free_buffer(&gout); free_buffer(&goutf); free_buffer(&back); free_buffer(&backf);
     free(ab); free(lens);
     return (int)(bad_div + bad_sqrt + bad_inv);
+}
+
+/* ------------------------------------------------------------------ -jacobi's expansion steps */
+static gbuf_t e_pts, e_portals;                       /* (device: once) */
+static gbuf_t e_items, e_snappts, e_snapn, e_src, e_pass, e_n;   /* (host: grown as needed) */
+static float e_eps_up, e_len_lo;
+static uint32_t e_robust, e_maxchop;
+
+static int grow(gbuf_t *b, VkDeviceSize size) {
+    if (b->buf && b->size >= size) return 1;
+    free_buffer(b);
+    return new_buffer(b, size + size / 2 + 4096, HOST);
+}
+
+int vgpu_expand_setup(int npd, const float *pts, int npts, const vgpu_eportal_t *portals, float eps_up, float len_lo,
+                      int robust, int maxchop) {
+    if (!vgpu_init() || !prog_expand.ok) return 0;
+    if (!upload(&e_pts, pts, (VkDeviceSize)npts * 16) || !upload(&e_portals, portals, (VkDeviceSize)npd * sizeof(vgpu_eportal_t)))
+        return 0;
+    e_eps_up = eps_up, e_len_lo = len_lo, e_robust = (uint32_t)robust, e_maxchop = (uint32_t)maxchop;
+    return 1;
+}
+
+int vgpu_expand(int nitems, const vgpu_item_t *items, int nsnap, const float *snap_pts, const uint32_t *snap_n,
+                float *out_src, float *out_pass, uint32_t *out_n) {
+    if (!grow(&e_items, (VkDeviceSize)nitems * sizeof(vgpu_item_t)) ||
+        !grow(&e_snappts, (VkDeviceSize)nsnap * 2 * VGPU_SNAPCAP * 16) || !grow(&e_snapn, (VkDeviceSize)nsnap * 2 * 4) ||
+        !grow(&e_src, (VkDeviceSize)nitems * VGPU_MAXW * 16) || !grow(&e_pass, (VkDeviceSize)nitems * VGPU_MAXW * 16) ||
+        !grow(&e_n, (VkDeviceSize)nitems * 16)) return 0;
+    memcpy(e_items.map, items, (size_t)nitems * sizeof(vgpu_item_t));
+    memcpy(e_snappts.map, snap_pts, (size_t)nsnap * 2 * VGPU_SNAPCAP * 16);
+    memcpy(e_snapn.map, snap_n, (size_t)nsnap * 2 * 4);
+    gbuf_t *bufs[8] = {&e_pts, &e_portals, &e_items, &e_snappts, &e_snapn, &e_src, &e_pass, &e_n};
+    bind_buffers(&prog_expand, bufs);
+    struct { uint32_t nitems; float eps_up, len_lo; uint32_t robust, snapcap, maxchop; } pc =
+        {(uint32_t)nitems, e_eps_up, e_len_lo, e_robust, VGPU_SNAPCAP, e_maxchop};
+    if (!begin()) return 0;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prog_expand.pipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prog_expand.pl, 0, 1, &prog_expand.ds, 0, NULL);
+    vkCmdPushConstants(cmd, prog_expand.pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
+    vkCmdDispatch(cmd, ((uint32_t)nitems + 63) / 64, 1, 1);
+    if (!submit()) return 0;
+    memcpy(out_n, e_n.map, (size_t)nitems * 16);
+    for (int k = 0; k < nitems; k++) {
+        if (!out_n[4 * k]) continue;
+        memcpy(out_src + (size_t)k * VGPU_MAXW * 4, (const float *)e_src.map + (size_t)k * VGPU_MAXW * 4, (size_t)out_n[4 * k + 1] * 16);
+        memcpy(out_pass + (size_t)k * VGPU_MAXW * 4, (const float *)e_pass.map + (size_t)k * VGPU_MAXW * 4, (size_t)out_n[4 * k + 2] * 16);
+    }
+    return 1;
+}
+
+int vgpu_merge_test(int n, const vgpu_mrec_t *recs, vgpu_mres_t *out, const double *cap_dir, int cap) {
+    if (!vgpu_init() || !prog_mtest.ok) return 0;
+    gbuf_t in, res, dirs;
+    if (!new_buffer(&in, (VkDeviceSize)n * sizeof(vgpu_mrec_t), HOST) || !new_buffer(&res, (VkDeviceSize)n * sizeof(vgpu_mres_t), HOST) ||
+        !new_buffer(&dirs, (VkDeviceSize)cap * 16, HOST)) return 0;
+    memcpy(in.map, recs, (size_t)n * sizeof(vgpu_mrec_t));
+    memcpy(dirs.map, cap_dir, (size_t)cap * 16);
+    gbuf_t *bufs[3] = {&in, &res, &dirs};
+    bind_buffers(&prog_mtest, bufs);
+    struct { uint32_t n, cap; } pc = {(uint32_t)n, (uint32_t)cap};
+    if (!begin()) return 0;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prog_mtest.pipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prog_mtest.pl, 0, 1, &prog_mtest.ds, 0, NULL);
+    vkCmdPushConstants(cmd, prog_mtest.pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
+    vkCmdDispatch(cmd, ((uint32_t)n + 63) / 64, 1, 1);
+    if (!submit()) return 0;
+    memcpy(out, res.map, (size_t)n * sizeof(vgpu_mres_t));
+    free_buffer(&in); free_buffer(&res); free_buffer(&dirs);
+    return 1;
 }
