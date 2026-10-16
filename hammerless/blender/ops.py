@@ -276,6 +276,27 @@ def surface_report(op, rep: Report) -> None:
 def build_map_text(context, root: str | None):
     """The scene as VMF text, exactly as Build exports it: (ir, text or None, report). Anything
     else that compares against the last build (Analyze Navmesh) must use this too."""
+    prep = read_map(context, root)
+    if prep[1] is None:
+        return prep[0], None, prep[2]
+    return map_text(*prep[1])
+
+
+def map_text(ir, content, base, rep):
+    """The second half of build_map_text (no Blender data: it can run on another thread)."""
+    from .extract import fill_triangles, write_textures
+    write_textures(ir.__dict__.get("_texture_writes", []), rep)
+    fill_triangles(ir)
+    text, rep2 = build_vmf(ir, content, base)
+    rep2.errors[:0] = rep.errors
+    rep2.warnings[:0] = rep.warnings
+    rep2.info[:0] = rep.info
+    return ir, text, rep2
+
+
+def read_map(context, root: str | None):
+    """The first half of build_map_text: what it reads from the scene (Blender's thread). Returns (ir, args for
+    map_text or None, report)."""
     s = context.scene.hammerless
     rep = Report()
     from .props import MAP_NAME_MAX, clean_map_name
@@ -295,7 +316,8 @@ def build_map_text(context, root: str | None):
                           "the game's own, or another of yours): give this one another name, or building it would "
                           "replace that map's files")
         return None, None, rep
-    ir, _mats = extract_scene(context, rep, gamedir, content)
+    ir, _mats = extract_scene(context, rep, gamedir, content, defer_textures=True)
+    ir.__dict__["_texture_writes"] = _mats.texture_writes   # (map_text writes them)
     if rep.errors:
         return ir, None, rep
     from .logic import compile_logic
@@ -315,11 +337,7 @@ def build_map_text(context, root: str | None):
         writer = VMFWriter()
         doc, world, ents = vmfimport.rebuild(context, writer, _mats, rep)
         base = (doc, world, ents, writer)
-    text, rep2 = build_vmf(ir, content if s.check_game_content else None, base)
-    rep2.errors[:0] = rep.errors
-    rep2.warnings[:0] = rep.warnings
-    rep2.info[:0] = rep.info
-    return ir, text, rep2
+    return ir, (ir, content if s.check_game_content else None, base, rep), rep
 
 
 def _write_mode_addon(gamedir: str, rep: Report) -> None:
@@ -355,13 +373,14 @@ def context_scene_setting(name: str, default):
         return default
 
 
-def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str) -> None:
+def _compile_models(root: str, gamedir: str, ir, rep: Report, work: str, own: bool | None = None) -> None:
     """The map's Custom Models: compiled with the game's studiomdl into models/hammerless/<map>/ (only the
     ones that changed since the last build), and their materials."""
     import hashlib
     from ..core import models as m
     studiomdl = os.path.join(root, "bin", "studiomdl.exe")
-    own = context_scene_setting("model_compiler", "HAMMERLESS") == "HAMMERLESS"
+    if own is None:
+        own = context_scene_setting("model_compiler", "HAMMERLESS") == "HAMMERLESS"
     no_studiomdl = not os.path.exists(studiomdl)
     if not own and no_studiomdl:
         rep.errors.append("Custom Models need studiomdl.exe from the Left 4 Dead 2 Authoring Tools (Steam > Library > "
@@ -464,24 +483,63 @@ def export_vmf(op, context, defer_scripts: bool = False) -> tuple[str | None, st
     """Extract + build + write. Returns (vmf_path, game_root, report). defer_scripts: the map's scripts aren't
     written into the game yet (rep.pending_scripts: Build writes them once the compiled map is in the game, so
     a failed or cancelled build leaves the old map with its own scripts)."""
+    prep = export_prepare(op, context, defer_scripts)
+    if not isinstance(prep, ExportPrep):
+        return prep
+    out = export_finish(prep)
+    export_after(context, prep, out)
+    return out
+
+
+class ExportPrep:
+    """What export_vmf read from the scene (Blender's thread) for export_finish (any thread)."""
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def export_prepare(op, context, defer_scripts: bool = False):
+    """The part of export_vmf that reads Blender: the scene, its settings. Returns an ExportPrep, or (None, root,
+    report) when it can't go on."""
     s = context.scene.hammerless
     root = game_root(context)
-    gamedir = os.path.join(root, "left4dead2") if root else None
-    ir, text, rep2 = build_map_text(context, root)
-    if text is None:
-        return None, root, rep2
+    ir, margs, rep0 = read_map(context, root)
+    if margs is None:
+        return None, root, rep0
     try:
         path = os.path.join(work_dir(context), f"{s.map_name}.vmf")
     except OSError as ex:
-        rep2.errors.append(f"Can't create the build folder ({ex}): set Settings > Game & Folders > Work Folder to a folder you can "
+        rep0.errors.append(f"Can't create the build folder ({ex}): set Settings > Game & Folders > Work Folder to a folder you can "
                            "write to")
+        return None, root, rep0
+    unsaved = not bpy.data.filepath and not os.path.isabs(bpy.path.abspath(s.output_dir or "//"))
+    from . import vmfimport
+    return ExportPrep(root=root, margs=margs, path=path, unsaved=unsaved, map_name=s.map_name,
+                      imported=vmfimport.imported(context.scene), defer_scripts=defer_scripts,
+                      own_models=context_scene_setting("model_compiler", "HAMMERLESS") == "HAMMERLESS")
+
+
+def export_after(context, prep, out) -> None:
+    """After export_finish, on Blender's thread: what needs the scene again (an imported map's instances)."""
+    path, root, rep2 = out
+    if path and prep.imported and getattr(prep, "has_instances", False):
+        from . import vmfimport
+        vmfimport.copy_instances(context.scene, os.path.dirname(path), rep2)
+
+
+def export_finish(prep) -> tuple[str | None, str | None, Report]:
+    """The rest of export_vmf: the map's text, its files, scripts and models. Reads no Blender data, so Build & Play
+    runs it on another thread (Blender doesn't freeze while it works)."""
+    root, path = prep.root, prep.path
+    gamedir = os.path.join(root, "left4dead2") if root else None
+    ir, text, rep2 = map_text(*prep.margs)
+    if text is None:
         return None, root, rep2
-    if not bpy.data.filepath and not os.path.isabs(bpy.path.abspath(s.output_dir or "//")):
+    if prep.unsaved:
         rep2.warnings.append("The .blend isn't saved: the build goes to a temporary folder Blender deletes on quit "
                              "(the next build after a restart compiles everything again). Save the .blend first")
     # (the light compiler's copies of the game's models sit in "<map>.hlvrad_models\models\<folder>\<model>.dx90.vtx"
     # under the build folder: past Windows' 260 characters they can't be written, and Valve's vrad lights the map)
-    if len(path) + len(s.map_name) + 110 > 259:
+    if len(path) + len(prep.map_name) + 110 > 259:
         rep2.warnings.append(f"The build folder '{os.path.dirname(path)}' is deep: files the light compiler needs "
                              "would pass Windows' 260-character path limit (then Valve's vrad lights the map). Save "
                              "the .blend in a shorter folder, use a shorter Map Name, or set Settings > Game & "
@@ -493,14 +551,13 @@ def export_vmf(op, context, defer_scripts: bool = False) -> tuple[str | None, st
                              "read; if the compile fails, save the .blend in a folder with plain (English) "
                              "letters or set Settings > Game & Folders > Work Folder")
     import json
-    from . import vmfimport
-    imported = vmfimport.imported(context.scene)
+    imported = prep.imported
+    s_map = prep.map_name
     try:
         # (an imported map keeps the bytes it was read with)
         with open(path, "w", encoding="latin-1" if imported else "utf-8", errors="replace") as f:
             f.write(text)
-        if imported and "func_instance" in text:
-            vmfimport.copy_instances(context.scene, os.path.dirname(path), rep2)
+        prep.has_instances = "func_instance" in text      # (an imported map's: copied by export_after)
         if "func_instance" in text:              # (the game's own instances, e.g. the Car Alarm: copied beside it)
             from ..core.mapcompiler import fetch_game_instances
             _copied, missing = fetch_game_instances(path, root)
@@ -514,14 +571,14 @@ def export_vmf(op, context, defer_scripts: bool = False) -> tuple[str | None, st
         return None, root, rep2
     rep2.info.append(f"Wrote {path}")
     if gamedir:
-        other = cc.map_owner(cc.Tools(root), s.map_name)
+        other = cc.map_owner(cc.Tools(root), s_map)
         if other and os.path.normcase(other) != os.path.normcase(path) and os.path.exists(other):
-            rep2.warnings.append(f"Another .blend also builds a map called '{s.map_name}' (its build: {other}). "
+            rep2.warnings.append(f"Another .blend also builds a map called '{s_map}' (its build: {other}). "
                                  "This build replaces that map in the game: give this one its own Map Name")
         files = game_files(ir)
         try:
-            if defer_scripts:
-                rep2.pending_scripts = (gamedir, s.map_name, files)
+            if prep.defer_scripts:
+                rep2.pending_scripts = (gamedir, s_map, files)
                 for rel, content in files.items():   # (except the nav marks: Build compares them to the nav's
                     if rel.rsplit("/", 1)[-1].startswith("navmark_"):      # own copy, and the old map ignores them)
                         full = os.path.join(gamedir, *rel.split("/"))
@@ -529,12 +586,12 @@ def export_vmf(op, context, defer_scripts: bool = False) -> tuple[str | None, st
                         with open(full, "w", encoding="utf-8") as f:
                             f.write(content)
             else:
-                write_map_scripts(gamedir, s.map_name, files, rep2)
-            cc.set_map_owner(cc.Tools(root), s.map_name, path)
+                write_map_scripts(gamedir, s_map, files, rep2)
+            cc.set_map_owner(cc.Tools(root), s_map, path)
             if ir.scripted_mode:
                 _write_mode_addon(gamedir, rep2)
             if ir.models:
-                _compile_models(root, gamedir, ir, rep2, os.path.dirname(path))
+                _compile_models(root, gamedir, ir, rep2, os.path.dirname(path), prep.own_models)
                 if rep2.errors:
                     return None, root, rep2
             else:
@@ -546,7 +603,7 @@ def export_vmf(op, context, defer_scripts: bool = False) -> tuple[str | None, st
         regions, _ = collect_regions(ir)
         rep2.nav_regions = regions
         rep2.nav_climbs = collect_climbs(ir)[0]
-        rep2.info.append(f"{'Made' if defer_scripts else 'Wrote'} {len(files)} script(s) for the game folder; nav marking covers "
+        rep2.info.append(f"{'Made' if prep.defer_scripts else 'Wrote'} {len(files)} script(s) for the game folder; nav marking covers "
                          f"{len(regions)} region(s)")
     return path, root, rep2
 
@@ -1299,7 +1356,50 @@ class HL_OT_build(bpy.types.Operator):
             return {"CANCELLED"}
         if self.vis_only:
             self.play = self.bake = False
-        path, root, rep = export_vmf(self, context, defer_scripts=True)
+        prep = export_prepare(self, context, defer_scripts=True)
+        if not isinstance(prep, ExportPrep):
+            return self._after_export(context, *prep)
+        # the rest of the export (the map's text, files, models: no Blender data) on its own thread, so Blender
+        # stays responsive; modal() carries on when it's done
+        import threading
+        self._prep, self._export_out = prep, None
+
+        def work():
+            try:
+                self._export_out = export_finish(prep)
+            except Exception as ex:          # (reported like any export error)
+                import traceback
+                traceback.print_exc()
+                r = Report()
+                r.errors.append(f"The export failed: {ex}")
+                self._export_out = (None, prep.root, r)
+        self._export_thread = threading.Thread(target=work, daemon=True)
+        self._export_thread.start()
+        self._job = None
+        self._key = _build_key(vmf)
+        _BUILDING.add(self._key)
+        self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        context.workspace.status_text_set("Hammerless: exporting the map...")
+        return {"RUNNING_MODAL"}
+
+    def _export_done(self, context):
+        """The export's thread finished (modal): the rest of the build starts."""
+        out, self._export_thread = self._export_out, None
+        export_after(context, self._prep, out)
+        r = self._after_export(context, *out)
+        if r != {"RUNNING_MODAL"}:           # (stopped before compiling: the timer and status go)
+            if self._timer is not None:
+                context.window_manager.event_timer_remove(self._timer)
+                self._timer = None
+            context.workspace.status_text_set(None)
+            _BUILDING.discard(self._key)
+            return {"CANCELLED"}
+        return r
+
+    def _after_export(self, context, path, root, rep):
+        """execute()'s part after the export (run by modal() once the export's thread is done)."""
+        import time
         self._pending_scripts = getattr(rep, "pending_scripts", None)
         self._export_s = time.time() - self._t0
         if path and self.play and not self.bake:
@@ -1432,8 +1532,9 @@ class HL_OT_build(bpy.types.Operator):
         except RuntimeError as ex:
             self.report({"ERROR"}, str(ex))
             return {"CANCELLED"}
-        self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
-        context.window_manager.modal_handler_add(self)
+        if self._timer is None:              # (the export's wait already made them)
+            self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
+            context.window_manager.modal_handler_add(self)
         self._key = _build_key(self._job.base + ".vmf")
         _BUILDING.add(self._key)
         from .lightview import _redraw
@@ -1442,6 +1543,34 @@ class HL_OT_build(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
+        if getattr(self, "_export_thread", None) is not None:
+            # (the export is still running on its thread: Esc stops the build once it's done)
+            if (event.type == "ESC" and event.value == "PRESS") or self._key in _CANCEL:
+                self._export_cancel = True
+            if event.type != "TIMER" or self._export_thread.is_alive():
+                return {"PASS_THROUGH"}
+            if getattr(self, "_export_cancel", False):
+                self._export_thread = None
+                _CANCEL.discard(self._key)
+                context.window_manager.event_timer_remove(self._timer)
+                self._timer = None
+                context.workspace.status_text_set(None)
+                _BUILDING.discard(self._key)
+                write_log(["Build cancelled while exporting: nothing was compiled"], append=True)
+                self.report({"WARNING"}, "Build cancelled: nothing was compiled")
+                return {"CANCELLED"}
+            try:
+                return self._export_done(context)
+            except Exception as ex:
+                import traceback
+                traceback.print_exc()
+                self.report({"ERROR"}, f"Build & Play stopped: {ex}")
+                if self._timer is not None:
+                    context.window_manager.event_timer_remove(self._timer)
+                    self._timer = None
+                context.workspace.status_text_set(None)
+                _BUILDING.discard(self._key)
+                return {"CANCELLED"}
         if (event.type == "ESC" and event.value == "PRESS") or self._key in _CANCEL:
             return self._cancel_build(context)
         if event.type != "TIMER":

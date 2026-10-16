@@ -119,6 +119,7 @@ class MaterialResolver:
         self.report = report
         self.cache: dict[str, str] = {}
         self.exported: list[str] = []
+        self.texture_writes: list = []    # (read here, written by write_textures)
 
     def resolve(self, mat) -> tuple[str, float, int]:
         """Blender material -> (Source material path, texture scale, lightmap scale)."""
@@ -168,15 +169,14 @@ class MaterialResolver:
         sig = _image_signature(img, surfaceprop, mode)
         out = os.path.join(self.game_dir, "materials", *path.split("/"))
         try:
-            if sig is None or _TEXTURE_CACHE.get(out) != sig or not (os.path.exists(out + ".vtf")
-                                                                     and os.path.exists(out + ".vmt")):
-                rgba = image_to_rgba8(img)
+            if not _texture_current(out, sig):
+                rgba = image_to_rgba8(img)            # (Blender's image: read here, on Blender's thread)
                 if mode != "OPAQUE" and int(rgba[..., 3].min()) == 255:
                     mode = "OPAQUE"                  # an alpha channel with nothing see-through
                 extra = {"$alphatest": "1"} if mode == "CUTOUT" else None
-                textures.write_material(self.game_dir, path, rgba, surfaceprop=surfaceprop,
-                                        translucent=mode == "BLENDED", extra=extra)
-                _TEXTURE_CACHE[out] = sig
+                # (converted and written by write_textures, on the export's other thread)
+                self.texture_writes.append((self.game_dir, path, rgba, surfaceprop, mode == "BLENDED", extra, out, sig,
+                                            mat.name))
             self.exported.append(path)
         except Exception as ex:
             self.report.warnings.append(f"Couldn't convert texture for material '{mat.name}': {ex}")
@@ -185,6 +185,39 @@ class MaterialResolver:
 
 
 _TEXTURE_CACHE: dict[str, tuple] = {}     # output file -> what it was made from (skips re-converting)
+
+
+def _texture_current(out: str, sig) -> bool:
+    """The texture at `out` (.vtf + .vmt) is already made from `sig`: in this session's cache, or in the .hlsig file
+    written beside it (so a Blender restart doesn't convert every texture again)."""
+    if sig is None or not (os.path.exists(out + ".vtf") and os.path.exists(out + ".vmt")):
+        return False
+    if _TEXTURE_CACHE.get(out) == sig:
+        return True
+    try:
+        with open(out + ".hlsig", encoding="utf-8") as f:
+            if f.read() == repr(sig):
+                _TEXTURE_CACHE[out] = sig
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def write_textures(writes: list, report) -> None:
+    """The textures MaterialResolver read (texture_writes): converted and written. Uses no Blender data (the
+    export's second half runs it on another thread)."""
+    for game_dir, path, rgba, surfaceprop, translucent, extra, out, sig, mat_name in writes:
+        try:
+            textures.write_material(game_dir, path, rgba, surfaceprop=surfaceprop, translucent=translucent,
+                                    extra=extra)
+            _TEXTURE_CACHE[out] = sig
+            if sig is not None:
+                with open(out + ".hlsig", "w", encoding="utf-8") as f:
+                    f.write(repr(sig))
+        except Exception as ex:
+            report.warnings.append(f"Couldn't convert texture for material '{mat_name}': {ex}")
+    writes.clear()
 
 
 def game_path(mat) -> str:
@@ -577,6 +610,10 @@ def model_prop(obj, depsgraph, scale: float, materials: MaterialResolver, ir, co
         if rig_print and not modified:
             # (by content, not by name: duplicated props each have their own mesh and rig data, the same model)
             shape = _mesh_fingerprint(ir, obj)
+    elif not modified:
+        # (by content too: a copy-pasted or Shift+D copy has its own mesh data, the same model; e.g. Make
+        # Collision's props of copied houses)
+        shape = _mesh_fingerprint(ir, obj)
     key = (shape, tuple(round(c, 4) for c in sca), kind, collide, hs.physics_class_name or hs.physics_class, round(hs.model_mass, 3),
            tuple(slot.material.name if slot.material else "" for slot in obj.material_slots), rig)
     name = getattr(ir, "_model_keys", {}).get(key)
@@ -672,7 +709,35 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
         mat_names: dict[int, str] = {}
         triangles = []
         tri_vis = []
-        for tri in mesh.loop_triangles:
+        deferred = None
+        if arm is None and game_rel is None:
+            # (copied out here, made into triangles by _triangles_from on the export's other thread)
+            import numpy as np
+            nt, nl = len(mesh.loop_triangles), len(mesh.loops)
+            t_loops = np.empty(nt * 3, np.int32); mesh.loop_triangles.foreach_get("loops", t_loops)
+            t_verts = np.empty(nt * 3, np.int32); mesh.loop_triangles.foreach_get("vertices", t_verts)
+            t_mat = np.empty(nt, np.int32); mesh.loop_triangles.foreach_get("material_index", t_mat)
+            co = np.empty(len(mesh.vertices) * 3, np.float32); mesh.vertices.foreach_get("co", co)
+            nrm = np.empty(nl * 3, np.float32)
+            (normals if normals is not None else mesh.loops).foreach_get("vector" if normals is not None else "normal", nrm)
+            uvs = None
+            if uv is not None:
+                uvs = np.empty(nl * 2, np.float32); uv.foreach_get("uv", uvs)
+            for mi in t_mat.tolist():            # (the materials in the order the triangles meet them, as before)
+                if mi in mat_names:
+                    continue
+                mat = slots[mi].material if mi < len(slots) else None
+                path, _ts, _lm = materials.resolve(mat)
+                mname = texture_file_name(mat.name) if mat is not None else "_empty_slot"
+                mode = _alpha_mode(mat) if mat is not None else "OPAQUE"
+                tool = path.lower().replace("\\", "/")
+                nodraw = {"tools/toolsnodraw": "nodraw", "tools/toolsinvisible": "invisible"}.get(tool, False)
+                ir.model_materials[mname] = (_model_texture(mat, path, content), mode == "BLENDED", mode == "CUTOUT",
+                                             False, _emissive(mat), nodraw)
+                mat_names[mi] = mname
+            deferred = (t_loops, t_verts, t_mat, co, nrm, uvs, dict(mat_names), (sca.x, sca.y, sca.z),
+                        (size.x, size.y, size.z), flip)
+        for tri in ([] if deferred is not None else mesh.loop_triangles):
             mi = tri.material_index
             if mi not in mat_names:
                 mat = slots[mi].material if mi < len(slots) else None
@@ -759,8 +824,45 @@ def _model_spec(obj, depsgraph, scale, sca, materials, ir, content, name, kind, 
         if slot.material is not None and slot.material.hammerless.surface not in ("", "DEFAULT"):
             surface = slot.material.hammerless.surface
             break
-    return ModelSpec(name, triangles, pieces, kind, surface, obj.hammerless.model_mass, obj.hammerless.physics_class_name or obj.hammerless.physics_class,
+    spec = ModelSpec(name, triangles, pieces, kind, surface, obj.hammerless.model_mass, obj.hammerless.physics_class_name or obj.hammerless.physics_class,
                      f"models/hammerless/{ir.settings.name}/", skeleton)
+    if deferred is not None:
+        spec._deferred = deferred            # (fill_triangles makes spec.triangles)
+    return spec
+
+
+def _triangles_from(t_loops, t_verts, t_mat, co, nrm, uvs, mat_names, sca, size, flip) -> list:
+    """A still model's triangles from the arrays _model_spec copied out of its mesh: the same arithmetic as its
+    loop over the mesh (mathutils Vectors of the same float32 values), so the same numbers bit for bit. Uses no
+    Blender data: runs on the export's other thread."""
+    sx, sy, sz = (Vector((sca[0], sca[1], sca[2])))         # (the object's scale as mathutils stored it: floats)
+    sz_ = Vector((size[0], size[1], size[2]))
+    out = []
+    lo, ve, ma = t_loops.tolist(), t_verts.tolist(), t_mat.tolist()
+    cl, nl_ = co.tolist(), nrm.tolist()
+    ul = uvs.tolist() if uvs is not None else None
+    for t in range(len(ma)):
+        verts = []
+        for k in range(3):
+            li, vi = lo[3 * t + k], ve[3 * t + k]
+            c = Vector((cl[3 * vi], cl[3 * vi + 1], cl[3 * vi + 2]))
+            n = Vector((nl_[3 * li], nl_[3 * li + 1], nl_[3 * li + 2]))
+            n = Vector((n.x / (sx or 1), n.y / (sy or 1), n.z / (sz or 1))).normalized()
+            p = (c.x * sz_.x, c.y * sz_.y, c.z * sz_.z)
+            uvp = (ul[2 * li], ul[2 * li + 1]) if ul is not None else (0.0, 0.0)
+            verts.append((p, (n.x, n.y, n.z), (uvp[0], uvp[1])))
+        if flip:
+            verts.reverse()
+        out.append((mat_names[ma[t]], tuple(verts)))
+    return out
+
+
+def fill_triangles(ir) -> None:
+    """The deferred models' triangles (_model_spec): made now, on whatever thread runs this."""
+    for spec in ir.models.values():
+        d = spec.__dict__.pop("_deferred", None)
+        if d is not None:
+            spec.triangles[:] = _triangles_from(*d)
 
 
 # ---------------------------------------------------------------- animated models (armatures)
@@ -940,8 +1042,8 @@ def _rig_fingerprint(arm, actions, fps) -> str | None:
 
 
 def _mesh_fingerprint(ir, obj) -> str:
-    """A rigged mesh's content (its points, faces, UVs, materials and bone weights), worked out once per mesh per
-    build: copies with their own mesh data still share one model."""
+    """A mesh's content (its points, faces, UVs, materials and bone weights), worked out once per mesh per build:
+    copies with their own mesh data still share one model."""
     import hashlib
     import numpy as np
     me = obj.data
@@ -967,8 +1069,9 @@ def _mesh_fingerprint(ir, obj) -> str:
         layer.data.foreach_get("uv", uv)
         h.update(layer.name.encode() + np.round(uv, 5).tobytes())
     names = [g.name for g in obj.vertex_groups]
-    h.update(repr([[(names[g.group] if g.group < len(names) else g.group, round(g.weight, 4)) for g in v.groups]
-                   for v in me.vertices]).encode())
+    if names:                                # (no vertex groups: no weights to read, vertex by vertex)
+        h.update(repr([[(names[g.group] if g.group < len(names) else g.group, round(g.weight, 4)) for g in v.groups]
+                       for v in me.vertices]).encode())
     cache[key] = "mesh:" + h.hexdigest()
     return cache[key]
 
@@ -1209,7 +1312,8 @@ def scene_settings_to_ir(s) -> MapSettings:
     )
 
 
-def extract_scene(context, report, game_dir: str | None = None, content=None) -> tuple[MapIR, MaterialResolver]:
+def extract_scene(context, report, game_dir: str | None = None, content=None,
+                  defer_textures: bool = False) -> tuple[MapIR, MaterialResolver]:
     s = context.scene.hammerless
     scale = s.units_per_meter
     depsgraph = context.evaluated_depsgraph_get()
@@ -1307,6 +1411,9 @@ def extract_scene(context, report, game_dir: str | None = None, content=None) ->
         report.warnings.append(f"{len(hidden)} hidden object(s) are left out of the map (Alt+H shows them; a "
                                f"missing wall can make the map leak): {', '.join(sorted(hidden)[:5])}"
                                + (", ..." if len(hidden) > 5 else ""))
+    if not defer_textures:           # (deferred: the caller runs write_textures, e.g. on the export's other thread)
+        write_textures(materials.texture_writes, report)
+        fill_triangles(ir)
     return ir, materials
 
 
