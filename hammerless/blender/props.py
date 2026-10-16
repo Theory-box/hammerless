@@ -31,6 +31,9 @@ DETAIL_CHOICES = [
                          "seal the map. For furniture, trim, overlapping boxes"),
     ("WORLD", "World", "Never func_detail: blocks visibility, so the game skips drawing what's behind it. "
                        "For walls between areas"),
+    ("VIS", "Vis Only", "Blocks visibility like a world brush, but nothing collides with it and it doesn't count "
+                        "toward the map's 8,192 brushes (our map compiler). For the walls of a prop that collides "
+                        "by itself, e.g. Make Collision's props"),
 ]
 
 COMPILE_PRESETS = [   # (stored by position: new ones go last)
@@ -390,6 +393,11 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
         ("PROPS", "Props", "Invisible static props of up to 20 pieces each (as fast as brushes, measured): no brushes "
                            "used. Their material is tools/toolsnodraw; set it to tools/toolsinvisible so bullet holes "
                            "stick to them")])
+    collision_blocks_vis: BoolProperty(
+        name="Blocks Vis", default=False,
+        description="Make Collision: the pieces also block visibility like world brushes, so the game skips "
+                    "drawing what's behind the walls. Brushes: they're world brushes. Props: Vis Only brushes as "
+                    "well, which use none of the map's brushes")
     physics_class_name: StringProperty(options={"HIDDEN"})
     physics_class: EnumProperty(name="Physics Class", items=lambda self, context: _physics_classes(),
                                 get=_physics_class_get, set=_physics_class_set,

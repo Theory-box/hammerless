@@ -227,7 +227,8 @@ static void *BuildConvexForBrush(planelist_t *pl, int b, float shrink, void *col
         if (side->bevel) continue;
         plane_t *plane = &mapplanes[side->planenum];
         float s = shrink;
-        if (i < mapbrushes[b].numsides && !mapbrushes[b].original_sides[i].visible) s = 0;
+        const mapbrush_t *mb = &mapbrushes[g_brush_src[b]];
+        if (i < mb->numsides && !mb->original_sides[i].visible) s = 0;
         if (collidetest && s != 0) {
             float start[3], end[3], neg[3] = {-plane->normal[0], -plane->normal[1], -plane->normal[2]};
             static const float zero[3] = {0, 0, 0};

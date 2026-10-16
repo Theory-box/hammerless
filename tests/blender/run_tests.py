@@ -1930,6 +1930,24 @@ def test_make_collision_modes():
     house.hammerless.collision_mode = "BRUSHES"
     b = press()
     assert len(b) == 1 and b[0].data.materials[0] == mat
+    # Blocks Vis: world brushes; with props, a Vis Only copy too (exported as func_hl_visblock, not in the world)
+    house.hammerless.collision_blocks_vis = True
+    b = press()
+    assert len(b) == 1 and b[0].hammerless.brush_detail == "WORLD"
+    house.hammerless.collision_mode = "PROPS"
+    p = press()
+    vis = [o for o in p if o.hammerless.brush_detail == "VIS"]
+    props = [o for o in p if o.hammerless.role == "MODEL"]
+    assert len(vis) == 1 and len(props) == 4 and all(o.data.materials[0] == mat for o in props), [o.name for o in p]
+    assert vis[0].data.materials[0] != mat
+    doc, log = export()
+    assert doc is not None, log
+    ents = [e for e in doc if e.name == "entity" and e.get("classname") == "func_hl_visblock"]
+    assert len(ents) == 1 and len(ents[0].blocks("solid")) == 64, len(ents)
+    world = next(e for e in doc if e.name == "world")
+    assert len(world.blocks("solid")) == 6, len(world.blocks("solid"))      # (only the automatic seal's)
+    house.hammerless.collision_blocks_vis = False
+    assert not [o for o in press() if o.hammerless.brush_detail == "VIS"]
     # tools/toolsinvisible on a model: a see-through alpha-tested material with its own texture (decals stick)
     d = os.path.join(TMP, "game_inv")
     written = write_model_materials(d, "models/hammerless/x", {

@@ -1027,6 +1027,14 @@ static void load_entity(parser_t *p) {
         }
     }
     const char *cls = ValueForKey(mapent, "classname");
+    if (!strcmp(cls, "func_hl_visblock")) {     /* (Hammerless: blocks vis like a world brush, collides as nothing:
+                                                    a prop does that) */
+        for (int i = 0; i < mapent->numbrushes; i++) mapbrushes[mapent->firstbrush + i].vis_only = 1;
+        MoveBrushesToWorld(mapent);
+        mapent->numbrushes = 0;
+        mapent->epairs = NULL;
+        return;
+    }
     if (!strcmp(cls, "func_detail")) {
         MoveBrushesToWorld(mapent);
         mapent->numbrushes = 0;

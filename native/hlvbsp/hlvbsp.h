@@ -185,7 +185,9 @@ typedef struct {
     vec3_t mins, maxs;
     int numsides;
     side_t *original_sides;
+    int vis_only;            /* func_hl_visblock: shapes the tree and vis, not in the brush list (no collision) */
 } mapbrush_t;
+extern int *g_brush_out, *g_brush_src, g_numoutbrushes;
 
 typedef struct epair_s {
     struct epair_s *next;

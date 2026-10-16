@@ -27,7 +27,8 @@ class Polygon:
 class Brush:
     faces: list[Polygon]
     source: str = ""  # Blender object name, for error messages
-    detail: str = "AUTO"  # AUTO: the map's Auto Detail rule decides; DETAIL: always func_detail; WORLD: never
+    detail: str = "AUTO"  # AUTO: the map's Auto Detail rule decides; DETAIL: always func_detail; WORLD: never;
+    #                       VIS: only blocks vis (func_hl_visblock: our compiler leaves it out of the brush list)
 
 
 @dataclass

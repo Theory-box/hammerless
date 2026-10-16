@@ -10,6 +10,7 @@ from ..core.slabcollision import slab_brushes
 
 OF = "hl_collision_of"          # on the made objects: the name of the mesh they were made from
 SKIPPED_SUFFIX = " (skipped faces)"
+VIS_SUFFIX = " Collision (blocks vis)"
 MAX_BRUSHES_WARN = 3000          # (the map holds 8192 brushes in all)
 MAX_PROP_PIECES = 20             # (Valve-sized props: as fast as brushes with a horde, measured; bigger ones aren't)
 
@@ -109,6 +110,8 @@ class HL_OT_make_collision(bpy.types.Operator):
         old = _outputs(src.name, False)
         material = None
         for o in old:
+            if o.hammerless.brush_detail == "VIS":      # (the vis-only brushes: always nodraw)
+                continue
             me = o.data
             if me is not None and len(me.polygons) and me.polygons[0].material_index < len(me.materials):
                 material = me.materials[me.polygons[0].material_index]      # (what its faces wear: a texture
@@ -137,8 +140,18 @@ class HL_OT_make_collision(bpy.types.Operator):
                 hs.model_collision = "HULLS"
             else:
                 hs.role = "BRUSH"
-                hs.brush_detail = "DETAIL"
+                hs.brush_detail = "WORLD" if src.hammerless.collision_blocks_vis else "DETAIL"
             obj.display_type = "SOLID"
+            made.append(obj)
+        if props and src.hammerless.collision_blocks_vis:      # the same pieces, blocking vis only
+            name = src.name + VIS_SUFFIX
+            obj = bpy.data.objects.new(name, _mesh(name, r.brushes, rcol, game_material("tools/toolsnodraw")))
+            obj[OF] = src.name
+            for c in colls or src.users_collection:
+                c.objects.link(obj)
+            obj.hammerless.role = "BRUSH"
+            obj.hammerless.brush_detail = "VIS"
+            obj.display_type = "WIRE"
             made.append(obj)
         # what got no brush, to look at (not exported)
         if r.skipped:

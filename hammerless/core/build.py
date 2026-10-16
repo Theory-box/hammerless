@@ -81,6 +81,9 @@ def is_auto_detail(brush: Brush, mode: str) -> bool:
             or max(b - a for a, b in zip(lo, hi)) < DETAIL_MAX_SIZE)
 
 
+VIS_ONLY_CLASS = "func_hl_visblock"
+
+
 def is_detail(brush: Brush, mode: str) -> bool:
     """func_detail or a world brush: the object's own Detail choice, else the map's Auto Detail rule."""
     if brush.detail == "WORLD":
@@ -358,7 +361,7 @@ MAX_NEAR_MISSES = 40
 def solid_geometry(ir: MapIR) -> list:
     """Brushes that become the map's solid surfaces (world and func_detail): the ones whose
     near misses make vbsp cut sliver faces. Triggers, ladders and clips don't."""
-    return ir.brushes + [b for e in ir.entities if e.classname == "func_detail" for b in e.brushes]
+    return ir.brushes + [b for e in ir.entities if e.classname in ("func_detail", VIS_ONLY_CLASS) for b in e.brushes]
 
 
 def mover_entity(e: Entity, report: Report) -> Entity:
@@ -465,6 +468,10 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
     """The map as VMF text. base: an imported map (core/vmfimport): (document, world block, entity blocks,
     writer): it is written back as it was, with what ir adds (the scene's own objects) after it; the map
     brings its own sky, sun, spawns and Director, so none are made up for it."""
+    vis_only = [b for b in ir.brushes if b.detail == "VIS"]
+    if vis_only:                    # (our compiler: in the tree and vis like world brushes, but no collision and
+        ir.brushes = [b for b in ir.brushes if b.detail != "VIS"]       # not in the brush list)
+        ir.entities.append(Entity(VIS_ONLY_CLASS, brushes=vis_only, source="Vis Only brushes"))
     report = validate(ir, content)
     if not report.ok:
         return None, report

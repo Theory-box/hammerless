@@ -35,6 +35,9 @@ extern int g_numprimindices;
 static side_t **origface_sides;   /* per plane: chain of sides already made into original faces */
 static int firstmodleaf;
 
+/* map brush -> its number in the BSP's brush list (-1: a vis-only brush, left out), and back */
+int *g_brush_out, *g_brush_src, g_numoutbrushes;
+
 void BeginBSPFile(void) {
     dvertexes = xalloc(sizeof(dvertex_t) * 65536);
     dedges = xalloc(sizeof(dedge_t) * 256000);
@@ -55,6 +58,16 @@ void BeginBSPFile(void) {
     numleafs = 1;
     dleafs[0].contents = CONTENTS_SOLID;
     dleafs[0].leafwaterdata = -1;
+    free(g_brush_out);
+    free(g_brush_src);
+    g_brush_out = xalloc(sizeof(int) * (nummapbrushes + 1));
+    g_brush_src = xalloc(sizeof(int) * (nummapbrushes + 1));
+    int n = 0;
+    for (int i = 0; i < nummapbrushes; i++) {
+        g_brush_out[i] = mapbrushes[i].vis_only ? -1 : n;
+        if (!mapbrushes[i].vis_only) g_brush_src[n++] = i;
+    }
+    g_numoutbrushes = n;
 }
 
 void BeginModel(void) {
@@ -201,7 +214,8 @@ static void EmitLeaf(node_t *node) {
     VecToShorts(node->maxs, leaf->maxs);
     leaf->firstleafbrush = (unsigned short)numleafbrushes;
     for (bspbrush_t *b = node->brushlist; b; b = b->next) {
-        int brushnum = (int)(b->original - mapbrushes), i;
+        int brushnum = g_brush_out[b->original - mapbrushes], i;
+        if (brushnum < 0) continue;
         for (i = leaf->firstleafbrush; i < numleafbrushes; i++)
             if (dleafbrushes[i] == brushnum) break;
         if (i == numleafbrushes) {
@@ -437,11 +451,11 @@ void UnparseEntities(void) {
 /* ------------------------------------------------------------------ brushes, planes, texinfo */
 static void EmitBrushes(void) {
     numbrushsides = 0;
-    numbrushes = nummapbrushes;
+    numbrushes = g_numoutbrushes;
     dbrushes = xalloc(sizeof(dbrush_t) * (nummapbrushes + 1));
     dbrushsides = xalloc(sizeof(dbrushside_t) * (nummapbrushsides + nummapbrushes * 6 + 1));
-    for (int bnum = 0; bnum < nummapbrushes; bnum++) {
-        mapbrush_t *b = &mapbrushes[bnum];
+    for (int bnum = 0; bnum < numbrushes; bnum++) {
+        mapbrush_t *b = &mapbrushes[g_brush_src[bnum]];
         dbrush_t *db = &dbrushes[bnum];
         db->contents = b->contents;
         db->firstside = numbrushsides;

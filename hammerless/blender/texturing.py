@@ -268,7 +268,8 @@ def selected_targets(context) -> list[tuple]:
         if srcs:                        # (one collision prop picked: the texture goes on the whole set)
             have = {o for o, _f in out}
             out += [(o, None) for o in bpy.data.objects
-                    if o.get("hl_collision_of") in srcs and o not in have and _paintable(o)]
+                    if o.get("hl_collision_of") in srcs and o not in have and _paintable(o)
+                    and o.hammerless.brush_detail != "VIS"]
     return out
 
 
