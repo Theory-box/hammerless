@@ -902,9 +902,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                          "once (no analysis reload)"),
                ("GAME", "By the game", "The game analyzes it after loading, then reloads the map")])
     wall_climbs: BoolProperty(
-        name="Zombies Climb Walls", default=False,
-        description="Common infected can climb any wall up to 160 units (about 3 m) high, as if it had a "
-                    "ladder, and get back down. Only with Nav Mesh: Made in Blender")
+        name="Auto Climb Links", default=False,
+        description="A nav link up every wall up to 160 units (about 3 m) high, and back down: common infected "
+                    "climb them like a ladder. The game has no zombies-only link, so the Director's flow and the "
+                    "bots treat them as walkable too: a route that only works with them is blocked for survivors. "
+                    "Only with Nav Mesh: Made in Blender")
     nav_culling: BoolProperty(
         name="Nav Culling", default=True,
         description="On (like the game's own generator): nav only grows from the item spawns and Landmarks across what "

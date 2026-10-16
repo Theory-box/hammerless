@@ -1106,7 +1106,7 @@ class Generator(Sampler):
         return None
 
     def add_wall_climbs(self, max_height: float) -> int:
-        """'Zombies Climb Walls': a climb link up every wall 19..max_height units high (commons
+        """'Auto Climb Links': a climb link up every wall 19..max_height units high (commons
         climb a nav link like that; see Zombie Climb), and a way back down where there is none
         (L4D2 makes no drop link for 19-64 unit ledges). Only where a wall really stands between
         the two: walking straight ahead from the low side must be blocked. Returns links added."""

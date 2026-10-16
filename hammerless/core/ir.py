@@ -102,7 +102,7 @@ class MapSettings:
     ambient_color: tuple[int, int, int] = (140, 160, 190)
     ambient_brightness: int = 80
     lightmap_scale: int = 16          # default for brush faces (lower = sharper, slower)
-    wall_climbs: bool = False         # Zombies Climb Walls (nav made in Blender)
+    wall_climbs: bool = False         # Auto Climb Links (nav made in Blender)
 
     # fog
     fog_enabled: bool = False
