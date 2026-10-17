@@ -10,7 +10,8 @@
 #define CSG_MAX_SIDES 96
 #define CSG_MAX_WIND 128
 #define CSG_ON_EPS 0.01           /* a point this close to a plane is on it */
-#define CSG_MIN_AREA 0.01          /* a face smaller than this is no face (a plane that only touches the brush) */
+#define CSG_MIN_AREA 1e-6          /* a face smaller than this is no face (a plane that only touches the brush): only
+                                      truly degenerate ones, dropping a real plane lets the brush poke past it */
 #define CSG_MIN_VOLUME 0.01        /* a piece smaller than this is no piece */
 #define CSG_BIG 1e6
 
@@ -234,15 +235,73 @@ EXPORT int hl_csg(int op, int na, const double *ap, const int *asrc, int nb, con
         c_emit(&o, &in);
         return o.overflow ? -1 : o.pieces;
     }
-    /* subtract: peel off, for each cutter plane in turn, the part of what's left that's in front of it */
+    /* subtract: peel off, for each cutter plane in turn, the part of what's left that's in front of it. Two orders
+       (the cutter faces' area inside the target, biggest first; and the cutter's own order): the one with fewer
+       pieces wins, then the one whose smallest piece is biggest (fewer slivers) */
+    static CBrush cand[2][CSG_MAX_SIDES];
+    int count[2] = {0, 0};
+    double smallest[2] = {1e300, 1e300};
     int order[CSG_MAX_SIDES];
-    int no = c_order(&a, &b, order);
-    in = a;
-    for (int k = 0; k < no; k++) {
-        CPlane cut = b.p[order[k]];
-        piece = in;
-        if (c_add_plane(&piece, c_flip(cut)) && c_tidy(&piece) > CSG_MIN_VOLUME) c_emit(&o, &piece);
-        if (!c_add_plane(&in, cut) || c_tidy(&in) <= CSG_MIN_VOLUME) break;
+    for (int c = 0; c < 2; c++) {
+        int no;
+        if (c == 0) no = c_order(&a, &b, order);
+        else { no = b.n; for (int k = 0; k < no; k++) order[k] = k; }
+        in = a;
+        for (int k = 0; k < no; k++) {
+            CPlane cut = b.p[order[k]];
+            piece = in;
+            double v;
+            if (c_add_plane(&piece, c_flip(cut)) && (v = c_tidy(&piece)) > CSG_MIN_VOLUME) {
+                cand[c][count[c]++] = piece;
+                if (v < smallest[c]) smallest[c] = v;
+            }
+            if (!c_add_plane(&in, cut) || c_tidy(&in) <= CSG_MIN_VOLUME) break;
+        }
     }
+    int best = (count[1] < count[0] || (count[1] == count[0] && smallest[1] > smallest[0] * 1.0001)) ? 1 : 0;
+    for (int k = 0; k < count[best]; k++) c_emit(&o, &cand[best][k]);
     return o.overflow ? -1 : o.pieces;
+}
+
+/* hl_csg_merge: two convex brushes as one, when their union is convex: they share a face (the same plane, facing
+ * each other) and the planes left (both brushes' but that pair) enclose exactly both: every corner of each is
+ * inside them and the volume is the sum. Writes the merged brush as hl_csg does (one piece); returns 1, 0 when
+ * the union isn't convex, -1 when a buffer is too small. */
+EXPORT int hl_csg_merge(int na, const double *ap, const int *asrc, int nb, const double *bp, const int *bsrc,
+                        double *out_planes, int *out_src, int *out_sides, double *out_verts, int *out_face_verts,
+                        int cap_sides, int cap_verts) {
+    static CBrush a, b, m;
+    COut o = {out_planes, out_src, out_sides, out_verts, out_face_verts, cap_sides, cap_verts, 1, 0, 0, 0, 0};
+    c_load(&a, na, ap, asrc);
+    c_load(&b, nb, bp, bsrc);
+    double va = c_tidy(&a), vb = c_tidy(&b);
+    if (va <= CSG_MIN_VOLUME || vb <= CSG_MIN_VOLUME) return 0;
+    for (int i = 0; i < a.n; i++)
+        for (int j = 0; j < b.n; j++) {
+            CPlane fa = a.p[i], fb = b.p[j];
+            if (!c_same(fa, c_flip(fb))) continue;           /* (a face of each, against each other) */
+            m.n = 0;
+            for (int k = 0; k < a.n; k++) if (k != i) c_add_plane(&m, a.p[k]);
+            for (int k = 0; k < b.n; k++) if (k != j) c_add_plane(&m, b.p[k]);
+            CBrush test = m;
+            double vm = c_tidy(&test);
+            /* (a non-convex union is off by a whole chunk; thin slivers by a dropped tiny face, a few hundredths) */
+            if (fabs(vm - (va + vb)) > 1e-4 * (va + vb) + 0.1) continue;
+            /* every corner of both inside the merged planes */
+            CV w[CSG_MAX_WIND];
+            int inside = 1;
+            for (int s2 = 0; s2 < 2 && inside; s2++) {
+                const CBrush *src = s2 ? &b : &a;
+                for (int f = 0; f < src->n && inside; f++) {
+                    int nw = c_winding(src, f, w);
+                    for (int k = 0; k < nw && inside; k++)
+                        for (int q = 0; q < test.n; q++)
+                            if (c_dot(test.p[q].n, w[k]) - test.p[q].d > CSG_ON_EPS * 4) { inside = 0; break; }
+                }
+            }
+            if (!inside) continue;
+            c_emit(&o, &test);
+            return o.overflow ? -1 : 1;
+        }
+    return 0;
 }

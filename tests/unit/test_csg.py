@@ -65,6 +65,38 @@ class TestCSG(unittest.TestCase):
         self.assertEqual(len(pieces), 3)
         self.assertAlmostEqual(sum(p.volume() for p in pieces) / u ** 3, 6 * 0.3 * 3 - 2 * 0.3 * 2, places=3)
 
+    def test_merge(self):
+        a = csg.box((0, 0, 0), (32, 32, 32), 0)
+        b = csg.box((32, 0, 0), (64, 32, 32), 10)
+        m = csg.merge(a, b)
+        self.assertIsNotNone(m)
+        self.assertEqual(len(m.sides), 6)
+        self.assertAlmostEqual(m.volume(), 64 * 32 * 32, places=6)
+        self.assertIsNone(csg.merge(a, csg.box((32, 0, 0), (64, 64, 32), 10)))   # (an L: not convex)
+        self.assertIsNone(csg.merge(a, csg.box((32, 32, 0), (64, 64, 32), 10)))  # (only an edge touches)
+        self.assertIsNone(csg.merge(a, csg.box((40, 0, 0), (64, 32, 32), 10)))   # (apart)
+        # random brushes cut by random planes: the halves merge back into the whole
+        rng = random.Random(5)
+        done = 0
+        for _ in range(1000):
+            t = _random_brush(rng, 0)
+            whole = csg.intersect(t, t)
+            if whole is None:
+                continue
+            n = [rng.uniform(-1, 1) for _ in range(3)]
+            ln = sum(c * c for c in n) ** 0.5 or 1.0
+            n = tuple(c / ln for c in n)
+            pts = [v for f in whole.faces for v in f]
+            mid = [sum(p[i] for p in pts) / len(pts) for i in range(3)]
+            f, k = csg.clip(t, (n, sum(n[i] * mid[i] for i in range(3)), 50))
+            if f is None or k is None:
+                continue
+            m = csg.merge(f.sides, k.sides)
+            self.assertIsNotNone(m, f"case {done}")
+            self.assertAlmostEqual(m.volume(), whole.volume(), delta=1e-6 * whole.volume() + 0.05)
+            done += 1
+        self.assertGreater(done, 800)
+
     def test_random(self):
         rng = random.Random(17)
         cases = 0
@@ -84,7 +116,7 @@ class TestCSG(unittest.TestCase):
                 self.assertGreaterEqual(len(p.sides), 4)
                 for (n, d, src), f in zip(p.sides, p.faces):
                     self.assertTrue(src < 100 or src >= 100)          # (a tag of one or the other)
-                    self.assertGreaterEqual(csg._area(f, n), 0.01 - 1e-9)
+                    self.assertGreater(csg._area(f, n), 0.0)
                     for v in f:                                       # every corner inside every plane
                         for (n2, d2, _s) in p.sides:
                             self.assertLessEqual(n2[0] * v[0] + n2[1] * v[1] + n2[2] * v[2] - d2, 0.02)

@@ -1017,6 +1017,10 @@ def test_brush_tools():
     assert bpy.ops.hammerless.brush_clip(axis="Z", keep="BOTH") == {"FINISHED"}
     n, vol, _m = parts_and_volume(slab)
     assert n == 2 and abs(vol - 8.0) < 1e-4, (n, vol)
+    # merge: the two halves back into one
+    assert bpy.ops.hammerless.brush_merge() == {"FINISHED"}
+    n, vol, _m = parts_and_volume(slab)
+    assert n == 1 and abs(vol - 8.0) < 1e-4, (n, vol)
     # a part that isn't convex is left as it was
     bpy.ops.mesh.primitive_monkey_add(location=(15, 0, 1))
     monkey = bpy.context.object

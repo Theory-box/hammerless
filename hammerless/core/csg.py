@@ -111,6 +111,39 @@ def clip(target, plane) -> tuple[Piece | None, Piece | None]:
     return front, back
 
 
+def merge(a, b) -> Piece | None:
+    """The two brushes as one when their union is convex (they share a face and nothing sticks out), else None."""
+    lib = _lib()
+    if not getattr(lib, "_hl_merge_typed", False):
+        lib.hl_csg_merge.restype = ctypes.c_int
+        lib._hl_merge_typed = True
+    na, ap, asrc = _planes(a)
+    nb, bp, bsrc = _planes(b)
+    cap_sides = na + nb + 8
+    cap_verts = cap_sides * 32
+    while True:
+        out_planes = (ctypes.c_double * (4 * cap_sides))()
+        out_src, out_sides = (ctypes.c_int * cap_sides)(), (ctypes.c_int * 1)()
+        out_verts, out_fv = (ctypes.c_double * (3 * cap_verts))(), (ctypes.c_int * cap_sides)()
+        r = lib.hl_csg_merge(ctypes.c_int(na), ap, asrc, ctypes.c_int(nb), bp, bsrc, out_planes, out_src, out_sides,
+                             out_verts, out_fv, ctypes.c_int(cap_sides), ctypes.c_int(cap_verts))
+        if r != -1:
+            break
+        cap_sides, cap_verts = cap_sides * 4, cap_verts * 4
+    if r != 1:
+        return None
+    p = Piece()
+    vi = 0
+    for si in range(out_sides[0]):
+        p.sides.append(((out_planes[4 * si], out_planes[4 * si + 1], out_planes[4 * si + 2]), out_planes[4 * si + 3],
+                        out_src[si]))
+        nv = out_fv[si]
+        p.faces.append([(out_verts[3 * (vi + j)], out_verts[3 * (vi + j) + 1], out_verts[3 * (vi + j) + 2])
+                        for j in range(nv)])
+        vi += nv
+    return p
+
+
 def box(lo, hi, src0: int = 0) -> list:
     """An axis-aligned box's planes (tags src0 .. src0 + 5: +x -x +y -y +z -z)."""
     return [((1.0, 0.0, 0.0), hi[0], src0), ((-1.0, 0.0, 0.0), -lo[0], src0 + 1),

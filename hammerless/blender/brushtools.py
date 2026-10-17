@@ -302,6 +302,65 @@ class HL_OT_brush_hollow(_BrushOp, bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _same_look(p, q, records) -> bool:
+    """Faces of the two pieces on one plane (they'd become one face) wear the same material."""
+    for n1, d1, t1 in p.sides:
+        for n2, d2, t2 in q.sides:
+            if (n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2] > 1 - 1e-9 and abs(d1 - d2) < 0.01):
+                r1, r2 = records.get(t1), records.get(t2)
+                if (r1.material if r1 else None) != (r2.material if r2 else None):
+                    return False
+    return True
+
+
+def merge_pieces(pieces, records):
+    """Pieces joined wherever two make one convex piece (same materials on the faces that join), until none do."""
+    from ..core import csg
+    pieces = list(pieces)
+    joined = True
+    while joined:
+        joined = False
+        for i in range(len(pieces)):
+            for j in range(i + 1, len(pieces)):
+                if not _same_look(pieces[i], pieces[j], records):
+                    continue
+                m = csg.merge(pieces[i].sides, pieces[j].sides)
+                if m is not None:
+                    pieces[i] = m
+                    del pieces[j]
+                    joined = True
+                    break
+            if joined:
+                break
+    return pieces
+
+
+class HL_OT_brush_merge(_BrushOp, bpy.types.Operator):
+    bl_idname = "hammerless.brush_merge"
+    bl_label = "Merge"
+    bl_description = ("Join the selected brushes' pieces back together wherever two make one convex piece (and the "
+                      "faces that join wear the same material): fewer, cleaner brushes")
+
+    def execute(self, context):
+        from ..core import csg
+        scale = context.scene.hammerless.units_per_meter
+        context.view_layer.update()
+        targets = [o for o in context.selected_objects if o.type == "MESH"]
+        before = after = 0
+        for t in targets:
+            parts, recs = read_brushes(t, scale)
+            convex = [csg.intersect(s, s) for s, c, _r in parts if c]
+            convex = [p for p in convex if p is not None]
+            others = [raw for s, c, raw in parts if not c]
+            merged = merge_pieces(convex, recs)
+            before += len(convex)
+            after += len(merged)
+            if len(merged) < len(convex):
+                write_brushes(t, merged + others, recs, scale)
+        self.report({"INFO"}, f"{before} pieces -> {after}")
+        return {"FINISHED"}
+
+
 class HL_PT_brush_tools(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -342,9 +401,10 @@ class HL_PT_brush_tools(bpy.types.Panel):
         row = layout.row(align=True)
         row.scale_y = 1.2
         row.operator("hammerless.brush_hollow", text="Hollow", icon="MOD_SOLIDIFY")
+        row.operator("hammerless.brush_merge", text="Merge", icon="AUTOMERGE_ON")
 
 
-CLASSES = (HL_OT_brush_carve, HL_OT_brush_clip, HL_OT_brush_hollow, HL_PT_brush_tools)
+CLASSES = (HL_OT_brush_carve, HL_OT_brush_clip, HL_OT_brush_hollow, HL_OT_brush_merge, HL_PT_brush_tools)
 
 
 def register():
