@@ -45,6 +45,45 @@ class _Sub(_Panel):
     bl_options = {"DEFAULT_CLOSED"}
 
 
+class _InPanel:
+    """The panel as its draw code sees it, with its layout swapped for an indented one."""
+
+    def __init__(self, panel, layout):
+        self._panel, self.layout = panel, layout
+
+    def __getattr__(self, name):
+        return getattr(self._panel, name)
+
+
+class _Nested:
+    """A panel inside a subpanel: Blender lines every level up at the same edge, so its header and contents are
+    moved right by `indent` steps (it reads as part of the panel above it, not as the next one)."""
+    indent = 1
+
+    def __init_subclass__(cls, **kw):
+        super().__init_subclass__(**kw)
+        body, head = cls.__dict__.get("draw"), cls.__dict__.get("draw_header")
+        if body is not None:
+            cls.draw = _indented_draw(body)
+        cls.draw_header = _indented_header(head)
+
+
+def _indented_draw(body):
+    def draw(self, context):            # (Blender wants exactly (self, context))
+        row = self.layout.row()
+        row.separator(factor=2.4 * self.indent)
+        body(_InPanel(self, row.column()), context)
+    return draw
+
+
+def _indented_header(head):
+    def draw_header(self, context):
+        self.layout.separator(factor=2.4 * self.indent)
+        if head is not None:
+            head(self, context)
+    return draw_header
+
+
 def _settings(layout):
     """A column of settings with their labels lined up on the left (Blender's property split)."""
     col = layout.column()
@@ -692,7 +731,7 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
                 _hint(layout, "Visibility is Off: no bounced light", icon="ERROR")
 
 
-class HL_PT_view_light(_Panel, bpy.types.Panel):
+class HL_PT_view_light(_Nested, _Panel, bpy.types.Panel):
     bl_label = "Baked Lighting"
     bl_parent_id = "HL_PT_lighting"
 
@@ -711,7 +750,7 @@ class HL_PT_view_light(_Panel, bpy.types.Panel):
         draw_panel(self.layout, context)
 
 
-class HL_PT_environment(_Sub, bpy.types.Panel):
+class HL_PT_environment(_Nested, _Sub, bpy.types.Panel):
     bl_label = "Environment"
     bl_parent_id = "HL_PT_lighting"
 
@@ -745,7 +784,8 @@ def _own_suns(context) -> list:
             and o.type != "LIGHT" and o.hammerless.classname == "light_environment" and o.visible_get()]
 
 
-class HL_PT_sun(_Sub, bpy.types.Panel):
+class HL_PT_sun(_Nested, _Sub, bpy.types.Panel):
+    indent = 2
     bl_label = "Sun"
     bl_parent_id = "HL_PT_environment"
 
@@ -783,7 +823,8 @@ class HL_PT_sun(_Sub, bpy.types.Panel):
             _hint(layout, "No sun: only the sky light is added (Sky Light Brightness 0: none)")
 
 
-class HL_PT_fog(_Sub, bpy.types.Panel):
+class HL_PT_fog(_Nested, _Sub, bpy.types.Panel):
+    indent = 2
     bl_label = "Fog"
     bl_parent_id = "HL_PT_environment"
 
@@ -801,7 +842,7 @@ class HL_PT_fog(_Sub, bpy.types.Panel):
         col.prop(s, "fog_max_density")
 
 
-class HL_PT_light_quality(_Sub, bpy.types.Panel):
+class HL_PT_light_quality(_Nested, _Sub, bpy.types.Panel):
     bl_label = "Quality Details"
     bl_parent_id = "HL_PT_lighting"
 
@@ -828,7 +869,7 @@ class HL_PT_light_quality(_Sub, bpy.types.Panel):
         col.prop(s, "light_prop_polys")
 
 
-class HL_PT_light_advanced(_Sub, bpy.types.Panel):
+class HL_PT_light_advanced(_Nested, _Sub, bpy.types.Panel):
     bl_label = "Advanced"
     bl_parent_id = "HL_PT_lighting"
 
@@ -915,7 +956,7 @@ class HL_PT_navmesh(_Panel, bpy.types.Panel):
         draw_buttons(self.layout, context)
 
 
-class HL_PT_view_nav(_Panel, bpy.types.Panel):
+class HL_PT_view_nav(_Nested, _Panel, bpy.types.Panel):
     bl_label = "Preview"
     bl_parent_id = "HL_PT_navmesh"
 
