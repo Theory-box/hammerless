@@ -500,8 +500,9 @@ class HL_OT_nav_analyze(bpy.types.Operator):
     bl_label = "Build Nav Mesh"
     bl_description = ("Build the nav mesh from this scene and run the game's nav analysis on it (visibility between "
                       "areas, hiding spots), as Build does. When the walls changed since the last build, it first "
-                      "compiles what the analysis looks through (walls and visibility, not the lighting). Build & "
-                      "Play puts the result in the game")
+                      "compiles what the analysis looks through (walls and visibility, not the lighting). When the "
+                      "walls haven't changed since the last Build, the result goes into the game too (Play uses "
+                      "it); else the next Build puts it there")
 
     _timer = None
     _thread = None
@@ -588,6 +589,7 @@ class HL_OT_nav_analyze(bpy.types.Operator):
                                    assets=asset_print(rep, root, context.scene.hammerless.map_name))
         job = cc.CompileJob(tools, path, opts, copy_to_game=False, skip_if_unchanged=True)   # (as Build: same options)
         self._job = None
+        self._path, self._rep = path, rep           # (for the game's copy of the result: _to_game)
         if not job.up_to_date():
             try:
                 self._job = job.start()
@@ -693,9 +695,36 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         spots = sum(len(a.hiding_spots) for a in mesh.areas)
         done = ("Compiled the walls and visibility and analyzed" if job is not None and not job.skipped
                 else "Analyzed")
-        self.report({"INFO"}, f"{done} {len(mesh.areas)} areas: {spots} hiding spots. Put the 3D cursor "
+        game = self._to_game(context, mesh)
+        self.report({"INFO"}, f"{done} {len(mesh.areas)} areas: {spots} hiding spots. {game}. Put the 3D cursor "
                               "on an area (Shift + right-click) to see what it can see")
         return {"FINISHED"}
+
+    def _to_game(self, context, mesh) -> str:
+        """The nav into the game, when the game's map is the one it was analyzed against (the walls didn't change
+        since the last Build): Play uses it, and the next Build keeps it (the same inputs key a Build records).
+        Else the game's map is older: Build puts a new nav in with it (never this compile's map: it has no
+        lighting)."""
+        from ..core import compile as cc
+        from .ops import _nav_key, compile_options
+        tools, name = self._tools, self._settings[0]
+        game_bsp = os.path.join(tools.maps_dir, name + ".bsp")
+        try:
+            same = (os.path.exists(game_bsp) and os.path.exists(self._base + ".bsp")
+                    and cc.bsp_signature(game_bsp) == cc.bsp_signature(self._base + ".bsp"))
+        except (OSError, ValueError):
+            same = False
+        if not same:
+            return "Build puts it in the game (the walls changed since the last Build)"
+        s = context.scene.hammerless
+        key = _nav_key(self._path, self._rep, s, compile_options(s))
+        try:
+            cc.write_generated_nav(tools, name, mesh, analyzed=True)
+            cc.set_nav_inputs(tools, name, key)
+        except OSError as ex:
+            return f"Couldn't put it in the game ({ex}): Build does"
+        _disk["key"] = None                           # (the panel's 'on disk' status: read again)
+        return "In the game now: Play uses it"
 
 
 def _progress(box, stage, **more) -> None:
