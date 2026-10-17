@@ -25,7 +25,7 @@ except ImportError:
 
 
 def register():
-    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing, gameskeleton, placedchar, particlebrowser, collisiontool, animpreview, behaviours, brushtools
+    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing, gameskeleton, placedchar, particlebrowser, collisiontool, animpreview, behaviours, brushtools, drawbrush
     watchdog.register()
     props.register()
     quality.register()
@@ -51,12 +51,14 @@ def register():
     animpreview.register()        # (after ui: its panel sits under the object panel)
     behaviours.register()
     brushtools.register()
+    drawbrush.register()
     particlebrowser.register()   # (after the main panels: its panel sits below them)
 
 
 def unregister():
-    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing, gameskeleton, placedchar, particlebrowser, collisiontool, animpreview, behaviours, brushtools
+    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing, gameskeleton, placedchar, particlebrowser, collisiontool, animpreview, behaviours, brushtools, drawbrush
     particlebrowser.unregister()
+    drawbrush.unregister()
     brushtools.unregister()
     behaviours.unregister()
     animpreview.unregister()

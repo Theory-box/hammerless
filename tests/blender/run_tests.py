@@ -1027,6 +1027,83 @@ def test_brush_tools():
     assert len(monkey.data.vertices) == before                   # (the monkey isn't convex: kept as it was)
 
 
+def test_draw_brush_maths_and_hollow():
+    # the Draw Brush frame (axis-aligned on axis-aligned surfaces, along a slope otherwise), its box's corners on
+    # its own planes; Hollow leaves exactly the walls
+    import bmesh
+    from mathutils import Vector
+    from hammerless.blender.drawbrush import box_corners, box_sides, frame_for
+    n, u, v = frame_for(Vector((0.0, 0.0001, 0.99999)))
+    assert tuple(n) == (0, 0, 1) and tuple(u) == (1, 0, 0) and tuple(v) == (0, 1, 0), (n, u, v)
+    n, u, v = frame_for(Vector((0.0, -0.6, 0.8)))
+    assert abs(n.dot(u)) < 1e-6 and abs(n.dot(v)) < 1e-6 and abs(u.dot(v)) < 1e-6 and abs(n.length - 1) < 1e-6
+    upm = 52.49
+    corners = box_corners(n, u, v, 10.0, -16, 32, 8, -24, 40, upm)
+    sides = box_sides(n, u, v, 10.0, -16, 32, 8, -24, 40, 0)
+    for c in corners:
+        g = c * upm
+        assert all(nn[0] * g.x + nn[1] * g.y + nn[2] * g.z - d < 1e-3 for nn, d, _t in sides)
+    # Hollow: a 2 m (104.98 unit) box with 8-unit walls
+    reset_scene()
+    box = add_box("Room", (2, 2, 2), (0, 0, 1))
+    for o in bpy.context.selected_objects:
+        o.select_set(False)
+    box.select_set(True)
+    bpy.context.view_layer.objects.active = box
+    assert bpy.ops.hammerless.brush_hollow(thickness=8.0) == {"FINISHED"}
+    bm = bmesh.new()
+    bm.from_mesh(box.data)
+    vol = bm.calc_volume(signed=True) * box.matrix_world.determinant()
+    bm.free()
+    t = 8.0 / bpy.context.scene.hammerless.units_per_meter
+    want = 8.0 - (2 - 2 * t) ** 3
+    assert abs(vol - want) < 1e-4, (vol, want)
+
+
+def test_draw_brush_results():
+    # what Draw Brush makes once a box is drawn (the mouse part needs a person): Add -> a closed brush on the
+    # surface with the surface's material; Carve -> the box cut out of the brushes it touches, their own material
+    import types
+    import bmesh
+    from mathutils import Vector
+    from hammerless.blender.drawbrush import HL_OT_draw_brush, box_corners, box_sides, frame_for
+    from hammerless.blender.extract import _loose_parts
+    reset_scene()
+    wall = add_box("Wall", (6, 0.3, 3), (0, 6, 1.5))
+    wall.data.materials.append(bpy.data.materials.new("plaster"))
+    upm = bpy.context.scene.hammerless.units_per_meter
+    reports = []
+
+    def fake(mode, n_world, d0, a0, a1, b0, b1, h):
+        n, u, v = frame_for(Vector(n_world))
+        f = types.SimpleNamespace(mode=mode, upm=upm, n=n, u=u, v=v, d0=d0, a0=a0, a1=a1, b0=b0, b1=b1, h=h,
+                                  hit_obj=wall, hit_index=0, report=lambda kind, msg: reports.append(msg))
+        f._box = lambda: box_corners(n, u, v, d0, a0, a1, b0, b1, h, upm)
+        f._sides = lambda tag: box_sides(n, u, v, d0, a0, a1, b0, b1, h, tag)
+        f._carve = lambda context, mat: HL_OT_draw_brush._carve(f, context, mat)
+        return f
+    # Add: on the floor (z = 0), 64 x 32, 48 high
+    f = fake("ADD", (0, 0, 1), 0.0, 0, 64, 0, 32, 48)
+    assert HL_OT_draw_brush._finish(f, bpy.context) == {"FINISHED"}
+    b = bpy.context.object
+    bm = bmesh.new()
+    bm.from_mesh(b.data)
+    vol = bm.calc_volume(signed=True) * upm ** 3
+    assert len(bm.faces) == 6 and bm.is_valid and abs(vol - 64 * 32 * 48) < 1.0, (len(bm.faces), vol)
+    bm.free()
+    # Carve: a doorway through the wall (its near face is y = 5.85 m, facing -y), 2 m wide, 2 m tall, deep enough
+    d0 = -5.85 * upm                                            # (the face plane: -y . p = d0)
+    door = fake("CARVE", (0, -1, 0), d0, -1.0 * upm, 1.0 * upm, 0.0, 2.0 * upm, -0.5 * upm)
+    assert HL_OT_draw_brush._carve(door, bpy.context, wall.data.materials[0]) == {"FINISHED"}
+    bm = bmesh.new()
+    bm.from_mesh(wall.data)
+    parts = len(_loose_parts(bm))
+    vol = bm.calc_volume(signed=True) * wall.matrix_world.determinant()
+    bm.free()
+    assert parts >= 2 and abs(vol - (6 * 0.3 * 3 - 2 * 0.3 * 2)) < 1e-3, (parts, vol, reports)
+    assert {m.name for m in wall.data.materials if m} == {"plaster"}       # (the doorway's faces: the wall's own)
+
+
 def test_light_pattern_presets():
     # a light's Pattern is a preset Behaviour: lights sharing one share a name (one light style), set once
     from hammerless.blender.lightpresets import PATTERNS, preset_slot

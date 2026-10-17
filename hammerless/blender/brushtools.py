@@ -173,6 +173,7 @@ class HL_OT_brush_carve(_BrushOp, bpy.types.Operator):
     def execute(self, context):
         from ..core import csg
         scale = context.scene.hammerless.units_per_meter
+        context.view_layer.update()           # (world matrices current: a scale just set reads right)
         cutter, targets = _targets(context, True)
         if cutter is None or not targets:
             self.report({"WARNING"}, "Select the brushes to cut, then the cutter last (the active object)")
@@ -238,6 +239,7 @@ class HL_OT_brush_clip(_BrushOp, bpy.types.Operator):
     def execute(self, context):
         from ..core import csg
         scale = context.scene.hammerless.units_per_meter
+        context.view_layer.update()           # (world matrices current: a scale just set reads right)
         targets = [o for o in context.selected_objects if o.type == "MESH"]
         if not targets:
             self.report({"WARNING"}, "Select the brushes to clip")
@@ -264,6 +266,42 @@ class HL_OT_brush_clip(_BrushOp, bpy.types.Operator):
         return {"FINISHED"}
 
 
+class HL_OT_brush_hollow(_BrushOp, bpy.types.Operator):
+    bl_idname = "hammerless.brush_hollow"
+    bl_label = "Hollow"
+    bl_description = ("Make the selected brushes hollow: walls of Thickness all round (the inside carved out), each "
+                      "wall its own convex piece. A room from a block")
+    thickness: bpy.props.FloatProperty(name="Thickness (units)", default=8.0, min=1.0, soft_max=64.0,
+                                       description="Wall thickness in game units (8 = a typical wall)")
+
+    def execute(self, context):
+        from ..core import csg
+        scale = context.scene.hammerless.units_per_meter
+        context.view_layer.update()           # (world matrices current: a scale just set reads right)
+        targets = [o for o in context.selected_objects if o.type == "MESH"]
+        if not targets:
+            self.report({"WARNING"}, "Select the brushes to hollow")
+            return {"CANCELLED"}
+        small = 0
+        for t in targets:
+            parts, recs = read_brushes(t, scale)
+            out = []
+            for sides, convex, raw in parts:
+                if not convex:
+                    out.append(raw)
+                    continue
+                inner = [(n, d - self.thickness, tag) for (n, d, tag) in sides]   # (each face moved in)
+                if csg.intersect(inner, inner) is None:
+                    small += 1                       # (thinner than two walls: left solid)
+                    out.append(csg.intersect(sides, sides))
+                    continue
+                out += csg.subtract(sides, inner)
+            write_brushes(t, [p for p in out if p is not None], recs, scale)
+        if small:
+            self.report({"WARNING"}, f"{small} brush{'es' if small != 1 else ''} thinner than two walls: left solid")
+        return {"FINISHED"}
+
+
 class HL_PT_brush_tools(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -274,6 +312,14 @@ class HL_PT_brush_tools(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        row = layout.row(align=True)
+        row.scale_y = 1.4
+        row.operator("hammerless.draw_brush", text="Draw Brush", icon="MESH_CUBE").mode = "ADD"
+        row.operator("hammerless.draw_brush", text="Draw Carve", icon="MOD_BOOLEAN").mode = "CARVE"
+        sub = layout.column(align=True)
+        sub.scale_y = 0.8
+        sub.label(text="Drag on a surface, move for height, click", icon="INFO")
+        layout.separator()
         col = layout.column(align=True)
         row = col.row(align=True)
         row.scale_y = 1.2
@@ -292,9 +338,13 @@ class HL_PT_brush_tools(bpy.types.Panel):
         sub = layout.column(align=True)
         sub.scale_y = 0.8
         sub.label(text="Cuts the selected brushes through the 3D cursor", icon="INFO")
+        layout.separator()
+        row = layout.row(align=True)
+        row.scale_y = 1.2
+        row.operator("hammerless.brush_hollow", text="Hollow", icon="MOD_SOLIDIFY")
 
 
-CLASSES = (HL_OT_brush_carve, HL_OT_brush_clip, HL_PT_brush_tools)
+CLASSES = (HL_OT_brush_carve, HL_OT_brush_clip, HL_OT_brush_hollow, HL_PT_brush_tools)
 
 
 def register():

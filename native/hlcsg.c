@@ -116,9 +116,17 @@ static double c_tidy(CBrush *b) {
     return vol;
 }
 
+/* (the same plane, within the tolerances: a face drawn on a surface lies on it, give or take float noise) */
+static int c_same(CPlane a, CPlane b) {
+    return c_dot(a.n, b.n) > 1.0 - 1e-9 && fabs(a.d - b.d) < CSG_ON_EPS;
+}
+
 static int c_add_plane(CBrush *b, CPlane p) {
+    p = c_snap(p);
+    for (int i = 0; i < b->n; i++)
+        if (c_same(b->p[i], p)) return 1;          /* (already bounded there: the first one's tag stays) */
     if (b->n >= CSG_MAX_SIDES) return 0;
-    b->p[b->n++] = c_snap(p);
+    b->p[b->n++] = p;
     return 1;
 }
 
@@ -161,7 +169,7 @@ static void c_load(CBrush *b, int n, const double *planes, const int *src) {
         if (l < 1e-12) continue;
         p.n = c_scale(p.n, 1.0 / l);
         p.d /= l;
-        b->p[b->n++] = c_snap(p);
+        c_add_plane(b, p);                         /* (coplanar faces of one brush: one plane) */
     }
 }
 

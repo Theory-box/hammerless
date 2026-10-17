@@ -52,6 +52,19 @@ class TestCSG(unittest.TestCase):
         self.assertIsNone(csg.intersect(a, b))
         self.assertEqual(csg.subtract(a, csg.box((-8, -8, -8), (40, 40, 40), 100)), [])   # (swallowed)
 
+    def test_cut_flush_with_a_face(self):
+        # a doorway drawn on a wall's face: the cutter's face lies on the wall's, give or take float noise (Blender
+        # stores vertices as 32-bit floats): still the same plane, three pieces left
+        u = 52.49
+        noise = 3e-5
+        wall = [((-1, 0, 0), 3 * u, 0), ((1, 0, 0), 3 * u + noise, 1), ((0, 1, 0), 6.15 * u - noise, 2),
+                ((0, -1, 0), -5.85 * u + noise, 3), ((0, 0, 1), 3 * u, 4), ((0, 0, -1), 0.0, 5)]
+        door = [((1, 0, 0), u, 100), ((-1, 0, 0), u, 100), ((0, 0, 1), 2 * u, 100), ((0, 0, -1), 0.0, 100),
+                ((0, -1, 0), -5.85 * u, 100), ((0, 1, 0), 6.35 * u, 100)]
+        pieces = csg.subtract(wall, door)
+        self.assertEqual(len(pieces), 3)
+        self.assertAlmostEqual(sum(p.volume() for p in pieces) / u ** 3, 6 * 0.3 * 3 - 2 * 0.3 * 2, places=3)
+
     def test_random(self):
         rng = random.Random(17)
         cases = 0
