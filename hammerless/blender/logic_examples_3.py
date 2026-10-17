@@ -281,48 +281,30 @@ SWELLING_POD = dict(
             ["each_common", "their_at", "common_dist", "common_close", "if_common", "kill_common", "forget",
              "forget_shot", "gone"])])
 
-SWELLING_PODS = dict(
-    about="Every pod in the map (the prop_dynamic entities whose model name has Model Name Has in it) behaves: five "
-          "times a second each runs 'Swelling Pod'. With Burst When Near on, it swells while a survivor is within "
-          "Radius (Swell Time (Near) to swell fully, when it bursts) and shrinks back when left alone (Shrink Time). "
-          "With Shooting Sets It Off on, a shot pod always bursts: it swells (Swell Time (Shot), Shot: Swell First) or "
-          "bursts at once. A "
-          "burst: an explosion, Damage and a green flash of spores for survivors within Burst Radius, the common "
-          "infected within it killed, and the pod is gone.",
-    inputs=[("name_has", "Model Name Has", "text"), ("near_on", "Burst When Near", "bool"), ("radius", "Radius", "num"),
-            ("near_time", "Swell Time (Near)", "num"), ("shrink_time", "Shrink Time", "num"),
-            ("shot_on", "Shooting Sets It Off", "bool"), ("shot_swells", "Shot: Swell First", "bool"),
-            ("shot_time", "Swell Time (Shot)", "num"), ("grow", "Grow To", "num"),
-            ("burst_radius", "Burst Radius", "num"), ("damage", "Damage", "num")],
-    outputs=[],
-    nodes=[N("timer", "HL_NodeTimer", 0, 0, seconds=0.2),
-           N("each", "HL_NodeForEach", 1, 0, what="CLASS", sockets={"match": "prop_dynamic"}),
-           N("pod", "HL_NodeGroup", 2, 0, group="Swelling Pod"),
-           # shot
-           N("ask", "HL_NodeOverride", 0, 3, hook="AllowTakeDamage"),
-           fn("model", "entity:GetModelName", 1, 4),
-           N("is_pod", "HL_NodeTextCheck", 2, 4, label="A pod?", op="CONTAINS"),
-           N("and_on", "HL_NodeBoolMath", 3, 4, label="And Shooting Sets It Off", op="AND"),
-           N("if_hit", "HL_NodeIf", 3, 3),
-           N("mark", "HL_NodeSetVariable", 4, 3, label="It was shot", var_name="pod_shot", scope="PLAYER",
-             value_kind="bool", sockets={"value": True}),
-           N("if_swell", "HL_NodeIf", 5, 3, label="Shot: Swell First?"),
-           N("burst_now", "HL_NodeSetVariable", 6, 4, label="Full now (bursts next tick)", var_name="pod_charge",
-             scope="PLAYER", sockets={"value": 1.0})],
-    links=[("timer.tick", "each.run"), ("each.each", "pod.run"), ("each.item", "pod.pod"),
-           ("in.name_has", "pod.name_has"), ("in.near_on", "pod.near_on"), ("in.radius", "pod.radius"),
-           ("in.near_time", "pod.near_time"), ("in.shrink_time", "pod.shrink_time"),
-           ("in.shot_time", "pod.shot_time"), ("in.grow", "pod.grow"), ("in.burst_radius", "pod.burst_radius"),
-           ("in.damage", "pod.damage"),
-           ("ask.asked", "if_hit.in"), ("ask.victim", "model.target"), ("model.result", "is_pod.a"),
-           ("in.name_has", "is_pod.b"), ("is_pod.result", "and_on.a"), ("in.shot_on", "and_on.b"),
-           ("and_on.result", "if_hit.condition"),
-           ("if_hit.true", "mark.run"), ("ask.victim", "mark.player"),
-           ("mark.then", "if_swell.in"), ("in.shot_swells", "if_swell.condition"),
-           ("if_swell.false", "burst_now.run"), ("ask.victim", "burst_now.player")],
-    steps=[("Five times a second, every prop_dynamic: the pods behave", ["timer", "each", "pod"]),
-           ("Shot (if Shooting Sets It Off): it keeps swelling, or bursts at once (Shot: Swell First off)",
-            ["ask", "model", "is_pod", "and_on", "if_hit", "mark", "if_swell", "burst_now"])])
+SWELLING_POD_BEHAVIOUR = dict(
+    behaviour=True,
+    about="The Behaviour each pod carries (Self is the pod). Five times a second it runs 'Swelling Pod' on Self: it "
+          "swells while a survivor is within Radius (Swell Time (Near) to swell fully, when it bursts) and shrinks "
+          "back when left alone (Shrink Time). Shot, it keeps swelling (Swell Time (Shot)) and bursts. A burst: an "
+          "explosion, Damage and a green flash of spores for survivors within Burst Radius, the common infected "
+          "within it killed, and the pod gone. Its settings are on the 'Swelling Pod' node; every pod sharing this "
+          "Behaviour uses them (Make Unique gives one pod its own).",
+    nodes=[N("me", "HL_NodeSelf", 0, 2),
+           N("timer", "HL_NodeTimer", 0, 0, seconds=0.2),
+           N("pod", "HL_NodeGroup", 2, 0, group="Swelling Pod",
+             sockets={"name_has": "pod", "near_on": True, "radius": 150.0, "near_time": 2.5, "shrink_time": 2.5,
+                      "shot_time": 2.5, "grow": 1.5, "burst_radius": 220.0, "damage": 20.0}),
+           # shot: the game asks before any damage; when the one hit is this pod, it was shot
+           N("ask", "HL_NodeOverride", 0, 4, hook="AllowTakeDamage"),
+           N("is_me", "HL_NodeCheck", 1, 5, label="This pod?", op="EQUAL"),
+           N("if_hit", "HL_NodeIf", 2, 4),
+           N("mark", "HL_NodeSetVariable", 3, 4, label="It was shot", var_name="pod_shot", scope="PLAYER",
+             value_kind="bool", sockets={"value": True})],
+    links=[("timer.tick", "pod.run"), ("me.entity", "pod.pod"),
+           ("ask.asked", "if_hit.in"), ("ask.victim", "is_me.a"), ("me.entity", "is_me.b"),
+           ("is_me.result", "if_hit.condition"), ("if_hit.true", "mark.run"), ("me.entity", "mark.player")],
+    steps=[("Five times a second: this pod behaves (settings on the Swelling Pod node)", ["me", "timer", "pod"]),
+           ("Shot: it keeps swelling, then bursts", ["ask", "is_me", "if_hit", "mark"])])
 
 REPLACE_WITH_COMMON = dict(
     about="Swaps a placed character for a real common infected where it is: same model, same body variant, facing "
@@ -1417,26 +1399,21 @@ EXAMPLES_3 = [
                 ("All done: show it", ["text", "publish"])]),
     dict(title="Swelling Pod", level="Animated Models",
          objects={"pod": ("POD", (0.0, 0.0, 0.0))},
-         about="An animated model with its own behaviour, all in one node: Swelling Pods (Tab goes in; its settings are "
-               "on the node). The pod (in the example's collection) is an ordinary Custom Model with an armature: its "
-               "two actions, 'idle' (a slow pulse, looping: Cyclic Animation is on) and 'swell', become its "
-               "animations in the game, and it plays 'idle' on its own. A pod is any prop_dynamic whose model name has "
-               "Model Name Has ('pod') in it. It swells while provoked (with Burst When Near on, a survivor within "
-               "Radius, Swell Time (Near) to swell fully; with Shooting Sets It Off on, a shot, Swell Time (Shot)) and, "
-               "unless it was shot, shrinks back when left alone (Shrink Time): its 'swell' animation and size follow "
-               "how far it has got. Full, it bursts: an explosion, Damage and a green flash of spores for survivors "
-               "within Burst Radius, and every common infected within it dies. A shot pod always bursts: it swells first (Shot: Swell First) or bursts at once. "
-               "Duplicate the pod "
-               "and its armature together (Shift+D) for more; keep 'pod' in their names. "
-               "(The shot needs Hammerless's own game mode: Build & Play starts the map in it.)",
+         behaviours={"pod": "Swelling Pod Behaviour"},
+         about="An animated model that carries its own behaviour: select the pod, Behaviours shows 'Swelling Pod "
+               "Behaviour' (Open shows its graph; Self in it is the pod). The pod (in the example's collection) is an "
+               "ordinary Custom Model with an armature: its two actions, 'idle' (a slow pulse, looping: Cyclic "
+               "Animation is on) and 'swell', become its animations in the game, and it plays 'idle' on its own. It "
+               "swells while a survivor is near and shrinks back when left alone; shot, it keeps swelling; full, it "
+               "bursts: an explosion, Damage and a green flash of spores for survivors within Burst Radius, and every "
+               "common infected within it dies. Duplicate the pod and its armature together (Shift+D) for more: each "
+               "copy carries the same Behaviour. (The shot needs Hammerless's own game mode: Build & Play starts the "
+               "map in it.)",
          groups={"Explosion": EXPLOSION, "Is a Survivor": IS_A_SURVIVOR, "Show Swelling": SHOW_SWELLING,
-                 "Swelling Pod": SWELLING_POD, "Swelling Pods": SWELLING_PODS},
-         nodes=[N("pods", "HL_NodeGroup", 0, 0, group="Swelling Pods",
-                  sockets={"name_has": "pod", "near_on": True, "radius": 150.0, "near_time": 2.5, "shrink_time": 2.5,
-                           "shot_on": True, "shot_swells": True, "shot_time": 2.5, "grow": 1.5,
-                           "burst_radius": 220.0, "damage": 20.0})],
+                 "Swelling Pod": SWELLING_POD, "Swelling Pod Behaviour": SWELLING_POD_BEHAVIOUR},
+         nodes=[],
          links=[],
-         steps=[("Every pod behaves (Tab in to see how; settings on the node)", ["pods"])]),
+         steps=[]),
     dict(title="Reskinned Commons", level="Animated Models",
          objects={"mannequin": ("MANNEQUIN:COMMON_MALE", (0.0, 0.0, 0.0))},
          about="Your own model on the common infected. The example adds the game's common-infected skeleton (Add > Game "

@@ -635,7 +635,8 @@ def _groups(ex, objects, problems) -> dict:
     for name, spec in (ex.get("groups") or {}).items():
         sig = _group_signature(name, spec)
         found = next((g for g in bpy.data.node_groups if g.get("hl_example_group") == sig
-                      and getattr(g, "is_group", False) and g.get("hl_example_state") == _group_state(g)), None)
+                      and (getattr(g, "is_group", False) or getattr(g, "is_behaviour", False))
+                      and g.get("hl_example_state") == _group_state(g)), None)
         if found is not None and any(n.bl_idname == "HL_NodeGroup" and n.group is not None and n.group.get("hl_example_group")
                                      and made.get(n.group.get("hl_example_name", "")) not in (None, n.group)
                                      for n in found.nodes):
@@ -643,21 +644,29 @@ def _groups(ex, objects, problems) -> dict:
         if found is not None:          # (an example group someone edited since isn't used: a fresh copy is made)
             made[name] = found
             continue
-        tree = new_group_tree(name, keep=False)
+        behaviour = spec.get("behaviour", False)      # (a Behaviour graph an example's object carries)
+        if behaviour:
+            tree = bpy.data.node_groups.new(name, "HL_LogicTree")
+            tree.is_behaviour = True
+        else:
+            tree = new_group_tree(name, keep=False)
         tree["hl_example_group"] = sig
         tree["hl_example_name"] = name
-        for ident, label, kind in spec.get("inputs", []):
-            new_item(tree, label, kind, False, uid=ident)
-        for ident, label, kind in spec.get("outputs", []):
-            new_item(tree, label, kind, True, uid=ident)
-        gin, gout = tree.nodes.new("HL_NodeGroupInput"), tree.nodes.new("HL_NodeGroupOutput")
-        gin.name, gout.name = "in", "out"
-        sync(tree)
-        nodes = _fill(tree, spec["nodes"], spec["links"], objects, made, problems, io={"in": gin, "out": gout})
         cols = [n["pos"][0] for n in spec["nodes"]] or [0]
         rows = [n["pos"][1] for n in spec["nodes"]] or [0]
-        _place(gin, (min(cols) - 1) * COL, 0.0)
-        _place(gout, (max(cols) + 1) * COL, 0.0)
+        if behaviour:
+            nodes = _fill(tree, spec["nodes"], spec["links"], objects, made, problems)
+        else:
+            for ident, label, kind in spec.get("inputs", []):
+                new_item(tree, label, kind, False, uid=ident)
+            for ident, label, kind in spec.get("outputs", []):
+                new_item(tree, label, kind, True, uid=ident)
+            gin, gout = tree.nodes.new("HL_NodeGroupInput"), tree.nodes.new("HL_NodeGroupOutput")
+            gin.name, gout.name = "in", "out"
+            sync(tree)
+            nodes = _fill(tree, spec["nodes"], spec["links"], objects, made, problems, io={"in": gin, "out": gout})
+            _place(gin, (min(cols) - 1) * COL, 0.0)
+            _place(gout, (max(cols) + 1) * COL, 0.0)
         for i, (label, ids) in enumerate(spec.get("steps", []), 1):
             frame = tree.nodes.new("NodeFrame")
             frame.name = frame.label = f"{i}. {label}"
@@ -742,6 +751,8 @@ def build_example(context, index: int, problems: list | None = None, into=None):
         tree = into
         x0 = _free_x(tree)
     groups = _groups(ex, objects, problems)
+    for key, gname in (ex.get("behaviours") or {}).items():    # (the example's objects carry these Behaviours)
+        objects[key].hammerless.behaviours.add().graph = groups[gname]
     nodes = _fill(tree, ex["nodes"], ex["links"], objects, groups, problems)
     # steps: a frame around each group of nodes, numbered in the order things happen
     _new_frames.clear()
@@ -756,7 +767,7 @@ def build_example(context, index: int, problems: list | None = None, into=None):
         c, r = spec["pos"]
         _place(nodes[spec["id"]], x0 + c * COL, r * ROW)
     # what it does, above the graph
-    cols = max(s["pos"][0] for s in ex["nodes"]) + 1
+    cols = max((s["pos"][0] for s in ex["nodes"]), default=0) + 1
     width = max(600.0, min(cols * COL, 1200.0))
     lines = textwrap.wrap(ex["about"], int(width / 8.5))
     if objects:

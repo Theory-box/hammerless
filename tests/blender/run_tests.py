@@ -1167,7 +1167,8 @@ def test_logic_examples_into_main_graph():
         outer = [n for n in made if n.bl_idname == "NodeFrame" and n.parent is None]
         assert len(outer) == 1 and outer[0].label.startswith(f"Example {i + 1:02d}:"), (ex["title"], outer)
         xs = [getattr(n, "location_absolute", n.location)[0] for n in made if n.bl_idname != "NodeFrame"]
-        spans.append((min(xs), max(xs)))
+        if xs:                                # (an example whose logic is all in Behaviours: only its note here)
+            spans.append((min(xs), max(xs)))
         want_links += len(ex["links"])
     assert len(mine.links) == want_links, (len(mine.links), want_links)
     assert all(b[0] > a[1] for a, b in zip(spans, spans[1:])), "examples overlap"

@@ -348,7 +348,8 @@ def check(run: Run, n: int, b: Bench):
         find = ('(function() { for (local e = null; e = Entities.FindByClassname(e, "prop_dynamic");) '
                 'if (e.GetModelName().find("pod") != null) return e; return null; })()')
         state = (f'(function() {{ local p = {find}; if (p == null) return "gone"; '
-                 'return [::HL_PVarGet(p, "pod_charge", 0.0), p.GetSequence() == p.LookupSequence("swell"), '
+                 'return [::HL_PVarGet(p, "Example 49 pod/pod_charge", 0.0), '   # (a Behaviour: kept per pod)
+                 'p.GetSequence() == p.LookupSequence("swell"), '
                  'NetProps.GetPropFloat(p, "m_flPlaybackRate"), NetProps.GetPropFloat(p, "m_flCycle")]; })()')
         assert b.value(f"{find} != null"), "no pod in the map"
         b.console("sb_stop 1", wait=0.2)
