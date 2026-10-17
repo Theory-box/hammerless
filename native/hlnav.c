@@ -903,4 +903,5 @@ static int create_areas_impl(int *out, int cap) {
 #include "hlareas.c"
 #include "hlvis.c"
 #include "hlbrush.c"
+#include "hlcsg.c"
 
