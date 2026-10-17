@@ -562,6 +562,23 @@ def _object_update(self, context):
     _label_from_target(self, context)
 
 
+def _owners_of(tree) -> list:
+    """The objects carrying this Behaviour graph."""
+    return [o for o in bpy.data.objects for s in o.hammerless.behaviours if s.graph == tree]
+
+
+def _self_update(self, context):
+    """Entity Events on Self: its events are those of the objects carrying the Behaviour (the first one's class)."""
+    if self.use_self:
+        owners = _owners_of(self.id_data)
+        cls = _object_class(owners[0]) if owners else self.classname
+        self.classname = cls
+        _rebuild_entity_sockets(self, cls)
+        self.auto_title = "Self" + (f" ({cls})" if cls else "")
+    else:
+        _object_update(self, context)
+
+
 class HL_NodeObject(_Node, bpy.types.Node):
     """An entity in the scene with all its events from the game (for anything the other nodes don't cover)"""
     bl_idname, bl_label, bl_icon = "HL_NodeObject", "Entity Events", "OUTLINER_DATA_EMPTY"
@@ -570,9 +587,25 @@ class HL_NodeObject(_Node, bpy.types.Node):
     classname: StringProperty()
     show_all: BoolProperty(name="All Events", description="Also show the rarely used inputs and outputs",
                            update=lambda self, c: _rebuild_entity_sockets(self, self.classname))
+    use_self: BoolProperty(name="Self", update=_self_update,
+                           description="The object running this Behaviour, whichever it is (its events: those of the "
+                                       "objects carrying the Behaviour)")
 
     def draw_buttons(self, context, layout):
-        layout.prop(self, "target", text="")
+        tree = self.id_data
+        row = layout.row(align=True)
+        if getattr(tree, "is_behaviour", False) or getattr(tree, "is_group", False):
+            row.prop(self, "use_self", text="", icon="OBJECT_ORIGIN")
+        if self.use_self:
+            row.label(text="Self")
+            if self.classname:
+                row = layout.row()
+                row.label(text=self.classname)
+                row.prop(self, "show_all", text="", icon="PLUS")
+            else:
+                layout.label(text="Put this Behaviour on an entity first", icon="INFO")
+            return
+        row.prop(self, "target", text="")
         if self.target and not self.classname:
             col = layout.column(align=True)
             col.label(text="Plain mesh, no entity events.", icon="INFO")
@@ -589,7 +622,11 @@ class HL_NodeObject(_Node, bpy.types.Node):
 
     def to_lnode(self, context):
         n = super().to_lnode(context)
-        n.obj = self.target.name if self.target else ""
+        if self.use_self:
+            owner = self_owner()
+            n.obj = owner.name if owner is not None else ""
+        else:
+            n.obj = self.target.name if self.target else ""
         return n
 
 
@@ -2423,7 +2460,7 @@ def _check_nodes(context, tree, report) -> None:
             if isinstance(obj, bpy.types.Object) and obj.name not in scene_objects:
                 report.warnings.append(f"{tree.name}: node '{node_title(node)}' points at '{obj.name}', "
                                        f"which isn't in this scene (deleted?): pick another object")
-        target = getattr(node, "target", None)
+        target = getattr(node, "target", None) if not getattr(node, "use_self", False) else None
         cls = getattr(node, "classname", "")
         if target is not None and cls and target.hammerless.classname and target.hammerless.classname != cls:
             report.warnings.append(f"{tree.name}: node '{node_title(node)}' shows the events of a {cls}, "

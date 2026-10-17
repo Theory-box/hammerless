@@ -895,6 +895,35 @@ def test_behaviours():
     assert not HL_NodeSelf.poll(world) and HL_NodeSelf.poll(tree)
 
 
+def test_entity_events_self():
+    # Entity Events in Self mode: the carriers' class, and built for each carrier it acts on that one
+    from hammerless.blender import logic
+    from hammerless.blender.behaviours import new_behaviour_tree
+    from hammerless.blender.logicgroups import flatten
+    from hammerless.core.build import Report
+    reset_scene()
+    btns = [add_box(f"Panel {i}", (0.1, 0.6, 0.6), (i * 2.0, 0, 1)) for i in range(2)]
+    tree = new_behaviour_tree("Panel Press")
+    for b in btns:
+        b.hammerless.role, b.hammerless.classname = "BRUSH_ENTITY", "func_button"
+        b.hammerless.behaviours.add().graph = tree
+    ev = tree.nodes.new("HL_NodeObject")
+    ev.use_self = True
+    assert ev.classname == "func_button" and ev.auto_title.startswith("Self"), (ev.classname, ev.auto_title)
+    world = bpy.data.node_groups.new("World", "HL_LogicTree")
+    other = world.nodes.new("HL_NodeObject")
+    assert not world.is_behaviour and not world.is_group     # (the Self toggle is only drawn in behaviours/groups)
+    for b in btns:
+        logic._SELF_OWNER[0] = b
+        try:
+            flat = flatten(bpy.context, tree, Report(), prefix=f"{b.name}/")
+        finally:
+            logic._SELF_OWNER[0] = None
+        node = next(n for n in flat.nodes if n.kind == "OBJECT")
+        assert node.obj == b.name and node.id.startswith(b.name + "/"), (node.obj, node.id)
+    assert other.to_lnode(bpy.context).obj == ""
+
+
 def test_light_pattern_presets():
     # a light's Pattern is a preset Behaviour: lights sharing one share a name (one light style), set once
     from hammerless.blender.lightpresets import PATTERNS, preset_slot
