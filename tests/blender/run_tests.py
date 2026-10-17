@@ -973,6 +973,60 @@ def test_brains():
     assert made.brain is not None and made.brain.name in bpy.context.scene.objects
 
 
+def test_brush_tools():
+    # Carve / Intersect / Clip on brush objects: convex pieces as loose parts, volumes right, cut faces the cutter's
+    import bmesh
+    from hammerless.blender.extract import _loose_parts
+
+    def parts_and_volume(obj):
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        n = len(_loose_parts(bm))
+        vol = bm.calc_volume(signed=True) * obj.matrix_world.determinant()     # (world size)
+        mats = {f.material_index for f in bm.faces}
+        bm.free()
+        return n, vol, mats
+
+    def select(objs, active):
+        for o in bpy.context.selected_objects:
+            o.select_set(False)
+        for o in objs:
+            o.select_set(True)
+        bpy.context.view_layer.objects.active = active
+    reset_scene()
+    wall = add_box("Wall", (2, 2, 2), (0, 0, 1))
+    wall.data.materials.append(bpy.data.materials.new("wall mat"))
+    cutter = add_box("Door Cutter", (1, 1, 3), (0, 0, 1))
+    cutter.data.materials.append(bpy.data.materials.new("cut mat"))
+    select([wall, cutter], cutter)
+    assert bpy.ops.hammerless.brush_carve() == {"FINISHED"}
+    n, vol, mats = parts_and_volume(wall)
+    assert n == 4 and abs(vol - (8.0 - 2.0)) < 1e-4, (n, vol)
+    assert [m.name for m in wall.data.materials if m] == ["wall mat", "cut mat"] and mats == {0, 1}, mats
+    # intersect: only the overlap
+    block = add_box("Block", (2, 2, 2), (5, 0, 1))
+    cut2 = add_box("Overlap", (2, 2, 2), (6, 0, 1))
+    select([block, cut2], cut2)
+    assert bpy.ops.hammerless.brush_carve(intersect=True) == {"FINISHED"}
+    n, vol, _m = parts_and_volume(block)
+    assert n == 1 and abs(vol - 4.0) < 1e-4, (n, vol)
+    # clip at the cursor: two halves
+    slab = add_box("Slab", (2, 2, 2), (10, 0, 1))
+    bpy.context.scene.cursor.location = (10, 0, 0.5)
+    select([slab], slab)
+    assert bpy.ops.hammerless.brush_clip(axis="Z", keep="BOTH") == {"FINISHED"}
+    n, vol, _m = parts_and_volume(slab)
+    assert n == 2 and abs(vol - 8.0) < 1e-4, (n, vol)
+    # a part that isn't convex is left as it was
+    bpy.ops.mesh.primitive_monkey_add(location=(15, 0, 1))
+    monkey = bpy.context.object
+    before = len(monkey.data.vertices)
+    cut3 = add_box("Monkey Cutter", (1, 1, 1), (15, 0, 1))
+    select([monkey, cut3], cut3)
+    bpy.ops.hammerless.brush_carve()
+    assert len(monkey.data.vertices) == before                   # (the monkey isn't convex: kept as it was)
+
+
 def test_light_pattern_presets():
     # a light's Pattern is a preset Behaviour: lights sharing one share a name (one light style), set once
     from hammerless.blender.lightpresets import PATTERNS, preset_slot
