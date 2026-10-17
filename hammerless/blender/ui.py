@@ -623,11 +623,24 @@ def _eye(layout, data, prop):
     layout.prop(data, prop, text="", icon="HIDE_OFF" if getattr(data, prop) else "HIDE_ON", emboss=False)
 
 
+# ---------------------------------------------------------------- Bake (Lighting, Visibility, Nav Mesh, Sound and
+# the Control Volumes that steer them, as its subpanels)
+
+class HL_PT_bake(_Panel, bpy.types.Panel):
+    bl_label = "Bake"
+    bl_order = 4
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        pass
+
+
 # ---------------------------------------------------------------- Lighting (with its baking, preview and environment)
 
 class HL_PT_lighting(_Panel, bpy.types.Panel):
     bl_label = "Lighting"
-    bl_order = 4
+    bl_parent_id = "HL_PT_bake"
+    bl_order = 0
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
@@ -843,7 +856,8 @@ class HL_PT_light_advanced(_Sub, bpy.types.Panel):
 
 class HL_PT_visibility(_Panel, bpy.types.Panel):
     bl_label = "Visibility"
-    bl_order = 5
+    bl_parent_id = "HL_PT_bake"
+    bl_order = 1
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
@@ -878,7 +892,8 @@ class HL_PT_visibility(_Panel, bpy.types.Panel):
 
 class HL_PT_navmesh(_Panel, bpy.types.Panel):
     bl_label = "Nav Mesh"
-    bl_order = 6
+    bl_parent_id = "HL_PT_bake"
+    bl_order = 2
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
@@ -922,7 +937,8 @@ class HL_PT_view_nav(_Panel, bpy.types.Panel):
 
 class HL_PT_sound(_Panel, bpy.types.Panel):
     bl_label = "Sound"
-    bl_order = 7
+    bl_parent_id = "HL_PT_bake"
+    bl_order = 3
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
@@ -949,7 +965,8 @@ def control_volume_objects(context) -> list:
 
 class HL_PT_control_volumes(_Panel, bpy.types.Panel):
     bl_label = "Control Volumes"
-    bl_order = 7
+    bl_parent_id = "HL_PT_bake"
+    bl_order = 4
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
@@ -1244,7 +1261,7 @@ def _add_menu(self, context):
 CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_MT_weather,
            HL_PT_build, HL_PT_problems,
            HL_PT_object, HL_PT_obj_model, HL_PT_obj_light, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
-           HL_PT_lighting, HL_PT_view_light, HL_PT_environment, HL_PT_sun, HL_PT_fog, HL_PT_light_quality,
+           HL_PT_bake, HL_PT_lighting, HL_PT_view_light, HL_PT_environment, HL_PT_sun, HL_PT_fog, HL_PT_light_quality,
            HL_PT_light_advanced,
            HL_PT_visibility, HL_PT_navmesh, HL_PT_view_nav, HL_PT_sound, HL_PT_control_volumes, HL_PT_director,
            HL_PT_logic,
