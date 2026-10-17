@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.18.0 (test release, 2026-10-17)
+
+- **Brush tools** (new Brush panel): **Draw Brush** (drag a rectangle on any surface, then move the mouse for the height; snaps to a grid in game units, Ctrl to stop snapping, mouse wheel or [ ] to change the grid) and **Draw Carve** (the same, but the box cuts what it passes through). **Carve** cuts the selected brushes out of the active one, **Intersect** keeps only their overlap, **Clip** cuts a brush by a plane, **Hollow** makes a box into walls, **Merge** joins brushes whose union is convex. Every result is convex pieces (what the game needs), made by Hammerless's own CSG code in the native library; faces that are flush or nearly flush are treated as one plane, so carving along an existing face works.
+- **Behaviours**: an object can carry its own logic graphs, with a **Self** node for "this object" (Entity Events can be Self too). Copy one graph onto many objects with Copy to Selected; each copy runs on its own object with its own variables. Example 49 (Swelling Pod) is now a behaviour each pod carries.
+- **Brains**: every map-wide logic graph lives on an empty in the map. Hide the empty or take it out of the map and its graph is off; Self in a world graph is its brain. Older files get their brains on load.
+- **Light Patterns are behaviours**: choosing a Pattern (flicker, pulse, strobe and the rest of Valve's styles) adds a preset behaviour you can open and edit. Lights with the same pattern share one light style, so the map's 32-style limit isn't used up.
+- **One light system**: the Add panel's lights are ordinary Blender lights (point, spot, sun); old light entities convert on load.
+- **Weather Volume** (Add panel): rain, storm, snow, ash, bugs or smoke inside a volume, with settings for the chosen weather and an optional wind. As in Valve's maps (Hard Rain), particles stop under roofs by themselves. Glass and other see-through faces no longer block vis.
+- **Control Volumes always apply**: to bakes, nav, vis and analysis alike, each with an **Enabled** switch, and a new **Control Volumes** panel lists them all.
+- **Vis: Fast (the default) / Tight.** Fast runs the GPU vis's first pass only: about 2.3x faster, drawing about 9% more than Tight. It never hides anything visible.
+- **Builds update the previews**: the nav mesh a build makes is shown, and the lighting preview reloads. **Build Nav Mesh** now puts its nav in the game when the game's map is the one it analyzed. The nav overlay stays visible over the lighting preview at a distance.
+- "Zombies Climb Walls" is now **Auto Climb Links**: it links every walkable climb, so it affects the survivors' route too.
+- **Animation Preview** (an animated Custom Model's panel): pick an animation and it loops in the viewport.
+- Swelling Pod: a burst kills every common infected within Burst Radius.
+- Imported maps: a brush with modifiers is built as it looks in the viewport (a brush resized by another add-on's modifier was built at its original size and blocked a doorway).
+
 ## 0.17.0 (test release, 2026-10-13)
 
 - **Make Collision** (a Custom Model's panel, Static props): smart collision for a big model like a house. It finds the mesh's flat areas (walls, floors, roof, stairs) and puts one thin slab just behind each: players stand exactly on the floors and doorways keep their width. Walls are covered by a few rectangles, a wall with two faces is one piece, closed boxy parts are one piece each, and nothing is thinner than one game unit. **Collision As**: invisible brushes, or invisible props of up to 20 pieces each (as fast as brushes with a horde, measured; they use none of the map's 8,192 brushes). **Blocks Vis**: the walls also hide what's behind them, as world walls do; with props this uses Hammerless's new Vis Only brushes, so it still costs no brushes. The collision is parented to the model, so it moves with it and a duplicated house keeps its own; press again after editing the mesh. Smallest Face leaves out small details.
