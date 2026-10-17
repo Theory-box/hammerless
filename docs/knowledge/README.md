@@ -25,7 +25,8 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 | `models/` | The own model writer matched to studiomdl, animated models through SMD/QC and what studiomdl was measured to do, the game's `.mdl`/`.ani` format decoded (frame-anims), game skeletons and placed characters, VTF/VMT, alpha, materials, parallax, collision for big models (Make Collision, invisible materials, Vis Only brushes) | written |
 | `sound/` | What a map can control of the sound engine (measured), new sounds through an addon VPK with its own `sound.cache` (format decoded), DSP presets, the automatic soundscapes, the shelved impulse-response work | written |
 | `loading/` | Build & Play step by step, the game prestart, the parallel build and its critical path, smart builds and `hlvbsp -onlyents`, the kept nav, Fast Map Loading (`sv_lan 1`), the stringtable dictionary, every load timing | written |
-| `game-facts/` | The BSP as L4D2 writes it (lump order, game lump, pakfile, `stale.txt`), the game's physics DLL from our tools, reading the game's content, Valve's maps decompiled, the VMF importer's exact round trip, engine behaviours met in testing, limits hit, reference maps, testing rules; weather (precipitation as Valve uses it, measured in game) | written |
+| `game-facts/` | The BSP as L4D2 writes it (lump order, game lump, pakfile, `stale.txt`), the game's physics DLL from our tools, reading the game's content, Valve's maps decompiled, the VMF importer's exact round trip (and its shape-after-modifiers rule), engine behaviours met in testing, limits hit, reference maps, testing rules; weather (precipitation as Valve uses it, measured in game) | written |
+| `editing/` | The brush tools: the CSG core (`native/hlcsg.c`: plane sets in double, the compiler's snapping, the coplanar and degenerate-face tolerances and the bugs behind them, two cut orders, merge), Carve / Intersect / Clip / Hollow / Merge, Draw Brush / Draw Carve, what the 2,500-case stress test proves, what is untested | written |
 
 ## Conventions
 
@@ -65,7 +66,7 @@ Every page follows these rules so the facts stay traceable and checkable:
 |---|---|
 | [lighting/README.md](lighting/README.md) | What a light compiler writes (lumps), quality presets and what they set, settings-to-options map, every measured number in one table |
 | [lighting/gpu-and-bounce.md](lighting/gpu-and-bounce.md) | The GPU path (Vulkan ray queries, record/replay rounds, vrad's walk in a shader), ray-traced bounce `-gi`, bounce links on the GPU, lighting alongside vis |
-| [lighting/layers-and-styles.md](lighting/layers-and-styles.md) | Light styles and switchable/flickering lights, Live Light Mixing (`-layers`, the `.hllayers` file), the remix (`-remix`), accuracy and cost |
+| [lighting/layers-and-styles.md](lighting/layers-and-styles.md) | Light styles and switchable/flickering lights, a light's Pattern as a preset Behaviour (one switched style per preset, measured in game), Live Light Mixing (`-layers`, the `.hllayers` file), the remix (`-remix`), accuracy and cost |
 | [lighting/bakes-sky-cycles-view.md](lighting/bakes-sky-cycles-view.md) | Partial bakes (`-nobake`), keep light (`-keeplight`), sky light from the skybox/HDRI (`-skymap`), the Cycles bake and its units, the Baked Lighting view |
 
 ### vis/
@@ -94,7 +95,7 @@ Every page follows these rules so the facts stay traceable and checkable:
 
 | Page | What it covers |
 |---|---|
-| [logic/README.md](logic/README.md) | The compiler and the measured game facts it depends on (entity order, root table, Gate timing, precision), how the script API, Director options and hooks were dumped, scripted mode and the mode add-on, the NetProps catalogue method (demo SendTables layout, harvest) and what sticks, the test bench, the examples and what each measured, custom enemies on bot bodies |
+| [logic/README.md](logic/README.md) | The compiler and the measured game facts it depends on (entity order, root table, Gate timing, precision), how the script API, Director options and hooks were dumped, scripted mode and the mode add-on, the NetProps catalogue method (demo SendTables layout, harvest) and what sticks, the test bench, the examples and what each measured, Behaviours (logic an object carries: Self, Light Pattern presets sharing one style, Entity Events on Self, the Swelling Pod as a Behaviour, brains for world graphs, the in-game test), custom enemies on bot bodies |
 
 ### models/
 
@@ -122,10 +123,16 @@ Every page follows these rules so the facts stay traceable and checkable:
 | [game-facts/README.md](game-facts/README.md) | BSP version 21 facts, `vphysics.dll` calling conventions and vtable slots, VPK and binary sources, the decompiler's findings and round-trip results, the Hammer-map importer, a table of engine behaviours with the area each belongs to, the limits met, the reference maps, the testing rules that cost data |
 | [game-facts/weather.md](game-facts/weather.md) | L4D2's precipitation as Hard Rain uses it (one map-sized `func_precipitation`, a handful of blockers, `env_wind` values), why buildings keep rain out by themselves, the in-game rain tests, the Weather Volume's keys |
 
+### editing/
+
+| Page | What it covers |
+|---|---|
+| [editing/README.md](editing/README.md) | The brush tools of 0.18.0: the CSG core (`native/hlcsg.c`) fact by fact with its tolerances (`c_snap`, `c_same`, `CSG_MIN_AREA` 1e-6 and the 0.16-unit bug, two cut orders, merge's checks), the random stress test and what it proves, Carve / Intersect / Clip / Hollow / Merge and their Blender tests, Draw Brush / Draw Carve step by step, what has not been tested (the modal mouse interaction by events; the user's hands-on test pending) |
+
 ### Known issues
 
 | Page | What it covers |
 |---|---|
 | [known-issues.md](known-issues.md) | Open behaviour problems from the October 2026 audits, re-checked in the code: what happens, where, the suggested fix; and what's been fixed since |
 
-Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4.
+Last checked: 2026-10-17 against branch brush-tools, commit 55c63a0 (release 0.18.0 is being made from it: the behaviours slice 2, brains, the brush tools and the importer's modifiers fix).

@@ -30,7 +30,22 @@ Status: `done`. Code: `hammerless/blender/lamps.py` (`LAMP_OF`, `_apply_light`, 
 | Left alone | preset parts and an imported Hammer map's objects (they keep their entities) |
 | Test | `tests/blender/run_tests.py` `test_lights_are_blender_lights`: the three lights from the Add panel; two converted entities export the same game light (colour / brightness within 1, style, spawnflags, name, an extra key, spot angles and cone); a logic node follows the light; converting again is a no-op |
 
-A light that carries a Behaviour graph (branch behaviours, 18c2ce4) is made switchable (named) like a light that logic uses; planned there: Light Pattern presets as behaviours that share **one** light name per graph, so many patterned lights don't each spend one of the 32 switched styles ([../logic/README.md](../logic/README.md)).
+A light that carries a Behaviour graph (branch behaviours, 18c2ce4) is made switchable (named) like a light that logic uses, with the one exception in the next section.
+
+### A light's Pattern is a preset Behaviour (b9dbb9a, 2026-10-16; in game 1f2432b, 2026-10-17)
+
+Status: `done`. Code: `hammerless/blender/lightpresets.py` (`PATTERNS`, `preset_graph`, `apply_pattern`, `shared_name`), `extract.light_style_keyvalues` / `light_name` / `in_world_logic`, `logic.compile_logic` (`done_shared`), `mapcollection._on_load`. The graph side is in [../logic/README.md](../logic/README.md) (Behaviours, slice 2).
+
+| Fact | Detail | How known |
+|---|---|---|
+| What picking a Pattern does now | puts a shared preset Behaviour "Light Pattern: <name>" (Map Start -> Fire Input `SetPattern` on Self) first in the light's Behaviours; the value is the game's own default style string for that pattern, the 12 of `g_DefaultLightstyles` in Valve's Source SDK 2013 `game/server/world.cpp`: the same flicker the old `style` key gave, now set by script at map start. Another Pattern replaces it, Steady / Custom removes it; lights with a Pattern from older files get theirs on load | read from the code; `test_light_pattern_presets` |
+| The `style` key | no longer written for a light that has its preset Behaviour (the game's style number is not needed: the pattern comes through `SetPattern` on a named light). A Custom pattern still writes `pattern`; Switchable / Starts Off / Custom still write a name as before | `extract.light_style_keyvalues` |
+| One switched style per preset, not per light | plain lights of one preset graph share one targetname `hl_lightpattern_<slug>` (e.g. `hl_lightpattern_light_pattern_flicker`), so hlvbsp's `SetLightStyles` assigns them **one** style of the 32, and the shared graph is compiled once (one `SetPattern` on that name). Note the accounting: before, a patterned light wrote `style` 1-12 (a baked, not a switched, style: it cost nothing of the 32) and was unnamed; now the pattern is a named light's run-time `SetPattern`, so each preset **in use** costs one of the 32 switched styles, shared by every plain light of that preset, and the pattern is a graph the user can open and change | read from the code; measured in game below |
+| Lights that keep their own name and copy | Switchable, Starts Off, or wired into logic by itself (an Entity Events node acting on it): switching such a light must not switch every light of the preset. *Make Unique* in Behaviours gives a light its own graph (its own name and style) | `shared_name`, `test_light_pattern_presets` |
+| In game | `tests/ingame/test_behaviours.py` (2026-10-17, the demo level as `hl_test_behaviours`, QUICK build): three lamps on Flicker come out as three `light` entities with one name, one `m_iStyle` (the test demands >= 32; the run saw **style 32**, the first switched style) and `m_iszPattern` = the Flicker string on that style, so all three flicker from one `SetPattern` | measured 2026-10-17 |
+| Cost of a preset at run time | one `SetPattern` at map start per preset in use (nothing per tick) | read from the graph |
+
+What is **not** measured: whether `SetPattern` at map start on a light that was baked with no `style` looks the same as the old baked `style` key did (the lightmap page is the same named-light page either way; the pattern is the engine's run-time scaling); whether lights of one preset in different rooms are affected by the 4-styles-per-face limit any differently (they share one style, so one preset counts once per face).
 
 ## Live Light Mixing (`-layers`)
 
@@ -85,6 +100,6 @@ A remix keeps the layers and the map's vis (`-remix` clears `-layers` and `-visf
 | A wider radial than 4 channels to cut the per-light cost | not done |
 | In-game prop check after a remix; cost of many flickering lights | open (2026-10-12) |
 | A Light panel for light *entities* (not Blender lights) | `removed` as a need (f8e16b2, 2026-10-16): light entities convert to Blender lights on load; only imported Hammer maps keep light entities, edited through their keyvalues |
-| Light Pattern presets as Behaviours sharing one light name per graph (the 32-style budget) | planned (branch behaviours) |
+| Light Pattern presets as Behaviours sharing one light name per graph (the 32-style budget) | `done` (b9dbb9a, 2026-10-16; in game 1f2432b, 2026-10-17; see above) |
 
-Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the one-light-system section, the limits and Valve's maps; the rest 2026-10-13 against 41dc861).
+Last checked: 2026-10-17 against branch brush-tools, commit 55c63a0 (the Pattern-as-Behaviour section and the open table; the one-light-system section 2026-10-16 against 18c2ce4; the rest 2026-10-13 against 41dc861).
