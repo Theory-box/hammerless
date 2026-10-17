@@ -78,6 +78,27 @@ class HL_OT_behaviour_add(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class HL_OT_behaviour_copy(bpy.types.Operator):
+    bl_idname = "hammerless.behaviour_copy"
+    bl_label = "Copy to Selected"
+    bl_description = ("Give the other selected objects this Behaviour too (they share it; ones that already carry it "
+                      "are left as they are)")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        obj, slot = _slot(context)
+        if slot is None or slot.graph is None:
+            return {"CANCELLED"}
+        n = 0
+        for o in context.selected_objects:
+            if o is obj or o.hammerless.preset or any(s.graph == slot.graph for s in o.hammerless.behaviours):
+                continue
+            o.hammerless.behaviours.add().graph = slot.graph
+            n += 1
+        self.report({"INFO"}, f"'{slot.graph.name}' on {n} more object{'s' if n != 1 else ''}")
+        return {"FINISHED"}
+
+
 class HL_OT_behaviour_remove(bpy.types.Operator):
     bl_idname = "hammerless.behaviour_remove"
     bl_label = "Remove Behaviour"
@@ -150,6 +171,36 @@ class HL_OT_behaviour_unique(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class HL_OT_logic_open_graph(bpy.types.Operator):
+    bl_idname = "hammerless.logic_open_graph"
+    bl_label = "Open Logic Graph"
+    bl_description = "Show this logic graph in the node editor"
+    bl_options = {"INTERNAL"}
+    graph: bpy.props.StringProperty()
+
+    def execute(self, context):
+        tree = bpy.data.node_groups.get(self.graph)
+        if tree is None or not show_tree(context, tree):
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class HL_OT_logic_give_brain(bpy.types.Operator):
+    bl_idname = "hammerless.logic_give_brain"
+    bl_label = "Give It a Brain"
+    bl_description = "A brain (an empty at the 3D cursor) for this logic graph: it's built again"
+    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
+    graph: bpy.props.StringProperty()
+
+    def execute(self, context):
+        from .logic import make_brain
+        tree = bpy.data.node_groups.get(self.graph)
+        if tree is None:
+            return {"CANCELLED"}
+        make_brain(context.scene, tree, context.scene.cursor.location)
+        return {"FINISHED"}
+
+
 class HL_UL_behaviours(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index=0):
         row = layout.row(align=True)
@@ -182,6 +233,11 @@ class HL_PT_obj_behaviours(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        from .logic import brain_trees
+        for t in brain_trees(context.object):       # (a brain: the world graphs living on it)
+            row = layout.row(align=True)
+            row.label(text=f"Brain of '{t.name}'", icon="NODETREE")
+            row.operator("hammerless.logic_open_graph", text="", icon="WINDOW").graph = t.name
         hs = context.object.hammerless
         row = layout.row()
         row.template_list("HL_UL_behaviours", "", hs, "behaviours", hs, "behaviours_index", rows=2)
@@ -189,6 +245,7 @@ class HL_PT_obj_behaviours(bpy.types.Panel):
         side.operator("hammerless.behaviour_new", text="", icon="ADD")
         side.operator("hammerless.behaviour_add", text="", icon="LINKED")
         side.operator("hammerless.behaviour_remove", text="", icon="REMOVE")
+        side.operator("hammerless.behaviour_copy", text="", icon="COPYDOWN")
         side.separator()
         side.operator("hammerless.behaviour_move", text="", icon="TRIA_UP").step = -1
         side.operator("hammerless.behaviour_move", text="", icon="TRIA_DOWN").step = 1
@@ -199,8 +256,9 @@ class HL_PT_obj_behaviours(bpy.types.Panel):
             col.label(text="its Self node is this object", icon="BLANK1")
 
 
-CLASSES = (HL_OT_behaviour_new, HL_OT_behaviour_add, HL_OT_behaviour_remove, HL_OT_behaviour_move,
-           HL_OT_behaviour_open, HL_OT_behaviour_unique, HL_UL_behaviours, HL_PT_obj_behaviours)
+CLASSES = (HL_OT_behaviour_new, HL_OT_behaviour_add, HL_OT_behaviour_copy, HL_OT_behaviour_remove, HL_OT_behaviour_move,
+           HL_OT_behaviour_open, HL_OT_behaviour_unique, HL_OT_logic_open_graph, HL_OT_logic_give_brain,
+           HL_UL_behaviours, HL_PT_obj_behaviours)
 
 
 def register():

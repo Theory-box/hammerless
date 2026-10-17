@@ -473,7 +473,8 @@ class _Compiler:
             return vs.field_expr(sock, vs.field_kind(fld)) if fld else "null"
         if k == "SELF":                  # a behaviour's own object (n.obj: bound per owner when it was flattened)
             if not n.obj:
-                self.problems.append(f"Logic node '{n.id}': Self is only something in an object's Behaviour")
+                self.problems.append(f"Logic node '{n.id}': Self has no object here (a Behaviour's object, or "
+                                     "a world graph's brain)")
                 return "null"
             e = self.entity_of(n.obj)
             if e is None:

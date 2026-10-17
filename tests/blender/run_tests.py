@@ -889,10 +889,18 @@ def test_behaviours():
     assert bpy.ops.hammerless.behaviour_unique(index=0) == {"FINISHED"}
     assert boxes[0].hammerless.behaviours[0].graph != tree and boxes[1].hammerless.behaviours[0].graph == tree
     assert boxes[0].hammerless.behaviours[0].graph.is_behaviour
-    # Self outside a Behaviour: nothing to be (a world graph can't add it)
+    # Copy to Selected: the others get it once (shared), the active keeps its own
+    extra = add_box("Blinker D", (0.5, 0.5, 0.5), (4, 2, 0.25))
+    for o in (boxes[1], extra):
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = boxes[1]
+    boxes[1].hammerless.behaviours_index = 0
+    assert bpy.ops.hammerless.behaviour_copy() == {"FINISHED"}
+    assert [s.graph for s in extra.hammerless.behaviours] == [tree] and len(boxes[1].hammerless.behaviours) == 1
+    # Self in a world graph is its brain (so it can be added there too)
     from hammerless.blender.logic import HL_NodeSelf
     world = bpy.data.node_groups.new("World", "HL_LogicTree")
-    assert not HL_NodeSelf.poll(world) and HL_NodeSelf.poll(tree)
+    assert HL_NodeSelf.poll(world) and HL_NodeSelf.poll(tree)
 
 
 def test_entity_events_self():
@@ -922,6 +930,47 @@ def test_entity_events_self():
         node = next(n for n in flat.nodes if n.kind == "OBJECT")
         assert node.obj == b.name and node.id.startswith(b.name + "/"), (node.obj, node.id)
     assert other.to_lnode(bpy.context).obj == ""
+
+
+def test_brains():
+    # world graphs live on a brain empty: an old graph gets one and builds the same; a brain outside the map turns its
+    # logic off; a graph whose brain was deleted isn't built (said so); New Logic Graph makes one
+    from hammerless.blender.logic import migrate_brains, new_tree
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    box = add_box("Gate Box", (0.5, 0.5, 0.5), (2, 2, 0.25))
+    bpy.ops.object.empty_add(location=(-4, 0, 0.1))
+    sp = bpy.context.object
+    sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
+    tree = bpy.data.node_groups.new("Old Logic", "HL_LogicTree")       # (a graph from before brains)
+    timer = tree.nodes.new("HL_NodeTimer")
+    sh = tree.nodes.new("HL_NodeShowHide")
+    sh.inputs["Object"].value = box
+    tree.links.new(timer.outputs["On Tick"], sh.inputs["Hide"])
+
+    def names(blocks):
+        return sorted((c, e.get("targetname") or "") for c in ("logic_timer", "func_brush")
+                      for e in entities(blocks, c))
+    blocks, log = export()
+    before = names(blocks)
+    assert ("logic_timer" in {c for c, _n in before}), log
+    assert migrate_brains() == 1 and tree.brain is not None and tree.brain.get("hl_brain")
+    assert migrate_brains() == 0
+    blocks, log = export()
+    assert names(blocks) == before, (names(blocks), before)            # (exactly as before)
+    brain = tree.brain
+    for c in list(brain.users_collection):                                # (outside the map: off)
+        c.objects.unlink(brain)
+    blocks, log = export()
+    assert not entities(blocks, "logic_timer"), log
+    bpy.context.scene.collection.objects.link(brain)
+    bpy.data.objects.remove(brain)                                       # (deleted: not built, a warning)
+    assert tree.brain is None
+    blocks, log = export()
+    assert not entities(blocks, "logic_timer")
+    assert "has no brain" in log, log
+    made = new_tree(bpy.context, "Fresh Logic")
+    assert made.brain is not None and made.brain.name in bpy.context.scene.objects
 
 
 def test_light_pattern_presets():

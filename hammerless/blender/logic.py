@@ -34,6 +34,9 @@ class HL_LogicTree(bpy.types.NodeTree):
 
     scene_name: StringProperty(name="Scene", description="The scene (map) this graph belongs to: only that map "
                                                          "gets its logic")
+    brain: PointerProperty(type=bpy.types.Object, name="Brain",
+                           description="The empty in the map this logic lives on: select it to find the graph; "
+                                       "outside the map (or deleted), the graph isn't built. Self is this object")
 
 
 class HL_EventSocket(bpy.types.NodeSocket):
@@ -517,22 +520,27 @@ class HL_NodeObjectInfo(_Node, bpy.types.Node):
         layout.prop(self, "target", text="")
 
 
-_SELF_OWNER: list = [None]        # the object a Behaviour is being built for (compile_logic sets it around flatten)
+_SELF_OWNER: list = [None]        # the object a graph is being built for (compile_logic sets it around flatten)
+_SELF_ISOLATE: list = [False]     # ...and whether it's a Behaviour (per-player variables kept apart per object)
 
 
 def self_owner():
     return _SELF_OWNER[0]
 
 
+def self_isolated() -> bool:
+    return _SELF_ISOLATE[0]
+
+
 class HL_NodeSelf(_Node, bpy.types.Node):
-    """The object this Behaviour runs on: wire Object into nodes that act on an object (Move, Show / Hide...),
-    Entity into ones that take an entity (functions, For Each...)"""
+    """The object this logic runs on (a Behaviour's object; a world graph's brain): wire Object into nodes that act
+    on an object or a place (Move, Show / Hide, Spawn at...), Entity into ones that take an entity (functions...)"""
     bl_idname, bl_label, bl_icon = "HL_NodeSelf", "Self", "OBJECT_ORIGIN"
     kind, category = "SELF", "Scene"
 
     @classmethod
     def poll(cls, ntree):
-        return ntree.bl_idname == TREE and (getattr(ntree, "is_behaviour", False) or getattr(ntree, "is_group", False))
+        return ntree.bl_idname == TREE        # (a Behaviour's object, or a world graph's brain)
 
     def make_sockets(self):
         self.outputs.new("HL_ObjectSocket", "Object", identifier="object")
@@ -2494,7 +2502,21 @@ def compile_logic(context, ir, report) -> None:
                                "(open one in the node editor and set its Scene in the sidebar)")
     trees = logic_trees(context.scene)
     from .logicgroups import flatten
-    jobs = [(tree, None) for tree in trees]
+    from .extract import collection_role
+    from .mapcollection import map_objects as _map_objects
+    in_map = _map_objects(context.scene)
+    jobs = []
+    for tree in trees:
+        b = tree.brain
+        if b is None:
+            if tree.get("hl_brain_migrated"):
+                report.warnings.append(f"Logic graph '{tree.name}' has no brain (its empty was deleted), so it isn't "
+                                       "built: give it one in Logic Graphs (or delete the graph)")
+                continue
+        elif b.name not in in_map or collection_role(b) == "IGNORE":
+            report.info.append(f"Logic graph '{tree.name}': its brain '{b.name}' isn't in the map, so it's off")
+            continue
+        jobs.append((tree, b, False))
     # Behaviours: each object's graphs, built once for that object (Self = it), always under their own names
     from .extract import effective_role
     from .mapcollection import map_objects
@@ -2504,23 +2526,22 @@ def compile_logic(context, ir, report) -> None:
             continue                                # (not part of the map: nor is its logic)
         for slot in obj.hammerless.behaviours:
             if slot.graph is not None:
-                jobs.append((slot.graph, obj))
+                jobs.append((slot.graph, obj, True))
     done_shared = set()
-    for tree, owner in jobs:
-        if owner is not None and tree.get("hl_light_preset"):
+    for tree, owner, behaviour in jobs:
+        if behaviour and tree.get("hl_light_preset"):
             from .lightpresets import shared_name
             if shared_name(owner):
                 if tree.name in done_shared:     # (its lights share one name: one copy acts on them all)
                     continue
                 done_shared.add(tree.name)
-        _SELF_OWNER[0] = owner
-        try:
-            flat = flatten(context, tree, report,
-                           prefix=f"{owner.name}/" if owner is not None else "")   # (Group nodes inlined)
+        _SELF_OWNER[0], _SELF_ISOLATE[0] = owner, behaviour
+        try:   # (Group nodes inlined; a world graph keeps the names it always had)
+            flat = flatten(context, tree, report, prefix=f"{owner.name}/" if behaviour else "")
         finally:
-            _SELF_OWNER[0] = None
+            _SELF_OWNER[0], _SELF_ISOLATE[0] = None, False
         nodes = flat.nodes
-        if owner is not None:
+        if behaviour:
             wide = sorted({n.id.split("/")[-1] for n in nodes if n.kind in MAP_WIDE_KINDS})
             if wide:
                 report.warnings.append(f"Behaviour '{tree.name}' on '{owner.name}': {', '.join(wide)} act on the whole "
@@ -2537,9 +2558,9 @@ def compile_logic(context, ir, report) -> None:
             ir.entities = [e for e in ir.entities if not (e.source.split(" (part ")[0] in volumes
                                                           and e.classname == "func_detail")]
         links = flat.links
-        name = f"{owner.name} {tree.name}" if owner is not None else (tree.name if len(trees) > 1 else "")
+        name = f"{owner.name} {tree.name}" if behaviour else (tree.name if len(trees) > 1 else "")
         for p in compile_graph(nodes, links, ir, name, log=context.scene.hammerless.debug_log):
-            report.warnings.append(f"{tree.name}: {p}" if owner is None else f"{tree.name} on '{owner.name}': {p}")
+            report.warnings.append(f"{tree.name} on '{owner.name}': {p}" if behaviour else f"{tree.name}: {p}")
 
 
 # ---------------------------------------------------------------- operators
@@ -2598,11 +2619,46 @@ def _migrate_on_load(*_args):
                 pass
 
 
-def new_tree(context):
-    tree = bpy.data.node_groups.new("Map Logic", TREE)
+def new_tree(context, name: str = "Map Logic"):
+    """A new world graph, with a brain at the 3D cursor."""
+    tree = bpy.data.node_groups.new(name, TREE)
     tree.use_fake_user = True          # kept when saved, even if no editor shows it
     tree.scene_name = context.scene.name
+    make_brain(context.scene, tree, context.scene.cursor.location)
     return tree
+
+
+def make_brain(scene, tree, location=(0.0, 0.0, 0.0)):
+    """An empty in the scene's map that the graph lives on (its brain)."""
+    from .mapcollection import map_collection
+    obj = bpy.data.objects.new(tree.name, None)
+    obj.empty_display_type, obj.empty_display_size = "SPHERE", 0.4
+    obj.location = location
+    obj["hl_brain"] = True
+    (map_collection(scene) or scene.collection).objects.link(obj)
+    tree.brain = obj
+    tree["hl_brain_migrated"] = True
+    return obj
+
+
+def migrate_brains() -> int:
+    """World graphs from before brains get one: an empty named after the graph at the map's origin (nothing else
+    changes: they build as they did). Returns how many."""
+    n = 0
+    for t in logic_trees():
+        if t.brain is not None or t.get("hl_brain_migrated") or t.library is not None:
+            continue
+        scene = bpy.data.scenes.get(t.scene_name) or (bpy.data.scenes[0] if bpy.data.scenes else None)
+        if scene is None:
+            continue
+        make_brain(scene, t)
+        n += 1
+    return n
+
+
+def brain_trees(obj) -> list:
+    """The world graphs living on this object."""
+    return [t for t in logic_trees() if t.brain == obj]
 
 
 class HL_OT_logic_from_outputs(bpy.types.Operator):

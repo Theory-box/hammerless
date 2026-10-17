@@ -208,7 +208,7 @@ def _const_of(sock):
 
 def flatten(context, tree, report, prefix: str = "", stack: tuple = (), checked: set | None = None) -> _Flat:
     """The tree's nodes and wires with every Group node replaced by what's inside it (recursively)."""
-    from .logic import _Node, _check_nodes, _compiled_links, self_owner
+    from .logic import _Node, _check_nodes, _compiled_links, self_isolated, self_owner
     flat = _Flat()
     if tree.name in stack:
         report.warnings.append(f"{tree.name}: the group is inside itself, so that copy is left out")
@@ -234,7 +234,7 @@ def flatten(context, tree, report, prefix: str = "", stack: tuple = (), checked:
             ln.id = prefix + ln.id
             if ln.kind in ("SET_VAR", "GET_VAR") and ln.settings.get("scope") == "GROUP":
                 ln.settings = dict(ln.settings, name=prefix + (ln.settings.get("name") or "value"), scope="MAP")
-            elif ln.kind in ("SET_VAR", "GET_VAR") and ln.settings.get("scope") == "PLAYER" and self_owner():
+            elif ln.kind in ("SET_VAR", "GET_VAR") and ln.settings.get("scope") == "PLAYER" and self_isolated():
                 # (in a Behaviour: each object's own, else 30 pods would share one value per player)
                 ln.settings = dict(ln.settings, name=self_owner().name + "/" + (ln.settings.get("name") or "value"))
             flat.nodes.append(ln)

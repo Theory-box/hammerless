@@ -1048,10 +1048,18 @@ class HL_PT_logic(_Panel, bpy.types.Panel):
         trees = logic_trees()
         if trees:
             col = layout.column(align=True)
-            for t in trees:          # which map each graph belongs to
+            for t in trees:          # which map each graph belongs to, and the brain it lives on
                 row = col.row(align=True)
                 row.label(text=t.name)
                 row.prop_search(t, "scene_name", bpy.data, "scenes", text="")
+                row = col.row(align=True)
+                row.prop(t, "brain", text="", icon="OUTLINER_OB_EMPTY")
+                if t.brain is not None:
+                    row.operator("hammerless.select_object", text="", icon="RESTRICT_SELECT_OFF").name = t.brain.name
+                else:
+                    row.operator("hammerless.logic_give_brain", text="", icon="ADD").graph = t.name
+                row.operator("hammerless.logic_open_graph", text="", icon="WINDOW").graph = t.name
+                col.separator()
         col = layout.column(align=True)
         col.operator("hammerless.logic_new", icon="ADD")
         col.operator("hammerless.logic_from_outputs", icon="NODE")
