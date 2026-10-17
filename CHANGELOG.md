@@ -15,6 +15,7 @@
 - **Animation Preview** (an animated Custom Model's panel): pick an animation and it loops in the viewport.
 - Swelling Pod: a burst kills every common infected within Burst Radius.
 - Imported maps: a brush with modifiers is built as it looks in the viewport (a brush resized by another add-on's modifier was built at its original size and blocked a doorway).
+- **Bake panel**: Lighting, Visibility, Nav Mesh, Sound and Control Volumes are its subpanels; the panels inside them are indented.
 
 ## 0.17.0 (test release, 2026-10-13)
 
