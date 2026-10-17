@@ -1895,9 +1895,238 @@ class HL_NodeScriptValue(_Block, bpy.types.Node):
         return {"expr": self.expr}
 
 
+# ---------------------------------------------------------------- Combat & Physics: lines traced through the world,
+# damage, pushes, aiming, explosions and effects, who sees what (generic pieces for turrets, mines, grapples, ...)
+
+TRACE_HITS = [("SHOTS", "Shots", "Stops at what bullets hit: the world, props, players and infected"),
+              ("SIGHT", "Sight", "Stops at what blocks seeing: the world and solid props (not glass, players or "
+                                 "infected)"),
+              ("WORLD", "World Only", "Stops only at the map's walls, floors and brush entities")]
+
+
+class HL_NodeTrace(_Block, bpy.types.Node):
+    """Traces a straight line from Start to End and tells what it hits first (Hit), or that nothing is in the way
+    (Missed). Hit Position, Hit Entity and Distance hold the last trace's answer"""
+    bl_idname, bl_label, bl_icon = "HL_NodeTrace", "Trace Line", "IPO_LINEAR"
+    kind = "TRACE"
+    hits: EnumProperty(name="Hits", default="SHOTS", items=TRACE_HITS)
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("vec", "start", "Start")
+        self.data_in("vec", "end", "End")
+        self.data_in("thing", "ignore", "Ignore")
+        self.ev_out("hit", "Hit")
+        self.ev_out("missed", "Missed")
+        self.data_out("vec", "pos", "Hit Position")
+        self.data_out("thing", "entity", "Hit Entity")
+        self.data_out("num", "distance", "Distance")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "hits", text="")
+
+    def settings(self):
+        return {"hits": self.hits}
+
+
+DAMAGE_TYPES = [("0", "Generic", ""), ("2", "Bullet", ""), ("64", "Blast", ""), ("8", "Burn", ""),
+                ("4", "Slash", ""), ("128", "Club", "")]
+
+
+class HL_NodeDamage(_Block, bpy.types.Node):
+    """Hurts an entity (a player, an infected, a breakable prop) by Amount, as if Attacker did it (empty: the
+    world). The game keeps survivors from being hurt this way until someone has left the safe room"""
+    bl_idname, bl_label, bl_icon = "HL_NodeDamage", "Damage", "MOD_PHYSICS"
+    kind = "DAMAGE"
+    damage_type: EnumProperty(name="Type", default="2", items=DAMAGE_TYPES)
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("thing", "entity", "Entity")
+        self.data_in("num", "amount", "Amount").value = 10.0
+        self.data_in("thing", "attacker", "Attacker")
+        self.ev_out("then", "Then")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "damage_type", text="")
+
+    def settings(self):
+        return {"type": self.damage_type}
+
+
+class HL_NodePush(_Block, bpy.types.Node):
+    """Pushes an entity: adds Velocity to how it moves (Add), or makes it move at exactly Velocity (Set). Hammer
+    units per second; up is +Z (700 up lifts a survivor about 170 units). Survivors can't be pushed until someone
+    has left the safe room"""
+    bl_idname, bl_label, bl_icon = "HL_NodePush", "Push", "FORCE_FORCE"
+    kind = "PUSH"
+    mode: EnumProperty(name="Mode", default="ADD", items=[
+        ("ADD", "Add", "Adds to how it moves now (a push, a jump pad, a blast)"),
+        ("SET", "Set", "Moves it at exactly this velocity (not physics props: use Add)")])
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("thing", "entity", "Entity")
+        self.data_in("vec", "velocity", "Velocity")
+        self.ev_out("then", "Then")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "mode", text="")
+
+    def settings(self):
+        return {"mode": self.mode}
+
+
+class HL_NodeAimAt(_Block, bpy.types.Node):
+    """Turns an entity to face a position (a player: their view). Max Turn limits how many degrees it turns each
+    time it runs (0 = at once), so run it from a Timer for a smooth turn"""
+    bl_idname, bl_label, bl_icon = "HL_NodeAimAt", "Aim At", "ORIENTATION_VIEW"
+    kind = "AIM"
+    yaw_only: BoolProperty(name="Turn Sideways Only", default=False,
+                           description="Only turns left and right (keeps its up and down tilt)")
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("thing", "entity", "Entity")
+        self.data_in("vec", "target", "Target")
+        self.data_in("num", "max_turn", "Max Turn")
+        self.ev_out("then", "Then")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "yaw_only")
+
+    def settings(self):
+        return {"yaw_only": self.yaw_only}
+
+
+class HL_NodeExplosion(_Block, bpy.types.Node):
+    """An explosion at a position: Damage to everything within Radius, with the game's blast effect and sound"""
+    bl_idname, bl_label, bl_icon = "HL_NodeExplosion", "Explosion", "OUTLINER_OB_FORCE_FIELD"
+    kind = "EXPLOSION"
+    push: BoolProperty(name="Push Props", default=True, description="Physics props nearby are thrown away")
+    shake: BoolProperty(name="Shake Screens", default=True, description="Screens near it shake")
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("vec", "position", "Position")
+        self.data_in("num", "damage", "Damage").value = 100.0
+        self.data_in("num", "radius", "Radius").value = 256.0
+        self.ev_out("then", "Then")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "push")
+        layout.prop(self, "shake")
+
+    def settings(self):
+        return {"push": self.push, "shake": self.shake}
+
+
+class HL_NodeBeam(_Block, bpy.types.Node):
+    """A straight beam of light from Start to End (a laser, a tracer, a tripwire, a cable) for Seconds
+    (0 = stays)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeBeam", "Beam", "LIGHT_SUN"
+    kind = "BEAM"
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("vec", "start", "Start")
+        self.data_in("vec", "end", "End")
+        self.data_in("text", "colour", "Colour").value = "255 40 40"
+        self.data_in("num", "width", "Width").value = 2.0
+        self.data_in("num", "seconds", "Seconds").value = 0.1
+        self.ev_out("then", "Then")
+        self.data_out("thing", "beam", "Beam")
+
+
+class HL_NodeParticle(_Block, bpy.types.Node):
+    """Plays one of the game's particle effects at Position, or riding on Attach To, for Seconds (0 = stays). The
+    effect is the game's name for it (e.g. fire_small_01)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeParticle", "Particle Effect", "PARTICLES"
+    kind = "PARTICLE"
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("text", "effect", "Effect")
+        self.data_in("vec", "position", "Position")
+        self.data_in("thing", "attach", "Attach To")
+        self.data_in("num", "seconds", "Seconds").value = 2.0
+        self.ev_out("then", "Then")
+        self.data_out("thing", "particle", "Particle")
+
+
+class HL_NodeSeenBy(_Block, bpy.types.Node):
+    """Whether someone is looking at a target: it is within View Angle of the centre of their view and (Clear Sight)
+    nothing blocks the line. Viewer empty: any living survivor. Seen By is who sees it"""
+    bl_idname, bl_label, bl_icon = "HL_NodeSeenBy", "Seen By", "HIDE_OFF"
+    kind = "SEEN"
+    clear_sight: BoolProperty(name="Clear Sight", default=True,
+                              description="Walls and solid props in between hide it (off: only where they look)")
+
+    def make_sockets(self):
+        self.data_in("thing", "target", "Target")
+        self.data_in("vec", "position", "Or Position")
+        self.data_in("thing", "viewer", "Viewer")
+        self.data_in("num", "angle", "View Angle").value = 45.0
+        self.bool_out("seen", "Seen")
+        self.data_out("thing", "who", "Seen By")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "clear_sight")
+
+    def settings(self):
+        return {"clear_sight": self.clear_sight}
+
+
+class HL_NodeFindNearby(_Block, bpy.types.Node):
+    """What is within Radius of a position: the Nearest one, all of them as a List (for For Each) and how many"""
+    bl_idname, bl_label, bl_icon = "HL_NodeFindNearby", "Find Nearby", "VIEWZOOM"
+    kind = "FIND_NEAR"
+    what: EnumProperty(name="Find", default="INFECTED", update=_ensure, items=[
+        ("SURVIVORS", "Survivors", "Living survivors (bots too)"),
+        ("SPECIALS", "Infected Players", "Living special infected and Tanks"),
+        ("COMMONS", "Common Infected", ""),
+        ("INFECTED", "Any Infected", "Common infected, special infected and Tanks"),
+        ("PLAYERS", "Players", "Living survivors and infected players"),
+        ("CLASS", "Entity of Class", "Entities of a class (prop_physics, weapon_*...)"),
+        ("NAME", "Entity Named", "Entities with a name (* is a wildcard)")])
+
+    def make_sockets(self):
+        self.data_in("vec", "position", "Position")
+        self.data_in("num", "radius", "Radius").value = 500.0
+        if self.what in ("CLASS", "NAME"):
+            self.data_in("text", "match", "Class" if self.what == "CLASS" else "Name")
+        self.data_in("thing", "ignore", "Ignore")
+        self.data_out("thing", "nearest", "Nearest")
+        self.data_out("any", "list", "List")
+        self.data_out("num", "count", "Count")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "what", text="")
+
+    def settings(self):
+        return {"what": self.what}
+
+
+class HL_NodePlayerView(_Block, bpy.types.Node):
+    """Where a player's eyes are and which way they look (Look Direction: one unit long; scale it with Vector
+    Math for a point ahead of them). Other entities: their position and facing"""
+    bl_idname, bl_label, bl_icon = "HL_NodePlayerView", "Player View", "CAMERA_DATA"
+    kind = "VIEW"
+
+    def make_sockets(self):
+        self.data_in("thing", "player", "Player")
+        self.data_out("vec", "eye", "Eye Position")
+        self.data_out("vec", "forward", "Look Direction")
+        self.data_out("vec", "angles", "Look Angles")
+
+
+COMBAT_CLASSES = (HL_NodeTrace, HL_NodeDamage, HL_NodePush, HL_NodeAimAt, HL_NodeExplosion, HL_NodeBeam,
+                  HL_NodeParticle, HL_NodeSeenBy, HL_NodeFindNearby, HL_NodePlayerView)
+
+
 BLOCK_CLASSES = (HL_NodeForEach, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeMakeTable, HL_NodeGetField,
                  HL_NodeFormatText, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, HL_NodeCheck,
-                 HL_NodePickValue, HL_NodeTextCheck, HL_NodeSplitText, HL_NodeFireInput, HL_NodeScriptCode, HL_NodeScriptValue)
+                 HL_NodePickValue, HL_NodeTextCheck, HL_NodeSplitText, HL_NodeFireInput, HL_NodeScriptCode, HL_NodeScriptValue) + COMBAT_CLASSES
 
 
 # ---------------------------------------------------------------- Director settings, HUD, overrides
@@ -2318,6 +2547,8 @@ MENU_LAYOUT = [
     ("Scene", [HL_NodeObjectInfo, HL_NodeSelf, HL_NodeObject, HL_NodeCollision, None, HL_NodeGetProperty]),
     ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
                  HL_NodeTeleport, HL_NodeFireInput, HL_NodeSetProperty, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
+    ("Combat & Physics", [HL_NodeTrace, HL_NodeSeenBy, HL_NodeFindNearby, HL_NodePlayerView, None, HL_NodeDamage,
+                          HL_NodePush, HL_NodeAimAt, None, HL_NodeExplosion, HL_NodeBeam, HL_NodeParticle]),
     ("Director", [HL_NodeDirector, HL_NodeDirectorSettings, HL_NodeDirectorOption, HL_NodeDirectorMood]),
     ("HUD & Messages", [HL_NodeMessage, HL_NodeObjective, None, HL_NodeHudText, HL_NodeHudHide]),
     ("Overrides", [HL_NodeOverride, HL_NodeOverrideAnswer]),

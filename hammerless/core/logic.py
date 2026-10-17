@@ -108,10 +108,12 @@ def _base(source: str) -> str:
 
 
 BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
-                 "CAMERA", "FIRE_INPUT", "SET_PROP")
+                 "CAMERA", "FIRE_INPUT", "SET_PROP", "TRACE", "DAMAGE", "PUSH", "AIM", "EXPLOSION", "BEAM", "PARTICLE")
 CLIENT_COMMAND = "hl_clientcommand"     # the map's point_clientcommand: a console command run on one player
 BLOCK_VALUES = ("SELF", "GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
-                "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE", "GET_PROP")
+                "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE", "GET_PROP", "SEEN", "FIND_NEAR", "VIEW")
+TRACE_MASKS = {"SHOTS": 1174421507, "SIGHT": 24705, "WORLD": 16395}   # MASK_SHOT, MASK_VISIBLE, MASK_SOLID_BRUSHONLY
+ACTION_RESULTS = ("FOR_EACH", "SCRIPT_CODE", "TRACE", "BEAM", "PARTICLE")   # actions whose outputs hold what they did
 VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
 
 
@@ -131,6 +133,134 @@ def parse_fields(text: str) -> list[tuple[str, str]]:
 
 # shared script helpers (written once into the map script when a node needs them)
 HELPERS = {
+    "HL_Trace": (
+        "::HL_Trace <- function(s, e, ign, mask) {   // the first thing on the line from s to e\n"
+        "    local t = { start = s, end = e, mask = mask };\n"
+        "    if (ign != null && typeof ign == \"instance\" && ign.IsValid()) t.ignore <- ign;\n"
+        "    TraceLine(t);\n"
+        "    local r = { hit = false, pos = e, ent = null, dist = (e - s).Length() };\n"
+        "    if (\"hit\" in t && t.hit) {\n"
+        "        r.hit = true; r.pos = t.pos; r.dist = (t.pos - s).Length();\n"
+        "        if (\"enthit\" in t && t.enthit != null && t.enthit.IsValid() && t.enthit.GetClassname() != \"worldspawn\")\n"
+        "            r.ent = t.enthit;\n    }\n    return r;\n}"),
+    "HL_Damage": (
+        "::HL_Damage <- function(e, amount, type, att) {\n"
+        "    if (e == null || typeof e != \"instance\" || !e.IsValid()) return;\n"
+        "    if (att == null || typeof att != \"instance\" || !att.IsValid()) att = Entities.First();   // (the world)\n"
+        "    e.TakeDamage(amount.tofloat(), type, att);\n}"),
+    "HL_Push": (
+        "::HL_Push <- function(e, v, set) {\n"
+        "    if (e == null || typeof e != \"instance\" || !e.IsValid() || v == null) return;\n"
+        "    if (set) e.SetVelocity(v); else e.ApplyAbsVelocityImpulse(v);\n}"),
+    "HL_View": (
+        "::HL_Fwd <- function(a) {   // the direction angles (pitch, yaw) face, one unit long\n"
+        "    local p = a.x * 0.0174533, y = a.y * 0.0174533;\n"
+        "    return Vector(cos(p) * cos(y), cos(p) * sin(y), -sin(p));\n}\n"
+        "::HL_Eye <- function(e) {   // a player's eyes; another entity's centre\n"
+        "    if (e == null || typeof e != \"instance\" || !e.IsValid()) return Vector(0, 0, 0);\n"
+        "    return e.GetClassname() == \"player\" ? e.EyePosition() : e.GetCenter();\n}\n"
+        "::HL_Look <- function(e) {   // which way a player looks; which way another entity faces (angles)\n"
+        "    if (e == null || typeof e != \"instance\" || !e.IsValid()) return QAngle(0, 0, 0);\n"
+        "    return e.GetClassname() == \"player\" ? e.EyeAngles() : e.GetAngles();\n}"),
+    "HL_AimAt": (
+        "::HL_Wrap <- function(a) { while (a > 180.0) a -= 360.0; while (a < -180.0) a += 360.0; return a; }\n"
+        "::HL_AimAt <- function(e, target, maxTurn, yawOnly) {\n"
+        "    if (e == null || typeof e != \"instance\" || !e.IsValid() || target == null) return;\n"
+        "    local d = target - HL_Eye(e);\n"
+        "    local cur = HL_Look(e);\n"
+        "    local yaw = atan2(d.y, d.x) * 57.29578;\n"
+        "    local pitch = yawOnly ? cur.x : -atan2(d.z, sqrt(d.x * d.x + d.y * d.y)) * 57.29578;\n"
+        "    if (maxTurn > 0) {\n"
+        "        local dy = HL_Wrap(yaw - cur.y);\n        local dp = HL_Wrap(pitch - cur.x);\n"
+        "        if (dy > maxTurn) dy = maxTurn; else if (dy < -maxTurn) dy = -maxTurn;\n"
+        "        if (dp > maxTurn) dp = maxTurn; else if (dp < -maxTurn) dp = -maxTurn;\n"
+        "        yaw = cur.y + dy; pitch = cur.x + dp;\n    }\n"
+        "    local a = QAngle(pitch, yaw, e.GetClassname() == \"player\" ? 0.0 : cur.z);\n"
+        "    if (e.GetClassname() == \"player\") e.SnapEyeAngles(a); else e.SetAngles(a);\n}"),
+    "HL_Explode": (
+        "::HL_Explode <- function(pos, dmg, radius, push, shake) {\n"
+        "    if (pos == null) return;\n"
+        "    local e = SpawnEntityFromTable(\"env_explosion\", { origin = pos, iMagnitude = dmg.tointeger(),\n"
+        "        iRadiusOverride = radius.tointeger() });\n"
+        "    if (e != null) { DoEntFire(\"!self\", \"Explode\", \"\", 0.0, null, e); DoEntFire(\"!self\", \"Kill\", \"\", 2.0, null, e); }\n"
+        "    if (push) {\n"
+        "        local f = SpawnEntityFromTable(\"env_physexplosion\", { origin = pos, magnitude = dmg.tofloat(),\n"
+        "            radius = radius.tofloat(), spawnflags = 1 });   // (force only: env_explosion does the damage)\n"
+        "        if (f != null) { DoEntFire(\"!self\", \"Explode\", \"\", 0.0, null, f); DoEntFire(\"!self\", \"Kill\", \"\", 2.0, null, f); }\n"
+        "    }\n"
+        "    if (shake) ScreenShake(pos, 8.0, 40.0, 1.0, radius.tofloat() * 2.0, 0, true);\n}"),
+    "HL_Beam": (
+        "::HL_BeamN <- 0;\n"
+        "PrecacheModel(\"sprites/laserbeam.vmt\");\n"
+        "::HL_Beam <- function(a, b, colour, width, secs) {   // a beam between two points (two targets it runs between)\n"
+        "    if (a == null || b == null) return null;\n"
+        "    ::HL_BeamN++;\n    local n = \"hl_beam_\" + ::HL_BeamN;\n"
+        "    local s = SpawnEntityFromTable(\"info_target\", { targetname = n + \"_a\", origin = a, spawnflags = 1 });\n"
+        "    local t = SpawnEntityFromTable(\"info_target\", { targetname = n + \"_b\", origin = b, spawnflags = 1 });\n"
+        "    local beam = SpawnEntityFromTable(\"env_beam\", { targetname = n, origin = a, LightningStart = n + \"_a\",\n"
+        "        LightningEnd = n + \"_b\", texture = \"sprites/laserbeam.vmt\", rendercolor = colour, renderamt = 255,\n"
+        "        BoltWidth = width.tofloat(), life = 0, NoiseAmplitude = 0, spawnflags = 1 });\n"
+        "    if (beam != null) DoEntFire(\"!self\", \"TurnOn\", \"\", 0.0, null, beam);\n"
+        "    if (secs > 0) foreach (x in [s, t, beam]) if (x != null) DoEntFire(\"!self\", \"Kill\", \"\", secs.tofloat(), null, x);\n"
+        "    return beam;\n}"),
+    "HL_Particle": (
+        "::HL_Particle <- function(effect, pos, attach, secs) {\n"
+        "    if (effect == null || effect == \"\") return null;\n"
+        "    local on = attach != null && typeof attach == \"instance\" && attach.IsValid();\n"
+        "    if (pos == null) pos = on ? attach.GetOrigin() : Vector(0, 0, 0);\n"
+        "    PrecacheEntityFromTable({ classname = \"info_particle_system\", effect_name = effect });\n"
+        "    local p = SpawnEntityFromTable(\"info_particle_system\", { effect_name = effect, origin = pos, start_active = 1 });\n"
+        "    if (p == null) return null;\n"
+        "    if (on) DoEntFire(\"!self\", \"SetParent\", \"!activator\", 0.0, attach, p);\n"
+        "    DoEntFire(\"!self\", \"Start\", \"\", 0.0, null, p);\n"
+        "    if (secs > 0) DoEntFire(\"!self\", \"Kill\", \"\", secs.tofloat(), null, p);\n"
+        "    return p;\n}"),
+    "HL_SeenBy": (
+        "::HL_SeenBy <- function(target, pos, viewer, angle, sight) {   // who (if anyone) looks at it\n"
+        "    local ent = target != null && typeof target == \"instance\" && target.IsValid();\n"
+        "    if (ent) pos = target.GetCenter();\n"
+        "    if (pos == null) return null;\n"
+        "    local c = cos(angle.tofloat() * 0.0174533);\n"
+        "    local who = (viewer != null) ? [viewer] : HL_Players(1);\n"
+        "    foreach (p in who) {\n"
+        "        if (p == null || typeof p != \"instance\" || !p.IsValid() || p == target) continue;\n"
+        "        if (p.GetClassname() == \"player\" && p.IsDead()) continue;\n"
+        "        local eye = HL_Eye(p);\n        local d = pos - eye;\n        local len = d.Length();\n"
+        "        if (len < 1.0) return p;\n"
+        "        if (HL_Fwd(HL_Look(p)).Dot(d) < c * len) continue;\n"
+        "        if (sight) {\n"
+        "            local t = { start = eye, end = pos, mask = 24705, ignore = p };\n"
+        "            TraceLine(t);\n"
+        "            if (\"hit\" in t && t.hit && !(ent && \"enthit\" in t && t.enthit == target) && t.fraction < 0.98) continue;\n"
+        "        }\n        return p;\n    }\n    return null;\n}"),
+    "HL_Nearby": (
+        "::HL_NearOk <- function(x, what, ign) {   // one Find Nearby candidate: what it asked for, alive\n"
+        "    if (x == null || !x.IsValid() || x == ign) return false;\n"
+        "    if (x.GetClassname() != \"player\") return x.GetClassname() != \"infected\" || x.GetHealth() > 0;   // (a common just killed is still there a moment)\n"
+        "    if (x.IsDead()) return false;\n"
+        "    if (what == \"SURVIVORS\") return x.IsSurvivor();\n"
+        "    if (what == \"SPECIALS\" || what == \"INFECTED\") return !x.IsSurvivor();\n"
+        "    return true;\n}\n"
+        "::HL_Nearby <- function(what, match, pos, radius, ign) {   // [entities within radius], nearest first\n"
+        "    local found = [], e = null, cls = null;\n"
+        "    if (pos == null) return [];\n"
+        "    radius = radius.tofloat();\n"
+        "    if (what == \"COMMONS\" || what == \"INFECTED\")\n"
+        "        while (e = Entities.FindByClassnameWithin(e, \"infected\", pos, radius))\n"
+        "            if (HL_NearOk(e, what, ign)) found.append([(e.GetOrigin() - pos).Length(), e]);\n"
+        "    if (what == \"SURVIVORS\" || what == \"SPECIALS\" || what == \"INFECTED\" || what == \"PLAYERS\") cls = \"player\";\n"
+        "    if (what == \"CLASS\") cls = match;\n"
+        "    e = null;\n"
+        "    if (cls != null)\n"
+        "        while (e = Entities.FindByClassnameWithin(e, cls, pos, radius))\n"
+        "            if (HL_NearOk(e, what, ign)) found.append([(e.GetOrigin() - pos).Length(), e]);\n"
+        "    if (what == \"NAME\")\n"
+        "        while (e = Entities.FindByNameWithin(e, match, pos, radius))\n"
+        "            if (HL_NearOk(e, what, ign)) found.append([(e.GetOrigin() - pos).Length(), e]);\n"
+        "    found.sort(function(a, b) { return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0); });\n"
+        "    local out = [];\n"
+        "    foreach (f in found) out.append(f[1]);\n"
+        "    return out;\n}"),
     "HL_Depth": ("::HL_Depth <- 0;   // script nodes in a loop: how deep the calls are\n"
                  "::HL_MAX_DEPTH <- 32;"),
     "HL_Players": (
@@ -482,7 +612,7 @@ class _Compiler:
                                      "needs one: set its Role, e.g. a Custom Model or a light)")
                 return "null"
             return f'Entities.FindByName(null, "{self.name_of(e, n.obj)}")'
-        if k in BLOCK_VALUES or k in ("FOR_EACH", "SCRIPT_CODE"):
+        if k in BLOCK_VALUES or k in ACTION_RESULTS:
             return self.block_value(n, sock, slug)
         if k == "DIRECTOR_MOOD":
             self.director_query()
@@ -1163,6 +1293,51 @@ class _Compiler:
             body = (f"    local hl_e = {ent};\n"
                     f'    if (hl_e != null && hl_e.IsValid()) DoEntFire("!self", {args}, hl_e);\n@@then@@')
             self.script_action(nid, fn, body, ["then"], take)
+        elif k == "TRACE":
+            self.helper("HL_Trace", HELPERS["HL_Trace"])
+            mask = TRACE_MASKS.get(s.get("hits", "SHOTS"), TRACE_MASKS["SHOTS"])
+            body = (f'    local r = HL_Trace({self.typed_in(n, "start", vs.VEC)}, {self.typed_in(n, "end", vs.VEC)}, '
+                    f'{self.typed_in(n, "ignore", vs.THING)}, {mask});\n'
+                    f'    ::HL_R["{slug}"] <- r;\n'
+                    "    if (r.hit) {\n@@hit@@\n    } else {\n@@missed@@\n    }\n")
+            self.script_action(nid, fn, body, ["hit", "missed"], take)
+        elif k == "DAMAGE":
+            self.helper("HL_Damage", HELPERS["HL_Damage"])
+            dtype = int(s.get("type", "2") or 0)
+            line = (f'    HL_Damage({self.typed_in(n, "entity", vs.THING)}, {self.typed_in(n, "amount", vs.NUM)}, {dtype}, '
+                    f'{self.typed_in(n, "attacker", vs.THING)});\n')
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
+        elif k == "PUSH":
+            self.helper("HL_Push", HELPERS["HL_Push"])
+            line = (f'    HL_Push({self.typed_in(n, "entity", vs.THING)}, {self.typed_in(n, "velocity", vs.VEC)}, '
+                    f'{"true" if s.get("mode") == "SET" else "false"});\n')
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
+        elif k == "AIM":
+            self.helper("HL_View", HELPERS["HL_View"])
+            self.helper("HL_AimAt", HELPERS["HL_AimAt"])
+            line = (f'    HL_AimAt({self.typed_in(n, "entity", vs.THING)}, {self.typed_in(n, "target", vs.VEC)}, '
+                    f'({self.typed_in(n, "max_turn", vs.NUM)}).tofloat(), {"true" if s.get("yaw_only") else "false"});\n')
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
+        elif k == "EXPLOSION":
+            self.helper("HL_Explode", HELPERS["HL_Explode"])
+            line = (f'    HL_Explode({self.typed_in(n, "position", vs.VEC)}, {self.typed_in(n, "damage", vs.NUM)}, '
+                    f'{self.typed_in(n, "radius", vs.NUM)}, {"true" if s.get("push", True) else "false"}, '
+                    f'{"true" if s.get("shake", True) else "false"});\n')
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
+        elif k == "BEAM":
+            self.helper("HL_Str", HELPERS["HL_Str"])
+            self.helper("HL_Beam", HELPERS["HL_Beam"])
+            line = (f'    ::HL_R["{slug}"] <- HL_Beam({self.typed_in(n, "start", vs.VEC)}, {self.typed_in(n, "end", vs.VEC)}, '
+                    f'HL_Str({self.typed_in(n, "colour", vs.TEXT)}), {self.typed_in(n, "width", vs.NUM)}, '
+                    f'{self.typed_in(n, "seconds", vs.NUM)});\n')
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
+        elif k == "PARTICLE":
+            self.helper("HL_Str", HELPERS["HL_Str"])
+            self.helper("HL_Particle", HELPERS["HL_Particle"])
+            pos = self.typed_in(n, "position", vs.VEC) if (nid, "position") in self.data_links else "null"
+            line = (f'    ::HL_R["{slug}"] <- HL_Particle(HL_Str({self.typed_in(n, "effect", vs.TEXT)}), {pos}, '
+                    f'{self.typed_in(n, "attach", vs.THING)}, {self.typed_in(n, "seconds", vs.NUM)});\n')
+            self.script_action(nid, fn, line + "@@then@@", ["then"], take)
         elif k == "SCRIPT_CODE":
             args = "".join(f"    local {x} = {self.typed_in(n, x, vs.ANY)};\n" for x in "abcd")
             code = "\n".join("    " + line for line in (s.get("code") or "").splitlines())
@@ -1191,6 +1366,39 @@ class _Compiler:
             return f'(("{slug}" in ::HL_L) ? ::HL_L["{slug}"] : null)'
         if k == "SCRIPT_CODE":                # what its code left in result, the last time it ran
             return f'(("{slug}" in ::HL_R) ? ::HL_R["{slug}"] : null)'
+        if k == "TRACE":                      # the last trace's answer
+            field, default = {"pos": ("pos", "Vector(0, 0, 0)"), "entity": ("ent", "null"),
+                              "distance": ("dist", "0.0")}.get(sock, ("pos", "null"))
+            return f'(("{slug}" in ::HL_R) ? ::HL_R["{slug}"].{field} : {default})'
+        if k in ("BEAM", "PARTICLE"):         # the entity it made last
+            return f'(("{slug}" in ::HL_R) ? ::HL_R["{slug}"] : null)'
+        if k == "VIEW":
+            self.helper("HL_View", HELPERS["HL_View"])
+            who = self.typed_in(n, "player", vs.THING)
+            if sock == "forward":
+                return f"HL_Fwd(HL_Look({who}))"
+            if sock == "angles":
+                return f"(function(a) {{ return Vector(a.x, a.y, a.z); }})(HL_Look({who}))"
+            return f"HL_Eye({who})"
+        if k == "SEEN":
+            self.helper("HL_Players", HELPERS["HL_Players"])
+            self.helper("HL_View", HELPERS["HL_View"])
+            self.helper("HL_SeenBy", HELPERS["HL_SeenBy"])
+            pos = self.typed_in(n, "position", vs.VEC) if (n.id, "position") in self.data_links or n.consts.get("position") else "null"
+            who = (f"HL_SeenBy({self.typed_in(n, 'target', vs.THING)}, {pos}, {self.typed_in(n, 'viewer', vs.THING)}, "
+                   f"{self.typed_in(n, 'angle', vs.NUM)}, {'true' if s.get('clear_sight', True) else 'false'})")
+            return f"({who} != null)" if sock == "seen" else who
+        if k == "FIND_NEAR":
+            self.helper("HL_Nearby", HELPERS["HL_Nearby"])
+            what = s.get("what", "INFECTED")
+            match = self.typed_in(n, "match", vs.TEXT) if what in ("CLASS", "NAME") else '""'
+            found = (f'HL_Nearby("{what}", {match}, {self.typed_in(n, "position", vs.VEC)}, '
+                     f'{self.typed_in(n, "radius", vs.NUM)}, {self.typed_in(n, "ignore", vs.THING)})')
+            if sock == "nearest":
+                return f"(function(l) {{ return l.len() > 0 ? l[0] : null; }})({found})"
+            if sock == "count":
+                return f"{found}.len().tofloat()"
+            return found
         if k == "GET_VAR":
             self.helper("HL_Vars", HELPERS["HL_Vars"])
             kind = s.get("kind", vs.NUM)

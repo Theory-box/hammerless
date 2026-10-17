@@ -1175,6 +1175,31 @@ def test_logic_value_wires():
                                                     for e in entities(blocks, "logic_script"))
 
 
+def test_combat_nodes_compile():
+    # every Combat & Physics node (tests/fixtures/combat_graph.py) compiles into the map script with nothing to
+    # warn about, each writing its helper (the in-game side: tests/ingame/test_combat_nodes.py)
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "fixtures"))
+    import combat_graph
+    from hammerless.blender.logic import COMBAT_CLASSES, new_tree
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    bpy.ops.object.empty_add(location=(2, 0, 0.1))
+    sp = bpy.context.object
+    sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
+    tree = combat_graph.build(new_tree(bpy.context))
+    used = {n.bl_idname for n in tree.nodes}
+    assert {c.bl_idname for c in COMBAT_CLASSES} <= used, {c.bl_idname for c in COMBAT_CLASSES} - used
+    blocks, log = export()
+    assert blocks, log
+    assert not [ln for ln in log.splitlines() if tree.name in ln], log
+    script = open(os.path.join(FAKE_GAME, "left4dead2", "scripts", "vscripts", "hammerless", "logic_test_map.nut"),
+                  encoding="utf-8").read()
+    for call in ("HL_Trace(", "HL_Damage(", "HL_Push(", "HL_AimAt(", "HL_Explode(", "HL_Beam(", "HL_Particle(",
+                 "HL_SeenBy(", "HL_Nearby(", "HL_Eye(", "HL_Fwd(", "1174421507"):
+        assert call in script, call
+    assert script.count("::HL_Trace <-") == 1, "a helper is written once"
+
+
 def test_custom_models_extract():
     # Custom Model meshes: linked copies share one model, each copy is a prop where the object is
     from mathutils import Vector
