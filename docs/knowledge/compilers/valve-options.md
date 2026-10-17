@@ -101,7 +101,7 @@ Valve's parser: `vvis.cpp`, `ParseCommandLine()`. hlvvis (`native/hlvvis.c`) acc
 | `-mpi_listparams` | 0 | Lists VMPI parameters. | `no effect` |
 | (common options) | | `-threads`, `-v`, `-low`, `-FullMinidumps`, `-novconfig`, `-vproject`/`-game`, `-allowdebug`/`-steam`, `-mpi`. | `no effect` |
 
-hlvvis's own option, not a vvis one: `-exact` runs vvis's path search (its output byte for byte) instead of the default merged-window search.
+hlvvis's own options, not vvis ones (`toolopts.py` marks them ours): `-exact` runs vvis's path search (its output byte for byte); `-cpu` the merged windows on the CPU; `-onepass` the first GPU pass only (Fast, the default since 2026-10-16); `-gpu2` both GPU passes (Tight; the default without `-onepass`); `-jacobi` the round-based merged flow on the CPU, `-jacobi -gpu` it on the graphics card; `-gpuselftest` the card's double arithmetic against the CPU's. The build passes `-exact`, `-onepass` or nothing (Tight) with *Vis on the GPU* on, `-cpu` with it off (`CompileJob`, `compile.py`). See [../vis/gpu-vis.md](../vis/gpu-vis.md).
 
 ## vrad
 

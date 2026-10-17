@@ -61,10 +61,18 @@ Research sources: BSPSource (GPL, learned from only), srctools (MIT), bsp_tool.
 
 The original text is kept (a Text block, `scene["hl_vmf_source"]`); objects are tagged with their VMF kind, id and index; Build rebuilds the stored file: a face still on its side's plane (tolerance 0.05, same material) keeps its original block, a moved face gets a new plane with the rest of the side kept; entities replaced in place, new ones after the last original; written latin-1; instance files copied next to the built map. Import turns off Auto Seal, the automatic Director, sun and Sound (Valve maps have their own). Proof: all 134 Valve sample maps byte-identical after a round trip; a compile of the rebuilt file differs from the original's only in lumps 0, 28/29 (physics noise) and 35 offsets. Left: editing displacements (kept as imported), texture lock on moved faces.
 
+Pages in this folder: [weather.md](weather.md) (L4D2's precipitation as Valve's maps use it, measured in game, the Weather Volume).
+
 ## Engine behaviours met while testing
 
 | Behaviour | Where it mattered |
 |---|---|
+| One map-sized `func_precipitation` keeps rain out of brush and prop buildings by itself (Valve's Hard Rain has one per map and 3 to 6 blockers); the particle rain is culled by a ray-trace environment (`PRECIPITATIONBLOCKER`), the old rain types by `MASK_SOLID_BRUSHONLY` traces (2026-10-16) | [weather.md](weather.md) |
+| Nav climb links are ordinary connections: the game has no zombies-only link type, so the Director's flow and the bots treat Auto Climb Links as walkable (a start area 35-88 units below its surroundings read "Start to end: OK" only through them; the game's own `nav_generate` reported the flow broken there) (2026-10-16) | nav/ |
+| VScript can edit the nav at run time (area `ConnectTo` / `Disconnect`, the ladder forms, `MarkAsBlocked` / `UnblockArea`, `SetAttributes` / `RemoveAttributes`, `MarkAsDamaging`, `NavMesh.RegisterAvoidanceObstacle`) but cannot create, resize or delete areas (`core/data/vscript_api.json`) | nav/, logic/ |
+| A script timer walking every `prop_dynamic` five times a second prints "SCRIPT PERF WARNING main ran long ~1.8 ms" (`RunScriptCode` calls show as "main"); about 1% of server time, harmless (2026-10-16) | logic/ (the Swelling Pod) |
+| Damage to common infected from script works with any attacker (an entity, null, the player, the common itself) (2026-10-16) | logic/ |
+| A map may have at most 32 switched (named) light styles; hlvbsp stops with "Too many switched lights ... max = 32" (`native/hlvbsp/write.c`); Valve's own c1-c5 maps use only named switchable lights (c2m5 23, c1m1 17, the others 2-4) and no baked flicker styles 1-12 | lighting/ |
 | `script_help` prints nothing unless the game was started with `-dev +developer 1` (the `developer` cvar is hidden in retail) | logic/ |
 | Modes come only from VPKs read at startup; loose `modes/*.txt` and `mp_gamemode` / a mode on the command line are ignored; `map <map> <mode>` works | logic/ |
 | Collision cost is per object entered, not per ray: one static prop holding ~1,200-4,000 convex pieces drops a map to 14-17 fps with 20 commons, while the same pieces as ~60 props of <= 20 pieces or as brushes run ~100-117 fps (per-ray cost of a prop 5-8 microseconds against 0.1-2.6 for brushes); `vprof` prints nothing in retail L4D2 (2026-10-15) | models/collision.md |
@@ -101,6 +109,7 @@ The original text is kept (a Text block, `scene["hl_vmf_source"]`); objects are 
 | Nav generator nodes | 500,000 nav points; beyond it part of the map gets no nav, with a warning | nav/ |
 | vrad patches | 262,144: a large user map (~397k bounce patches, 11.6k faces, 2.6 million square feet) hit hlvrad's fallback that smaller maps never did | lighting/, compilers/ |
 | Light styles per face | 4 (Source); more than 4 are dropped silently (open audit item) | lighting/ |
+| Switched (named) light styles per map | 32 (styles 32..63); hlvbsp errors past it (`write.c`, `SetLightStyles`) | lighting/ |
 | Model bones | 128 (127 usable); 3 weights per vertex; 53 bones per hardware strip; 65,535 vertices per mesh; `.phy` triangles 4,096 per piece (12-bit index) | models/ |
 | Brush sides | more than 64 corners crashes vbsp without a message (caught at export) | compilers/ |
 | Map limits (brushes, sides, materials, areas, area portals, leaf faces, primitives...) | hlvbsp stops with vbsp's message | compilers/ |
@@ -121,4 +130,4 @@ The original text is kept (a Text block, `scene["hl_vmf_source"]`); objects are 
 - Python 3.12's `sum()` (Neumaier) differs from 3.11's: exactness tests run with Blender's Python.
 - Quick in-game tests: QUICK preset, no lighting, ~30 s build + load; wait for `HAMMERLESS_FLOW` after "Map: <name>"; don't probe the instant a map loads.
 
-Last checked: 2026-10-15 against branch light-layers, commit a2d00a3 (the collision-cost, decal and brush-limit rows; the rest re-read 2026-10-13 against 46f75ac).
+Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the weather, climb-link, nav-API, script-perf, damage and switched-light rows; the collision-cost, decal and brush-limit rows 2026-10-15 against a2d00a3; the rest re-read 2026-10-13 against 46f75ac).

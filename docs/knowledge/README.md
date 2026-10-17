@@ -18,14 +18,14 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 |---|---|---|
 | `compilers/` | The map, vis and light compilers (hlvbsp, hlvvis, hlvrad) against Valve's vbsp, vvis, vrad: options, fallbacks, what ours do | written |
 | `lighting/` | hlvrad beyond vrad: GPU path and ray-traced bounce, light styles and Live Light Mixing, partial bakes and keep light, sky light, Cycles, the lighting view | written |
-| `vis/` | hlvvis in depth: what decides vvis's bits, nondeterminism, radial vis decoded, speed history and dropped ideas, merged windows with its safety proof and tools | written |
+| `vis/` | hlvvis in depth: what decides vvis's bits, nondeterminism, radial vis decoded, speed history and dropped ideas, merged windows with its safety proof and tools, vis on the graphics card (the round-based flow, the two passes, Fast / Tight) | written |
 | `nav/` | The .nav format decoded, the generator port and its L4D2 constants, the analysis matched to the game, speed work, the in-game flow check, the real-time nav plan | written |
 | `director/` | AI Director: the flow, wanderer placement read from `server.dll` and fitted in game, the special/mob filter, the budget limit, the spawn preview check, options/scopes/hooks, item densities, quirks | written |
 | `logic/` | Graph -> VScript compiler and the facts it is built on, the script API dump method, scripted mode and hooks, the NetProps catalogue method and what sticks, the test bench, examples and what each measured, enemies on bot bodies | written |
 | `models/` | The own model writer matched to studiomdl, animated models through SMD/QC and what studiomdl was measured to do, the game's `.mdl`/`.ani` format decoded (frame-anims), game skeletons and placed characters, VTF/VMT, alpha, materials, parallax, collision for big models (Make Collision, invisible materials, Vis Only brushes) | written |
 | `sound/` | What a map can control of the sound engine (measured), new sounds through an addon VPK with its own `sound.cache` (format decoded), DSP presets, the automatic soundscapes, the shelved impulse-response work | written |
 | `loading/` | Build & Play step by step, the game prestart, the parallel build and its critical path, smart builds and `hlvbsp -onlyents`, the kept nav, Fast Map Loading (`sv_lan 1`), the stringtable dictionary, every load timing | written |
-| `game-facts/` | The BSP as L4D2 writes it (lump order, game lump, pakfile, `stale.txt`), the game's physics DLL from our tools, reading the game's content, Valve's maps decompiled, the VMF importer's exact round trip, engine behaviours met in testing, limits hit, reference maps, testing rules | written |
+| `game-facts/` | The BSP as L4D2 writes it (lump order, game lump, pakfile, `stale.txt`), the game's physics DLL from our tools, reading the game's content, Valve's maps decompiled, the VMF importer's exact round trip, engine behaviours met in testing, limits hit, reference maps, testing rules; weather (precipitation as Valve uses it, measured in game) | written |
 
 ## Conventions
 
@@ -74,6 +74,7 @@ Every page follows these rules so the facts stay traceable and checkable:
 |---|---|
 | [vis/README.md](vis/README.md) | What vvis writes, the exact search's bit-deciding details, vvis nondeterminism, radial vis as decoded from `vvis_dll.dll`, speeds, ideas tried and dropped, views, limits |
 | [vis/merged-windows.md](vis/merged-windows.md) | The merged-window method, the corrected safety argument, the audit's two bugs, the exact 0.01-unit claim, the proof tools and release gate |
+| [vis/gpu-vis.md](vis/gpu-vis.md) | Vis on the graphics card (the default since 2026-10-16): the round-based `-jacobi` reference, the GPU port step by step with its bit-identity checks, the second pass, the day's default history, Fast / Tight with the measured difference, fallbacks, development variables and lessons, the rejected cluster merging, the zoned-vis review |
 
 ### nav/
 
@@ -119,6 +120,7 @@ Every page follows these rules so the facts stay traceable and checkable:
 | Page | What it covers |
 |---|---|
 | [game-facts/README.md](game-facts/README.md) | BSP version 21 facts, `vphysics.dll` calling conventions and vtable slots, VPK and binary sources, the decompiler's findings and round-trip results, the Hammer-map importer, a table of engine behaviours with the area each belongs to, the limits met, the reference maps, the testing rules that cost data |
+| [game-facts/weather.md](game-facts/weather.md) | L4D2's precipitation as Hard Rain uses it (one map-sized `func_precipitation`, a handful of blockers, `env_wind` values), why buildings keep rain out by themselves, the in-game rain tests, the Weather Volume's keys |
 
 ### Known issues
 
@@ -126,4 +128,4 @@ Every page follows these rules so the facts stay traceable and checkable:
 |---|---|
 | [known-issues.md](known-issues.md) | Open behaviour problems from the October 2026 audits, re-checked in the code: what happens, where, the suggested fix; and what's been fixed since |
 
-Last checked: 2026-10-15 against branch light-layers, commit a2d00a3.
+Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4.

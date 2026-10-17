@@ -37,6 +37,8 @@ Facts the compiler is built on, all measured in game:
 
 Variables: Map, Per Player (or per entity wired into Player: how a Swelling Pod keeps a charge per pod), This Group Copy; per-entity keys are kept apart from players' keys; Keep Across Maps saves only marked plain values (the test run found it saving junk once). Node groups (`logicgroups.py`): Ctrl+G, Tab, Ctrl+Alt+G, exposed inputs; every Group node is flattened at build under `<group node>/<node>` names, so the game never sees a group; re-adding an example reuses its groups unless edited; Remove Unused Groups.
 
+An example's node groups update only when the example is re-added: delete the old copy first, since adding runs the unused-example-group cleanup (measured while shipping ffc6b31; an edited group of an old copy is reused as the group facts above say).
+
 Design rule (the user's, 2026-10-08 and 10-11): nodes stay generic building blocks; behaviour is wired from existing nodes, never baked into a node or hidden in a Script Code blob; a missing piece is a new generic node (ask first); reusable bundles are node groups. All examples were rebuilt that way (ec0034c, 6ce9d09).
 
 ## The game's script API: how it was dumped
@@ -93,7 +95,7 @@ Lessons recorded in `tests/ingame/README.md`: test map names `hl_test_*` only; n
 | 43 Slow Motion Headshots | `func_timescale` works without cheats |
 | 44/45 Camera | `point_clientcommand` per player |
 | 46 Random Zombie Sizes | model scale hitboxes follow the size |
-| 49 Swelling Pod | animation held at a charge: Set Playback Rate 0 + `m_flCycle` through NetProps; walk-up swell/burst/20 damage and shooting tested |
+| 49 Swelling Pod | animation held at a charge: Set Playback Rate 0 + `m_flCycle` through NetProps; walk-up swell/burst/20 damage and shooting tested. Since ffc6b31 (2026-10-16) a burst also kills every common within Burst Radius (a For Each over the commons, `TakeDamage` 10000 blast with the pod as the attacker, as Explode Common does): the test spawns 3 commons inside the radius and 1 outside, held with `nb_stop` while the pod swells: 3 killed, 1 alive. Damage to commons from script works with any attacker (the pod, null, the player, the common itself; measured). The pod's idle plays in game (`m_flCycle` advancing; the example's idle is subtle: the top rises 6 cm and the sides 4 cm over 40 frames). The pods' timer walks every `prop_dynamic` every 0.2 s: the game prints "SCRIPT PERF WARNING main ran long ~1.8 ms" (`RunScriptCode` calls show as "main"), about 1% of server time, harmless |
 | 50 Reskinned Commons | a mannequin on the game's common skeleton worn by every common keeps common behaviour ([../models/](../models/README.md)) |
 | 51/52 Sleepers, Husks | placed characters replaced by real commons, `RushVictim`, `Director.GetClosestSurvivor`; a woken common keeps its facing |
 | 53/54 lights | `SetPattern` / `TurnOff` on switchable baked lights ([../lighting/](../lighting/layers-and-styles.md)) |
@@ -125,6 +127,21 @@ Status: `partial`. The Top-Down Camera node group stops at a fixed camera + Scre
 | `env_beam` between two `info_target`s: `info_target`s are server-only unless spawnflag 2 (always transmit); a beam between two static unparented points draws where they were when it switched on and never follows them (one between transmitted points spawned in place did draw); a moving laser never showed; `env_laser` updates its end only on its own think (~0.1 s) | the laser was dropped (04d5abc) |
 | Trace masks: Make Table's whole-number fields were rounded through floats (1174421515 -> 1174421504 lost `CONTENTS_SOLID` etc., so the trace hit nothing solid) | fixed 587d0d3: int fields are whole-number sockets and typed values are written exactly. `TraceLine` is a value-only node: drive it through an If's condition and keep the table in a variable so Get Field reads the filled one |
 
+## Behaviours: logic graphs an object carries (branch behaviours, slice 1, 18c2ce4, 2026-10-16)
+
+Status: `in progress` (slice 1 on branch behaviours; not merged at the page's date). Code: `hammerless/blender/behaviours.py` (the panel and list), `blender/logic.py` (the Self node, `is_behaviour` trees), `blender/logicgroups.py`, `core/logic.py`, `blender/extract.py`. Test: `tests/blender/run_tests.py` (a Blink behaviour, Timer -> Show/Hide Self, on three boxes).
+
+| Fact | Detail |
+|---|---|
+| What a Behaviour is | a logic graph marked `is_behaviour`, listed under *Selected Object > Behaviours* (New, link an existing one, Remove, reorder, Open; a shared graph shows its user count and *Make Unique* forks it for this object) |
+| How it builds | once per object that carries it, with **Self** bound to that object: Self's Object output works with every node that takes an object, its Entity output with script nodes. Names are prefixed `<object>/` (entities `hl_<object>_...`), never deduplicated by order, so three boxes with one Blink graph give three timers each hiding its own `func_brush` (`hl_blinker_..`) |
+| Variables | per-player variables are kept apart per owner object (group-scope ones already were) |
+| Map-wide nodes | Director options / settings, HUD, crescendo, objective inside a Behaviour warn that they run once per object |
+| World graphs | `logic_trees` skips Behaviours; `used_groups` walks them (a group used only by a Behaviour survives the unused-group cleanup); Self can't be added to a world graph; world-graph output is unchanged (the existing logic tests pass) |
+| Lights | a light with a Behaviour is switchable (named), like a light logic uses |
+
+Planned: Light Pattern presets as Behaviours sharing one light name per graph (the 32 switched-style limit, [../lighting/layers-and-styles.md](../lighting/layers-and-styles.md)); an Entity Events Self mode; prefabs in a Blender asset library.
+
 ## Custom enemies on bot bodies (measured 2026-09-29, not in nodes)
 
 `info_l4d1_survivor_spawn` (character 4-7, input `SpawnSurvivor`) spawns a bot on team 4. The map must precache the L4D1 survivor models (a hidden `prop_dynamic` per model) or spawning crashes with "UTIL_SetModel: not precached" (same for any `SetModel` swap). `CommandABot` move works; attack is accepted but does nothing: the script is the brain (aim with `SnapEyeAngles` each 0.1 s think; fire with `m_afButtonForced = 1`; semi-auto weapons fire once per press, so give an SMG and toggle). Team 2 <-> team 4 bullets are dropped by the engine (not even `AllowTakeDamage` sees them) and survivors can't damage team-4 bots at all; workaround: `weapon_fire` -> `TraceLine` (mask 33570827) from the shooter's eye; enemy -> survivor `TakeDamage(dmg, DMG_BULLET, enemy)`; survivor -> enemy `SetHealth`, and at 0 a `prop_ragdoll` plus `kickid`. Four at once worked; `sb_stop` freezes them; survivor bots won't target them. Status: `not done` (the L4D2.5 goal, see the roadmap notes).
@@ -145,4 +162,4 @@ Status: `partial`. The Top-Down Camera node group stops at a fixed camera + Scre
 - `docs/systems/LOGIC_AND_SCRIPTING.md` says "54 ready-made graphs"; `docs/LOGIC_NODES.md` lists examples up to 61 (60 numbered graphs, 48 listed last), and `tests/ingame/README.md` says "all 45 examples". The counts are from different dates.
 - Commit b69fe96 says 2,511 properties; the catalogue holds 2,631 after 21d7c4e. The commit message is the older number.
 
-Last checked: 2026-10-14 against branch light-layers, commit 04d5abc.
+Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the Swelling Pod row, the example re-add note and the Behaviours section; the rest 2026-10-14 against 04d5abc).

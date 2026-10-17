@@ -8,7 +8,9 @@ A Control Volume with *Light Baking* ticked tells hlvrad where not to work out l
 
 What happens to unbaked points: they get the map's ambient colour (the `light_environment`'s ambient) and aren't traced, so they cost next to nothing; surfaces there still cast shadows; partly covered faces are cut at the volume's edge; prop vertices and leaf ambient samples inside are skipped (rooms wholly inside skip their ambient); bounced light from skipped surfaces is their ambient colour. With bounce off, everything outside is byte-identical to a full bake. The volumes count as a lighting setting (changing them relights without recompiling geometry) and aren't written into the map.
 
-The **Bake Lighting** dropdown: Whole Map; What the View Sees (the viewport's frustum out to *View Distance*, default 3000 units, as an Only Inside volume); Selected Objects (around the selection's bounds); each Only Inside volume by name. Build and Build & Play bake inside every Only Inside light volume, or the whole map if there are none (0.13.x fix: for a while builds baked the whole map). A bake made by Bake Lighting records its area (`CompileJob.light_as`), so a following Build & Play with nothing changed reuses it (0.13.x fix: it used to bake again because the area counted as a changed setting).
+The **Bake Lighting** dropdown: Whole Map; What the View Sees (the viewport's frustum out to *View Distance*, default 3000 units, as an Only Inside volume); Selected Objects (around the selection's bounds). Until 6f38061 (2026-10-16) it also listed each Only Inside volume by name and Bake Lighting ignored those volumes unless one was picked; now **every enabled Control Volume applies to every build and every bake** (Build, Build & Play and Bake Lighting bake only inside the Only Inside volumes, or the whole map if there are none; 0.13.x fix before that: for a while builds baked the whole map). A bake made by Bake Lighting records its area (`CompileJob.light_as`), so a following Build & Play with nothing changed reuses it (0.13.x fix: it used to bake again because the area counted as a changed setting).
+
+**Enabled** (6f38061): a Control Volume has a keyvalue `enabled` (on by default; older files without it read as on). Off, `control.settings_of` returns None, so the nav, spawns, the nav analysis, visibility, light baking and the sound trace all ignore it (they all read `settings_of`); the volume stays in the map. A *Control Volumes* panel lists every volume with its checkbox, mode and aspect icons, selects one on click, and adds new ones. Tests: `tests/unit/test_core.py` `TestControlVolumeEnabled` (a disabled volume does nothing for each aspect in both modes), `tests/blender/run_tests.py` `test_control_volumes` (add, list, toggle; the Bake dropdown's choices).
 
 Measured: a view holding a quarter of a real map's surfaces lit in 1.6 s instead of 3.2 s.
 
@@ -70,7 +72,7 @@ Status: `done`. Code: `hammerless/blender/lightview.py`, `hammerless/core/propli
 | X-Ray | through walls |
 | Live Light Mixing | follows light colour/brightness changes (layers-and-styles.md) |
 
-Fixes recorded: it kept showing after opening another file, could show one map's lighting over another, re-read the map every second after an unlit build (0.11.x).
+Fixes recorded: it kept showing after opening another file, could show one map's lighting over another, re-read the map every second after an unlit build (0.11.x). A shown lighting preview reloads when a build ends instead of at the viewport's next redraw (196457a, 2026-10-16; checked in a Blender window: a second Build with the sun changed shows the new bake). The view pulls its faces toward the camera by a fixed depth bias of 2e-5 of clip depth (`lightview.py`), which far away is more than the nav overlay's 2-unit lift, so the lit floor hid the nav beyond some distance; the nav overlay now draws with its own shaders and a bias of 4e-5 (`navview.py` `DEPTH_BIAS`; dae428a, checked by screenshots zoomed far out over the demo level).
 
 ## Not done
 
@@ -78,4 +80,4 @@ Fixes recorded: it kept showing after opening another file, could show one map's
 - Sky from an image visible in game; in-game check of skybox light orientation.
 - hlvrad providing the layout for Cycles instead of Valve's vrad (possible, not asked for).
 
-Last checked: 2026-10-13 against branch light-layers, commit 41dc861.
+Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the Control Volume and view rows; the rest 2026-10-13 against 41dc861).

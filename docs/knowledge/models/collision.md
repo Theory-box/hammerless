@@ -52,8 +52,9 @@ Unit tests (`tests/unit/test_slabcollision.py`): a room gives 6 brushes each 1 i
 
 | Choice | What is made | Status |
 |---|---|---|
-| Brushes (default) | One object `<name> Collision` of nodraw brushes, Detail `func_detail`; with *Blocks Vis* its Detail is World (the pieces block vis like world walls). They count toward the map's 8,192 brushes (`MAX_MAP_BRUSHES`, hlvbsp stops with vbsp's message); the tool warns over 3,000. | `done` |
-| Props | Invisible static props `<name> Collision Prop N`, each of at most 20 pieces (`MAX_PROP_PIECES`): the pieces are split by halving along the longest axis of their centres until each part holds 20 or fewer (`_chunks`, a kd split, so each prop is compact); Custom Model, Static, Collision Convex Pieces; material `tools/toolsnodraw` by default (never drawn, see below). With *Blocks Vis*, one more object `<name> Collision (blocks vis)`: the same pieces as Vis Only brushes (nodraw, drawn as wire). No brushes of the map's 8,192 are used for the collision. | `done` (7c8b601, 569f938) |
+| Brushes (default) | One object `<name> Collision` of nodraw brushes, Detail `func_detail`; with *Blocks Vis* the pieces from opaque faces get Detail World (they block vis like world walls) and the pieces from see-through faces stay a separate `func_detail` collision set. They count toward the map's 8,192 brushes (`MAX_MAP_BRUSHES`, hlvbsp stops with vbsp's message); the tool warns over 3,000. | `done` |
+| Props | Invisible static props `<name> Collision Prop N`, each of at most 20 pieces (`MAX_PROP_PIECES`): the pieces are split by halving along the longest axis of their centres until each part holds 20 or fewer (`_chunks`, a kd split, so each prop is compact); Custom Model, Static, Collision Convex Pieces; material `tools/toolsnodraw` by default (never drawn, see below). With *Blocks Vis*, one more object `<name> Collision (blocks vis)`: the opaque faces' pieces as Vis Only brushes (nodraw, drawn as wire). No brushes of the map's 8,192 are used for the collision. | `done` (7c8b601, 569f938) |
+| See-through faces with Blocks Vis | A face whose material is see-through (`$translucent`, `$alphatest`, `$additive`, or Blender alpha: glass, fences, foliage) still collides but is never a vis blocker: the blockers are made from the opaque faces only, in both modes (`collisiontool.py`). Before e28b2b1 a glass wall hid everything behind it. | `done` (e28b2b1, 2026-10-16) |
 
 Why 20 pieces per prop: measured 2026-10-15 in game, the user's house with its full model visible (`fps_max 0`, 8 samples, median fps; `vprof_on` / `vprof_generate_report` print nothing in retail L4D2, so frame rate is the only probe):
 
@@ -129,6 +130,7 @@ Reasoning from the engine's design, not a measurement. In Source, a brush face c
 | Brush count on a big house: ~1,000-1,300 of 8,192 at Smallest Face 0.05 (Brushes mode); Props mode uses none | known; the tool warns over 3,000 |
 | The `.phy` of a collision prop: 4,096 triangles per piece (12-bit index) as for any Custom Model | known ([README.md](README.md)) |
 | Vis Only brushes with Valve's vbsp | not supported (an unknown brush entity; untested) |
-| Vis cost of a house's walls as vis blockers (one house 4.7 s, five houses estimated ~635 s) | known; see [../vis/](../vis/README.md) |
+| Vis cost of a house's walls as vis blockers (one house 4.7 s; five houses 290 s on the CPU merged windows, 109 s Tight / 46 s Fast on the GPU since 2026-10-16) | known; see [../vis/](../vis/README.md) and [../vis/gpu-vis.md](../vis/gpu-vis.md) |
+| Vis blockers as a simple sealed shell instead of every piece | discussed 2026-10-16, not built: the blockers should be grid-snapped wall and floor slabs with the openings left open (Valve's world brushes are that shell; `func_detail` and props are the detail), and the collision the detailed set. Expected to give most of the drawing gain for a fraction of the leaves and portals; not measured |
 
-Last checked: 2026-10-15 against branch light-layers, commit a2d00a3.
+Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the see-through and shell rows; the rest 2026-10-15 against a2d00a3).

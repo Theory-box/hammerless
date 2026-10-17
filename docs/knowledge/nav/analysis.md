@@ -101,7 +101,7 @@ The Director computes the flow (the escape route from the start to the end safe 
 | `HAMMERLESS_FLOW broken connected x y z` | the walk reached the end areas but the Director still found no flow (typically the next-map rule below) |
 | `HAMMERLESS_FLOW nonav` / `noend` | no nav areas / no CHECKPOINT areas or no PLAYER_START areas |
 
-`compile.py` parses the line (`parse_flow`, unit-tested in `tests/unit/test_core.py`) and Build & Play shows it in Blender (the Problems row). Rules this check depends on, verified in game 2026-09-24: the flow exists only when the end room's `info_changelevel` names a **different, real** map (empty or self-referencing gives flow -9999; Build fills in `c1m2_streets`, `build.FALLBACK_NEXT_MAP`); roof areas marked CHECKPOINT break the flow (so safe-room marks are never padded upward); `nav_generate` must run after the survivors spawn.
+`compile.py` parses the line (`parse_flow`, unit-tested in `tests/unit/test_core.py`) and Build & Play shows it in Blender (the Problems row). A caution from 2026-10-16: the flow walks climb links like any connection, so with Auto Climb Links on, "ok" can come from a climb no survivor can make (the user's map: the start area 35-88 units below its surroundings; the game's own `nav_generate` printed `HAMMERLESS_FLOW broken` there). See [README.md](README.md), Extras. Rules this check depends on, verified in game 2026-09-24: the flow exists only when the end room's `info_changelevel` names a **different, real** map (empty or self-referencing gives flow -9999; Build fills in `c1m2_streets`, `build.FALLBACK_NEXT_MAP`); roof areas marked CHECKPOINT break the flow (so safe-room marks are never padded upward); `nav_generate` must run after the survivors spawn.
 
 ## Audit 4 (2026-10-11) items still open
 
@@ -123,4 +123,4 @@ The Director computes the flow (the escape route from the start to the end safe 
 - Run `tests/compile/nav_native_exact.py` with Blender's Python 3.11 (3.12's `sum()` differs).
 - Set `HAMMERLESS_NAV_CHECK=1` to compare the native and Python meshes on every build.
 
-Last checked: 2026-10-13 against branch light-layers, commit 46f75ac.
+Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the climb-link caution; the rest 2026-10-13 against 46f75ac).

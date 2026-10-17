@@ -6,10 +6,11 @@ Compiler-level facts (byte-identity evidence, speed table, option handling) are 
 |---|---|
 | this README | What vis is and writes, the exact-mode details that decide bits, vvis's nondeterminism, radial vis as decoded, speed history and the ideas tried, views and the Vis Cost file, limits |
 | [merged-windows.md](merged-windows.md) | The merged-window method, why it is safe, the audit that found two bugs, the exact claim, the certifying tools and the release gate |
+| [gpu-vis.md](gpu-vis.md) | Vis on the graphics card (the default since 2026-10-16): the round-based `-jacobi` reference, the GPU port step by step, the two passes, Fast / Tight, fallbacks, the rejected cluster merging, the zoned-vis review |
 
-Code: `native/hlvvis.c` (one file; `hammerless/core/hlvvis.exe`), `hammerless/blender/visview.py` (views), `hammerless/core/bsppvs.py` (PVS reader used by the nav analysis), tests in `tests/compile/` (`compare_vis.py`, `vis_merged_suite.py`, `vis_check.py`, `vis_rays.c`, `vis_certify.c`, `vis_inflate_test.c`) and `tests/unit/test_core.py` (fixtures `tests/fixtures/vis/rooms_portal.zip`, `rooms_fog.zip`).
+Code: `native/hlvvis.c` (`hammerless/core/hlvvis.exe`; the GPU part in `native/hlvvis_gpu.c` and `native/hlvvis_shaders/`), `hammerless/blender/visview.py` (views), `hammerless/core/bsppvs.py` (PVS reader used by the nav analysis), tests in `tests/compile/` (`compare_vis.py`, `vis_merged_suite.py`, `vis_check.py`, `vis_rays.c`, `vis_certify.c`, `vis_inflate_test.c`) and `tests/unit/test_core.py` (fixtures `tests/fixtures/vis/rooms_portal.zip`, `rooms_fog.zip`).
 
-Timeline (2026): research and first bit-identical prototype 10-07; shipping tool and compare_vis 10-07 (`-threads 1` repeatable); final exact corpus 10-10 (commit 0ecc9dd); radial vis 10-10 (1b1f066); default compiler 10-10 (95d3125); merged windows default 10-11 (ac1ae02); audit fixes and the claim reworded 10-11 (2ae86d8, f5e96d1).
+Timeline (2026): research and first bit-identical prototype 10-07; shipping tool and compare_vis 10-07 (`-threads 1` repeatable); final exact corpus 10-10 (commit 0ecc9dd); radial vis 10-10 (1b1f066); default compiler 10-10 (95d3125); merged windows default 10-11 (ac1ae02); audit fixes and the claim reworded 10-11 (2ae86d8, f5e96d1); the GPU vis in one day 10-16 (round-based reference 109207e, GPU steps 79e6ac1 .. 285314a, two passes 39a022c, default e784cf2 / 10ce1bf, Fast/Tight 19c70d6; see gpu-vis.md).
 
 ## What vis is, and what vvis writes
 
@@ -85,6 +86,9 @@ VVIS++ (ficool2) claims the same results as vvis; measured: hides 82 pairs vvis 
 | Published faster methods: VVIS OptiX GPU path (~1% misses), Trim Regions 2023 (1.3-5% false negatives), Disocclusion Buffer 2025 (no guarantees), NeuralPVS, COS 2019 (conservative but view cells <= 30 cm) | all allow misses or are slower; a miss shows as a missing wall in game | 2026-10-07/10 |
 | Exact from-region methods (Teller, Nirenstein, Bittner), Plücker, GPU core | slower than vvis's search; GPU kept only as an idea for a validation ray oracle | 2026-10-10 |
 | Merged-window fixpoint per base flow (Fable consult, 2026-10-10) | **adopted**: see merged-windows.md | 2026-10-11 |
+| The merged flow in rounds (`-jacobi`), then on the GPU, with a second pass pruned by the first | **adopted** as the default (Fast = the first GPU pass, Tight = both): see gpu-vis.md | 2026-10-16 |
+| Cluster merging at weak portals in hlvbsp (`-mergeclusters`, size-capped) | merged clusters aren't convex and a flow never revisits a cluster, so it hid real sight lines (396 of 1,000 sampled hidden pairs ray-visible); uncapped, one cluster got 5,144 portals (229,000 s estimated); capped it saved only ~5% (68 -> 64 s): vis time follows portals, not clusters. Code in a git stash on light-layers | 2026-10-16 |
+| Zoned / incremental vis from hlvbsp's 1024-unit blocks | reviewed, not built: `MarkVisibleSides`, `FloodEntities` / `FillOutside` and cluster numbering are global, so zones aren't independent; a per-portal cache keyed by geometry hashes recommended instead (gpu-vis.md) | 2026-10-16 |
 
 ## Vis Only brushes and the cost of a house as a vis blocker (2026-10-15)
 
@@ -110,12 +114,13 @@ Detail facts measured: in a test room, 36 overlapping boxes made `func_detail` c
 
 | Item | Status |
 |---|---|
-| No reuse between compiles (every build runs vis from scratch) | not done; incremental reuse by a changed-brush hull test was Fable's suggestion; no prior art found |
+| No reuse between compiles (every build runs vis from scratch) | not done; incremental reuse by a changed-brush hull test was Fable's first suggestion; the 2026-10-16 review found hlvbsp's blocks aren't independent zones and recommends a per-portal vis cache keyed by geometry hashes, measuring first how much of the portal graph an edit changes (gpu-vis.md) |
 | Exact mode with threads varies like vvis | by design; `-threads 1` repeatable |
 | Merged windows about 1% looser; may hide an opening thinner than 0.01 units | by design; see merged-windows.md |
 | Switching vis compiler doesn't trigger a rebuild (same map) | by design |
 | Per-thread memory NPD x PW x 8 bytes (~50 MB/thread on a 20k-portal map), never freed | fine (audit 3) |
-| hlvvis options: `-fast`, `-exact`, `-threads`, `-radius_override`, `-game`, `-v` | done |
-| A house's every collision piece as a Vis Only blocker: 4,242 leaves / 2,073 clusters / 4.7 s for one, ~635 s estimated for five | known (2026-10-15); outer-walls-only not tried |
+| hlvvis options: `-fast`, `-exact`, `-cpu`, `-onepass`, `-gpu2`, `-jacobi`, `-gpu`, `-gpuselftest`, `-threads`, `-radius_override`, `-game`, `-v` | done (the GPU ones 2026-10-16) |
+| A house's every collision piece as a Vis Only blocker: 4,242 leaves / 2,073 clusters / 4.7 s for one; five houses 290 s on the CPU merged windows, 109 s (Tight) / 46 s (Fast) on the GPU | known (2026-10-15/16); outer-walls-only not tried; see-through faces no longer become blockers since e28b2b1 ([../models/collision.md](../models/collision.md)) |
+| Fast (the default) draws about 9% more clusters than Tight on the user's map (1,675 vs 1,531) | by design; a strict superset (0 of 12.6 M pairs lost) |
 
-Last checked: 2026-10-15 against branch light-layers, commit a2d00a3 (the Vis Only section; the rest re-read 2026-10-13 against 41dc861).
+Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the GPU rows and the ideas table; the Vis Only section 2026-10-15 against a2d00a3; the rest re-read 2026-10-13 against 41dc861).

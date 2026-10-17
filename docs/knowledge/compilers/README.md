@@ -13,7 +13,7 @@ All three are built with `python native/build.py <tool>` (zig cc). The build use
 Why each exists, in one line each:
 
 - **hlvbsp**: to own the whole pipeline (no feature of the map should need Valve's tool), to make smart builds exact (`-onlyents`), and as the base for speed work later. It is not yet faster than vbsp.
-- **hlvvis**: speed. Vis is the critical path of a full build. Exact mode is about 3x faster than vvis; merged windows (the default) is many times faster again (c1m1_hotel 18.4 s exact to 2.3 s merged, 2026-10-11).
+- **hlvvis**: speed. Vis is the critical path of a full build. Exact mode is about 3x faster than vvis; merged windows is many times faster again (c1m1_hotel 18.4 s exact to 2.3 s merged, 2026-10-11); since 2026-10-16 the default runs that flow on the graphics card (the five-house map 290 s on the CPU, 109 s Tight / 46 s Fast on an RTX 4090; [../vis/gpu-vis.md](../vis/gpu-vis.md)).
 - **hlvrad**: speed and features vrad can't do: GPU ray tracing, sky light from the skybox or an HDRI, ray-traced bounce, partial bakes with kept light, per-light layers for live mixing and remixes.
 
 The user's standing rule (2026-10-10): **any time a Valve tool runs instead of ours is a bug to fix**, not an accepted outcome. Valve's tools remain installed as a safety net only. The full list of cases is in [valve-fallbacks.md](valve-fallbacks.md).

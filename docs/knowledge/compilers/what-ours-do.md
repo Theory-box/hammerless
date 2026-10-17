@@ -66,10 +66,11 @@ Bytes vbsp itself doesn't determine (masked by `bspdump.py`): padding and unused
 
 Source `native/hlvvis.c`, built to `hammerless/core/hlvvis.exe`. Default since 2026-10-10 (commit 95d3125); merged windows the default mode since 2026-10-11 (commit ac1ae02).
 
-Two modes:
+Modes:
 
 - **`-exact`** ("Match vvis Exactly" in the Visibility panel): vvis's own path search; its output byte for byte; about 3x faster than vvis.
-- **Merged windows** (default): the same search with one merged state per portal per base flow (convex hulls of the source and pass windows, union of might-see bits), re-expanded only when a state grows; a sweep with exact hulls when the queue runs dry; a portal that keeps growing is opened fully (a superset). About 1% looser than vvis, several times faster again.
+- **Merged windows** (`-cpu`; the default until 2026-10-16 and the fallback since): the same search with one merged state per portal per base flow (convex hulls of the source and pass windows, union of might-see bits), re-expanded only when a state grows; a sweep with exact hulls when the queue runs dry; a portal that keeps growing is opened fully (a superset). About 1% looser than vvis, several times faster again.
+- **On the graphics card** (the default since 2026-10-16, *Vis on the GPU*): the merged flow in rounds (`-jacobi`, deterministic) run on Vulkan compute with the CPU's float operations in the CPU's order (bit-identical to the CPU reference); **Fast** (`-onepass`, the default) = the first GPU pass, **Tight** = a second pass pruned by the first (the least drawing, about twice the time; Fast is a strict superset of Tight: 0 of 12.6 M pairs lost on the user's map). On the user's map copy (8,984 clusters) Tight 68 s, Fast 30 s; the CPU merged windows on the five-house map 290 s. Any GPU failure or an unfit card falls back to the merged windows on the CPU, never to vvis. Details, measurements and the day's history in [../vis/gpu-vis.md](../vis/gpu-vis.md).
 
 ### Identical to vvis (exact mode)
 
@@ -134,7 +135,8 @@ Profile facts: vvis spends 99% in the flow, 0.1 s in the rough pass; keeps 14 to
 |---|---|
 | Exact mode with threads varies like vvis (a borderline pair or two); `-threads 1` repeatable | by design |
 | Merged windows is about 1% looser and may hide an opening thinner than 0.01 units | by design, documented claim |
-| Switching between Valve's and Hammerless's vis compiler doesn't trigger a rebuild (they count as the same map) | by design |
+| The GPU default (Fast) draws about 9% more than Tight; Tight's second pass hides only zero-width pairs (0.0000 units inside a portal) beyond the CPU merged windows | by design (2026-10-16); see [../vis/gpu-vis.md](../vis/gpu-vis.md) |
+| Switching between Valve's and Hammerless's vis compiler doesn't trigger a rebuild (they count as the same map); a Tight build is **not** skipped over a Fast one (`_serves` checks `vis_tight`) | by design |
 
 ---
 
@@ -255,4 +257,4 @@ History: the first wired-in version was single-threaded, 81 s (2026-10-08, commi
 
 The release gate for the vis compiler is the suite plus `vis_certify -all` on every pair merged hides and exact shows, plus a sight-line search over each of those chains.
 
-Last checked: 2026-10-15 against branch light-layers, commit a2d00a3 (the Vis Only row; the rest re-read 2026-10-13 against 41dc861).
+Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the hlvvis modes and known issues; the Vis Only row 2026-10-15 against a2d00a3; the rest re-read 2026-10-13 against 41dc861).

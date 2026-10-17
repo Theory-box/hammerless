@@ -130,13 +130,16 @@ traps), re-checked in the current code.
 ### 8. Control Volume: Nav Mesh and Light Baking ticked by default (audit 5 item 1)
 
 - **What happens:** a new Control Volume has *Nav Mesh* and *Light Baking* ticked (`core/entities.py`, the
-  `KeyDef("nav", "1", ...)` and `KeyDef("light", "1", ...)` defaults); *Only Inside* means different things per tick
-  (for nav it limits every build; for light it's a Bake-dropdown choice and full builds bake everything). Nothing
+  `KeyDef("nav", "1", ...)` and `KeyDef("light", "1", ...)` defaults). Nothing
   reports how much floor a volume cut out of the nav. Both of the user's audited .blend files hold an Only-Inside
   volume with every tick on.
+- **Partly addressed (6f38061, 2026-10-16):** *Only Inside* now means the same for every tick: every enabled volume
+  applies to every build and every Bake Lighting (the Bake dropdown no longer lists volumes). Each volume has an
+  *Enabled* switch and a panel lists them, so a volume that cuts too much can be switched off without deleting it
+  ([lighting/bakes-sky-cycles-view.md](lighting/bakes-sky-cycles-view.md)).
 - **Also:** under Only Inside, the *Zombie Spawns* toggle is drawn pressed while it's ignored, and its stored value
   comes back as a map-sized no-spawn box if the mode is switched (audit 5, `ui.py` around line 359).
-- **Suggested fix:** every tick off by default ("pick what this volume controls"); label Only Inside per tick; a
+- **Suggested fix (what's left):** every tick off by default ("pick what this volume controls"); a
   Problems row per volume with the share of floor it leaves out, alerting above 20%.
 
 ### 9. Launch forces the difficulty (audit 5 item 5)
@@ -179,5 +182,9 @@ traps), re-checked in the current code.
 | Build & Play froze 9.2 s on a first build and 4.9 s on a rebuild of the user's map (32 pods) with 0.17.0 as released | 5d40ae4 (2026-10-14) | 4.6 s / 1.2 s: copies of a rigged model share one model by content (32 pods = 1 model), the imported file's parsed Document and each brush's faces are kept between builds, instance lookups from a memo, the prestart after the export; VMF text identical to before (see [loading/](loading/README.md)) |
 | A build folder past Windows' 260-character path limit made the light compiler fall back to Valve's vrad silently (its model copies couldn't be written) | 283c44a (2026-10-14) | the export warns when the path would pass the limit (the fall back itself stays the net; [compilers/valve-fallbacks.md](compilers/valve-fallbacks.md) case i) |
 | Map names of 32+ characters: the game loaded the map but never joined its own listen server (`console.log`: "Netchannel: failed reading message net_SignonState from loopback", no HAMMERLESS_READY; was item 13). Measured 2026-10-14 on `demo_level`: 31 characters loads and the survivors spawn, 32 and 33 don't | 78892b4 (2026-10-14) | `props.MAP_NAME_MAX = 31`: `clean_map_name` trims a typed name to 31 characters, and `build_map_text` refuses a longer stored Map Name with a message |
+| Build Nav Mesh was preview-only (its compile has `copy_to_game=False`): Play then ran the game's own `nav_generate`, or an older nav | fc1d655 (2026-10-16) | when the game's map has the same `bsp_signature` as the compile the button analysed, the nav goes into the game with the inputs key a Build records; otherwise the button says Build puts it there ([nav/README.md](nav/README.md)) |
+| A build that made the nav in Blender never showed it (the nav preview said "Build Nav Mesh to see it"); the lighting preview reloaded only at the next redraw; "What can be seen from the 3D cursor" with the cursor off the nav drew everything near-invisible grey; the lighting preview hid the nav overlay at a distance | 196457a, 7238ac9, dae428a (2026-10-16) | builds show the nav they make (analysis and problems) and switch the overlay on; the lighting view reloads when the build ends; usual colours plus a legend hint; the nav draws with its own shaders and a 4e-5 depth bias |
+| "Zombies Climb Walls" made a route that only works through climb links read "Start to end: OK" (the user's map: a start area 35-88 units below everything around it) | 00723c8 (2026-10-16) | renamed *Auto Climb Links* and described as what it is: ordinary nav connections the flow and the bots also walk ([nav/README.md](nav/README.md)) |
+| Light entities (`light`, `light_spot`, `light_environment` point entities) and Blender lights were two systems with two panels | f8e16b2 (2026-10-16) | one system: the Add panel adds Blender lights and old files' light entities convert on load ([lighting/layers-and-styles.md](lighting/layers-and-styles.md)) |
 
-Last checked: 2026-10-14 against branch light-layers, commit 04d5abc.
+Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (item 8 and the Fixed table; the rest 2026-10-14 against 04d5abc).

@@ -7,7 +7,8 @@ Branch `light-layers` (from main at 0.14.1, started 2026-10-12). Commits: 5ec24d
 - A face's lightmap has one page per **light style**; style 0 is the static light. A named light (or one with a `pattern`/`style` key) gets a style of its own; the game scales that page at run time by the style's current brightness letter (a..z, `m` = normal, `a` = dark, `z` = double) ten steps a second.
 - The style number is assigned by the **map compiler** (`SetLightStyles` in vbsp / hlvbsp), not vrad: a named light needs the `style` key vbsp writes, which is why `hlvbsp -onlyents` remakes "named lights' styles".
 - L4D2 has the game's 12 built-in patterns (Flicker, Fluorescent Flicker, Candle, Gentle Pulse, Fast Strobe, Underwater and others) plus custom step strings.
-- Limits measured/known: at most **3** switchable or patterned lights may reach the same surface (4 style slots per face, one is style 0); a map can have **32** switchable lights (styles 32..63 are the named ones).
+- Limits measured/known: at most **3** switchable or patterned lights may reach the same surface (4 style slots per face, one is style 0); a map can have **32** switchable lights (styles 32..63 are the named ones): hlvbsp stops with "Too many switched lights (error at light <name>), max = 32" (`native/hlvbsp/write.c`, the style assignment; read from the code 2026-10-16).
+- What Valve's own maps do (read from the 25 loose `.bsp` files of c1-c5, 2026-10-16): only switchable (named) lights, styles 32 and up assigned to named lights; c2m5 has 23, c1m1 17, the others 2 to 4; **no** baked flicker patterns (styles 1-12) at all. The DLC maps (inside VPKs) weren't scanned.
 - Switchable lights' styled layers **don't bounce** in the game's model (their pages hold direct light only), so hlvrad's styled layers don't bounce either.
 
 ## Switchable and flickering lights in Hammerless
@@ -17,6 +18,19 @@ Status: `done` (commit 5ec24d0, 2026-10-12). UI: *Selected Object > Light* on Bl
 Game-tested with `tests/ingame/test_lightstyles.py` (lit build with our compilers): on, off, back on, a pattern change, a style 10 flicker, Starts Off; characters in the room dim with the light. 7/7 again on 2026-10-13 after the vrad-options work. Examples 53 (Power Goes Out) and 54 (Lights Flicker While a Tank Lives) use them.
 
 Screenshot-brightness testing facts (research note 2026-10-12): L4D2 has no `mat_autoexposure_*`; pin exposure with `mat_dynamic_tonemapping 0` + `mat_force_tonemap_scale 1`; flashlights off (`m_fEffects` bit 4); bots away (`sb_stop 1`); `dev/dev_measuregeneric01b` is a good flat material (`concrete/concretefloor001a` is missing in L4D2).
+
+### One light system (f8e16b2, 2026-10-16)
+
+Status: `done`. Code: `hammerless/blender/lamps.py` (`LAMP_OF`, `_apply_light`, the conversion), `mapcollection.py` (runs it on file load), `spawn.py`, `core/entities.py`, `core/spawnlist.py`. Before it, the Add panel offered light **entities** (`light`, `light_spot`, `light_environment` point objects with keyvalues) next to Blender lights, and the two had different panels (the open item "a Light panel for light entities" below). Now:
+
+| Fact | Detail |
+|---|---|
+| The Add panel's Point Light, Spot Light (new) and Sun add **Blender lights** | they export as the game's `light` / `light_spot` / `light_environment` through `extract.light_entity`, with the Light panel's Pattern, Switchable and Start Off |
+| Light entities in older files convert to Blender lights when the file opens | colour and brightness from `_light` (the inverse of `extract.light_entity`: sRGB to linear, a sun's energy = brightness / 100), a spot's cone from `_cone` / `_inner_cone`, the direction from the angles and `pitch`, a listed light `style` becomes the Pattern, spawnflag 1 ("initially dark") becomes Start Off, other keys are kept; everything pointing at the old object (logic nodes, anything else) is pointed at the new light with `user_remap`. Converting again does nothing |
+| Left alone | preset parts and an imported Hammer map's objects (they keep their entities) |
+| Test | `tests/blender/run_tests.py` `test_lights_are_blender_lights`: the three lights from the Add panel; two converted entities export the same game light (colour / brightness within 1, style, spawnflags, name, an extra key, spot angles and cone); a logic node follows the light; converting again is a no-op |
+
+A light that carries a Behaviour graph (branch behaviours, 18c2ce4) is made switchable (named) like a light that logic uses; planned there: Light Pattern presets as behaviours that share **one** light name per graph, so many patterned lights don't each spend one of the 32 switched styles ([../logic/README.md](../logic/README.md)).
 
 ## Live Light Mixing (`-layers`)
 
@@ -69,6 +83,8 @@ A remix keeps the layers and the map's vis (`-remix` clears `-layers` and `-visf
 | Layers for vrad's patch bounce (mixing forces `-gi`) | not done |
 | Static props' vertex light mixed live in the Blender view (the build's remix does remake it); estimated 0.1 to 0.2 s per light | not done, waiting for a yes |
 | A wider radial than 4 channels to cut the per-light cost | not done |
-| In-game prop check after a remix; cost of many flickering lights; a Light panel for light *entities* (not Blender lights) | open (2026-10-12) |
+| In-game prop check after a remix; cost of many flickering lights | open (2026-10-12) |
+| A Light panel for light *entities* (not Blender lights) | `removed` as a need (f8e16b2, 2026-10-16): light entities convert to Blender lights on load; only imported Hammer maps keep light entities, edited through their keyvalues |
+| Light Pattern presets as Behaviours sharing one light name per graph (the 32-style budget) | planned (branch behaviours) |
 
-Last checked: 2026-10-13 against branch light-layers, commit 41dc861.
+Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the one-light-system section, the limits and Valve's maps; the rest 2026-10-13 against 41dc861).
