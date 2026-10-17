@@ -25,7 +25,7 @@ except ImportError:
 
 
 def register():
-    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing, gameskeleton, placedchar, particlebrowser, collisiontool, animpreview
+    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing, gameskeleton, placedchar, particlebrowser, collisiontool, animpreview, behaviours
     watchdog.register()
     props.register()
     quality.register()
@@ -49,12 +49,14 @@ def register():
     collisiontool.register()
     ui.register()
     animpreview.register()        # (after ui: its panel sits under the object panel)
+    behaviours.register()
     particlebrowser.register()   # (after the main panels: its panel sits below them)
 
 
 def unregister():
-    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing, gameskeleton, placedchar, particlebrowser, collisiontool, animpreview
+    from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing, gameskeleton, placedchar, particlebrowser, collisiontool, animpreview, behaviours
     particlebrowser.unregister()
+    behaviours.unregister()
     animpreview.unregister()
     ui.unregister()
     collisiontool.unregister()

@@ -1280,7 +1280,10 @@ def light_style_keyvalues(obj, kv: dict[str, str]) -> dict[str, str]:
 
 
 def light_in_logic(obj) -> bool:
-    """A light an Entity Events node uses: switchable (logic turns it on and off by the name its panel shows)."""
+    """A light an Entity Events node uses, or one with a Behaviour: switchable (logic turns it on and off by the name
+    its panel shows)."""
+    if any(slot.graph is not None for slot in getattr(obj.hammerless, "behaviours", ())):
+        return True
     for tree in bpy.data.node_groups:
         if tree.bl_idname != "HL_LogicTree":
             continue

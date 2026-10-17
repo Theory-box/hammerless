@@ -327,12 +327,25 @@ LIGHT_PATTERNS = [
 ]
 
 
+def _is_behaviour(_self, tree) -> bool:
+    return tree.bl_idname == "HL_LogicTree" and getattr(tree, "is_behaviour", False)
+
+
+class HL_BehaviourSlot(bpy.types.PropertyGroup):
+    """One Behaviour an object carries: a logic graph it runs as Self (several objects can share one, as materials)"""
+    graph: PointerProperty(type=bpy.types.NodeTree, name="Behaviour", poll=_is_behaviour,
+                           description="The logic graph this object runs (Self in it is this object). Objects "
+                                       "sharing one all run it; Make Unique gives this object its own copy")
+
+
 class HL_ObjectSettings(bpy.types.PropertyGroup):
     role: EnumProperty(name="Role", items=OBJECT_ROLES, default="AUTO")
     classname: StringProperty(name="Class", description="Entity classname",
                               update=_on_classname_change)
     keyvalues: CollectionProperty(type=HL_KeyValue)
     keyvalues_index: IntProperty()
+    behaviours: CollectionProperty(type=HL_BehaviourSlot)
+    behaviours_index: IntProperty()
     outputs: CollectionProperty(type=HL_Output)
     outputs_index: IntProperty()
     preset: StringProperty(description="On a preset's parent Empty: which preset it is")
@@ -978,7 +991,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     last_log: StringProperty()
 
 
-CLASSES = (HL_Problem, HL_SpawnListItem, HL_KeyValue, HL_Output, HL_ObjectSettings, HL_CollectionSettings, HL_MaterialSettings, HL_SceneSettings)
+CLASSES = (HL_Problem, HL_SpawnListItem, HL_KeyValue, HL_Output, HL_BehaviourSlot, HL_ObjectSettings, HL_CollectionSettings, HL_MaterialSettings, HL_SceneSettings)
 
 
 def register():

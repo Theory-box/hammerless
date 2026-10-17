@@ -219,6 +219,8 @@ class _Node:
             return None
         if sock.is_linked:
             found = _sources(sock)
+            if found and found[0][0].bl_idname == "HL_NodeSelf":
+                return self_owner()              # (the object the Behaviour is being built for)
             return getattr(found[0][0], "target", None) if found else None
         return sock.value
 
@@ -513,6 +515,32 @@ class HL_NodeObjectInfo(_Node, bpy.types.Node):
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "target", text="")
+
+
+_SELF_OWNER: list = [None]        # the object a Behaviour is being built for (compile_logic sets it around flatten)
+
+
+def self_owner():
+    return _SELF_OWNER[0]
+
+
+class HL_NodeSelf(_Node, bpy.types.Node):
+    """The object this Behaviour runs on: wire Object into nodes that act on an object (Move, Show / Hide...),
+    Entity into ones that take an entity (functions, For Each...)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeSelf", "Self", "OBJECT_ORIGIN"
+    kind, category = "SELF", "Scene"
+
+    @classmethod
+    def poll(cls, ntree):
+        return ntree.bl_idname == TREE and (getattr(ntree, "is_behaviour", False) or getattr(ntree, "is_group", False))
+
+    def make_sockets(self):
+        self.outputs.new("HL_ObjectSocket", "Object", identifier="object")
+        _data_socket(self.outputs, "thing", "entity", "Entity")
+
+    def to_lnode(self, context) -> LNode:
+        owner = self_owner()
+        return LNode(self.name, self.kind, {}, obj=owner.name if owner is not None else "")
 
 
 def _object_class(obj) -> str:
@@ -2219,7 +2247,7 @@ CATEGORIES = [
     ("Events", [HL_NodeMapStart, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton, HL_NodeTimer]),
     ("Values", [HL_NodeProgress, HL_NodeRandomValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath,
                 HL_NodeInfectedCount, HL_NodeValue]),
-    ("Scene", [HL_NodeObjectInfo, HL_NodeObject, HL_NodeCollision]),
+    ("Scene", [HL_NodeObjectInfo, HL_NodeSelf, HL_NodeObject, HL_NodeCollision]),
     ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
               HL_NodeCounter, HL_NodeRandom]),
     ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
@@ -2242,7 +2270,7 @@ MENU_LAYOUT = [
                 HL_NodeInfectedCount, None, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeFormatText, HL_NodeTextCheck, HL_NodeSplitText,
                 HL_NodeCheck, HL_NodePickValue, None, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, None,
                 HL_NodeMakeTable, HL_NodeGetField]),
-    ("Scene", [HL_NodeObjectInfo, HL_NodeObject, HL_NodeCollision, None, HL_NodeGetProperty]),
+    ("Scene", [HL_NodeObjectInfo, HL_NodeSelf, HL_NodeObject, HL_NodeCollision, None, HL_NodeGetProperty]),
     ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
                  HL_NodeTeleport, HL_NodeFireInput, HL_NodeSetProperty, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
     ("Director", [HL_NodeDirector, HL_NodeDirectorSettings, HL_NodeDirectorOption, HL_NodeDirectorMood]),
@@ -2287,7 +2315,8 @@ def _add_menu(self, context):
 def logic_trees(scene=None):
     """The L4D2 Logic graphs (of one scene: its own, plus unassigned ones when the file has one scene). Node groups
     aren't graphs of their own: they're built where Group nodes use them."""
-    trees = [t for t in bpy.data.node_groups if t.bl_idname == TREE and not getattr(t, "is_group", False)]
+    trees = [t for t in bpy.data.node_groups if t.bl_idname == TREE and not getattr(t, "is_group", False)
+             and not getattr(t, "is_behaviour", False)]
     if scene is None:
         return trees
     return [t for t in trees if t.scene_name == scene.name
@@ -2411,6 +2440,10 @@ def refresh_entity_node(node) -> None:
         _rebuild_entity_sockets(node, node.classname)
 
 
+# nodes that act on the whole map: in a Behaviour they'd run once per object using it (a warning says so)
+MAP_WIDE_KINDS = ("DIRECTOR_OPTION", "DIRECTOR_SETTINGS", "HUD_TEXT", "HUD_HIDE", "CRESCENDO", "OBJECTIVE")
+
+
 def compile_logic(context, ir, report) -> None:
     """Add the scene's L4D2 Logic graphs' entities, connections and script to the map."""
     for t in logic_trees():
@@ -2424,9 +2457,30 @@ def compile_logic(context, ir, report) -> None:
                                "(open one in the node editor and set its Scene in the sidebar)")
     trees = logic_trees(context.scene)
     from .logicgroups import flatten
-    for tree in trees:
-        flat = flatten(context, tree, report)      # (Group nodes replaced by the nodes inside them)
+    jobs = [(tree, None) for tree in trees]
+    # Behaviours: each object's graphs, built once for that object (Self = it), always under their own names
+    from .extract import effective_role
+    from .mapcollection import map_objects
+    inside = map_objects(context.scene)
+    for obj in sorted(context.scene.objects, key=lambda o: o.name):
+        if obj.name not in inside or effective_role(obj) == "IGNORE":
+            continue                                # (not part of the map: nor is its logic)
+        for slot in obj.hammerless.behaviours:
+            if slot.graph is not None:
+                jobs.append((slot.graph, obj))
+    for tree, owner in jobs:
+        _SELF_OWNER[0] = owner
+        try:
+            flat = flatten(context, tree, report,
+                           prefix=f"{owner.name}/" if owner is not None else "")   # (Group nodes inlined)
+        finally:
+            _SELF_OWNER[0] = None
         nodes = flat.nodes
+        if owner is not None:
+            wide = sorted({n.id.split("/")[-1] for n in nodes if n.kind in MAP_WIDE_KINDS})
+            if wide:
+                report.warnings.append(f"Behaviour '{tree.name}' on '{owner.name}': {', '.join(wide)} act on the whole "
+                                       "map, and run once for every object using this behaviour")
         volumes = {n.obj for n in nodes if n.kind == "VOLUME" and n.obj}
         if volumes:     # a volume's mesh becomes the trigger, not a solid wall
             ir.brushes = [b for b in ir.brushes if b.source.split(" (part ")[0] not in volumes]
@@ -2439,9 +2493,9 @@ def compile_logic(context, ir, report) -> None:
             ir.entities = [e for e in ir.entities if not (e.source.split(" (part ")[0] in volumes
                                                           and e.classname == "func_detail")]
         links = flat.links
-        for p in compile_graph(nodes, links, ir, tree.name if len(trees) > 1 else "",
-                               log=context.scene.hammerless.debug_log):
-            report.warnings.append(f"{tree.name}: {p}")
+        name = f"{owner.name} {tree.name}" if owner is not None else (tree.name if len(trees) > 1 else "")
+        for p in compile_graph(nodes, links, ir, name, log=context.scene.hammerless.debug_log):
+            report.warnings.append(f"{tree.name}: {p}" if owner is None else f"{tree.name} on '{owner.name}': {p}")
 
 
 # ---------------------------------------------------------------- operators

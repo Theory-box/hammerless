@@ -842,6 +842,59 @@ def test_logic_nodes_convert_plain_meshes():
     assert len(world_solids(blocks)) == 1 + 6, len(world_solids(blocks))
 
 
+def test_behaviours():
+    # a Behaviour graph shared by three objects: built once for each, Self being that object, with its own names
+    from hammerless.blender.behaviours import new_behaviour_tree
+    from hammerless.blender.logicgroups import new_group_tree, remove_unused_groups
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    boxes = [add_box(f"Blinker {c}", (0.5, 0.5, 0.5), (i * 2.0 - 2.0, 2, 0.25)) for i, c in enumerate("ABC")]
+    bpy.ops.object.empty_add(location=(-4, 0, 0.1))
+    sp = bpy.context.object
+    sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
+    tree = new_behaviour_tree("Blink")
+    me = next(n for n in tree.nodes if n.bl_idname == "HL_NodeSelf")
+    timer = tree.nodes.new("HL_NodeTimer")
+    timer.seconds = 2.0
+    sh = tree.nodes.new("HL_NodeShowHide")
+    tree.links.new(me.outputs["Object"], sh.inputs["Object"])
+    tree.links.new(timer.outputs["On Tick"], sh.inputs["Hide"])
+    # a group used only inside the behaviour is in use (the cleanup keeps it)
+    grp = new_group_tree("Blink Helper", keep=False)
+    gnode = tree.nodes.new("HL_NodeGroup")
+    gnode.group = grp
+    for b in boxes:
+        b.hammerless.behaviours.add().graph = tree
+    from hammerless.blender.logic import logic_trees
+    assert tree not in logic_trees(), "a Behaviour isn't a world graph"
+    remove_unused_groups()
+    assert bpy.data.node_groups.get("Blink Helper") is not None, "a group used by a Behaviour was removed"
+    blocks, log = export()
+    assert blocks, log
+    timers = entities(blocks, "logic_timer")
+    brushes = entities(blocks, "func_brush")
+    assert len(timers) == 3 and len(brushes) == 3, (len(timers), len(brushes), log)
+    names = {b.get("targetname") for b in brushes}
+    hit = set()
+    for t in timers:
+        target = t.blocks("connections")[0].get("OnTimer").split(",")[0]
+        assert target in names, (target, names)
+        hit.add(target)
+    assert hit == names, "each copy hides its own object"
+    assert all("blinker" in n for n in names), names
+    # Make Unique: one object gets its own copy, the others keep sharing
+    for o in bpy.context.selected_objects:
+        o.select_set(False)
+    bpy.context.view_layer.objects.active = boxes[0]
+    assert bpy.ops.hammerless.behaviour_unique(index=0) == {"FINISHED"}
+    assert boxes[0].hammerless.behaviours[0].graph != tree and boxes[1].hammerless.behaviours[0].graph == tree
+    assert boxes[0].hammerless.behaviours[0].graph.is_behaviour
+    # Self outside a Behaviour: nothing to be (a world graph can't add it)
+    from hammerless.blender.logic import HL_NodeSelf
+    world = bpy.data.node_groups.new("World", "HL_LogicTree")
+    assert not HL_NodeSelf.poll(world) and HL_NodeSelf.poll(tree)
+
+
 def test_logic_value_wires():
     # grey/pink value wires from Blender reach the map script
     reset_scene()

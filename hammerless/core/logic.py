@@ -110,7 +110,7 @@ def _base(source: str) -> str:
 BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
                  "CAMERA", "FIRE_INPUT", "SET_PROP")
 CLIENT_COMMAND = "hl_clientcommand"     # the map's point_clientcommand: a console command run on one player
-BLOCK_VALUES = ("GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
+BLOCK_VALUES = ("SELF", "GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
                 "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE", "GET_PROP")
 VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
 
@@ -471,6 +471,16 @@ class _Compiler:
             e = vs.event(s.get("event", ""))
             fld = next((x for x in (e or {}).get("fields", []) if x["name"] == sock), None)
             return vs.field_expr(sock, vs.field_kind(fld)) if fld else "null"
+        if k == "SELF":                  # a behaviour's own object (n.obj: bound per owner when it was flattened)
+            if not n.obj:
+                self.problems.append(f"Logic node '{n.id}': Self is only something in an object's Behaviour")
+                return "null"
+            e = self.entity_of(n.obj)
+            if e is None:
+                self.problems.append(f"Logic node '{n.id}': '{n.obj}' isn't an entity in the map (Self's Entity "
+                                     "needs one: set its Role, e.g. a Custom Model or a light)")
+                return "null"
+            return f'Entities.FindByName(null, "{self.name_of(e, n.obj)}")'
         if k in BLOCK_VALUES or k in ("FOR_EACH", "SCRIPT_CODE"):
             return self.block_value(n, sock, slug)
         if k == "DIRECTOR_MOOD":

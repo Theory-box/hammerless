@@ -208,7 +208,7 @@ def _const_of(sock):
 
 def flatten(context, tree, report, prefix: str = "", stack: tuple = (), checked: set | None = None) -> _Flat:
     """The tree's nodes and wires with every Group node replaced by what's inside it (recursively)."""
-    from .logic import _Node, _check_nodes, _compiled_links
+    from .logic import _Node, _check_nodes, _compiled_links, self_owner
     flat = _Flat()
     if tree.name in stack:
         report.warnings.append(f"{tree.name}: the group is inside itself, so that copy is left out")
@@ -234,6 +234,9 @@ def flatten(context, tree, report, prefix: str = "", stack: tuple = (), checked:
             ln.id = prefix + ln.id
             if ln.kind in ("SET_VAR", "GET_VAR") and ln.settings.get("scope") == "GROUP":
                 ln.settings = dict(ln.settings, name=prefix + (ln.settings.get("name") or "value"), scope="MAP")
+            elif ln.kind in ("SET_VAR", "GET_VAR") and ln.settings.get("scope") == "PLAYER" and self_owner():
+                # (in a Behaviour: each object's own, else 30 pods would share one value per player)
+                ln.settings = dict(ln.settings, name=self_owner().name + "/" + (ln.settings.get("name") or "value"))
             flat.nodes.append(ln)
     for ln in flat.nodes:
         by_id[ln.id] = ln
@@ -337,7 +340,7 @@ def used_groups() -> set:
     """The groups a logic graph uses: through its Group nodes, and the groups those use (Blender's own count of a
     group's users only drops when the file is saved, so it's worked out here)."""
     from .logic import logic_trees
-    used, todo = set(), [t for t in logic_trees()]
+    used, todo = set(), [t for t in logic_trees()] + behaviour_trees_in_use()
     while todo:
         t = todo.pop()
         for n in t.nodes:
@@ -346,6 +349,16 @@ def used_groups() -> set:
                 used.add(g.name)
                 todo.append(g)
     return used
+
+
+def behaviour_trees_in_use() -> list:
+    """The Behaviour graphs objects carry (a group used only inside one is in use too)."""
+    out = []
+    for o in bpy.data.objects:
+        for slot in getattr(o.hammerless, "behaviours", ()):
+            if slot.graph is not None and slot.graph not in out:
+                out.append(slot.graph)
+    return out
 
 
 def remove_unused_groups(examples_only: bool = False) -> int:
@@ -709,6 +722,9 @@ def register():
     from .logic import HL_LogicTree
     bpy.utils.register_class(HL_GroupItem)
     HL_LogicTree.is_group = BoolProperty(name="Is a Group", default=False)
+    HL_LogicTree.is_behaviour = BoolProperty(name="Is a Behaviour", default=False,
+                                             description="Logic that objects carry (Selected Object > Behaviours): it "
+                                                         "runs once for each object using it, Self being that object")
     HL_LogicTree.group_items = bpy.props.CollectionProperty(type=HL_GroupItem)
     HL_LogicTree.hl_next_uid = IntProperty(default=0)
     for c in CLASSES[1:]:
@@ -732,7 +748,7 @@ def unregister():
     for c in reversed(CLASSES[1:]):
         bpy.utils.unregister_class(c)
     from .logic import HL_LogicTree
-    for p in ("is_group", "group_items", "hl_next_uid"):
+    for p in ("is_group", "is_behaviour", "group_items", "hl_next_uid"):
         try:
             delattr(HL_LogicTree, p)
         except AttributeError:
