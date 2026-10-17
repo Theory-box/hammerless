@@ -519,6 +519,13 @@ class HL_PT_obj_light(_Panel, bpy.types.Panel):
             col.label(text="Logic name: " + light_name(obj), icon="LINKED")
         elif hs.light_pattern != "0":
             col.label(text="Flickers on its own; Switchable to control it", icon="INFO")
+        from .lightpresets import preset_slot
+        slot = preset_slot(obj)
+        if slot is not None:
+            row = col.row(align=True)
+            row.label(text=f"Pattern: Behaviour '{slot.graph.name}'", icon="NODETREE")
+            op = row.operator("hammerless.behaviour_open", text="", icon="WINDOW")
+            op.index = list(hs.behaviours).index(slot)
 
 
 class HL_PT_obj_material(_Panel, bpy.types.Panel):

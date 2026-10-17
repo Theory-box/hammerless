@@ -2468,7 +2468,14 @@ def compile_logic(context, ir, report) -> None:
         for slot in obj.hammerless.behaviours:
             if slot.graph is not None:
                 jobs.append((slot.graph, obj))
+    done_shared = set()
     for tree, owner in jobs:
+        if owner is not None and tree.get("hl_light_preset"):
+            from .lightpresets import shared_name
+            if shared_name(owner):
+                if tree.name in done_shared:     # (its lights share one name: one copy acts on them all)
+                    continue
+                done_shared.add(tree.name)
         _SELF_OWNER[0] = owner
         try:
             flat = flatten(context, tree, report,

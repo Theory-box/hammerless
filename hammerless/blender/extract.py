@@ -1268,8 +1268,9 @@ def light_style_keyvalues(obj, kv: dict[str, str]) -> dict[str, str]:
     out = {}
     custom = hs.light_pattern == "CUSTOM"
     switchable = hs.light_switchable or light_in_logic(obj)
-    if hs.light_pattern not in ("0", "CUSTOM") and "style" not in kv:
-        out["style"] = hs.light_pattern
+    from .lightpresets import preset_slot
+    if hs.light_pattern not in ("0", "CUSTOM") and "style" not in kv and preset_slot(obj) is None:
+        out["style"] = hs.light_pattern            # (a pattern without its Behaviour: the game's own style)
     if custom and "pattern" not in kv:
         out["pattern"] = "".join(c for c in hs.light_custom.lower() if "a" <= c <= "z") or "m"
     if (switchable or custom or hs.light_start_off) and not kv.get("targetname"):
@@ -1284,6 +1285,11 @@ def light_in_logic(obj) -> bool:
     its panel shows)."""
     if any(slot.graph is not None for slot in getattr(obj.hammerless, "behaviours", ())):
         return True
+    return in_world_logic(obj)
+
+
+def in_world_logic(obj) -> bool:
+    """An Entity Events node (of any graph) acts on this object itself."""
     for tree in bpy.data.node_groups:
         if tree.bl_idname != "HL_LogicTree":
             continue
@@ -1296,6 +1302,9 @@ def light_in_logic(obj) -> bool:
 def light_name(obj) -> str:
     """The name logic and the game know a switchable light by: its targetname, or one made from its name."""
     name = next((kv.value for kv in obj.hammerless.keyvalues if kv.key == "targetname" and kv.value), "")
+    if not name:
+        from .lightpresets import shared_name
+        name = shared_name(obj) or ""         # (lights of one Light Pattern graph: one name, one light style)
     return name or "hl_light_" + (re.sub(r"[^a-z0-9_]+", "_", obj.name.lower()).strip("_") or "light")
 
 

@@ -145,6 +145,7 @@ class HL_OT_behaviour_unique(bpy.types.Operator):
             return {"CANCELLED"}
         copy = slot.graph.copy()
         copy.name = f"{obj.name} {slot.graph.name}"
+        copy["hl_unique"] = True                  # (a preset's copy is this object's own: never handed out again)
         slot.graph = copy
         return {"FINISHED"}
 

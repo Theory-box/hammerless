@@ -445,6 +445,11 @@ def _on_load(*_args):
     convert_old_volumes()
     from .lamps import convert_light_entities
     convert_light_entities()             # (light entities from older files: Blender lights now)
+    from .lightpresets import PATTERNS, apply_pattern, preset_slot
+    for o in bpy.data.objects:           # (lights given a Pattern before patterns were Behaviours)
+        if (o.type == "LIGHT" and o.library is None and o.hammerless.light_pattern in PATTERNS
+                and preset_slot(o) is None):
+            apply_pattern(o)
 
 
 def convert_old_volumes() -> int:

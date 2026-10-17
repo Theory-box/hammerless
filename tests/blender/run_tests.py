@@ -895,6 +895,48 @@ def test_behaviours():
     assert not HL_NodeSelf.poll(world) and HL_NodeSelf.poll(tree)
 
 
+def test_light_pattern_presets():
+    # a light's Pattern is a preset Behaviour: lights sharing one share a name (one light style), set once
+    from hammerless.blender.lightpresets import PATTERNS, preset_slot
+    reset_scene()
+    add_box("floor", (10, 10, 0.5), (0, 0, -0.25))
+    bpy.ops.object.empty_add(location=(-4, 0, 0.1))
+    sp = bpy.context.object
+    sp.hammerless.role, sp.hammerless.classname = "ENTITY", "info_survivor_position"
+    lamps = []
+    for i in range(3):
+        data = bpy.data.lights.new(f"Hall Lamp {i}", "POINT")
+        lamp = bpy.data.objects.new(f"Hall Lamp {i}", data)
+        bpy.context.collection.objects.link(lamp)
+        lamp.location = (i * 2.0 - 2.0, 0.0, 2.0)
+        lamp.hammerless.light_pattern = "1"
+        lamps.append(lamp)
+    graphs = {preset_slot(l).graph for l in lamps}
+    assert len(graphs) == 1, graphs
+    blocks, log = export()
+    assert blocks, log
+    lights = entities(blocks, "light")
+    names = {l.get("targetname") for l in lights}
+    assert len(lights) == 3 and len(names) == 1 and next(iter(names)), (names, log)
+    assert all(not l.get("style") for l in lights), [l.get("style") for l in lights]
+    script = open(os.path.join(FAKE_GAME, "left4dead2", "scripts", "vscripts", "hammerless",
+                               "logic_test_map.nut")).read()
+    assert script.count(PATTERNS["1"]) == 1, script.count(PATTERNS["1"])
+    assert script.count("SetPattern") == 1
+    # another preset: the graph is replaced; Make Unique: its own name; Steady: no Behaviour, no name
+    lamps[0].hammerless.light_pattern = "10"
+    assert preset_slot(lamps[0]).graph.get("hl_light_preset") == "10" and len(lamps[0].hammerless.behaviours) == 1
+    for o in bpy.context.selected_objects:
+        o.select_set(False)
+    bpy.context.view_layer.objects.active = lamps[1]
+    assert bpy.ops.hammerless.behaviour_unique(index=0) == {"FINISHED"}
+    lamps[2].hammerless.light_pattern = "0"
+    assert preset_slot(lamps[2]) is None and not lamps[2].hammerless.behaviours
+    blocks, log = export()
+    by_name = {l.get("targetname") or "" for l in entities(blocks, "light")}
+    assert len(by_name) == 3 and "" in by_name, by_name     # (Fluorescent, Lamp 1's own Flicker, a steady unnamed)
+
+
 def test_logic_value_wires():
     # grey/pink value wires from Blender reach the map script
     reset_scene()
@@ -1814,9 +1856,10 @@ def test_light_patterns():
     kv = light_entity(lamp("Plain"), 52.49).keyvalues
     assert not {"style", "pattern", "targetname", "spawnflags"} & set(kv), kv
     kv = light_entity(lamp("Tube", light_pattern="10"), 52.49).keyvalues
-    assert kv["style"] == "10" and "targetname" not in kv, kv            # (flickers on its own, unnamed)
+    # (a Pattern is a preset Behaviour: the lights of one preset share its name, no game style key)
+    assert "style" not in kv and kv["targetname"].startswith("hl_lightpattern_"), kv
     kv = light_entity(lamp("Hall Lamp", light_switchable=True, light_pattern="3"), 52.49).keyvalues
-    assert kv["targetname"] == "hl_light_hall_lamp" and kv["style"] == "3", kv
+    assert kv["targetname"] == "hl_light_hall_lamp" and "style" not in kv, kv    # (switchable: its own name)
     kv = light_entity(lamp("Siren", "SPOT", light_pattern="CUSTOM", light_custom="az Z9m"), 52.49).keyvalues
     assert kv["pattern"] == "azzm" and kv["targetname"] == "hl_light_siren", kv
     kv = light_entity(lamp("Dark", light_start_off=True), 52.49).keyvalues
@@ -1971,8 +2014,10 @@ def test_lights_are_blender_lights():
         assert all(abs(g - w) <= 1 for g, w in zip(got, want)), (got, want)
         assert all(abs(a - b) < 0.05 or abs(abs(a - b) - 360) < 0.05 for a, b in zip(e.angles, angles)) or cls == "light",             (e.angles, angles)
         if cls == "light":
+            from hammerless.blender.lightpresets import preset_slot
             assert new.hammerless.light_pattern == "10" and new.hammerless.light_start_off
-            assert e.keyvalues.get("style") == "10" and e.keyvalues.get("spawnflags") == "1"
+            assert preset_slot(new).graph.get("hl_light_preset") == "10"         # (its pattern: a Behaviour)
+            assert "style" not in e.keyvalues and e.keyvalues.get("spawnflags") == "1"
             assert e.keyvalues.get("targetname") == "lamp_a" and e.keyvalues.get("_quadratic_attn") == "1"
         else:
             assert abs(float(e.keyvalues["_cone"]) - 40) <= 1 and abs(float(e.keyvalues["_inner_cone"]) - 25) <= 1,                 e.keyvalues

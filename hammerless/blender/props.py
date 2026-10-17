@@ -327,6 +327,13 @@ LIGHT_PATTERNS = [
 ]
 
 
+def _light_pattern_changed(self, _context):
+    obj = self.id_data
+    if isinstance(obj, bpy.types.Object) and obj.type == "LIGHT":
+        from .lightpresets import apply_pattern
+        apply_pattern(obj)
+
+
 def _is_behaviour(_self, tree) -> bool:
     return tree.bl_idname == "HL_LogicTree" and getattr(tree, "is_behaviour", False)
 
@@ -384,9 +391,10 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
     use_convex_hull: BoolProperty(
         name="Use Convex Hull",
         description="Wrap each loose part in its convex hull instead of requiring it to be convex")
-    light_pattern: EnumProperty(name="Pattern", default="0", items=LIGHT_PATTERNS,
+    light_pattern: EnumProperty(name="Pattern", default="0", items=LIGHT_PATTERNS, update=_light_pattern_changed,
                                 description="How the light's brightness changes over time in the game (its baked "
-                                            "light flickers, pulses or strobes)")
+                                            "light flickers, pulses or strobes): a preset Behaviour on the light "
+                                            "(Behaviours: open it to change how it does it)")
     light_custom: StringProperty(name="Custom", default="mmamammmmammamamaaamammma",
                                  description="Brightness steps, ten a second: a = dark, m = normal, z = double")
     light_switchable: BoolProperty(name="Switchable", default=False,
