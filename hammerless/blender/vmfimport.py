@@ -418,12 +418,21 @@ def import_text(context, text: str, path: str) -> tuple[int, int]:
 
 # ---------------------------------------------------------------- writing back (Build)
 
-def _faces(obj, upm: float, materials) -> list[tuple]:
+def _faces(obj, upm: float, materials, depsgraph=None) -> list[tuple]:
     """(side id, corners, material, texture axes or None) per face; axes for faces painted with the texturing
-    tools (from their UVs)."""
+    tools (from their UVs). The shape after its modifiers (what the viewport shows), as new brushes are."""
+    ev = obj.evaluated_get(depsgraph) if depsgraph is not None and obj.modifiers else None
+    if ev is not None:
+        try:
+            return _mesh_faces(obj, ev.to_mesh(), upm, materials)
+        finally:
+            ev.to_mesh_clear()
+    return _mesh_faces(obj, obj.data, upm, materials)
+
+
+def _mesh_faces(obj, mesh, upm: float, materials) -> list[tuple]:
     from .extract import PAINTED, texture_size
     m = obj.matrix_world
-    mesh = obj.data
     attr = mesh.attributes.get("hl_side")
     ids = [0] * len(mesh.polygons)
     if attr is not None and attr.domain == "FACE":
@@ -528,7 +537,7 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
                 report.warnings.append(f"'{obj.name}': editing displacements isn't written back yet: it keeps "
                                        "its imported shape")
             return block
-        return vi.solid_block(block, _faces(obj, upm, materials), writer.new_id, default_side)
+        return vi.solid_block(block, _faces(obj, upm, materials, depsgraph), writer.new_id, default_side)
 
     children: dict = {}                 # (each object's children in the map, listed once: not per entity)
     for o in objs:

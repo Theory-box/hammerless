@@ -1481,6 +1481,37 @@ def test_vmf_import_roundtrip():
     assert world.blocks("hidden"), "the world's hidden blocks stay"
 
 
+def test_vmf_import_modifiers_exported():
+    # an imported brush with a modifier (another add-on's Geometry Nodes resize) exports the shape the viewport
+    # shows, not its unmodified mesh (a wall across a doorway blocked the nav)
+    from hammerless.blender import vmfimport
+    reset_scene()
+    path = os.path.join(TMP, "small.vmf")
+    with open(path, "w", encoding="latin-1") as f:
+        f.write(SMALL_VMF)
+    vmfimport.import_text(bpy.context, SMALL_VMF, path)
+    bpy.context.scene.hammerless.map_name = "test_map"
+    brush = next(o for o in bpy.data.objects if o.get("hl_vmf_id") == 20)
+    ng = bpy.data.node_groups.new("Half X", "GeometryNodeTree")
+    ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    gi, go = ng.nodes.new("NodeGroupInput"), ng.nodes.new("NodeGroupOutput")
+    tr = ng.nodes.new("GeometryNodeTransform")
+    tr.inputs["Scale"].default_value = (0.5, 1.0, 1.0)
+    ng.links.new(gi.outputs[0], tr.inputs[0])
+    ng.links.new(tr.outputs[0], go.inputs[0])
+    brush.modifiers.new("Half", "NODES").node_group = ng
+    bpy.context.view_layer.update()
+    world = next(b for b in _imported_export(SMALL_VMF) if b.name == "world")
+    solid = next(s for s in world.blocks("solid") if s.get("id") == "20")
+    xs = set()                          # the x of each side facing along x (its three points share it)
+    for sd in solid.blocks("side"):
+        v = [float(t) for t in sd.get("plane").replace("(", " ").replace(")", " ").split()]
+        if abs(v[0] - v[3]) < 0.01 and abs(v[0] - v[6]) < 0.01:
+            xs.add(round(v[0], 1))
+    assert xs == {12.0, 36.0}, xs        # the 0..48 box halved about its centre (24)
+
+
 def test_vmf_import_copied_entities():
     # a copy of an imported point entity (Shift+D on a prop or a light) is built where it is, with the original's
     # settings; the original stays as imported. A brush entity's copy still isn't (its shape is in the original's parts)
