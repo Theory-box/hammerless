@@ -443,6 +443,8 @@ def _on_load(*_args):
     _new_colls.clear()
     _sigs.clear()
     convert_old_volumes()
+    from .lamps import convert_light_entities
+    convert_light_entities()             # (light entities from older files: Blender lights now)
 
 
 def convert_old_volumes() -> int:

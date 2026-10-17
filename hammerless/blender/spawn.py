@@ -126,6 +126,10 @@ class HL_OT_spawn_item(bpy.types.Operator):
             return {"CANCELLED"}
         if it.kind == "preset":
             return bpy.ops.hammerless.add_preset(preset=it.key)
+        from .lamps import LAMP_OF, add_lamp
+        if it.key in LAMP_OF:                 # (lights are Blender lights: the Light panel has their settings)
+            add_lamp(context, LAMP_OF[it.key])
+            return {"FINISHED"}
         if it.kind == "entity":
             return bpy.ops.hammerless.add_entity(classname=it.key)
         # volume: convert the selected meshes, or add a box

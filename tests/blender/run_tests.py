@@ -1877,6 +1877,56 @@ def test_example_groups_dont_pile_up():
     del mine
 
 
+def test_lights_are_blender_lights():
+    # the Add panel's lights are Blender lights; older light entities become Blender lights giving the same game light
+    import math
+    from hammerless.blender.extract import light_entity
+    from hammerless.blender.lamps import convert_light_entities
+    s = reset_scene()
+    for key, kind in (("light", "POINT"), ("light_spot", "SPOT"), ("light_environment", "SUN")):
+        assert bpy.ops.hammerless.spawn_item(item="entity:" + key) == {"FINISHED"}
+        o = bpy.context.object
+        assert o.type == "LIGHT" and o.data.type == kind, (key, o.type)
+    upm = s.units_per_meter
+    olds = {}
+    for cls, kv, rot in (("light", {"_light": "255 128 64 300", "style": "10", "spawnflags": "1",
+                                    "targetname": "lamp_a", "_quadratic_attn": "1"}, (0, 0, 0)),
+                         ("light_spot", {"_light": "200 220 255 650", "_cone": "40", "_inner_cone": "25"},
+                          (0, math.radians(35), math.radians(70)))):
+        assert bpy.ops.hammerless.add_entity(classname=cls) == {"FINISHED"}
+        o = bpy.context.object
+        o.rotation_euler = rot
+        o.hammerless.keyvalues.clear()
+        for k, v in kv.items():
+            item = o.hammerless.keyvalues.add()
+            item.key, item.value = k, v
+        bpy.context.view_layer.update()
+        from hammerless.blender.extract import source_angles
+        olds[o.name] = (cls, kv, tuple(round(a, 3) for a in source_angles(o.matrix_world)))
+    tree = bpy.data.node_groups.new("lamp logic", "HL_LogicTree")
+    node = tree.nodes.new("HL_NodeObject")
+    first = next(iter(olds))
+    node.target = bpy.data.objects[first]
+    assert convert_light_entities() == 2
+    for name, (cls, kv, angles) in olds.items():
+        new = bpy.data.objects[name]
+        assert new.type == "LIGHT", name
+        e = light_entity(new, upm)
+        assert e.classname == cls, (e.classname, cls)
+        got = [int(v) for v in e.keyvalues["_light"].split()]
+        want = [int(v) for v in kv["_light"].split()]
+        assert all(abs(g - w) <= 1 for g, w in zip(got, want)), (got, want)
+        assert all(abs(a - b) < 0.05 or abs(abs(a - b) - 360) < 0.05 for a, b in zip(e.angles, angles)) or cls == "light",             (e.angles, angles)
+        if cls == "light":
+            assert new.hammerless.light_pattern == "10" and new.hammerless.light_start_off
+            assert e.keyvalues.get("style") == "10" and e.keyvalues.get("spawnflags") == "1"
+            assert e.keyvalues.get("targetname") == "lamp_a" and e.keyvalues.get("_quadratic_attn") == "1"
+        else:
+            assert abs(float(e.keyvalues["_cone"]) - 40) <= 1 and abs(float(e.keyvalues["_inner_cone"]) - 25) <= 1,                 e.keyvalues
+    assert node.target is bpy.data.objects[first] and node.target.type == "LIGHT"     # (logic follows it)
+    assert convert_light_entities() == 0                                              # (once)
+
+
 def test_make_collision_modes():
     # Make Collision: brushes as one object, or invisible static props of <= 20 pieces; pressing again replaces
     # the last result (either mode) and keeps a material set by hand on it

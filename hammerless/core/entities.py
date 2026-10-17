@@ -367,10 +367,17 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               size=(16.0, 16.0, 16.0), floor_origin=False),
 
     # --- lights (basic; full lighting comes later)
-    EntityDef("light", "Point Light", "Lights", "Omni light.",
+    EntityDef("light", "Point Light", "Lights",
+              "A Blender point light: its colour and Power, and in the Light panel its Pattern (flicker, pulse...), "
+              "Switchable and Start Off.",
               (KeyDef("_light", "255 240 220 300", "Color + brightness"),), floor_origin=False),
+    EntityDef("light_spot", "Spot Light", "Lights",
+              "A Blender spot light, shining along its -Z: its colour, Power and cone (Spot Size, Blend), and in the "
+              "Light panel its Pattern, Switchable and Start Off.",
+              (KeyDef("_light", "255 240 220 600", "Color + brightness"),), floor_origin=False),
     EntityDef("light_environment", "Sun", "Lights",
-              "Sun + sky ambient light. Auto-added if the map has no lights.",
+              "A Blender sun: the map's sun and sky light, pointing the way it shines (Lighting > Environment sets "
+              "the same when there's no sun in the scene).",
               (KeyDef("_light", "255 245 225 400", "Sun color + brightness"),
                KeyDef("_ambient", "140 160 190 80", "Ambient color + brightness"),
                KeyDef("pitch", "-50", "Sun pitch")), floor_origin=False),

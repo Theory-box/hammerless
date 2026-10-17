@@ -71,7 +71,7 @@ _TIPS = {
     "prop_door_rotating_checkpoint": "The safe room presets already include one.",
     "info_director": "Added automatically. You only need this to name it yourself.",
     "info_player_start": "Added automatically when missing.",
-    "light_environment": "Set the sun in Lighting > Environment > Sun instead. Added automatically.",
+    "light_environment": "Or set the sun in Lighting > Environment > Sun: added automatically when the scene has none.",
     "func_precipitation": "Scale it over the whole playable area, up to well above the roofs.",
 }
 
