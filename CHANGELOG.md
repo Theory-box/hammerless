@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Convert to Brushes, Organic** (new, experimental): for curved, sculpted or scanned meshes (rocks, creatures, stumps) that Extend-or-Fill refuses. The solid is cut with planes, always where the most collision would stand off it, until every piece is within **Detail** of the mesh (no point of its collision farther than Detail from the surface), up to **Max Pieces**; nothing is ever missing. A few seconds on 2-3k-triangle meshes (a hand: 7 pieces, about 5% extra collision); at most 64 sides per brush. Hollow and walled shapes (a dumpster, window frames) are peeled along their faces.
+- **Convert to Brushes, Auto** (the new default): Extend-or-Fill when the mesh is clean enough for it, else Organic; the message says which ran. Each can still be chosen by hand.
 - **Convert to Brushes, Extend-or-Fill on all cores**: bigger shapes (12+ creases) test their candidate cuts in up to 8 worker processes, about 3x faster on curved props with the same pieces. Workers start per press (about 0.2 s) and close after; if they fail it carries on in one process. Machines under 4 cores stay single-process.
 
 ## 0.19.0 (test release, 2026-10-18)

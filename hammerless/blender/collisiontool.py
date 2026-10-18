@@ -4,6 +4,8 @@ Custom Model such as a house: the model draws, the brushes collide (the engine's
 limit per prop). The brushes are an ordinary object to look at, edit or delete; the button makes them again."""
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import bpy
 
@@ -147,9 +149,10 @@ class HL_OT_make_collision(bpy.types.Operator):
         inch = 0.0254 / unit
         co, tri, mi, mats = _world_triangles(src, context.evaluated_depsgraph_get())
         upm = context.scene.hammerless.units_per_meter or 52.49
-        eof = src.hammerless.brush_algorithm == "EOF"
+        algo = src.hammerless.brush_algorithm
+        eof = algo != "SLABS"                   # (Extend-or-Fill or Organic: convex pieces of a solid)
         if eof:
-            r = self._extend_or_fill(src, co, tri, unit * upm)
+            r = self._solid_pieces(src, co, tri, unit * upm, algo)
             if r is None:
                 return {"CANCELLED"}
         else:
@@ -214,13 +217,25 @@ class HL_OT_make_collision(bpy.types.Operator):
         _remove(_outputs(src, True))     # (the skipped-faces object older versions made)
         what = (f"{len(groups)} invisible props of {len(r.brushes)} collision pieces" if props
                 else f"{len(r.brushes)} collision brushes")
-        if eof:
+        if eof and r.info.get("method") == "Organic":
+            info = r.info
+            air = info["air"] / max(info["volume"], 1e-9) * 100
+            msg = (f"{what} (Organic, {info['seconds']:.1f} s{', ' + info['why'] if info.get('why') else ''}); "
+                   f"collision beyond the mesh: about {air:.1f}% of its volume")
+            if info["stopped"]:
+                msg += "; it ran out of time, so the last pieces are looser than Detail"
+            elif info["pieces"] >= src.hammerless.brush_max_pieces:
+                msg += "; it used all of Max Pieces: raise it or Detail for a closer or simpler fit"
+        elif eof:
             info = r.info
             filled = info["filled"] / max(info["volume"], 1e-9) * 100
             msg = (f"{what} (Extend-or-Fill, {info['seconds']:.1f} s)" +
                    (f"; detail covered over: {filled:.2f}% of the volume" if info["filled"] > 0 else "; exact"))
             if info["stuck"]:
                 msg += "; some of it couldn't be split into convex pieces: those pieces are their convex hull"
+            if info.get("capped"):
+                msg += (f"; {info['capped']} curved pieces had more than {64} sides: each is a slightly larger "
+                        "64-sided brush")
         else:
             msg = (f"{what} from {r.kept_regions} flat areas "
                    f"({100 * r.kept_share:.1f}% of the surface; {r.paired_walls} two-sided walls as one brush each); "
@@ -236,35 +251,60 @@ class HL_OT_make_collision(bpy.types.Operator):
         return {"FINISHED"}
 
 
-    def _extend_or_fill(self, src, co, tri, scale):
-        """The mesh (Blender units) through core/brushfit.py in game units; its pieces back as brushes."""
+    def _solid_pieces(self, src, co, tri, scale, algo):
+        """The mesh (Blender units) through core/brushfit.py (Extend-or-Fill) or core/organicfit.py (Organic) in game
+        units; its pieces back as brushes. Auto: Extend-or-Fill, and Organic when the mesh is too detailed for it."""
         try:
-            from ..core import brushfit
+            from ..core import brushfit, organicfit
         except ImportError as e:
-            self.report({"ERROR"}, f"Extend-or-Fill needs its geometry kernel (manifold3d), which didn't load: {e}")
+            self.report({"ERROR"}, f"Convert to Brushes needs its geometry kernel (manifold3d), which didn't load: {e}")
             return None
-        if len(tri) > 20000:
-            self.report({"WARNING"}, f"'{src.name}' has {len(tri)} triangles: Extend-or-Fill is meant for props; "
-                                     "this may take a while")
+        hs = src.hammerless
+        detail = hs.brush_detail_depth * scale
+        why = ""
+        meshes = info = None
         try:
-            meshes, info = brushfit.convert(co * scale, tri, detail=src.hammerless.brush_detail_depth * scale)
+            if algo in ("AUTO", "EOF"):
+                if len(tri) > 20000 and algo == "EOF":
+                    self.report({"WARNING"}, f"'{src.name}' has {len(tri)} triangles: Extend-or-Fill is meant for "
+                                             "props; this may take a while")
+                t0 = time.time()
+                try:
+                    meshes, info = brushfit.convert(co * scale, tri, detail=detail,
+                                                    time_limit=10.0 if algo == "AUTO" else None)
+                    info["method"] = "Extend-or-Fill"
+                except brushfit.TooBig as e:
+                    if algo == "EOF":
+                        self.report({"ERROR"}, f"'{src.name}': {e} (or use Organic)")
+                        return None
+                    why = ("Extend-or-Fill took too long" if "longer than" in str(e)
+                           else "too detailed for Extend-or-Fill")
+            if meshes is None:
+                left = organicfit.TIME_LIMIT - (time.time() - t0 if algo == "AUTO" else 0.0)
+                meshes, info = organicfit.convert(co * scale, tri, detail=max(detail, 0.5),
+                                                  max_pieces=hs.brush_max_pieces, time_limit=max(left, 20.0))
+                info["method"], info["why"] = "Organic", why
         except brushfit.NotSolid as e:
             self.report({"ERROR"}, f"'{src.name}': {e} (or use Slabs)")
-            return None
-        except brushfit.TooBig as e:
-            self.report({"ERROR"}, f"'{src.name}': {e}")
             return None
         except Exception as e:                  # (a kernel failure on odd geometry: said plainly, not a traceback)
             import traceback
             traceback.print_exc()
-            self.report({"ERROR"}, f"'{src.name}': Extend-or-Fill failed ({type(e).__name__}: {e}); try Slabs")
+            self.report({"ERROR"}, f"'{src.name}': Convert to Brushes failed ({type(e).__name__}: {e}); try Slabs")
             return None
         if not meshes:
             self.report({"WARNING"}, f"'{src.name}': no pieces made")
             return None
-        brushes = []
+        brushes, capped = [], 0
         for k, (V, T) in enumerate(meshes):
-            brushes.append(((V / scale).tolist(), brushfit.hull_faces(V, T), k))
+            faces = brushfit.hull_faces(V, T)
+            if len(faces) > organicfit.MAX_SIDES:
+                capped += 1
+                V, T = brushfit.arrays(organicfit.fewer_sides(brushfit.Manifold.hull_points(V.tolist()),
+                                                              organicfit.MAX_SIDES))
+                faces = brushfit.hull_faces(V, T)
+            brushes.append(((V / scale).tolist(), faces, k))
+        info["capped"] = capped
         return _Pieces(brushes, info)
 
 

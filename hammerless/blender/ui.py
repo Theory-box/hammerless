@@ -540,10 +540,12 @@ class HL_PT_obj_brushes(_Panel, bpy.types.Panel):
         hs = context.object.hammerless
         col = _settings(self.layout)
         col.prop(hs, "brush_algorithm")
-        if hs.brush_algorithm == "EOF":
-            col.prop(hs, "brush_detail_depth")
-        else:
+        if hs.brush_algorithm == "SLABS":
             col.prop(hs, "collision_min_area")
+        else:
+            col.prop(hs, "brush_detail_depth")
+            if hs.brush_algorithm in ("AUTO", "ORGANIC"):
+                col.prop(hs, "brush_max_pieces")
         col.prop(hs, "collision_mode", text="As")
         col.prop(hs, "collision_blocks_vis")
         row = self.layout.row()

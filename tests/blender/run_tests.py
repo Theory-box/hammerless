@@ -1310,6 +1310,78 @@ def test_convert_to_brushes_extend_or_fill():
     assert res == {"CANCELLED"} and not made, (res, made)
 
 
+def test_convert_to_brushes_organic():
+    # Convert to Brushes, Organic: a dumbbell (two spheres and a bar, fused) becomes a few convex brushes that
+    # cover all of it (nothing missing) with little to spare, none over 64 sides; Auto falls back to it when the
+    # mesh is too detailed for Extend-or-Fill
+    import bmesh
+    from hammerless.blender.collisiontool import OF
+    from hammerless.core import brushfit
+    reset_scene()
+    parts = []
+    for x in (-1.2, 1.2):
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=0.8, location=(x, 0, 0), segments=24, ring_count=12)
+        parts.append(bpy.context.object)
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.3, depth=2.4, location=(0, 0, 0), rotation=(0, 1.5708, 0),
+                                        vertices=16)
+    parts.append(bpy.context.object)
+    base = parts[0]
+    for o in parts[1:]:
+        m = base.modifiers.new("u", "BOOLEAN")
+        m.operation, m.object, m.solver = "UNION", o, "EXACT"
+        bpy.context.view_layer.objects.active = base
+        bpy.ops.object.modifier_apply(modifier=m.name)
+        bpy.data.objects.remove(o)
+    base.name = "Dumbbell"
+    bm = bmesh.new()
+    bm.from_mesh(base.data)
+    vol = bm.calc_volume(signed=False)
+    bm.free()
+
+    def press():
+        bpy.context.view_layer.objects.active = base
+        res = bpy.ops.hammerless.make_collision()
+        return res, [o for o in bpy.data.objects if o.get(OF) == base.name]
+
+    def pieces(o):
+        bm = bmesh.new()
+        bm.from_mesh(o.data)
+        seen, out = set(), []
+        for f in bm.faces:
+            if f.index in seen:
+                continue
+            stack, group = [f], []
+            while stack:
+                x = stack.pop()
+                if x.index in seen:
+                    continue
+                seen.add(x.index)
+                group.append(x)
+                stack += [g for e in x.edges for g in e.link_faces]
+            out.append(group)
+        total = bm.calc_volume(signed=False)
+        bm.free()
+        return len(out), max(len(g) for g in out), total
+
+    base.hammerless.brush_algorithm = "ORGANIC"
+    base.hammerless.brush_detail_depth = 0.0762            # (4 game units)
+    res, made = press()
+    assert res == {"FINISHED"} and len(made) == 1, (res, made)
+    n, most_sides, total = pieces(made[0])
+    assert 2 <= n <= base.hammerless.brush_max_pieces, n
+    assert most_sides <= 64, most_sides
+    assert vol * 0.999 <= total <= vol * 1.6, (vol, total)    # (covers it all; pieces don't overlap much)
+    # Auto: Extend-or-Fill refuses it as too detailed (its crease limit lowered here), so Organic runs
+    saved = brushfit.MAX_CREASES
+    brushfit.MAX_CREASES = 5
+    try:
+        base.hammerless.brush_algorithm = "AUTO"
+        res, made = press()
+    finally:
+        brushfit.MAX_CREASES = saved
+    assert res == {"FINISHED"} and pieces(made[0])[0] >= 2, (res, made)
+
+
 def test_custom_models_extract():
     # Custom Model meshes: linked copies share one model, each copy is a prop where the object is
     from mathutils import Vector
