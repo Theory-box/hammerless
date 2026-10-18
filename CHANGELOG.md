@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.0 (test release, 2026-10-18)
+
+- **Convert to Brushes** (Selected Object, a collapsible panel, for any mesh): collision brushes or invisible props that collide like the mesh. Make Collision moved here from the Custom Model panel. **Algorithm**:
+  - **Extend-or-Fill** (new, experimental): few clean convex pieces the way a mapper would build them, with faces on the mesh's own planes and no overlaps. Exact, curves included (one piece per curve segment), except shallow detail up to **Detail** deep (grooves, notches, hand-holds), which is covered over. On 12 test props it used the fewest pieces (or tied) on every straight-edged one with no invisible collision, against CoACD and V-HACD at their default settings. The mesh must be a closed solid; meshes with too many creases (over 300) or runs over 30 s stop with a message.
+  - **Slabs**: the earlier Make Collision (a thin slab behind each flat area), for big shells like a house.
+  - Both keep **As** (brushes or props) and **Blocks Vis**. Geometry kernel: manifold3d 3.5.4 (Apache-2.0), bundled.
+- **Combat & Physics logic nodes**: Trace Line, Seen By, Find Nearby, Player View, Damage, Push, Aim At, Explosion, Beam and Particle Effect - building blocks for turrets, mines, jump pads, grappling hooks and stalker enemies. Checked in the game. The game protects survivors from script damage and pushes until someone leaves the safe room (explosions still hurt them).
+
 ## 0.18.0 (test release, 2026-10-17)
 
 - **Brush tools** (new Brush panel): **Draw Brush** (drag a rectangle on any surface, then move the mouse for the height; snaps to a grid in game units, Ctrl to stop snapping, mouse wheel or [ ] to change the grid) and **Draw Carve** (the same, but the box cuts what it passes through). **Carve** cuts the selected brushes out of the active one, **Intersect** keeps only their overlap, **Clip** cuts a brush by a plane, **Hollow** makes a box into walls, **Merge** joins brushes whose union is convex. Every result is convex pieces (what the game needs), made by Hammerless's own CSG code in the native library; faces that are flush or nearly flush are treated as one plane, so carving along an existing face works.
