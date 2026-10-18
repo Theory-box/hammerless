@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Convert to Brushes, Extend-or-Fill on all cores**: bigger shapes (12+ creases) test their candidate cuts in up to 8 worker processes, about 3x faster on curved props with the same pieces. Workers start per press (about 0.2 s) and close after; if they fail it carries on in one process. Machines under 4 cores stay single-process.
+
 ## 0.19.0 (test release, 2026-10-18)
 
 - **Convert to Brushes** (Selected Object, a collapsible panel, for any mesh): collision brushes or invisible props that collide like the mesh. Make Collision moved here from the Custom Model panel. **Algorithm**:

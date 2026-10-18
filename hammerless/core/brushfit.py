@@ -497,6 +497,116 @@ def planarize(V, T):
 _OPTS: dict = {}
 
 
+# ------------------------------------------------------------------ worker processes (all cores)
+
+# candidate cuts tested in this many worker processes (0: here, one after another). Started per conversion (about
+# 0.2 s) and closed after it; past 8 there is little gain (measured 3x at 8, 3.6x at 15 on curved props)
+# (under 4 cores: none, one or two workers lose to their own start-up and copying)
+WORKERS = 0 if (os.cpu_count() or 1) < 4 else min(8, os.cpu_count() - 1)
+PARALLEL_FROM = 12          # (only shapes with at least this many creases use them: small ones are instant anyway)
+_POOL = None
+_POOL_SIZE = 0
+_BIG = [False]
+_BROKEN = [False]           # (a worker died or couldn't start this conversion: the rest of it runs here)
+_TUNABLES = ("WELD", "PLANE_OFFSET", "GAP", "SNAP_MAX", "POCKET_SHRINK", "PROBE", "CRUMB", "TOUCH", "TOL", "SLIVER")
+
+
+def to_manifold64(V, T):
+    # (fresh, writable copies: the binding refuses read-only arrays, like a mesh's own or unpickled ones)
+    return Manifold(K.Mesh64(vert_properties=np.array(V, np.float64, order="C", copy=True),
+                             tri_verts=np.array(T, np.uint64, order="C", copy=True)))
+
+
+def _set_tunables(values):
+    globals().update(values)
+
+
+def _cut_task(args):
+    """In a worker: one candidate cut of one piece, with the creases of what it makes (meshes in, meshes out)."""
+    V, T, nrm, off, mid, values = args
+    _set_tunables(values)
+    res = cut(to_manifold64(V, T), nrm, off, mid)
+    if res is None:
+        return None
+    out = []
+    for r in res:
+        Vr, Tr = arrays(r)
+        out.append((Vr, Tr, _creases_of(r), extent(r, nrm)))
+    return out
+
+
+STABLE_NAME = "hl_brushfit"   # (this module's name in the workers: an installed add-on's own module path,
+#                               bl_ext.<repo>.hammerless..., exists only inside Blender)
+
+
+def _python_exe():
+    """The Python to start workers with (None: none found, work here). Blender since 2.91 sets sys.executable to its
+    own bundled Python; an older or unusual build may leave it as the blender binary itself, never to be spawned."""
+    exe = sys.executable
+    if os.path.basename(exe).lower().startswith("blender"):
+        exe = os.path.join(sys.prefix, "bin", "python.exe" if os.name == "nt" else "python3")
+        if not os.path.isfile(exe):
+            return None
+    return exe
+
+
+class _NoMain:
+    """While workers start: hide the main script from multiprocessing, which would otherwise run it again in every
+    worker (a script run from Blender's text editor, or a test). Workers need only this file."""
+
+    def __enter__(self):
+        m = sys.modules.get("__main__")
+        self.saved = (m, m.__dict__.pop("__file__", None), m.__dict__.get("__spec__")) if m else None
+        if m:
+            m.__spec__ = None
+        return self
+
+    def __exit__(self, *exc):
+        if self.saved:
+            m, f, spec = self.saved
+            if f is not None:
+                m.__file__ = f
+            if spec is not None or "__spec__" in m.__dict__:
+                m.__spec__ = spec
+
+
+def pool(n):
+    """The worker processes, kept between conversions (starting them is the slow part)."""
+    global _POOL, _POOL_SIZE
+    if n <= 0 or _BROKEN[0]:
+        return None
+    if _POOL is None or _POOL_SIZE != n:
+        exe = _python_exe()
+        if exe is None:
+            return None
+        import concurrent.futures
+        import multiprocessing
+        if _POOL is not None:
+            _POOL.shutdown(cancel_futures=True)
+        mod = sys.modules[__name__]
+        sys.modules[STABLE_NAME] = mod               # (tasks are pickled by module name: the stable one)
+        _cut_task.__module__ = STABLE_NAME
+        ctx = multiprocessing.get_context("spawn")
+        ctx.set_executable(exe)          # (process-wide for multiprocessing: Blender's own Python, the same anyway)
+        # (the worker's setup runs through exec, a built-in every Python has: it loads this file as STABLE_NAME)
+        loader = "; ".join([
+            "import importlib.util, sys",
+            f"spec = importlib.util.spec_from_file_location({STABLE_NAME!r}, {os.path.abspath(__file__)!r})",
+            "mod = importlib.util.module_from_spec(spec)",
+            f"sys.modules[{STABLE_NAME!r}] = mod",
+            "spec.loader.exec_module(mod)"])
+        _POOL = concurrent.futures.ProcessPoolExecutor(n, mp_context=ctx, initializer=exec, initargs=(loader, {}))
+        _POOL_SIZE = n
+    return _POOL
+
+
+def shutdown_pool():
+    global _POOL, _POOL_SIZE
+    if _POOL is not None:
+        _POOL.shutdown(cancel_futures=True)
+    _POOL, _POOL_SIZE = None, 0
+
+
 def piece_options(piece, crs):
     hit = _OPTS.get(id(piece))
     if hit is not None and hit[0] is piece:
@@ -517,17 +627,48 @@ def piece_options(piece, crs):
         if cost > 2.0:
             continue
         out.append((cost, [filled], None, "fill", None, q.volume()))
-    for cr in crs:
-        mid = (cr[0] + cr[1]) / 2
-        for nrm, off, kind in candidates(cr):
+    tasks = [(nrm, off, kind, (cr[0] + cr[1]) / 2) for cr in crs for nrm, off, kind in candidates(cr)]
+    ex = pool(WORKERS) if len(tasks) > 1 and _BIG[0] else None
+    if ex is not None:
+        V, T = arrays(piece)
+        values = {k: globals()[k] for k in _TUNABLES}
+        from concurrent.futures.process import BrokenProcessPool
+        try:
+            with _NoMain():                           # (workers start on demand, in here)
+                futs = [ex.submit(_cut_task, (V, T, nrm, off, mid, values)) for nrm, off, _k, mid in tasks]
+            done = [f.result() for f in futs]
+        except BrokenProcessPool as e:
+            print(f"Extend-or-Fill: worker processes failed ({e}); carrying on in one process")
+            _BROKEN[0] = True
+            shutdown_pool()
+            ex = None
+    if ex is not None:
+        results = []
+        for got in done:
+            if got is None:
+                results.append(None)
+                continue
+            res, exts = [], []
+            for Vr, Tr, crs_r, ext in got:
+                r = to_manifold64(Vr, Tr)
+                _CREASES[id(r)] = (r, crs_r)          # (the worker found its creases already)
+                res.append(r)
+                exts.append(ext)
+            results.append((res, exts))
+    else:
+        results = []
+        for nrm, off, _k, mid in tasks:
             res = cut(piece, nrm, off, mid)
-            if res is None:
-                continue
-            resolved = len(crs) - sum(len(creases_of(r)) for r in res)
-            if resolved <= 0:
-                continue
-            cost = (len(res) - 1) / resolved + 0.6 * sum(1 for r in res if extent(r, nrm) < SLIVER)
-            out.append((cost, res, nrm, kind, off / np.linalg.norm(nrm), 0.0))
+            results.append(None if res is None else (res, [extent(r, nrm) for r in res]))
+    for (nrm, off, kind, _mid), got in zip(tasks, results):
+        if got is None:
+            continue
+        res, exts = got
+        resolved = len(crs) - sum(len(creases_of(r)) for r in res)
+        if resolved <= 0:
+            continue
+        cost = (len(res) - 1) / resolved + 0.6 * sum(1 for e in exts if e < SLIVER)
+        out.append((cost, res, nrm, kind, off / np.linalg.norm(nrm), 0.0))
     if len(_OPTS) > 20000:
         _OPTS.clear()
     _OPTS[id(piece)] = (piece, out)
@@ -687,19 +828,24 @@ def convert(V, T, detail=TOL, tries=None, cancel=None, time_limit=None):
         raise TooBig(f"too detailed for Extend-or-Fill ({n0} inward creases, at most {MAX_CREASES}): use Slabs, or "
                      "simplify the mesh")
     start = (model, solids(model))
-    best = run_once(start, cancel=cancel)
-    best_s = result_score(*best)
-    if tries is None:
-        n_creases = len(creases_of(model))
-        tries = TRIES if n_creases <= 16 else (2 if n_creases <= 40 else 1)
-    rnd = random.Random(7)
-    for _ in range(tries):
-        if cancel is not None and cancel():
-            break
-        cand = run_once(start, rnd, cancel=cancel)
-        sc = result_score(*cand)
-        if sc < best_s - 1e-9:
-            best, best_s = cand, sc
+    _BIG[0] = n0 >= PARALLEL_FROM
+    _BROKEN[0] = False
+    try:
+        best = run_once(start, cancel=cancel)
+        best_s = result_score(*best)
+        if tries is None:
+            tries = TRIES if n0 <= 16 else (2 if n0 <= 40 else 1)
+        rnd = random.Random(7)
+        for _ in range(tries):
+            if cancel is not None and cancel():
+                break
+            cand = run_once(start, rnd, cancel=cancel)
+            sc = result_score(*cand)
+            if sc < best_s - 1e-9:
+                best, best_s = cand, sc
+    finally:
+        _BIG[0] = False
+        shutdown_pool()                 # (no idle processes left behind: starting them again is cheap)
     pieces, cut_planes, log, filled, volume = best
     if "cancelled" in log:
         raise TooBig(f"took longer than {limit:.0f} s: use Slabs, raise Detail, or simplify the mesh")

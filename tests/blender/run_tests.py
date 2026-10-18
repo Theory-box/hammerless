@@ -1200,6 +1200,34 @@ def test_combat_nodes_compile():
     assert script.count("::HL_Trace <-") == 1, "a helper is written once"
 
 
+def test_brushfit_worker_processes():
+    # Extend-or-Fill on all cores: a comb (5 slots, 10 creases) gives the same pieces with candidate cuts tested in
+    # worker processes (started from Blender's own Python) as in this one, and no workers are left running after
+    import numpy as np
+    from hammerless.core import brushfit as B
+    boxes = [((0, 0, 0), (100, 20, 16))] + [((k * 20, 20, 0), (k * 20 + 10, 60, 16)) for k in range(5)]
+    whole = None
+    for lo, hi in boxes:
+        m = B.Manifold.cube([b - a for a, b in zip(lo, hi)]).translate(list(lo))
+        whole = m if whole is None else whole + m
+    V, T = B.arrays(whole)
+    saved = B.WORKERS, B.PARALLEL_FROM
+    try:
+        out = {}
+        for w in (0, 2):
+            B.WORKERS, B.PARALLEL_FROM = w, 1
+            meshes, info = B.convert(V, T, detail=0)
+            out[w] = (len(meshes), round(sum(B.to_manifold64(*mm).volume() for mm in meshes), 3))
+            assert B._POOL is None, "workers left running"
+            main = sys.modules["__main__"]
+            assert getattr(main, "__file__", None), "the main script's __file__ wasn't put back"
+    finally:
+        B.WORKERS, B.PARALLEL_FROM = saved
+    assert out[0] == out[2], out
+    assert out[0][0] == 6, out          # (the bar and five teeth)
+    assert abs(out[0][1] - whole.volume()) < 1e-3 * whole.volume(), (out, whole.volume())
+
+
 def test_convert_to_brushes_extend_or_fill():
     # Convert to Brushes, Extend-or-Fill: an L-shaped solid becomes 2 convex brushes covering it exactly (one
     # object, two loose parts); a shallow groove is covered at the default Detail and cut around at Detail 0; an
