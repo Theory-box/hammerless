@@ -1,4 +1,5 @@
-"""Make Collision Brushes: invisible brushes that follow a mesh's flat areas (core/slabcollision.py), for a big
+"""Convert to Brushes: invisible brushes (or props) that collide like a mesh. Extend-or-Fill (core/brushfit.py): few
+clean convex pieces on the mesh's own faces. Slabs (core/slabcollision.py): brushes that follow its flat areas, for a big
 Custom Model such as a house: the model draws, the brushes collide (the engine's fastest collision, no pieces
 limit per prop). The brushes are an ordinary object to look at, edit or delete; the button makes them again."""
 from __future__ import annotations
@@ -118,14 +119,20 @@ def _mesh(name, brushes, rcol, material):
     return mesh
 
 
+class _Pieces:
+    """Extend-or-Fill's pieces in the shape the output code takes (Slabs' result has the same .brushes)."""
+
+    def __init__(self, brushes, info):
+        self.brushes, self.info = brushes, info
+
+
 class HL_OT_make_collision(bpy.types.Operator):
     bl_idname = "hammerless.make_collision"
-    bl_label = "Make Collision"
-    bl_description = ("Invisible brushes along this mesh's flat areas (walls, floors, roof, stairs): one thin slab "
-                      "behind each, so players stand exactly on the floors and doorways keep their width. For a big "
-                      "Custom Model like a house: set its Collision to None so it doesn't collide twice. Collision As "
-                      "picks brushes or invisible props for the pieces. Areas "
-                      "smaller than Smallest Face are left out. Press again after editing the mesh")
+    bl_label = "Convert to Brushes"
+    bl_description = ("Brushes (or invisible props) that collide like this mesh. Extend-or-Fill: few clean convex "
+                      "pieces on the mesh's own faces, exact except shallow detail (Detail). Slabs: a thin slab "
+                      "behind each flat area, for big shells like a house. For a Custom Model, set its Collision "
+                      "to None so it doesn't collide twice. Press again after editing the mesh")
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -140,15 +147,21 @@ class HL_OT_make_collision(bpy.types.Operator):
         inch = 0.0254 / unit
         co, tri, mi, mats = _world_triangles(src, context.evaluated_depsgraph_get())
         upm = context.scene.hammerless.units_per_meter or 52.49
-        min_area = src.hammerless.collision_min_area / unit ** 2
-        min_width = max(inch, 1.05 / upm / unit)      # (1 game unit: the smallest brush)
-        r = slab_brushes(co, tri, inch, min_area, min_width=min_width)
-        if not r.brushes:
-            self.report({"WARNING"}, f"'{src.name}' has no flat area bigger than Smallest Face: no brushes made")
-            return {"CANCELLED"}
+        eof = src.hammerless.brush_algorithm == "EOF"
+        if eof:
+            r = self._extend_or_fill(src, co, tri, unit * upm)
+            if r is None:
+                return {"CANCELLED"}
+        else:
+            min_area = src.hammerless.collision_min_area / unit ** 2
+            min_width = max(inch, 1.05 / upm / unit)      # (1 game unit: the smallest brush)
+            r = slab_brushes(co, tri, inch, min_area, min_width=min_width)
+            if not r.brushes:
+                self.report({"WARNING"}, f"'{src.name}' has no flat area bigger than Smallest Face: no brushes made")
+                return {"CANCELLED"}
         # the vis blockers: the same pieces, or, with glass in the mesh, pieces of its opaque faces only
         rv, clear = r, 0
-        if src.hammerless.collision_blocks_vis and mats:
+        if src.hammerless.collision_blocks_vis and mats and not eof:
             see = np.array(_see_through(mats, context) + [False])
             glass = see[np.clip(mi, 0, len(mats))]
             clear = int(glass.sum())
@@ -201,9 +214,17 @@ class HL_OT_make_collision(bpy.types.Operator):
         _remove(_outputs(src, True))     # (the skipped-faces object older versions made)
         what = (f"{len(groups)} invisible props of {len(r.brushes)} collision pieces" if props
                 else f"{len(r.brushes)} collision brushes")
-        msg = (f"{what} from {r.kept_regions} flat areas "
-               f"({100 * r.kept_share:.1f}% of the surface; {r.paired_walls} two-sided walls as one brush each); "
-               f"{r.regions - r.kept_regions} small areas and {r.thin} thin strips left out")
+        if eof:
+            info = r.info
+            filled = info["filled"] / max(info["volume"], 1e-9) * 100
+            msg = (f"{what} (Extend-or-Fill, {info['seconds']:.1f} s)" +
+                   (f"; detail covered over: {filled:.2f}% of the volume" if info["filled"] > 0 else "; exact"))
+            if info["stuck"]:
+                msg += "; some of it couldn't be split into convex pieces: those pieces are their convex hull"
+        else:
+            msg = (f"{what} from {r.kept_regions} flat areas "
+                   f"({100 * r.kept_share:.1f}% of the surface; {r.paired_walls} two-sided walls as one brush each); "
+                   f"{r.regions - r.kept_regions} small areas and {r.thin} thin strips left out")
         if clear:
             msg += f"; {clear} see-through faces (glass, fences) collide but don't block vis"
         if not props and len(r.brushes) > MAX_BRUSHES_WARN:
@@ -213,6 +234,38 @@ class HL_OT_make_collision(bpy.types.Operator):
         if src.hammerless.role == "MODEL" and src.hammerless.model_collision != "NONE":
             self.report({"WARNING"}, f"'{src.name}' still has its own collision: set its Collision to None")
         return {"FINISHED"}
+
+
+    def _extend_or_fill(self, src, co, tri, scale):
+        """The mesh (Blender units) through core/brushfit.py in game units; its pieces back as brushes."""
+        try:
+            from ..core import brushfit
+        except ImportError as e:
+            self.report({"ERROR"}, f"Extend-or-Fill needs its geometry kernel (manifold3d), which didn't load: {e}")
+            return None
+        if len(tri) > 20000:
+            self.report({"WARNING"}, f"'{src.name}' has {len(tri)} triangles: Extend-or-Fill is meant for props; "
+                                     "this may take a while")
+        try:
+            meshes, info = brushfit.convert(co * scale, tri, detail=src.hammerless.brush_detail_depth * scale)
+        except brushfit.NotSolid as e:
+            self.report({"ERROR"}, f"'{src.name}': {e} (or use Slabs)")
+            return None
+        except brushfit.TooBig as e:
+            self.report({"ERROR"}, f"'{src.name}': {e}")
+            return None
+        except Exception as e:                  # (a kernel failure on odd geometry: said plainly, not a traceback)
+            import traceback
+            traceback.print_exc()
+            self.report({"ERROR"}, f"'{src.name}': Extend-or-Fill failed ({type(e).__name__}: {e}); try Slabs")
+            return None
+        if not meshes:
+            self.report({"WARNING"}, f"'{src.name}': no pieces made")
+            return None
+        brushes = []
+        for k, (V, T) in enumerate(meshes):
+            brushes.append(((V / scale).tolist(), brushfit.hull_faces(V, T), k))
+        return _Pieces(brushes, info)
 
 
 CLASSES = (HL_OT_make_collision,)

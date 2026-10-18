@@ -12,6 +12,7 @@ blender_version_min = "4.2.0"
 platforms = ["windows-x64"]          # L4D2's map compilers and the native nav library are Windows programs
 
 license = ["SPDX:GPL-3.0-or-later"]
+copyright = ["2026 Hammerless contributors", "manifold3d (bundled in _vendor): Apache-2.0, includes Clipper2 (BSL-1.0)"]
 
 [permissions]
 files = "Write map, texture and compile files; read game archives"

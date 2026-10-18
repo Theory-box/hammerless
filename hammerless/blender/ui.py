@@ -378,13 +378,6 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                 col.prop(hs, "model_mass")
             else:
                 col.prop(hs, "model_collision")
-                if hs.model_kind == "STATIC" and obj.get("hl_collision_of") is None:   # (brushes don't move
-                                                                                        # with a dynamic prop)
-                    row = col.row(align=True)
-                    row.operator("hammerless.make_collision", icon="MOD_SOLIDIFY")
-                    row.prop(hs, "collision_min_area", text="")
-                    col.prop(hs, "collision_mode", expand=True)
-                    col.prop(hs, "collision_blocks_vis")
             if hs.model_kind == "DYNAMIC":
                 col.label(text="Name it (Keyvalues: targetname) to use it from logic", icon="INFO")
 
@@ -530,6 +523,36 @@ class HL_PT_obj_model(_Panel, bpy.types.Panel):
         row = self.layout.row(align=True)
         row.prop(mkv, "value", text="")
         row.operator("hammerless.pick_model", text="", icon="VIEWZOOM")
+
+
+class HL_PT_obj_brushes(_Panel, bpy.types.Panel):
+    """Convert to Brushes: collision brushes (or invisible props) for any mesh."""
+    bl_label = "Convert to Brushes"
+    bl_parent_id = "HL_PT_object"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.object
+        return obj is not None and obj.type == "MESH" and obj.get("hl_collision_of") is None
+
+    def draw(self, context):
+        hs = context.object.hammerless
+        col = _settings(self.layout)
+        col.prop(hs, "brush_algorithm")
+        if hs.brush_algorithm == "EOF":
+            col.prop(hs, "brush_detail_depth")
+        else:
+            col.prop(hs, "collision_min_area")
+        col.prop(hs, "collision_mode", text="As")
+        col.prop(hs, "collision_blocks_vis")
+        row = self.layout.row()
+        row.scale_y = 1.2
+        row.operator("hammerless.make_collision", icon="MOD_SOLIDIFY")
+        if hs.role == "MODEL" and hs.model_kind == "DYNAMIC":
+            _hint(self.layout, "Brushes don't move with a Dynamic prop", icon="ERROR")
+        elif hs.role == "MODEL" and hs.model_collision != "NONE":
+            _hint(self.layout, "Set this model's Collision to None, so it doesn't collide twice")
 
 
 class HL_PT_obj_light(_Panel, bpy.types.Panel):
@@ -1301,7 +1324,7 @@ def _add_menu(self, context):
 
 CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_MT_weather,
            HL_PT_build, HL_PT_problems,
-           HL_PT_object, HL_PT_obj_model, HL_PT_obj_light, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
+           HL_PT_object, HL_PT_obj_model, HL_PT_obj_brushes, HL_PT_obj_light, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
            HL_PT_bake, HL_PT_lighting, HL_PT_view_light, HL_PT_environment, HL_PT_sun, HL_PT_fog, HL_PT_light_quality,
            HL_PT_light_advanced,
            HL_PT_visibility, HL_PT_navmesh, HL_PT_view_nav, HL_PT_sound, HL_PT_control_volumes, HL_PT_director,

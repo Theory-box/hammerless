@@ -1200,6 +1200,88 @@ def test_combat_nodes_compile():
     assert script.count("::HL_Trace <-") == 1, "a helper is written once"
 
 
+def test_convert_to_brushes_extend_or_fill():
+    # Convert to Brushes, Extend-or-Fill: an L-shaped solid becomes 2 convex brushes covering it exactly (one
+    # object, two loose parts); a shallow groove is covered at the default Detail and cut around at Detail 0; an
+    # open mesh (a plane) is refused with a message instead of guessed at
+    import bmesh
+    from mathutils import Matrix
+    from hammerless.blender.collisiontool import OF
+    reset_scene()
+
+    def solid(name, boxes, cut=None):
+        objs = []
+        for lo, hi in boxes:
+            bpy.ops.mesh.primitive_cube_add(size=1, location=[(a + b) / 2 for a, b in zip(lo, hi)])
+            o = bpy.context.object
+            o.scale = [b - a for a, b in zip(lo, hi)]
+            bpy.ops.object.transform_apply(scale=True)
+            objs.append(o)
+        base = objs[0]
+        for o in objs[1:] + ([cut] if cut else []):
+            m = base.modifiers.new("b", "BOOLEAN")
+            m.operation = "DIFFERENCE" if o is cut else "UNION"
+            m.object, m.solver = o, "EXACT"
+            bpy.context.view_layer.objects.active = base
+            bpy.ops.object.modifier_apply(modifier=m.name)
+            bpy.data.objects.remove(o)
+        base.name = name
+        return base
+
+    def press(obj):
+        bpy.context.view_layer.objects.active = obj
+        res = bpy.ops.hammerless.make_collision()
+        return res, [o for o in bpy.data.objects if o.get(OF) == obj.name]
+
+    def parts(o):
+        bm = bmesh.new()
+        bm.from_mesh(o.data)
+        seen, out = set(), 0
+        for v in bm.verts:
+            if v.index in seen:
+                continue
+            out += 1
+            stack = [v]
+            while stack:
+                x = stack.pop()
+                if x.index in seen:
+                    continue
+                seen.add(x.index)
+                stack += [e.other_vert(x) for e in x.link_edges]
+        vol = bm.calc_volume(signed=False)
+        bm.free()
+        return out, vol
+
+    L = solid("L", [((0, 0, 0), (4, 1, 1)), ((0, 0, 0), (1, 3, 1))])
+    L.hammerless.brush_algorithm = "EOF"
+    res, made = press(L)
+    assert res == {"FINISHED"} and len(made) == 1 and made[0].hammerless.role == "BRUSH", (res, made)
+    n, vol = parts(made[0])
+    assert n == 2, n
+    assert abs(vol - (4 + 2)) < 1e-3, vol                     # (exact: the L's 6 m3)
+    # a groove 0.06 m deep (3 game units) on a block: covered at the default Detail (8 units), cut at 0
+    bpy.ops.mesh.primitive_cube_add(size=1, location=(10, 0.03, 1.0))
+    g = bpy.context.object
+    g.scale = (0.3, 0.06, 2.2)
+    bpy.ops.object.transform_apply(scale=True)
+    block = solid("Block", [((9, 0, 0), (11, 2, 2))], cut=g)
+    block.hammerless.brush_algorithm = "EOF"
+    res, made = press(block)
+    assert res == {"FINISHED"} and parts(made[0])[0] == 1, parts(made[0])
+    block.hammerless.brush_detail_depth = 0.0
+    res, made = press(block)
+    assert res == {"FINISHED"} and parts(made[0])[0] >= 3, parts(made[0])
+    # an open mesh: refused
+    bpy.ops.mesh.primitive_plane_add(location=(20, 0, 0))
+    plane = bpy.context.object
+    plane.hammerless.brush_algorithm = "EOF"
+    try:
+        res, made = press(plane)
+    except RuntimeError:
+        res, made = {"CANCELLED"}, []
+    assert res == {"CANCELLED"} and not made, (res, made)
+
+
 def test_custom_models_extract():
     # Custom Model meshes: linked copies share one model, each copy is a prop where the object is
     from mathutils import Vector
@@ -2315,6 +2397,7 @@ def test_make_collision_modes():
     house.hammerless.role = "MODEL"
     house.hammerless.model_collision = "NONE"
     house.hammerless.collision_min_area = 0.0
+    house.hammerless.brush_algorithm = "SLABS"      # (this test is the Slabs method's)
 
     def press():
         bpy.context.view_layer.objects.active = house
