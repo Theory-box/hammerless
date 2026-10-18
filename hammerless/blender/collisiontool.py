@@ -281,7 +281,9 @@ class HL_OT_make_collision(bpy.types.Operator):
                            else "too detailed for Extend-or-Fill")
             if meshes is None:
                 left = organicfit.TIME_LIMIT - (time.time() - t0 if algo == "AUTO" else 0.0)
-                meshes, info = organicfit.convert(co * scale, tri, detail=max(detail, 0.5),
+                size = float(np.linalg.norm(co.max(axis=0) - co.min(axis=0))) * scale
+                fit = max(size * hs.brush_fit / 100.0, 0.5)          # (Fit: a share of the object's diagonal)
+                meshes, info = organicfit.convert(co * scale, tri, detail=fit,
                                                   max_pieces=hs.brush_max_pieces, time_limit=max(left, 20.0))
                 info["method"], info["why"] = "Organic", why
         except brushfit.NotSolid as e:

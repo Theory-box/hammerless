@@ -385,16 +385,19 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
                                   "solid. Experimental: noisy meshes can give extra pieces, and glass isn't kept out of "
                                   "Blocks Vis yet"),
         ("ORGANIC", "Organic", "For curved, sculpted or scanned meshes (rocks, creatures, stumps): few convex pieces "
-                               "cut from the solid, each within Detail of the mesh (no point of its collision more "
-                               "than Detail from the surface), at most Max Pieces. The mesh must be a closed solid. "
+                               "cut from the solid, each within Fit of the mesh (no point of its collision farther "
+                               "from the surface than Fit, a share of the object's size), at most Max Pieces. The mesh must be a closed solid. "
                                "Experimental; glass isn't kept out of Blocks Vis yet"),
         ("SLABS", "Slabs", "One thin slab behind each flat area (the earlier Make Collision): for big shells like a "
                            "house, any mesh, closed or not")])
     brush_detail_depth: FloatProperty(
         name="Detail", default=0.1524, min=0.0, soft_max=0.5, subtype="DISTANCE", unit="LENGTH",
         description="Extend-or-Fill: pockets at most this deep (grooves, hand-holds, notches) are covered over "
-                    "instead of cut around (default 8 game units). 0: everything exact. Organic: how far the "
-                    "collision may stand off the mesh (smaller: tighter, more pieces; at least half a game unit)")
+                    "instead of cut around (default 8 game units). 0: everything exact")
+    brush_fit: FloatProperty(
+        name="Fit", default=2.5, min=0.25, soft_max=10.0, max=50.0, subtype="PERCENTAGE", precision=1,
+        description="Organic: how far the collision may stand off the mesh, as a share of the object's size (its "
+                    "diagonal), so a pebble and a statue come out alike. Smaller: tighter, more pieces")
     brush_max_pieces: IntProperty(
         name="Max Pieces", default=32, min=2, max=256,
         description="Organic: at most this many pieces. Fewer pieces fit more loosely")

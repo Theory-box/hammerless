@@ -1364,7 +1364,7 @@ def test_convert_to_brushes_organic():
         return len(out), max(len(g) for g in out), total
 
     base.hammerless.brush_algorithm = "ORGANIC"
-    base.hammerless.brush_detail_depth = 0.0762            # (4 game units)
+    base.hammerless.brush_fit = 2.0                        # (of the 4.4 m diagonal: about 4.6 game units)
     res, made = press()
     assert res == {"FINISHED"} and len(made) == 1, (res, made)
     n, most_sides, total = pieces(made[0])
