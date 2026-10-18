@@ -931,13 +931,16 @@ def hull_faces(V, T):
     """A convex piece's faces as polygons: its coplanar triangles merged, each face's corners in order (wound
     outward like the triangles)."""
     n, area = tri_normals(V, T)
+    size = float(np.linalg.norm(V.max(axis=0) - V.min(axis=0))) if len(V) else 1.0
+    eps = 1e-5 * size + 1e-6
     groups = []
-    for t in np.argsort(-area):
+    for t in np.argsort(-area):              # (big triangles first: they set each face's plane)
         if area[t] < 1e-12:
             continue
         d = float(np.dot(n[t], V[T[t][0]]))
         for g in groups:
-            if np.dot(g[0], n[t]) > 1 - 1e-6 and abs(g[1] - d) < 1e-4:
+            # (a sliver triangle's own normal is noise: it joins a face when its corners lie on that face's plane)
+            if np.dot(g[0], n[t]) > 0.9 and np.max(np.abs(V[T[t]] @ g[0] - g[1])) < eps:
                 g[2].append(t)
                 break
         else:
@@ -949,6 +952,27 @@ def hull_faces(V, T):
         u = V[idx[0]] - c
         u /= np.linalg.norm(u) or 1.0
         v = np.cross(nrm, u)
-        ang = np.arctan2((V[idx] - c) @ v, (V[idx] - c) @ u)
-        faces.append([int(idx[k]) for k in np.argsort(ang)])
+        ring = _outline(np.c_[(V[idx] - c) @ u, (V[idx] - c) @ v], eps)
+        if len(ring) >= 3:
+            faces.append([int(idx[k]) for k in ring])
     return faces
+
+
+def _outline(P, eps):
+    """Indices of the 2D points' convex outline, counter-clockwise (monotone chain): a corner inside the face or
+    on a straight stretch of its edge is left out, so a face never folds over itself."""
+    order = sorted(range(len(P)), key=lambda k: (P[k][0], P[k][1]))
+
+    def turn(o, a, b):
+        return (P[a][0] - P[o][0]) * (P[b][1] - P[o][1]) - (P[a][1] - P[o][1]) * (P[b][0] - P[o][0])
+    tol = eps * eps
+    lower, upper = [], []
+    for k in order:
+        while len(lower) >= 2 and turn(lower[-2], lower[-1], k) <= tol:
+            lower.pop()
+        lower.append(k)
+    for k in reversed(order):
+        while len(upper) >= 2 and turn(upper[-2], upper[-1], k) <= tol:
+            upper.pop()
+        upper.append(k)
+    return lower[:-1] + upper[:-1]

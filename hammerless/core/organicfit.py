@@ -28,6 +28,7 @@ from .brushfit import Manifold, NotSolid, arrays, solids, to_manifold, tri_norma
 
 MAX_PIECES = 32
 MAX_SIDES = 64              # faces per piece (a curved hull has hundreds: its face directions in 64 groups)
+SLIVER = 2.0                # units: a piece thinner than this is a sliver (it joins a neighbour)
 TIME_LIMIT = 60.0           # seconds: past this every piece left is finished as it is (its hull)
 GRID_SHIFT = np.array([0.2345, 0.3456, 0.4567])   # (voxels: on an integer grid, rays along exact edges miscount)
 
@@ -282,7 +283,7 @@ def split(p, n, d):
     for q, sg in parts:
         Vq, _ = arrays(q)
         ext = float((Vq @ n).max() - (Vq @ n).min())
-        (crumbs if q.volume() < 0.01 * p.vol and ext < D else big).append((q, sg))
+        (crumbs if q.volume() < 0.05 * p.vol and ext < max(D, SLIVER) else big).append((q, sg))
     if len(big) < 2:
         return None
     masked = side_masks(p, n, d, big + crumbs)
@@ -435,6 +436,42 @@ def fewer_sides(hull, max_sides):
     return out if out.volume() >= hull.volume() * (1 - 1e-6) else box
 
 
+def thinnest(p):
+    """The piece's smallest width across its hull's face directions."""
+    if len(p.N) == 0:
+        return 0.0
+    Vh, _ = arrays(p.hull)
+    w = Vh @ p.N.T
+    return float((w.max(axis=0) - w.min(axis=0)).min())
+
+
+def join_slivers(done):
+    """A piece thinner than SLIVER (a hair-thin leftover between two cuts) joins the touching neighbour whose
+    joined hull adds the least air, whatever Detail says: a sliver brush is worse than a little air."""
+    changed = True
+    while changed:
+        changed = False
+        for i, p in enumerate(done):
+            if thinnest(p) >= SLIVER:
+                continue
+            best = None
+            for j, q in enumerate(done):
+                if j == i or p.m.min_gap(q.m, 0.5) > 0.25:
+                    continue
+                m = p.m + q.m
+                added = m.hull().volume() - m.volume() - p.air - q.air
+                if best is None or added < best[0]:
+                    best = (added, j, m)
+            if best is None:
+                continue
+            _a, j, m = best
+            joined = Piece(m, *union_mask(p, done[j]), check=False)
+            done = [x for k, x in enumerate(done) if k not in (i, j)] + [joined]
+            changed = True
+            break
+    return done
+
+
 def convert(V, T, detail=4.0, max_pieces=MAX_PIECES, time_limit=None, cancel=None, max_sides=MAX_SIDES):
     """Mesh (game units) -> convex pieces [(corners, triangles)] and info (pieces, seconds, air, volume, cuts,
     stopped). Raises NotSolid (not a closed solid / inside out)."""
@@ -474,6 +511,7 @@ def convert(V, T, detail=4.0, max_pieces=MAX_PIECES, time_limit=None, cancel=Non
             heapq.heappush(heap, (-q.air, uid, q))
             uid += 1
     done = merge_pass(done, t0 + limit * 1.25)
+    done = join_slivers(done)
     meshes, total = [], 0.0
     for p in done:
         h = fewer_sides(p.hull, max_sides)
