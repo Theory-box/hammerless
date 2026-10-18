@@ -331,7 +331,40 @@ def candidates(p):
         e[ax] = 1.0
         for f in (0.25, 0.5, 0.75):
             out.append(("blind", e, float(lo[ax] + f * (hi[ax] - lo[ax])), False))
-    return out
+    return out + snapped(p, out)
+
+
+def snapped(p, cuts):
+    """Each cut nearly along one of the piece's own faces (within 2 degrees, and near it) also tried exactly on that
+    face: a cut a little off the underside of a beam leaves a thin slice of the beam on the post below, and the
+    post's hull grows a slanted wedge. On the face, the post stays a box."""
+    V, T = p.V, p.T
+    n_t, area = tri_normals(V, T)
+    ok = area > 1e-9
+    if not ok.any():
+        return []
+    n_t = n_t[ok]
+    d_t = np.einsum("ij,ij->i", n_t, V[T[ok, 0]])
+    q = np.c_[np.round(n_t * 1000).astype(np.int64), np.round(d_t / 0.05).astype(np.int64)]
+    _u, first = np.unique(q, axis=0, return_index=True)
+    Nf, Df = n_t[first], d_t[first]
+    reach = 2.0 * max(G["D"], SLIVER)
+    cos2 = np.cos(np.radians(2.0))
+    out = []
+    for kind, n, d, _peel in cuts:
+        c = Nf @ n
+        for k in np.nonzero(np.abs(c) > cos2)[0]:
+            sign = 1.0 if c[k] > 0 else -1.0
+            nn, dd = sign * Nf[k], sign * float(Df[k])
+            if abs(dd - d) <= reach and (abs(dd - d) > 1e-6 or np.dot(nn, n) < 1 - 1e-9):
+                out.append(("snap-" + kind, nn, dd, True))
+    seen, uniq = set(), []                 # (one of each plane)
+    for c in out:
+        key = (tuple(np.round(c[1], 5)), round(c[2], 4))
+        if key not in seen:
+            seen.add(key)
+            uniq.append(c)
+    return uniq
 
 
 def best_cut(p, budget):

@@ -305,7 +305,11 @@ class HL_OT_make_collision(bpy.types.Operator):
                 V, T = brushfit.arrays(organicfit.fewer_sides(brushfit.Manifold.hull_points(V.tolist()),
                                                               organicfit.MAX_SIDES))
                 faces = brushfit.hull_faces(V, T)
-            brushes.append(((V / scale).tolist(), faces, k))
+            # (only the corners the faces use: one inside a face or on a straight edge would be a loose point)
+            used = sorted({i for f in faces for i in f})
+            remap = {i: j for j, i in enumerate(used)}
+            faces = [[remap[i] for i in f] for f in faces]
+            brushes.append(((V[used] / scale).tolist(), faces, k))
         info["capped"] = capped
         return _Pieces(brushes, info)
 
