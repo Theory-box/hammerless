@@ -158,6 +158,9 @@ def setup(V, T, D):
     size = float(np.linalg.norm(V.max(0) - V.min(0)))
     # (Detail/4, but never finer than size/200: at most about 10 million voxels, a few seconds per distance map)
     h = max(min(D / 4.0, size / 150), size / 200)
+    # (Fit can't be finer than the voxels measure: below 2 voxels nearly every empty voxel reads as "too far", and a
+    #  finish check tests millions of them - a statue's body at Fit 0.25% took minutes per step)
+    D = max(D, 2.0 * h)
     pad = 2 * D + 4 * h
     lo = V.min(0) - pad + h * GRID_SHIFT
     shape = np.ceil((V.max(0) + pad - lo) / h).astype(int) + 1
@@ -484,6 +487,9 @@ def _scores(p, cands):
     t = time.time()
     out = []
     for _kind, n, d, _pk in cands:
+        if time.time() > G.get("deadline", float("inf")):       # (out of time: the rest aren't tried)
+            out.append((None, None))
+            continue
         parts = split(p, n, d)
         out.append((None if parts is None else [(q.vol, q.air) for q in parts], parts))
     G["cut_time"] = G.get("cut_time", 0.0) + time.time() - t
@@ -662,6 +668,7 @@ def convert(V, T, detail=4.0, max_pieces=MAX_PIECES, time_limit=None, cancel=Non
         meshes += ms
         for k in ("air", "volume", "cuts"):
             info[k] += inf[k]
+        info["fit"] = max(info.get("fit", 0.0), inf.get("fit", 0.0))
         info["stopped"] |= inf["stopped"]
     info.update(pieces=len(meshes), seconds=time.time() - t0, parts=len(parts))
     return meshes, info
@@ -680,6 +687,7 @@ def _convert_one(V, T, detail, max_pieces, limit, cancel, max_sides):
     if model.volume() <= 0:
         raise NotSolid("the mesh is inside out (its normals point inward): recalculate normals outside first")
     setup(V, T, D)
+    G["deadline"] = t0 + limit
     heap, done, uid, cuts, stopped = [], [], 0, 0, False
     for s in solids(model):
         p = Piece(s, np.zeros(3, int), G["occ"])
@@ -717,4 +725,5 @@ def _convert_one(V, T, detail, max_pieces, limit, cancel, max_sides):
             meshes.append((Vh, Th))
             total += h.volume()
     return meshes, dict(pieces=len(meshes), seconds=time.time() - t0, air=max(0.0, total - model.volume()),
+                        fit=G["D"],
                         volume=model.volume(), cuts=cuts, stopped=stopped)

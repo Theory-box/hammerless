@@ -502,7 +502,7 @@ _OPTS: dict = {}
 # candidate cuts tested in this many worker processes (0: here, one after another). Started per conversion (about
 # 0.2 s) and closed after it; past 8 there is little gain (measured 3x at 8, 3.6x at 15 on curved props)
 # (under 4 cores: none, one or two workers lose to their own start-up and copying)
-WORKERS = 0 if (os.cpu_count() or 1) < 4 else min(8, os.cpu_count() - 1)
+WORKERS = 0 if (os.cpu_count() or 1) < 4 else min(8, os.cpu_count() // 2)   # (half the cores at most)
 PARALLEL_FROM = 12          # (only shapes with at least this many creases use them: small ones are instant anyway)
 _POOL = None
 _POOL_SIZE = 0
@@ -535,6 +535,9 @@ def _cut_task(args):
     return out
 
 
+MAX_SHARDS = 64             # a General cut making more separate bits than this is refused
+
+
 def plane_parts(m, n, d, D, sliver, pvol):
     """General's (organicfit) full plane cut of solid m: (big, crumbs) as [(solid, side)], or None if it doesn't
     split it into two real parts. Crumbs - under 5% of the piece's volume and thinner than max(D, sliver) along
@@ -543,7 +546,7 @@ def plane_parts(m, n, d, D, sliver, pvol):
     n = np.asarray(n, float)
     a, b = m.split_by_plane(n.tolist(), float(d))
     parts = [(q, 1) for q in solids(a) if q.volume() > 1e-6] + [(q, -1) for q in solids(b) if q.volume() > 1e-6]
-    if len(parts) < 2:
+    if len(parts) < 2 or len(parts) > MAX_SHARDS:          # (a cut that shatters the piece is a bad cut anyway)
         return None
     big, crumbs = [], []
     for q, sg in parts:
@@ -556,14 +559,15 @@ def plane_parts(m, n, d, D, sliver, pvol):
 
 
 def fold_crumbs(big, crumbs):
-    """The final parts of a plane cut: each crumb joins the biggest part (as it is then). -> (solids, owner)"""
+    """The final parts of a plane cut: the crumbs join the biggest part, in one boolean (a plane through a detailed
+    sculpt cuts off hundreds of bits; joining them one by one was a full boolean each - minutes and gigabytes per
+    step). -> (solids, owner)"""
     ms = [m for m, _ in big]
-    owner = []
-    for cm, _sg in crumbs:
-        j = int(np.argmax([m.volume() for m in ms]))
-        ms[j] = ms[j] + cm
-        owner.append(j)
-    return ms, owner
+    if not crumbs:
+        return ms, []
+    j = int(np.argmax([m.volume() for m in ms]))
+    ms[j] = Manifold.batch_boolean([ms[j]] + [cm for cm, _sg in crumbs], K.OpType.Add)
+    return ms, [j] * len(crumbs)
 
 
 def _organic_task(args):
@@ -641,7 +645,11 @@ def pool(n):
             f"spec = importlib.util.spec_from_file_location({STABLE_NAME!r}, {os.path.abspath(__file__)!r})",
             "mod = importlib.util.module_from_spec(spec)",
             f"sys.modules[{STABLE_NAME!r}] = mod",
-            "spec.loader.exec_module(mod)"])
+            "spec.loader.exec_module(mod)",
+            # (workers run below normal priority: the machine stays usable while they work)
+            "import ctypes, os",
+            "os.name == 'nt' and ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), "
+            "0x4000)"])
         _POOL = concurrent.futures.ProcessPoolExecutor(n, mp_context=ctx, initializer=exec, initargs=(loader, {}))
         _POOL_SIZE = n
     return _POOL

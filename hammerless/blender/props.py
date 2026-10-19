@@ -396,7 +396,7 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
         description="Hard Surface: pockets at most this deep (grooves, hand-holds, notches) are covered over "
                     "instead of cut around (default 8 game units). 0: everything exact")
     brush_fit: FloatProperty(
-        name="Fit", default=2.5, min=0.25, soft_max=10.0, max=50.0, subtype="PERCENTAGE", precision=1,
+        name="Fit", default=2.5, min=1.0, soft_max=10.0, max=50.0, subtype="PERCENTAGE", precision=1,
         description="General: how far the collision may stand off the mesh, as a share of the object's size (its "
                     "diagonal), so a pebble and a statue come out alike. Smaller: tighter, more pieces")
     brush_max_pieces: IntProperty(

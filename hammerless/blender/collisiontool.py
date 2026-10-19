@@ -223,8 +223,10 @@ class HL_OT_make_collision(bpy.types.Operator):
             air = info["air"] / max(info["volume"], 1e-9) * 100
             msg = (f"{what} (General, {info['seconds']:.1f} s{', ' + info['why'] if info.get('why') else ''}); "
                    f"collision beyond the mesh: about {air:.1f}% of its volume")
+            if info.get("raised"):
+                msg += f"; Fit raised to about {info['raised']:.1f}% (the finest this mesh can be measured to)"
             if info["stopped"]:
-                msg += "; it ran out of time, so the last pieces are looser than Detail"
+                msg += "; it ran out of time, so the last pieces are looser than Fit"
             elif info["pieces"] >= src.hammerless.brush_max_pieces:
                 msg += "; it used all of Max Pieces: raise it or Detail for a closer or simpler fit"
         elif eof:
@@ -287,6 +289,8 @@ class HL_OT_make_collision(bpy.types.Operator):
                 meshes, info = organicfit.convert(co * scale, tri, detail=fit,
                                                   max_pieces=hs.brush_max_pieces, time_limit=max(left, 20.0))
                 info["method"], info["why"] = "General", why
+                if info.get("fit", 0.0) > fit * 1.05 and size > 0:
+                    info["raised"] = 100.0 * info["fit"] / size
         except brushfit.NotSolid as e:
             self.report({"ERROR"}, f"'{src.name}': {e} (or use Slabs)")
             return None
