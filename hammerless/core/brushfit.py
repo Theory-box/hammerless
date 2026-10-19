@@ -207,13 +207,27 @@ def section(m, R, height):
 
 
 def solids(m):
-    """The separate solids of m (decompose() returns a hollow's inner surface as its own inside-out shell:
-    each part intersected with m again gets its hollows back)."""
+    """The separate solids of m (decompose() returns a hollow's inner surface as its own inside-out shell, with
+    negative volume: the solid whose box holds it is intersected with m again and gets it back). Dust (parts
+    under 1e-3 units^3) is dropped.
+    (Before, dust too made every solid `q ^ m`: a boolean of a solid with itself, every face coincident - the
+    kernel's worst case, 50 ms on an 8k-triangle sculpt, and it leaves hair-thin tetrahedra behind. Those were
+    dust, so the next cut did it again on every solid, 22 of them: one cut step took 100 s and gigabytes.
+    Manifold.compose can't put a hollow back - it drops an inside-out shell - and a mesh rebuilt from the arrays
+    loses the zero-thickness sheet a cut exactly along a face leaves, which the hull counts: so the boolean stays,
+    for the solids that hold a hollow.)"""
     parts = m.decompose()
-    comps = [q for q in parts if q.volume() > 1e-3]
-    if len(comps) == len(parts):
+    vols = [q.volume() for q in parts]
+    comps = [q for q, v in zip(parts, vols) if v > 1e-3]
+    hollows = [q.bounding_box() for q, v in zip(parts, vols) if v < 0]
+    if not hollows:
         return comps
-    return [q ^ m for q in comps]
+    out = []
+    for q in comps:
+        b = q.bounding_box()
+        holds = any(all(b[i] <= hb[i] + 1e-6 and b[i + 3] >= hb[i + 3] - 1e-6 for i in range(3)) for hb in hollows)
+        out.append(q ^ m if holds else q)
+    return out
 
 
 def extent(m, n) -> float:
