@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.2 (test release, 2026-10-19)
+
+- **Convert to Brushes, General is much faster**: pieces work out their voxels and hull planes only when needed (about 2x), and candidate cuts are scored on several cores (dense meshes about 3x more; a 14,000-triangle Suzanne in Blender: 24 s -> 9 s), with the same result.
+- **General: no more freezes on detailed sculpts** (a user's 10k-triangle statue used to eat all memory and stall the PC; now 59 brushes in 7 s): tiny dust bits a welded sculpt carries no longer trigger a slow repair on every cut; the bits a cut slices off aren't joined one by one; a cut that shatters a piece is refused; a small loose part no longer gets a huge voxel grid; the time limit also applies inside a cut step; worker processes use at most half the cores at below-normal priority.
+- **General: loose parts on their own**: each loose part of the mesh, including overlapping closed meshes in one object and solids joined only at single points, is converted on its own (hollows stay with their shell); Max Pieces is shared out by volume. The message says when parts joined at single points were found.
+- **General: Fit** can't go below what the voxels can measure (the panel minimum is now 1%); the message says when Fit was raised.
+- Fixes: when a cut left several parts on one side, a part could get another part's voxels.
+
 ## 0.20.1 (test release, 2026-10-18)
 
 - **Convert to Brushes**: the Algorithm options are now named for what they're for: **Hard Surface** (Extend-or-Fill) and **General** (was Organic: any closed shape, curved or boxy). Files already set keep their choice.
