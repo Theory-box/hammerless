@@ -595,11 +595,81 @@ def join_slivers(done):
     return done
 
 
+def loose_parts(V, T):
+    """The mesh's loose parts as [(V, T)]: each outer shell with the hollows inside it (a hollow's surface is a loose
+    part of its own, facing inward: negative volume). Overlapping closed meshes in one object are separate parts
+    here - as one mesh the kernel would count their overlap twice and the voxels would read it as outside."""
+    n = len(V)
+    parent = np.arange(n)
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for a, b, c in T:
+        ra, rb, rc = find(a), find(b), find(c)
+        parent[rb] = ra
+        parent[find(rc)] = ra
+    roots = np.array([find(i) for i in range(n)])
+    tri_root = roots[T[:, 0]]
+    shells = []
+    for r in np.unique(tri_root):
+        ts = T[tri_root == r]
+        P0, P1, P2 = V[ts[:, 0]], V[ts[:, 1]], V[ts[:, 2]]
+        vol = float(np.einsum("ij,ij->i", P0, np.cross(P1, P2)).sum() / 6.0)
+        idx = np.unique(ts)
+        shells.append((vol, ts, V[idx].min(0), V[idx].max(0)))
+    outer = [k for k, sh in enumerate(shells) if sh[0] > 0]
+    if len(outer) <= 1:
+        return [(V, T)]
+    groups = {k: [shells[k][1]] for k in outer}
+    for k, (vol, ts, lo, hi) in enumerate(shells):
+        if vol > 0:
+            continue
+        # (a hollow belongs to the smallest outer shell whose box holds it)
+        holders = [j for j in outer if np.all(shells[j][2] <= lo + 1e-6) and np.all(shells[j][3] >= hi - 1e-6)]
+        j = min(holders, key=lambda j: shells[j][0]) if holders else max(outer, key=lambda j: shells[j][0])
+        groups[j].append(ts)
+    out = []
+    for k in outer:
+        ts = np.vstack(groups[k])
+        idx, inv = np.unique(ts, return_inverse=True)
+        out.append((V[idx], inv.reshape(-1, 3)))
+    return out
+
+
 def convert(V, T, detail=4.0, max_pieces=MAX_PIECES, time_limit=None, cancel=None, max_sides=MAX_SIDES):
     """Mesh (game units) -> convex pieces [(corners, triangles)] and info (pieces, seconds, air, volume, cuts,
-    stopped). Raises NotSolid (not a closed solid / inside out)."""
+    stopped). Raises NotSolid (not a closed solid / inside out). Each loose part is converted on its own (Max
+    Pieces shared out by volume, at least 2 each)."""
     t0 = time.time()
     limit = TIME_LIMIT if time_limit is None else time_limit
+    V, T = weld(np.asarray(V, float), np.asarray(T, int))
+    parts = loose_parts(V, T)
+    if len(parts) == 1:
+        return _convert_one(V, T, detail, max_pieces, limit, cancel, max_sides)
+    vols = []
+    for Vp, Tp in parts:
+        P0, P1, P2 = Vp[Tp[:, 0]], Vp[Tp[:, 1]], Vp[Tp[:, 2]]
+        vols.append(abs(float(np.einsum("ij,ij->i", P0, np.cross(P1, P2)).sum() / 6.0)))
+    total = sum(vols) or 1.0
+    meshes, info = [], dict(pieces=0, seconds=0.0, air=0.0, volume=0.0, cuts=0, stopped=False)
+    for (Vp, Tp), v in sorted(zip(parts, vols), key=lambda x: -x[1]):
+        cap = max(2, int(round(max_pieces * v / total)))
+        left = max(limit - (time.time() - t0), 1.0)
+        ms, inf = _convert_one(Vp, Tp, detail, cap, left, cancel, max_sides)
+        meshes += ms
+        for k in ("air", "volume", "cuts"):
+            info[k] += inf[k]
+        info["stopped"] |= inf["stopped"]
+    info.update(pieces=len(meshes), seconds=time.time() - t0, parts=len(parts))
+    return meshes, info
+
+
+def _convert_one(V, T, detail, max_pieces, limit, cancel, max_sides):
+    """One loose part (its hollows included) -> convex pieces and info."""
+    t0 = time.time()
     D = max(float(detail), 0.5)
     V, T = weld(np.asarray(V, float), np.asarray(T, int))
     model = to_manifold(V, T)
