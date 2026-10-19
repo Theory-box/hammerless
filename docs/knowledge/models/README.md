@@ -4,12 +4,12 @@ What Hammerless knows about L4D2's model and texture files: the own writer for s
 
 Code: `hammerless/core/models.py` (Custom Models, fingerprints), `mdlwrite.py` (`.mdl`/`.vvd`/`.vtx`), `phywrite.py` (`.phy`), `skeletal.py` (SMD/QC), `gamemodel.py` (reads `.mdl`/`.ani`), `gamemesh.py` (reads `.vvd`/`.vtx`), `textures.py` (VTF/VMT), `vtf_read.py`, `vpk.py`, `content.py` (`GameContent`), `hammerless/blender/extract.py`, `texturing.py`, `preview.py`, `gameskeleton.py`, `placedchar.py`, `examplemodels.py`. Tests: `tests/ingame/test_models.py` (the reference run for the writer), unit tests for the skeletal writer and the pod export (8237803).
 
-Timeline (2026): Custom Models through studiomdl, then the own `.mdl`/`.vvd`/`.vtx` writer and `.phy` (default since) 10-08 (842e605, 619b9d9, 7855d1e); animated models 10-11/12 (93a5952, branch anim-models, 0.14.0); game model reader 9c9a8ff, game skeletons 2b60362, Import Game Mesh 105b828, placed characters (0.14.1, 2026-10-12); loose-material fix 500a493 (2026-10-13); 63-character model names, Check the Map without sampling, the pose cache and shared rig copies e88a0f4 / f57eadf / c29bd02 / 10ea8d0 (0.17.0, 2026-10-13); studiomdl runs in parallel 5865e70 (2026-10-13); copies of a rigged model share one model by content 5d40ae4 (2026-10-14); Make Collision for big models, invisible model materials and Vis Only brushes 0c5a776 .. 43c3707 (2026-10-15, see [collision.md](collision.md)).
+Timeline (2026): Custom Models through studiomdl, then the own `.mdl`/`.vvd`/`.vtx` writer and `.phy` (default since) 10-08 (842e605, 619b9d9, 7855d1e); animated models 10-11/12 (93a5952, branch anim-models, 0.14.0); game model reader 9c9a8ff, game skeletons 2b60362, Import Game Mesh 105b828, placed characters (0.14.1, 2026-10-12); loose-material fix 500a493 (2026-10-13); 63-character model names, Check the Map without sampling, the pose cache and shared rig copies e88a0f4 / f57eadf / c29bd02 / 10ea8d0 (0.17.0, 2026-10-13); studiomdl runs in parallel 5865e70 (2026-10-13); copies of a rigged model share one model by content 5d40ae4 (2026-10-14); Make Collision for big models, invisible model materials and Vis Only brushes 0c5a776 .. 43c3707 (2026-10-15); Convert to Brushes with Extend-or-Fill 92b17b9 (0.19.0) and Organic plus Auto 50538a9 .. efcacb5 (0.20.0, 2026-10-18), see [collision.md](collision.md).
 
 | Page | What it covers |
 |---|---|
 | this README | The model writer, animated models, the game's models decoded, skeletons and placed characters, textures and materials, limits |
-| [collision.md](collision.md) | Collision for big Custom Models (Make Collision: the slab method, Brushes or Props, the measured frame rates, what was tried and dropped), invisible model materials (`toolsnodraw` / `toolsinvisible`), Vis Only brushes, why Source worlds are brushes |
+| [collision.md](collision.md) | Collision from meshes (Convert to Brushes: the Algorithm dropdown with Auto / Extend-or-Fill / Organic / Slabs, the slab method, Organic's cut-and-check method and its benchmark, Brushes or Props, the measured frame rates, what was tried and dropped), invisible model materials (`toolsnodraw` / `toolsinvisible`), Vis Only brushes, why Source worlds are brushes |
 
 ## The own model writer (static, dynamic, physics props)
 
@@ -123,7 +123,8 @@ Placed characters (`placedchar.py`): a `prop_dynamic` of the game's model loopin
 | Packing models and textures with the map | not done |
 | `.phy` ragdoll per bone (a common-skeleton model gets the commons' ragdoll from the game's library) | not done |
 | Collision of animated models = rest shape or none | known |
-| Collision of a big static model (a house): Make Collision, as brushes or props of <= 20 pieces | done (2026-10-15); see [collision.md](collision.md) |
+| Collision of a big static model (a house): Convert to Brushes, Slabs, as brushes or props of <= 20 pieces | done (2026-10-15); see [collision.md](collision.md) |
+| Collision of a closed solid (props, rocks, creatures): Convert to Brushes, Extend-or-Fill (exact, hard surfaces) or Organic (within Fit, at most Max Pieces); Auto picks | done, experimental (0.19.0 / 0.20.0, 2026-10-18); see [collision.md](collision.md) |
 | Flexes (faces) | not done |
 | Survivor puppet trick as a feature | not done |
 | Meshes without UVs get zero texture coordinates | known |
@@ -132,4 +133,4 @@ Placed characters (`placedchar.py`): a `prop_dynamic` of the game's model loopin
 | Animation sampling of rigs with constraints or drivers (not cached): ~0.6 s per model per frame set on a big map | known (by design; see the pose cache above) |
 | Enemies on bot bodies (precache rule: the map must precache any model given with `SetModel`) | see [../logic/](../logic/README.md) |
 
-Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the Animation Preview row and the pod re-check; the rest 2026-10-15 against a2d00a3).
+Last checked: 2026-10-18 against branch test-combined, commit efcacb5 (the Convert to Brushes rows; the Animation Preview row and the pod re-check 2026-10-16 against 18c2ce4; the rest 2026-10-15 against a2d00a3).

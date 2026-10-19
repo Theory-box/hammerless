@@ -1,8 +1,8 @@
-# Collision for big Custom Models: Make Collision, invisible materials, Vis Only brushes
+# Collision from meshes: Convert to Brushes (Extend-or-Fill, Organic, Slabs), invisible materials, Vis Only brushes
 
-What Hammerless knows about giving a big Custom Model (an archviz house used as one prop: single-sided, unclosed surfaces, tens of thousands of triangles) collision the game can afford. The feature is *Make Collision* on a static Custom Model's panel (2026-10-15, commits 0c5a776 .. 43c3707); the facts here are the method, what was measured in the game, what was tried first and why it was dropped, and the two things built alongside it: invisible model materials and Vis Only brushes (the compiler side of those is in [../compilers/what-ours-do.md](../compilers/what-ours-do.md) and [../vis/](../vis/README.md)). User-facing: `CHANGELOG.md` 0.17.0 entry "Make Collision".
+What Hammerless knows about giving a mesh collision the game can afford. The feature began as *Make Collision* on a static Custom Model's panel for an archviz house used as one prop (single-sided, unclosed surfaces, tens of thousands of triangles; 2026-10-15, commits 0c5a776 .. 43c3707) and became *Convert to Brushes* on the Selected Object panel, for any mesh, with an *Algorithm* dropdown (0.19.0 / 0.20.0, 2026-10-18: Extend-or-Fill and Organic for closed solids, Slabs = the earlier method). The facts here are each method, what was measured, what was tried first and why it was dropped, and the two things built alongside: invisible model materials and Vis Only brushes (the compiler side of those is in [../compilers/what-ours-do.md](../compilers/what-ours-do.md) and [../vis/](../vis/README.md)). User-facing: `CHANGELOG.md` 0.17.0 "Make Collision", 0.19.0 and 0.20.0 "Convert to Brushes".
 
-Code: `hammerless/core/slabcollision.py` (`slab_brushes`, the method), `hammerless/blender/collisiontool.py` (`HL_OT_make_collision`, the objects it makes), `hammerless/blender/props.py` (`collision_min_area`, `collision_mode`, `collision_blocks_vis`, the `VIS` Detail choice), `hammerless/core/build.py` (`VIS_ONLY_CLASS`, `solid_geometry`), `native/hlvbsp/map.c` / `write.c` / `phys.c` (`vis_only`, `g_brush_out`, `g_brush_src`), `hammerless/core/models.py` (`_invisible_vmt`, `write_model_materials`), `hammerless/blender/extract.py` (the material -> nodraw mapping), `hammerless/blender/texturing.py` (`selected_targets`, `paint_faces`). Tests: `tests/unit/test_slabcollision.py` (14 hand-made meshes), `tests/blender/run_tests.py` `test_make_collision_modes`, `tests/compile/vis_only_suite.py`.
+Code: `hammerless/core/slabcollision.py` (`slab_brushes`, Slabs), `hammerless/core/brushfit.py` (`convert`, Extend-or-Fill; `hull_faces`, the kernel wrapper over the vendored manifold3d), `hammerless/core/organicfit.py` (`convert`, Organic), `hammerless/blender/collisiontool.py` (`HL_OT_make_collision`, `_solid_pieces` choosing the method, the objects it makes), `hammerless/blender/props.py` (`brush_algorithm`, `brush_detail_depth`, `brush_fit`, `brush_max_pieces`, `collision_min_area`, `collision_mode`, `collision_blocks_vis`, the `VIS` Detail choice), `hammerless/core/build.py` (`VIS_ONLY_CLASS`, `solid_geometry`), `native/hlvbsp/map.c` / `write.c` / `phys.c` (`vis_only`, `g_brush_out`, `g_brush_src`), `hammerless/core/models.py` (`_invisible_vmt`, `write_model_materials`), `hammerless/blender/extract.py` (the material -> nodraw mapping), `hammerless/blender/texturing.py` (`selected_targets`, `paint_faces`). Tests: `tests/unit/test_slabcollision.py` (14 hand-made meshes), `tests/blender/run_tests.py` `test_make_collision_modes`, `tests/compile/vis_only_suite.py`.
 
 The house used throughout ("the user's house"): one joined mesh of about 44,000 triangles, interior and exterior, baked-lighting materials; 224 loose parts, of which one welded shell holds most of the area (1,297 square metres, 8,081 triangles, 11% open edges; closed parts only 8.7% of the area, closed *and* convex parts 1.7%). Measured 2026-10-15 with a scratch diagnostic; those numbers are why per-part ideas were small wins and the method had to work on open surfaces.
 
@@ -48,6 +48,67 @@ The first prototype's coverage check (scratch, 2026-10-15): 1,031 regions of 0.0
 
 Unit tests (`tests/unit/test_slabcollision.py`): a room gives 6 brushes each 1 in thick outside it, a floor's top is exactly the floor, a wall with a doorway 2 to 4 brushes, small regions skipped, a two-sided wall one brush, a wall split by the mesh merges, a gable's top uses convex pieces, a very thin two-sided wall keeps a slab's thickness, a step's tread and riser meet without a lip, a wall 1.5 in off square is one brush, a solid box is one brush, a room is not a solid box, a gable wall's rectangles lie below the slope, faces are wound outward.
 
+## The Algorithm dropdown (Convert to Brushes, 0.19.0 / 0.20.0)
+
+`brush_algorithm` in `props.py`; the choice is made in `collisiontool.py` `_solid_pieces`. Extend-or-Fill and Organic need a closed solid (`brushfit.NotSolid` otherwise, with "or use Slabs"); both run in game units (the mesh scaled by *Units per Meter*) and their pieces come back as brushes through `brushfit.hull_faces`.
+
+| Choice | What runs | Status |
+|---|---|---|
+| Auto (default) | Extend-or-Fill with a 10 s limit; if it raises `TooBig` (over `MAX_CREASES` = 300 inward creases, or the limit), Organic runs with the rest of the 60 s (`organicfit.TIME_LIMIT`, never under 20 s). The message names which ran and, for Organic, why ("too detailed for Extend-or-Fill" / "Extend-or-Fill took too long"). | `done` (50538a9) |
+| Extend-or-Fill | `brushfit.convert`: exact pieces on the mesh's own planes, no overlaps, for hard surfaces; *Detail* (`brush_detail_depth`, a distance, default 0.1524 m = 8 units) is the deepest pocket covered over. Alone it has its own 30 s limit (`brushfit.TIME_LIMIT`) and stops with a message past 300 creases. 12+ creases test candidate cuts in up to 8 worker processes (597df13). | `done`, experimental (92b17b9; measured against CoACD and V-HACD on 12 test props: fewest pieces or tied on every straight-edged one, 0% invisible collision; `CHANGELOG.md` 0.19.0) |
+| Organic | `organicfit.convert`: convex pieces cut from the solid until each is within *Fit* of the mesh; below. | `done`, experimental (50538a9 .. efcacb5) |
+| Slabs | `slab_brushes`, the method above; any mesh, closed or not; *Smallest Face*. | `done` |
+
+### Organic (`organicfit.py`)
+
+Settings: *Fit* (`brush_fit`): the largest allowed distance from any point of the collision to the mesh, as a percentage of the object's diagonal (default 2.5%, min 0.25%; the code calls the resulting distance D). A share of size rather than a distance because Detail as a distance gave one hull on a small Suzanne (5e78a72). *Max Pieces* (`brush_max_pieces`): default 32.
+
+| Step | What it does | Constants |
+|---|---|---|
+| Voxelise once | Grid at D/4, never finer than size/200 (at most about 10 M voxels; `setup`). The grid origin is shifted by a fraction of a voxel (`GRID_SHIFT`): on integer coordinates, parity rays hit edges exactly and left stray solid voxels in hollows. Inside = ray parity along x (`parity_mask`); thin walls get surface voxels (`surface_mask`, points every h/2 over each triangle) but only where no inside voxel is within one voxel; surface voxels everywhere brought every distance a voxel closer and finished pieces early. | `GRID_SHIFT` (0.2345, 0.3456, 0.4567) voxels |
+| Which piece next | The piece with the most air: hull volume minus volume (a heap, `convert`). | |
+| Worst air | `Piece.far`: the exact EDT from every voxel to the nearest solid voxel, its argmax among voxels inside the hull and farther than D. A piece is done when no such voxel exists. | |
+| Candidates (`candidates`, `snapped`) | The 10 mesh face planes nearest the worst-air spot plus the 12 biggest face planes (planes that really cut the piece: the mesh must reach 0.5 units past them both ways); the axes, the piece's SVD axes and the 3 hull-face normals nearest the spot, each through the spot at offsets 0 and ±D; blind cuts at 25/50/75% along each axis; and a snapped copy of every candidate onto a nearby mesh face (within 2°, within 2·max(D, 2 units)), so a post under a beam stays a box instead of taking a wedge (37f302d). | |
+| Choice (`best_cut`) | 1. A **peel** first: a face cut moving at least 15% of the piece's volume into finished, air-free parts (hollows and frames: a dumpster, a window wall). Peels within 1% of the piece's volume of each other are told apart by the air they leave, because rounding flipped near-ties (upm is stored as 52.4900016784668; efcacb5). 2. Else the least total air, each part beyond two paying `need` = max(D³, 2% of the air), and only if it removes at least `need`. 3. Else **halve**: the 2-part cut whose worst part has the least air, when that part is under 75% of the air and the air is at least 8·D³ (curved shells such as a bowl; not a pinhole). | 15%, 1%, 2%, 75%, 8·D³ |
+| Split (`split`) | A full plane cut through the kernel; leftovers both thinner than max(D, 2 units) along the cut and under 5% of the volume fold into the biggest part. Parts of a split on the same side of the plane take side & voxelise(part); otherwise voxels are just sorted by side. | `SLIVER` 2 units |
+| Merge pass | Neighbours (gap under 0.25 units) whose joined piece is still done and adds less than max(D³, 1% of its volume) of air become one. | |
+| Slivers (`join_slivers`) | A piece thinner than 2 units across any hull direction joins the touching neighbour where joining adds the least air, whatever Fit says. | `SLIVER` 2 |
+| 64 sides (`fewer_sides`) | A curved hull has hundreds of facets, each a brush side. Over 64: area-weighted spherical k-means of the facet normals into 58 clusters, each plane pushed out to touch the hull (the piece only grows), intersected with the exact bounding box. Measured 0.4-2.7 points of extra invisible collision on a hand, a rock and Suzanne; keeping the biggest facets instead added 3-10. The operator applies the same cap to Extend-or-Fill pieces. | `MAX_SIDES` 64 |
+| Time limit | Past it, every piece left is finished as its hull (`stopped`; the message says the last pieces are looser than Fit); the merge pass gets 1.25x the limit. | `TIME_LIMIT` 60 s |
+| No scipy | Blender's Python lacks it. The EDT is exact: axis 0 by two sweeps, axes 1 and 2 by a chunked min-plus brute force (`_min_plus`; max error against scipy 8e-7, 0.15 s on 860k voxels). | |
+
+Measured 2026-10-18 at D = 4 units (scratch benchmark; pieces, invisible collision as a share of the volume, time; 0% of the mesh missing everywhere):
+
+| Mesh | Pieces | Invisible | Time |
+|---|---|---|---|
+| hand | 7 | 7.7% | 3.6-6.9 s |
+| rock | 4 | 4.3% | 3 s |
+| blob | 8 | 8.3% | 3 s |
+| stump | 20 | 4.7% | 11 s |
+| Suzanne | 32 (the cap) | 4.4% | 10 s |
+| dumpster | 6 | 2.3% | 3.5 s |
+| window wall | 4 | 0% | 0.6 s |
+
+Suzanne at Fit 2.5%: 21 pieces at about 7.7% at sizes 0.7, 2.7 and 11 m (scale-independent). A thin bowl (radius 50, 1-unit wall, D 8): 25 pieces, not filled solid. At equal piece counts it beat the earlier line-of-sight attempt (Suzanne, 8 pieces: 14.5% vs 16.3-16.8% invisible, 4 s vs 30 s).
+
+### Fixes shared by Extend-or-Fill and Organic (960cef0, 37f302d)
+
+| Fact | Detail |
+|---|---|
+| `brushfit.hull_faces` | A sliver triangle joins a face when its corners lie on that face's plane (its own normal is noise). Before, it made a second, overlapping face on the same plane. |
+| Face outlines | Monotone-chain 2D convex hulls (`_outline`), so a face never folds over itself. |
+| Corners | The operator keeps only the corners the faces use; dropped corners used to show as loose points. |
+
+### Tried for Organic and dropped (2026-10-18; prototypes, benchmarks and scripts were session scratch only)
+
+| Idea | Result | Why dropped |
+|---|---|---|
+| Line-of-sight / weak-convexity spectral clustering (Asafi 2013 style) | useful only while pieces were point-blob hulls; once pieces were cut solids scored by air, an ablation showed the LoS cuts rarely won and cost 10-14 s | dropped |
+| Point blobs (Voronoi assignment, then hull, then trim) | bulgy, overlapping, 100-330 s | slow and loose |
+| Morphological closing as a fill detector | finds gaps, not concavity | wrong measure |
+| Global-hull pockets | Suzanne's whole face is one pocket | too coarse |
+| AO / curvature filters on flat-region creases (Suzanne 457 creases -> 58 region boundaries) | superseded by the cut-and-check method | |
+
 ## Collision As: Brushes or Props
 
 | Choice | What is made | Status |
@@ -75,7 +136,7 @@ Valve-sized props (about 20 pieces, what the game's own props carry: ~40 at most
 | Found by parent | A mesh's collision is its collision children (plus unparented ones made before b6e0a6f, by the `hl_collision_of` name), so a duplicated house (Shift+D with its children) keeps its own and each one's Make Collision replaces only its own set. | `done` (43c3707) |
 | Pressing again | Replaces the previous set, either mode, and keeps the material the previous faces wore (a texture applied by hand, e.g. `tools/toolsinvisible`); the Vis Only object is always nodraw and is not the source of that material. | `done` (d019784) |
 | No skipped-faces object | The first version made `<name> Collision (skipped faces)` (not exported) to show what was left out; it is no longer made, and an old one goes on the next press. | `removed` (fea4007) |
-| Panel | The collision objects show no Make Collision rows of their own (`poll`: an object with `hl_collision_of` can't be a source). The tool warns when the source Custom Model still has its own collision ("set its Collision to None"). | `done` |
+| Panel | Since 0.19.0 the *Convert to Brushes* panel on the Selected Object (any mesh); before, Make Collision on the Custom Model panel. The collision objects show no rows of their own (`poll`: an object with `hl_collision_of` can't be a source). The tool warns when the source Custom Model still has its own collision ("set its Collision to None"). | `done` |
 | Apply to Selected (texture panel) in Object Mode | Replaces all of an object's material slots with the one texture (before 06dbc88 it added a slot). Picking one collision prop targets the whole set: `selected_targets` adds the parent's other collision children (not the Vis Only one, which isn't paintable); `test_make_collision_modes` checks all four props end with the one material and that pressing again keeps it. | `done` (06dbc88, d019784) |
 
 ## Invisible model materials
@@ -132,5 +193,8 @@ Reasoning from the engine's design, not a measurement. In Source, a brush face c
 | Vis Only brushes with Valve's vbsp | not supported (an unknown brush entity; untested) |
 | Vis cost of a house's walls as vis blockers (one house 4.7 s; five houses 290 s on the CPU merged windows, 109 s Tight / 46 s Fast on the GPU since 2026-10-16) | known; see [../vis/](../vis/README.md) and [../vis/gpu-vis.md](../vis/gpu-vis.md) |
 | Vis blockers as a simple sealed shell instead of every piece | discussed 2026-10-16, not built: the blockers should be grid-snapped wall and floor slabs with the openings left open (Valve's world brushes are that shell; `func_detail` and props are the detail), and the collision the detailed set. Expected to give most of the drawing gain for a fraction of the leaves and portals; not measured |
+| Extend-or-Fill and Organic with *Blocks Vis*: see-through faces are not kept out of the blockers (the opaque-only pass runs for Slabs alone, `collisiontool.py`) | known (experimental methods) |
+| Organic in game (frame rate, feel of the pieces) | not measured; the numbers above are from the benchmark only |
+| Organic at Max Pieces: a piece can stay looser than Fit (Suzanne hits the cap of 32 at D = 4) | known; the message says to raise Max Pieces or Fit |
 
-Last checked: 2026-10-16 against branch behaviours, commit 18c2ce4 (the see-through and shell rows; the rest 2026-10-15 against a2d00a3).
+Last checked: 2026-10-18 against branch test-combined, commit efcacb5 (the Algorithm dropdown, Organic, the shared fixes; the see-through and shell rows 2026-10-16 against 18c2ce4; the rest 2026-10-15 against a2d00a3).
