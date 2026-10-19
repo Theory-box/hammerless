@@ -24,9 +24,12 @@ import time
 
 import numpy as np
 
-from .brushfit import Manifold, NotSolid, arrays, solids, to_manifold, tri_normals, weld
+from . import brushfit as _bf
+from .brushfit import Manifold, NotSolid, arrays, fold_crumbs, plane_parts, solids, to_manifold, tri_normals, weld
 
 MAX_PIECES = 32
+POOL_AFTER = 1.0            # seconds of cutting in one process before the worker processes start (small shapes never)
+POOL_WORK = 100_000         # ...or a cut step this big (triangles x candidate cuts, ~0.1 s here): workers at once
 MAX_SIDES = 64              # faces per piece (a curved hull has hundreds: its face directions in 64 groups)
 SLIVER = 2.0                # units: a piece thinner than this is a sliver (it joins a neighbour)
 TIME_LIMIT = 60.0           # seconds: past this every piece left is finished as it is (its hull)
@@ -309,24 +312,11 @@ def side_masks(p, n, d, parts):
 
 def split(p, n, d):
     """Full plane cut; leftovers (tiny and thinner than Detail along n) fold into the biggest part."""
-    D = G["D"]
-    a, b = p.m.split_by_plane(n.tolist(), float(d))
-    parts = [(q, 1) for q in solids(a) if q.volume() > 1e-6] + [(q, -1) for q in solids(b) if q.volume() > 1e-6]
-    if len(parts) < 2:
+    got = plane_parts(p.m, n, d, G["D"], SLIVER, p.vol)
+    if got is None:
         return None
-    big, crumbs = [], []
-    for q, sg in parts:
-        Vq, _ = arrays(q)
-        ext = float((Vq @ n).max() - (Vq @ n).min())
-        (crumbs if q.volume() < 0.05 * p.vol and ext < max(D, SLIVER) else big).append((q, sg))
-    if len(big) < 2:
-        return None
-    ms = [m for m, _ in big]
-    owner = []
-    for cm, _sg in crumbs:
-        j = int(np.argmax([m.volume() for m in ms]))
-        ms[j] = ms[j] + cm
-        owner.append(j)
+    big, crumbs = got
+    ms, owner = fold_crumbs(big, crumbs)
     cache = {}
 
     def masks():                       # (the parts' voxels: worked out once, only if one of them is asked)
@@ -422,32 +412,82 @@ def best_cut(p, budget):
     has the least air, so the pieces keep shrinking."""
     D = G["D"]
     need = max(D ** 3, 0.02 * p.air)
+    cands = candidates(p)
+    scores = _scores(p, cands)          # (per cut: None or [(volume, air)] per part; parts kept when cut here)
+    made = {}
+
+    def parts_of(i):                    # (the real parts of cut i: as scored here, or cut again here)
+        if i not in made:
+            _k, n, d, _pk = cands[i]
+            made[i] = scores[i][1] if scores[i][1] is not None else split(p, n, d)
+        return made[i]
     best, peel, even = None, None, None
-    for kind, n, d, may_peel in candidates(p):
-        parts = split(p, n, d)
-        if parts is None or len(parts) > budget:
+    for i, (kind, n, d, may_peel) in enumerate(cands):
+        info = scores[i][0]
+        if info is None or len(info) > budget:
             continue
-        a = sum(q.air for q in parts) + need * (len(parts) - 2)
+        a = sum(air for _v, air in info) + need * (len(info) - 2)
         if best is None or a < best[0]:
-            best = (a, kind, parts)
-        worst = max(q.air for q in parts)
-        if len(parts) == 2 and (even is None or worst < even[0]):
-            even = (worst, kind, parts)
+            best = (a, kind, i)
+        worst = max(air for _v, air in info)
+        if len(info) == 2 and (even is None or worst < even[0]):
+            even = (worst, kind, i)
         if may_peel:
-            exact = [q for q in parts if q.air <= 0.005 * q.vol + 1e-6]
-            moved = sum(q.vol for q in exact)
+            exact = [k for k, (v, air) in enumerate(info) if air <= 0.005 * v + 1e-6]
+            moved = sum(info[k][0] for k in exact)
             # (peels moving about the same volume - within 1% of the piece - are told apart by the air they leave:
             #  a rounding hair's difference in volume must not pick the one that leaves a curved front on a post)
-            key = (round(moved / (0.01 * p.vol)), -sum(q.air for q in parts))
-            if moved >= 0.15 * p.vol and all(q.done() for q in exact) and (peel is None or key > peel[0]):
-                peel = (key, "peel", parts)
+            key = (round(moved / (0.01 * p.vol)), -sum(air for _v, air in info))
+            if moved >= 0.15 * p.vol and (peel is None or key > peel[0]):
+                parts = parts_of(i)
+                if parts is not None and all(parts[k].done() for k in exact):
+                    peel = (key, "peel", i)
+    pick = None
     if peel is not None:
-        return peel[1], peel[2]
-    if best is not None and p.air - best[0] >= need:
-        return best[1], best[2]
-    if even is not None and even[0] < 0.75 * p.air and p.air >= 8 * D ** 3:   # (a shell's air, not a pinhole's)
-        return "halve", even[2]
-    return None
+        pick = peel
+    elif best is not None and p.air - best[0] >= need:
+        pick = best
+    elif even is not None and even[0] < 0.75 * p.air and p.air >= 8 * D ** 3:   # (a shell's air, not a pinhole's)
+        pick = (even[0], "halve", even[2])
+    if pick is None:
+        return None
+    parts = parts_of(pick[2])
+    return (pick[1], parts) if parts is not None else None
+
+
+def _scores(p, cands):
+    """Every candidate cut's parts as [(volume, air)] - in worker processes once cutting has taken a while (they
+    only score; the chosen cut is made again here), else here, keeping the parts. -> [(info, parts or None)]"""
+    ex = None
+    work = len(p.T) * len(cands)        # (triangles x cuts: a 40k-triangle piece is worth it from the first cut)
+    if _bf.WORKERS > 1 and len(cands) >= 16 and not _bf._BROKEN[0] and             (work > POOL_WORK or G.get("cut_time", 0.0) > POOL_AFTER):
+        ex = _bf.pool(_bf.WORKERS)
+    if ex is not None:
+        from concurrent.futures.process import BrokenProcessPool
+        V, T = p.V, p.T
+        n_chunks = min(len(cands), _bf.WORKERS)          # (one chunk per worker: the mesh goes over once each)
+        chunks = [list(range(k, len(cands), n_chunks)) for k in range(n_chunks)]
+        try:
+            with _bf._NoMain():
+                futs = [ex.submit(_bf._organic_task, (V, T, [(cands[i][1], cands[i][2]) for i in ch], G["D"], SLIVER,
+                                                      p.vol)) for ch in chunks]
+            got = [f.result() for f in futs]
+            out = [None] * len(cands)
+            for ch, res in zip(chunks, got):
+                for i, info in zip(ch, res):
+                    out[i] = (info, None)
+            return out
+        except BrokenProcessPool as e:
+            print(f"General: worker processes failed ({e}); carrying on in one process")
+            _bf._BROKEN[0] = True
+            _bf.shutdown_pool()
+    t = time.time()
+    out = []
+    for _kind, n, d, _pk in cands:
+        parts = split(p, n, d)
+        out.append((None if parts is None else [(q.vol, q.air) for q in parts], parts))
+    G["cut_time"] = G.get("cut_time", 0.0) + time.time() - t
+    return out
 
 
 def union_mask(p, q):
@@ -575,24 +615,28 @@ def convert(V, T, detail=4.0, max_pieces=MAX_PIECES, time_limit=None, cancel=Non
         p = Piece(s, np.zeros(3, int), G["occ"])
         heapq.heappush(heap, (-p.air, uid, p))
         uid += 1
-    while heap:
-        _neg, _u, p = heapq.heappop(heap)
-        if time.time() - t0 > limit or (cancel is not None and cancel()):
-            stopped = True
-            done.append(p)
-            continue
-        budget = max_pieces - (len(done) + len(heap))
-        if budget < 2 or p.done():
-            done.append(p)
-            continue
-        best = best_cut(p, budget)
-        if best is None:
-            done.append(p)
-            continue
-        cuts += 1
-        for q in best[1]:
-            heapq.heappush(heap, (-q.air, uid, q))
-            uid += 1
+    _bf._BROKEN[0] = False
+    try:
+        while heap:
+            _neg, _u, p = heapq.heappop(heap)
+            if time.time() - t0 > limit or (cancel is not None and cancel()):
+                stopped = True
+                done.append(p)
+                continue
+            budget = max_pieces - (len(done) + len(heap))
+            if budget < 2 or p.done():
+                done.append(p)
+                continue
+            best = best_cut(p, budget)
+            if best is None:
+                done.append(p)
+                continue
+            cuts += 1
+            for q in best[1]:
+                heapq.heappush(heap, (-q.air, uid, q))
+                uid += 1
+    finally:
+        _bf.shutdown_pool()             # (no idle processes left behind)
     done = merge_pass(done, t0 + limit * 1.25)
     done = join_slivers(done)
     meshes, total = [], 0.0

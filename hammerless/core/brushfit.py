@@ -535,6 +535,52 @@ def _cut_task(args):
     return out
 
 
+def plane_parts(m, n, d, D, sliver, pvol):
+    """General's (organicfit) full plane cut of solid m: (big, crumbs) as [(solid, side)], or None if it doesn't
+    split it into two real parts. Crumbs - under 5% of the piece's volume and thinner than max(D, sliver) along
+    n - fold into a big part. Here (not in organicfit) so worker processes, which load this file alone, run the
+    same code."""
+    n = np.asarray(n, float)
+    a, b = m.split_by_plane(n.tolist(), float(d))
+    parts = [(q, 1) for q in solids(a) if q.volume() > 1e-6] + [(q, -1) for q in solids(b) if q.volume() > 1e-6]
+    if len(parts) < 2:
+        return None
+    big, crumbs = [], []
+    for q, sg in parts:
+        Vq, _ = arrays(q)
+        ext = float((Vq @ n).max() - (Vq @ n).min())
+        (crumbs if q.volume() < 0.05 * pvol and ext < max(D, sliver) else big).append((q, sg))
+    if len(big) < 2:
+        return None
+    return big, crumbs
+
+
+def fold_crumbs(big, crumbs):
+    """The final parts of a plane cut: each crumb joins the biggest part (as it is then). -> (solids, owner)"""
+    ms = [m for m, _ in big]
+    owner = []
+    for cm, _sg in crumbs:
+        j = int(np.argmax([m.volume() for m in ms]))
+        ms[j] = ms[j] + cm
+        owner.append(j)
+    return ms, owner
+
+
+def _organic_task(args):
+    """In a worker: General's candidate cuts of one piece, scored only: per cut None or [(volume, air)] per part."""
+    V, T, cuts, D, sliver, pvol = args
+    m = to_manifold64(V, T)
+    out = []
+    for n, d in cuts:
+        got = plane_parts(m, n, d, D, sliver, pvol)
+        if got is None:
+            out.append(None)
+            continue
+        ms, _owner = fold_crumbs(*got)
+        out.append([(q.volume(), max(0.0, q.hull().volume() - q.volume())) for q in ms])
+    return out
+
+
 STABLE_NAME = "hl_brushfit"   # (this module's name in the workers: an installed add-on's own module path,
 #                               bl_ext.<repo>.hammerless..., exists only inside Blender)
 
@@ -603,7 +649,7 @@ def pool(n):
 def shutdown_pool():
     global _POOL, _POOL_SIZE
     if _POOL is not None:
-        _POOL.shutdown(cancel_futures=True)
+        _POOL.shutdown(wait=False, cancel_futures=True)     # (the workers exit on their own: waiting took ~3 s)
     _POOL, _POOL_SIZE = None, 0
 
 
