@@ -389,8 +389,11 @@ def best_cut(p, budget):
         if may_peel:
             exact = [q for q in parts if q.air <= 0.005 * q.vol + 1e-6]
             moved = sum(q.vol for q in exact)
-            if moved >= 0.15 * p.vol and all(q.done() for q in exact) and (peel is None or moved > peel[0]):
-                peel = (moved, "peel", parts)
+            # (peels moving about the same volume - within 1% of the piece - are told apart by the air they leave:
+            #  a rounding hair's difference in volume must not pick the one that leaves a curved front on a post)
+            key = (round(moved / (0.01 * p.vol)), -sum(q.air for q in parts))
+            if moved >= 0.15 * p.vol and all(q.done() for q in exact) and (peel is None or key > peel[0]):
+                peel = (key, "peel", parts)
     if peel is not None:
         return peel[1], peel[2]
     if best is not None and p.air - best[0] >= need:
