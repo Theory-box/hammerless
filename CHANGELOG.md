@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.1 (test release, 2026-10-18)
 
 - **Convert to Brushes**: the Algorithm options are now named for what they're for: **Hard Surface** (Extend-or-Fill) and **General** (was Organic: any closed shape, curved or boxy). Files already set keep their choice.
 
