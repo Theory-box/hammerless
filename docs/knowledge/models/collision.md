@@ -50,6 +50,8 @@ Unit tests (`tests/unit/test_slabcollision.py`): a room gives 6 brushes each 1 i
 
 ## The Algorithm dropdown (Convert to Brushes, 0.19.0 / 0.20.0)
 
+In the panel the options read **Auto, Hard Surface, General, Slabs** (since 5059280): Hard Surface is Extend-or-Fill (`EOF`), General is the method called Organic on this page (`ORGANIC`); the stored values are unchanged, so files keep their choice.
+
 `brush_algorithm` in `props.py`; the choice is made in `collisiontool.py` `_solid_pieces`. Extend-or-Fill and Organic need a closed solid (`brushfit.NotSolid` otherwise, with "or use Slabs"); both run in game units (the mesh scaled by *Units per Meter*) and their pieces come back as brushes through `brushfit.hull_faces`.
 
 | Choice | What runs | Status |
