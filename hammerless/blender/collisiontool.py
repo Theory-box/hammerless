@@ -223,6 +223,9 @@ class HL_OT_make_collision(bpy.types.Operator):
             air = info["air"] / max(info["volume"], 1e-9) * 100
             msg = (f"{what} (General, {info['seconds']:.1f} s{', ' + info['why'] if info.get('why') else ''}); "
                    f"collision beyond the mesh: about {air:.1f}% of its volume")
+            if info.get("pinched"):
+                msg += (f"; {info['pinched']} parts joined to others only at single points were converted on their "
+                        "own")
             if info.get("raised"):
                 msg += f"; Fit raised to about {info['raised']:.1f}% (the finest this mesh can be measured to)"
             if info["stopped"]:

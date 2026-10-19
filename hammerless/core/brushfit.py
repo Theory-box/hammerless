@@ -559,15 +559,34 @@ def plane_parts(m, n, d, D, sliver, pvol):
 
 
 def fold_crumbs(big, crumbs):
-    """The final parts of a plane cut: the crumbs join the biggest part, in one boolean (a plane through a detailed
-    sculpt cuts off hundreds of bits; joining them one by one was a full boolean each - minutes and gigabytes per
-    step). -> (solids, owner)"""
-    ms = [m for m, _ in big]
+    """The final parts of a plane cut, as groups of solids: the crumbs go with the biggest part. They aren't joined
+    here: a part's volume is the sum and its hull the hull of all of them (no boolean at all); joining dozens of
+    crumbs touching a sculpt along the cut was a slow, gigabyte boolean, and it ran for every candidate cut.
+    -> (groups, owner)"""
+    groups = [[m] for m, _ in big]
     if not crumbs:
-        return ms, []
-    j = int(np.argmax([m.volume() for m in ms]))
-    ms[j] = Manifold.batch_boolean([ms[j]] + [cm for cm, _sg in crumbs], K.OpType.Add)
-    return ms, [j] * len(crumbs)
+        return groups, []
+    vols = [m.volume() for m, _ in big]
+    owner = []
+    for cm, _sg in crumbs:
+        # (a crumb joins the biggest part it touches; one touching none is a little part of its own - folded into a
+        #  part it doesn't touch, a piece became 22 scattered solids under one hull: slow to cut, and all air)
+        touching = [k for k, (m, _s) in enumerate(big) if cm.min_gap(m, 1e-3) <= 1e-4]
+        if touching:
+            j = max(touching, key=lambda k: vols[k])
+            groups[j].append(cm)
+        else:
+            j = len(groups)
+            groups.append([cm])
+        owner.append(j)
+    return groups, owner
+
+
+def group_score(group):
+    """(volume, air) of a part made of several solids: summed volume, the hull of them all."""
+    vol = sum(q.volume() for q in group)
+    hull = Manifold.batch_hull(group) if len(group) > 1 else group[0].hull()
+    return vol, max(0.0, hull.volume() - vol)
 
 
 def _organic_task(args):
@@ -580,8 +599,8 @@ def _organic_task(args):
         if got is None:
             out.append(None)
             continue
-        ms, _owner = fold_crumbs(*got)
-        out.append([(q.volume(), max(0.0, q.hull().volume() - q.volume())) for q in ms])
+        groups, _owner = fold_crumbs(*got)
+        out.append([group_score(g) for g in groups])
     return out
 
 

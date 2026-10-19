@@ -157,7 +157,10 @@ def voxelise(V, T, lo, h, a, b):
 def setup(V, T, D):
     size = float(np.linalg.norm(V.max(0) - V.min(0)))
     # (Detail/4, but never finer than size/200: at most about 10 million voxels, a few seconds per distance map)
-    h = max(min(D / 4.0, size / 150), size / 200)
+    # (the grid spans the part plus its padding: sized from that, a 1.5-unit button converted with a big object's
+    #  Fit got 1,100^3 voxels - 1.3 GB - because the padding came from Fit and the voxel size from the button)
+    span = size + 4.0 * D
+    h = max(min(D / 4.0, span / 150), span / 200)
     # (Fit can't be finer than the voxels measure: below 2 voxels nearly every empty voxel reads as "too far", and a
     #  finish check tests millions of them - a statue's body at Fit 0.25% took minutes per step)
     D = max(D, 2.0 * h)
@@ -191,11 +194,15 @@ class Piece:
     The voxels and the hull's planes are worked out only when asked for: a cut is tried ~100 ways per step and
     almost none of those parts are ever looked at again (measured: 2-2.5x faster, the same pieces)."""
 
-    def __init__(self, m, a=None, sub=None, check=True, source=None):
-        self.m = m
-        self.V, self.T = arrays(m)
-        self.vol = m.volume()
-        self.hull = m.hull()
+    def __init__(self, m, a=None, sub=None, check=True, source=None, extra=()):
+        # (m with its folded crumbs `extra`: kept apart until something needs the joined solid - see fold_crumbs)
+        self._parts = [m] + list(extra)
+        self._m = m if not extra else None
+        both = Manifold.compose(self._parts) if extra else m      # (their meshes side by side: no boolean)
+        self.V, self.T = arrays(both)
+        self.vol = sum(q.volume() for q in self._parts)
+        self.area = sum(q.surface_area() for q in self._parts)
+        self.hull = Manifold.batch_hull(self._parts) if extra else m.hull()
         self.air = max(0.0, self.hull.volume() - self.vol)
         self._source = source if source is not None else (lambda: (a, sub))     # -> (corner index, voxels)
         self._check = check
@@ -203,6 +210,12 @@ class Piece:
         self._N = self._Dp = None
         self._far = None
         self._vox = None
+
+    @property
+    def m(self):
+        if self._m is None:                 # (joined only for a piece that is cut again, merged or kept)
+            self._m = Manifold.batch_boolean(self._parts, _bf.K.OpType.Add)
+        return self._m
 
     def _voxels(self):
         if self._sub is not None:
@@ -216,7 +229,7 @@ class Piece:
         if np.all(ib > ia):
             box[ia[0] - na[0]:ib[0] - na[0], ia[1] - na[1]:ib[1] - na[1], ia[2] - na[2]:ib[2] - na[2]] = \
                 sub[ia[0] - a[0]:ib[0] - a[0], ia[1] - a[1]:ib[1] - a[1], ia[2] - a[2]:ib[2] - a[2]]
-        if self._check and abs(box.sum() * h ** 3 - self.vol) > 0.15 * self.vol + self.m.surface_area() * h:
+        if self._check and abs(box.sum() * h ** 3 - self.vol) > 0.15 * self.vol + self.area * h:
             box = voxelise(self.V, self.T, G["lo"], h, na, nb)                 # (bookkeeping off: voxelise it)
         self._a, self._sub = na, box
         self._source = None
@@ -319,19 +332,19 @@ def split(p, n, d):
     if got is None:
         return None
     big, crumbs = got
-    ms, owner = fold_crumbs(big, crumbs)
+    groups, owner = fold_crumbs(big, crumbs)
     cache = {}
 
     def masks():                       # (the parts' voxels: worked out once, only if one of them is asked)
         if "r" not in cache:
             # (side_masks answers side by side, not in the order asked: each part takes its own voxels by identity)
             got = {id(m): mk for m, mk in side_masks(p, n, d, big + crumbs)}
-            mk = [got[id(m)] for m, _sg in big]
-            for j, (cm, _sg) in zip(owner, crumbs):
-                mk[j] = mk[j] | got[id(cm)]
+            mk = [got[id(m)] for m, _sg in big] + [None] * (len(groups) - len(big))
+            for j, (cm, _sg) in zip(owner, crumbs):     # (a crumb touching no part is a part of its own)
+                mk[j] = got[id(cm)] if mk[j] is None else mk[j] | got[id(cm)]
             cache["r"] = (p.a, mk)
         return cache["r"]
-    return [Piece(m, source=(lambda i=i: (masks()[0], masks()[1][i]))) for i, m in enumerate(ms)]
+    return [Piece(g[0], extra=g[1:], source=(lambda i=i: (masks()[0], masks()[1][i]))) for i, g in enumerate(groups)]
 
 
 def candidates(p):
@@ -652,7 +665,20 @@ def convert(V, T, detail=4.0, max_pieces=MAX_PIECES, time_limit=None, cancel=Non
     t0 = time.time()
     limit = TIME_LIMIT if time_limit is None else time_limit
     V, T = weld(np.asarray(V, float), np.asarray(T, int))
-    parts = loose_parts(V, T)
+    parts, pinched = [], 0
+    for Vp, Tp in loose_parts(V, T):
+        # (a loose part can still be several solids touching only at single vertices - a detail welded on by one
+        #  point: to the kernel they are separate, and every cut shatters into bits. Each becomes a part of its own)
+        m = to_manifold(Vp, Tp)
+        comps = solids(m) if "NoError" in str(m.status()) else [m]
+        if len(comps) > 1:
+            pinched += len(comps) - 1
+            for c in comps:
+                Vc, Tc = arrays(c)
+                if len(Tc):
+                    parts.append((Vc, Tc))
+        else:
+            parts.append((Vp, Tp))
     if len(parts) == 1:
         return _convert_one(V, T, detail, max_pieces, limit, cancel, max_sides)
     vols = []
@@ -670,7 +696,7 @@ def convert(V, T, detail=4.0, max_pieces=MAX_PIECES, time_limit=None, cancel=Non
             info[k] += inf[k]
         info["fit"] = max(info.get("fit", 0.0), inf.get("fit", 0.0))
         info["stopped"] |= inf["stopped"]
-    info.update(pieces=len(meshes), seconds=time.time() - t0, parts=len(parts))
+    info.update(pieces=len(meshes), seconds=time.time() - t0, parts=len(parts), pinched=pinched)
     return meshes, info
 
 
