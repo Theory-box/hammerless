@@ -131,8 +131,9 @@ class _Pieces:
 class HL_OT_make_collision(bpy.types.Operator):
     bl_idname = "hammerless.make_collision"
     bl_label = "Convert to Brushes"
-    bl_description = ("Brushes (or invisible props) that collide like this mesh. Extend-or-Fill: few clean convex "
-                      "pieces on the mesh's own faces, exact except shallow detail (Detail). Slabs: a thin slab "
+    bl_description = ("Brushes (or invisible props) that collide like this mesh. Hard Surface: few clean convex "
+                      "pieces on the mesh's own faces, exact except shallow detail (Detail). General: few convex "
+                      "pieces of any closed shape, within Fit of it. Slabs: a thin slab "
                       "behind each flat area, for big shells like a house. For a Custom Model, set its Collision "
                       "to None so it doesn't collide twice. Press again after editing the mesh")
     bl_options = {"REGISTER", "UNDO"}
@@ -217,10 +218,10 @@ class HL_OT_make_collision(bpy.types.Operator):
         _remove(_outputs(src, True))     # (the skipped-faces object older versions made)
         what = (f"{len(groups)} invisible props of {len(r.brushes)} collision pieces" if props
                 else f"{len(r.brushes)} collision brushes")
-        if eof and r.info.get("method") == "Organic":
+        if eof and r.info.get("method") == "General":
             info = r.info
             air = info["air"] / max(info["volume"], 1e-9) * 100
-            msg = (f"{what} (Organic, {info['seconds']:.1f} s{', ' + info['why'] if info.get('why') else ''}); "
+            msg = (f"{what} (General, {info['seconds']:.1f} s{', ' + info['why'] if info.get('why') else ''}); "
                    f"collision beyond the mesh: about {air:.1f}% of its volume")
             if info["stopped"]:
                 msg += "; it ran out of time, so the last pieces are looser than Detail"
@@ -229,7 +230,7 @@ class HL_OT_make_collision(bpy.types.Operator):
         elif eof:
             info = r.info
             filled = info["filled"] / max(info["volume"], 1e-9) * 100
-            msg = (f"{what} (Extend-or-Fill, {info['seconds']:.1f} s)" +
+            msg = (f"{what} (Hard Surface, {info['seconds']:.1f} s)" +
                    (f"; detail covered over: {filled:.2f}% of the volume" if info["filled"] > 0 else "; exact"))
             if info["stuck"]:
                 msg += "; some of it couldn't be split into convex pieces: those pieces are their convex hull"
@@ -266,26 +267,26 @@ class HL_OT_make_collision(bpy.types.Operator):
         try:
             if algo in ("AUTO", "EOF"):
                 if len(tri) > 20000 and algo == "EOF":
-                    self.report({"WARNING"}, f"'{src.name}' has {len(tri)} triangles: Extend-or-Fill is meant for "
+                    self.report({"WARNING"}, f"'{src.name}' has {len(tri)} triangles: Hard Surface is meant for "
                                              "props; this may take a while")
                 t0 = time.time()
                 try:
                     meshes, info = brushfit.convert(co * scale, tri, detail=detail,
                                                     time_limit=10.0 if algo == "AUTO" else None)
-                    info["method"] = "Extend-or-Fill"
+                    info["method"] = "Hard Surface"
                 except brushfit.TooBig as e:
                     if algo == "EOF":
-                        self.report({"ERROR"}, f"'{src.name}': {e} (or use Organic)")
+                        self.report({"ERROR"}, f"'{src.name}': {e} (or use General)")
                         return None
-                    why = ("Extend-or-Fill took too long" if "longer than" in str(e)
-                           else "too detailed for Extend-or-Fill")
+                    why = ("Hard Surface took too long" if "longer than" in str(e)
+                           else "too detailed for Hard Surface")
             if meshes is None:
                 left = organicfit.TIME_LIMIT - (time.time() - t0 if algo == "AUTO" else 0.0)
                 size = float(np.linalg.norm(co.max(axis=0) - co.min(axis=0))) * scale
                 fit = max(size * hs.brush_fit / 100.0, 0.5)          # (Fit: a share of the object's diagonal)
                 meshes, info = organicfit.convert(co * scale, tri, detail=fit,
                                                   max_pieces=hs.brush_max_pieces, time_limit=max(left, 20.0))
-                info["method"], info["why"] = "Organic", why
+                info["method"], info["why"] = "General", why
         except brushfit.NotSolid as e:
             self.report({"ERROR"}, f"'{src.name}': {e} (or use Slabs)")
             return None

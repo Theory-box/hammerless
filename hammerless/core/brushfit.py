@@ -825,7 +825,7 @@ def convert(V, T, detail=TOL, tries=None, cancel=None, time_limit=None):
         raise NotSolid("the mesh is inside out (its normals point inward): recalculate normals outside first")
     n0 = len(creases_of(model))
     if n0 > MAX_CREASES:
-        raise TooBig(f"too detailed for Extend-or-Fill ({n0} inward creases, at most {MAX_CREASES}): use Slabs, or "
+        raise TooBig(f"too detailed for Hard Surface ({n0} inward creases, at most {MAX_CREASES}): use Slabs, or "
                      "simplify the mesh")
     start = (model, solids(model))
     _BIG[0] = n0 >= PARALLEL_FROM

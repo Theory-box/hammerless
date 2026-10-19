@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Convert to Brushes**: the Algorithm options are now named for what they're for: **Hard Surface** (Extend-or-Fill) and **General** (was Organic: any closed shape, curved or boxy). Files already set keep their choice.
+
 ## 0.20.0 (test release, 2026-10-18)
 
 - **Convert to Brushes, Organic** (new, experimental): for curved, sculpted or scanned meshes (rocks, creatures, stumps) that Extend-or-Fill refuses. The solid is cut with planes, always where the most collision would stand off it, until every piece is within **Fit** of the mesh (no point of its collision farther than Fit from the surface; Fit is a share of the object's size, 2.5% by default, so small and large meshes come out alike), up to **Max Pieces**; nothing is ever missing. A few seconds on 2-3k-triangle meshes (a hand: 7 pieces, about 5% extra collision); at most 64 sides per brush. Hollow and walled shapes (a dumpster, window frames) are peeled along their faces.
