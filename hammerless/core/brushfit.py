@@ -632,6 +632,7 @@ def pool(n):
         mod = sys.modules[__name__]
         sys.modules[STABLE_NAME] = mod               # (tasks are pickled by module name: the stable one)
         _cut_task.__module__ = STABLE_NAME
+        _organic_task.__module__ = STABLE_NAME       # (General's: picked from the same module)
         ctx = multiprocessing.get_context("spawn")
         ctx.set_executable(exe)          # (process-wide for multiprocessing: Blender's own Python, the same anyway)
         # (the worker's setup runs through exec, a built-in every Python has: it loads this file as STABLE_NAME)
