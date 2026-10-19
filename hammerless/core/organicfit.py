@@ -31,7 +31,8 @@ MAX_PIECES = 32
 POOL_AFTER = 1.0            # seconds of cutting in one process before the worker processes start (small shapes never)
 POOL_WORK = 100_000         # ...or a cut step this big (triangles x candidate cuts, ~0.1 s here): workers at once
 MAX_SIDES = 64              # faces per piece (a curved hull has hundreds: its face directions in 64 groups)
-SLIVER = 2.0                # units: a piece thinner than this is a sliver (it joins a neighbour)
+SLIVER = 2.0                # units: a piece thinner than this is a sliver (it joins a neighbour if that stays in Fit)
+MIN_BRUSH = 1.0             # units: thinner than this, a piece joins a neighbour regardless (the smallest safe brush)
 TIME_LIMIT = 60.0           # seconds: past this every piece left is finished as it is (its hull)
 GRID_SHIFT = np.array([0.2345, 0.3456, 0.4567])   # (voxels: on an integer grid, rays along exact edges miscount)
 
@@ -589,26 +590,33 @@ def thinnest(p):
 
 def join_slivers(done):
     """A piece thinner than SLIVER (a hair-thin leftover between two cuts) joins the touching neighbour whose
-    joined hull adds the least air, whatever Detail says: a sliver brush is worse than a little air."""
+    joined hull adds the least air - as long as the joined piece is still within Fit. A piece that is thin because
+    the mesh is thin there (a hat's crown at its real size) stays: joined regardless, it filled the hat's cavity."""
+    kept = set()
     changed = True
     while changed:
         changed = False
         for i, p in enumerate(done):
-            if thinnest(p) >= SLIVER:
+            if id(p) in kept or thinnest(p) >= SLIVER:
                 continue
-            best = None
+            options = []
             for j, q in enumerate(done):
                 if j == i or p.m.min_gap(q.m, 0.5) > 0.25:
                     continue
                 m = p.m + q.m
-                added = m.hull().volume() - m.volume() - p.air - q.air
-                if best is None or added < best[0]:
-                    best = (added, j, m)
-            if best is None:
+                options.append((m.hull().volume() - m.volume() - p.air - q.air, j, m))
+            joined = None
+            must = thinnest(p) < MIN_BRUSH
+            for _added, j, m in sorted(options, key=lambda o: o[0]):
+                cand = Piece(m, *union_mask(p, done[j]), check=False)
+                if must or cand.done():
+                    joined = (j, cand)
+                    break
+            if joined is None:
+                kept.add(id(p))
                 continue
-            _a, j, m = best
-            joined = Piece(m, *union_mask(p, done[j]), check=False)
-            done = [x for k, x in enumerate(done) if k not in (i, j)] + [joined]
+            j, cand = joined
+            done = [x for k, x in enumerate(done) if k not in (i, j)] + [cand]
             changed = True
             break
     return done
