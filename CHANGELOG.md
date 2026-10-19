@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.20.3 (test release, 2026-10-19)
+
+- **General: thin shells keep their shape at any size**: a piece 1-2 units thin joins a neighbour only if the joined piece stays within Fit (under 1 unit it always joins: the smallest safe brush). A statue's hat at its real size had its cavity filled (1 piece, 57% extra collision); now 12 pieces at 10%, about the same at any scale.
+- **General: Fit down to 0.25% again**: the voxel grid is as fine as Fit needs, up to a memory budget; past it, or below half a game unit, Fit is raised and the message says so. Very fine Fits on big meshes take longer.
+- General's time limit also holds in its last passes (a fine Fit could overrun it).
+
 ## 0.20.2 (test release, 2026-10-19)
 
 - **Convert to Brushes, General is much faster**: pieces work out their voxels and hull planes only when needed (about 2x), and candidate cuts are scored on several cores (dense meshes about 3x more; a 14,000-triangle Suzanne in Blender: 24 s -> 9 s), with the same result.
