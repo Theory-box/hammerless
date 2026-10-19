@@ -28,6 +28,7 @@ from . import brushfit as _bf
 from .brushfit import Manifold, NotSolid, arrays, fold_crumbs, plane_parts, solids, to_manifold, tri_normals, weld
 
 MAX_PIECES = 32
+VOXEL_BUDGET = 48_000_000   # voxels in a part's grid at most (about 1-1.5 GB at peak): Fit finer than 2 voxels of it is raised
 POOL_AFTER = 1.0            # seconds of cutting in one process before the worker processes start (small shapes never)
 POOL_WORK = 100_000         # ...or a cut step this big (triangles x candidate cuts, ~0.1 s here): workers at once
 MAX_SIDES = 64              # faces per piece (a curved hull has hundreds: its face directions in 64 groups)
@@ -157,13 +158,17 @@ def voxelise(V, T, lo, h, a, b):
 
 def setup(V, T, D):
     size = float(np.linalg.norm(V.max(0) - V.min(0)))
-    # (Detail/4, but never finer than size/200: at most about 10 million voxels, a few seconds per distance map)
-    # (the grid spans the part plus its padding: sized from that, a 1.5-unit button converted with a big object's
-    #  Fit got 1,100^3 voxels - 1.3 GB - because the padding came from Fit and the voxel size from the button)
+    ext = V.max(0) - V.min(0)
+    # (voxels of Fit/4 - as fine as Fit needs - unless the grid, the part plus its padding, would pass VOXEL_BUDGET
+    #  voxels: then the finest that fits. The padding is part of the count: sized from the part alone, a 1.5-unit
+    #  button converted with a big object's Fit got 1,100^3 voxels)
     span = size + 4.0 * D
-    h = max(min(D / 4.0, span / 150), span / 200)
-    # (Fit can't be finer than the voxels measure: below 2 voxels nearly every empty voxel reads as "too far", and a
-    #  finish check tests millions of them - a statue's body at Fit 0.25% took minutes per step)
+    h = min(D / 4.0, span / 150)
+    for _ in range(4):
+        box = ext + 2 * (2 * D + 4 * h)
+        h = max(h, float(np.prod(box) / VOXEL_BUDGET) ** (1.0 / 3.0))
+    # (Fit can't be finer than 2 voxels: below, nearly every empty voxel reads as "too far" and a finish check tests
+    #  millions of them - a statue's body at Fit 0.25% took minutes per step. Raised here, said in the message)
     D = max(D, 2.0 * h)
     pad = 2 * D + 4 * h
     lo = V.min(0) - pad + h * GRID_SHIFT
@@ -455,7 +460,8 @@ def best_cut(p, budget):
             # (peels moving about the same volume - within 1% of the piece - are told apart by the air they leave:
             #  a rounding hair's difference in volume must not pick the one that leaves a curved front on a post)
             key = (round(moved / (0.01 * p.vol)), -sum(air for _v, air in info))
-            if moved >= 0.15 * p.vol and (peel is None or key > peel[0]):
+            if moved >= 0.15 * p.vol and (peel is None or key > peel[0]) and \
+                    time.time() < G.get("deadline", float("inf")):
                 parts = parts_of(i)
                 if parts is not None and all(parts[k].done() for k in exact):
                     peel = (key, "peel", i)
@@ -529,6 +535,8 @@ def merge_pass(done, deadline):
         changed = False
         order = sorted(range(len(done)), key=lambda i: done[i].vol)
         for i in order:
+            if time.time() > deadline:
+                break
             for j in range(len(done)):
                 if i == j:
                     continue
@@ -599,6 +607,8 @@ def join_slivers(done):
         for i, p in enumerate(done):
             if id(p) in kept or thinnest(p) >= SLIVER:
                 continue
+            if thinnest(p) >= MIN_BRUSH and time.time() > G.get("deadline", float("inf")) + 15.0:
+                continue                    # (late: only brushes too thin to keep are still joined)
             options = []
             for j, q in enumerate(done):
                 if j == i or p.m.min_gap(q.m, 0.5) > 0.25:

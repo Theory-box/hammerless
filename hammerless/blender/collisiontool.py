@@ -227,7 +227,11 @@ class HL_OT_make_collision(bpy.types.Operator):
                 msg += (f"; {info['pinched']} parts joined to others only at single points were converted on their "
                         "own")
             if info.get("raised"):
-                msg += f"; Fit raised to about {info['raised']:.1f}% (the finest this mesh can be measured to)"
+                msg += (f"; Fit raised to about {info['raised']:.2f}%: finer would need more memory than General allows "
+                        "(the finest it can measure this mesh to)")
+            if info.get("half_unit"):
+                msg += (f"; Fit raised to {info['half_unit']:.2f}% - half a game unit, the finest General goes (finer "
+                        "isn't felt in game)")
             if info["stopped"]:
                 msg += "; it ran out of time, so the last pieces are looser than Fit"
             elif info["pieces"] >= src.hammerless.brush_max_pieces:
@@ -288,12 +292,15 @@ class HL_OT_make_collision(bpy.types.Operator):
             if meshes is None:
                 left = organicfit.TIME_LIMIT - (time.time() - t0 if algo == "AUTO" else 0.0)
                 size = float(np.linalg.norm(co.max(axis=0) - co.min(axis=0))) * scale
-                fit = max(size * hs.brush_fit / 100.0, 0.5)          # (Fit: a share of the object's diagonal)
+                asked = size * hs.brush_fit / 100.0               # (Fit: a share of the object's diagonal)
+                fit = max(asked, 0.5)                             # (and never under half a game unit)
                 meshes, info = organicfit.convert(co * scale, tri, detail=fit,
                                                   max_pieces=hs.brush_max_pieces, time_limit=max(left, 20.0))
                 info["method"], info["why"] = "General", why
                 if info.get("fit", 0.0) > fit * 1.05 and size > 0:
                     info["raised"] = 100.0 * info["fit"] / size
+                elif asked < 0.5 and size > 0:
+                    info["half_unit"] = 100.0 * 0.5 / size
         except brushfit.NotSolid as e:
             self.report({"ERROR"}, f"'{src.name}': {e} (or use Slabs)")
             return None
