@@ -1575,11 +1575,17 @@ def fewer_sides(hull, max_sides):
         C = np.where(ln[:, None] > 1e-12, S / np.maximum(ln, 1e-12)[:, None], C)
     Dp = (Vh @ C.T).max(0)
     lo, hi = Vh.min(0), Vh.max(0)
-    box = Manifold.cube((hi - lo).tolist()).translate(lo.tolist())
-    out = box
-    for c, d in zip(C, Dp):
-        out = out.trim_by_plane((-c).tolist(), float(-d))
-    return out if out.volume() >= hull.volume() * (1 - 1e-6) else box
+    ext = float((hi - lo).max())
+    # (a plane through the hull's own corners can cut a hair inside it in the kernel - 0.005% of a statue's piece:
+    #  that is rounding, kept. Short by more, the planes go out a little and it is tried again; the last resort is
+    #  the hull itself, never its box - the box once stood 4.5x the piece in a statue's chest)
+    for margin in (0.0, 1e-5, 1e-3):
+        out = Manifold.cube((hi - lo).tolist()).translate(lo.tolist())
+        for c, d in zip(C, Dp):
+            out = out.trim_by_plane((-c).tolist(), float(-(d + margin * ext)))
+        if not out.is_empty() and out.volume() >= hull.volume() * (1 - 1e-3):
+            return out
+    return hull
 
 
 def thinnest(p):
