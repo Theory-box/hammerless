@@ -40,6 +40,8 @@ VOXEL_BUDGET = 8_000_000    # voxels in a part's grid at most (about 250 MB at p
 AIM_VOXELS = False          # aim the cuts from a voxel distance field (the old way) instead of the worst-air search
 AIM_RES = 0.25              # of Fit: the worst-air search stops at cells this size, and takes a spot this close to the worst
 AIM_CAP = 100_000           # cells kept in the worst-air search's frontier at most (the best-bounded)
+WORST_FIRST = 0.05          # a piece whose air averages more than this x Fit over its hull has its worst air searched
+#                             before it is certified (see Piece.done): the search alone usually settles it
 POOL_AFTER = 1.0            # seconds of cutting in one process before the worker processes start (small shapes never)
 POOL_WORK = 100_000         # ...or a cut step this big (triangles x candidate cuts, ~0.1 s here): workers at once
 SCORER_FROM = 1500          # triangles: a piece this big is scored without the kernel (brushfit.CutScorer); under it
@@ -520,7 +522,8 @@ class TriBuckets:
         order; a triangle's box no nearer than the nearest surface point known is dropped before the real
         distance."""
         N = len(P)
-        pair = np.unique(pt * len(self.A) + tri)
+        pair = np.sort(pt * len(self.A) + tri)                   # (each pair once: sorted, repeats dropped - the
+        pair = pair[np.r_[True, pair[1:] != pair[:-1]]]          #  same as np.unique, which hashes: 5x slower here)
         pt, tri = pair // len(self.A), pair % len(self.A)
         for s in range(0, len(pt), self.PAIRS):
             ps, ts = pt[s:s + self.PAIRS], tri[s:s + self.PAIRS]
@@ -885,9 +888,36 @@ def worst_air(p, D):
     Fit; then the winning cell is followed down to Fit / 64 (its best child's centre each time: the spot is a
     real local worst, not a cell centre). The cost follows the air, not the box: no voxel grid, and the same at
     any Fit. (best, None) when no air point was found (a cell centre in the hull and out of the solid)."""
-    V, T = p.V, p.T
-    N, Dp = p.N, p.Dp
-    Vh, _Th = arrays(p.hull)
+    return worst_air_of(p.V, p.T, arrays(p.hull)[0], p.N, p.Dp, D)
+
+
+def judge(V, T, Vh, Th, air, vol, D):
+    """Is a piece (solid V, T; hull Vh, Th; its air and volume) within Fit? -> (ok, (witness point or None, its
+    distance), worst air (best, spot) or None where it wasn't searched). The worst air first, for a piece with
+    air to spare - thicker than WORST_FIRST x Fit over its hull on average: a real point of the hull, outside the
+    solid and farther than Fit plus the tolerance from it, is what certify would have to find - the piece isn't
+    within Fit, no need to look again - and it is where the cut is aimed anyway (far). certify's own search runs
+    only when the worst air found is within Fit or the tolerance. Either order gives the same answer; measured
+    on a statue certify failed 24 pieces in 32, at 0.25 s each, and the search then ran anyway. A piece with
+    thinner air likely passes certify at its coarsest cells, where the search would still have to look
+    everywhere. Arrays in, plain values out: it runs in a worker process too (brushfit._judge_task)."""
+    worst = None
+    if not AIM_VOXELS and air > WORST_FIRST * D * _area(Vh, Th):
+        N, Dp = hull_planes(Vh, Th)
+        worst = worst_air_of(V, T, Vh, N, Dp, D)
+        best, spot = worst
+        if spot is not None and best > D * (1 + CERT_TOL):
+            return False, (spot, best), worst
+    ok, wit, dw = certify(V, T, Vh, Th, D)
+    return ok, (wit, dw), worst
+
+
+def _area(V, T):
+    return float(tri_normals(V, T)[1].sum()) if len(T) else 0.0
+
+
+def worst_air_of(V, T, Vh, N, Dp, D):
+    """worst_air of a solid (V, T) with the hull corners Vh and hull planes (N, Dp)."""
     lo, hi = Vh.min(0), Vh.max(0)
     ext = float((hi - lo).max())
     best, spot, cell_at = 0.0, None, None
@@ -915,11 +945,16 @@ def worst_air(p, D):
         cells, centre, v = cells[keep], centre[keep], v[keep]
         if len(cells) == 0:
             break
+        _t0 = time.time()
         ins = ray.inside(centre)
+        _t1 = time.time()
         d = np.full(len(centre), np.inf)
         out = np.nonzero(~ins)[0]
         if len(out):
             d[out] = dist(centre[out])
+        if TRACE:
+            print(f"      worst_air s {s / D:.3f} D: {len(cells)} cells, {len(out)} out; inside {_t1 - _t0:.3f} "
+                  f"dist {time.time() - _t1:.3f} best {best / D:.2f} D")
         # (a centre in the hull and out of the solid is a point of the air: the best of them may be the spot)
         cand = ~ins & (v <= tiny).all(axis=1) & np.isfinite(d)
         if cand.any():
@@ -1262,6 +1297,8 @@ class Piece:
         self._N = self._Dp = None
         self._far = None
         self._ok = self._wit = None
+        self._worst = None                  # (worst_air's answer, found by done: far reuses it)
+        self._pending = None                # (done's answer on its way from a worker process: see judge_later)
         self.uid = next(_UIDS)
         self._vox = None
 
@@ -1336,10 +1373,30 @@ class Piece:
                 #  boxy prop's peel search asks this of dozens of exactly convex parts per step)
                 self._ok, self._wit = True, (None, 0.0)
                 return self._ok
-            Vh, Th = arrays(self.hull)
-            ok, wit, dw = certify(self.V, self.T, Vh, Th, G["D"])
-            self._ok, self._wit = ok, (wit, dw)
+            got = None
+            if self._pending is not None:           # (judged in a worker process meanwhile: its answer)
+                try:
+                    got = self._pending.result()
+                except Exception as e:              # (a worker died, or the pool was shut: judged here instead)
+                    print(f"General: a worker's answer was lost ({e!r}); judging the piece here")
+                self._pending = None
+            if got is None:
+                Vh, Th = arrays(self.hull)
+                got = judge(self.V, self.T, Vh, Th, self.air, self.vol, G["D"])
+            self._ok, self._wit, self._worst = got
         return self._ok
+
+    def judge_later(self, ex):
+        """Have a worker process judge the piece (done, and its worst air) now, while the main process goes on
+        cutting: a cut's parts are judged side by side instead of one after another when each is popped."""
+        if self._ok is None and self._pending is None and self.air > 1e-9 * max(self.vol, 1e-12) and \
+                len(self.T) >= SCORER_FROM and not AIM_VOXELS:
+            Vh, Th = arrays(self.hull)
+            try:
+                with _bf._NoMain():
+                    self._pending = ex.submit(_bf._judge_task, (self.V, self.T, Vh, Th, self.air, self.vol, G["D"]))
+            except Exception:
+                self._pending = None
 
     def far(self):
         """(largest distance from the hull's air to the solid, where it is); (0, None) when within Fit. The spot is
@@ -1354,7 +1411,7 @@ class Piece:
             wit, dw = self._wit
             far = (max(dw, D * (1 + 1e-9)), wit)
             if not AIM_VOXELS:
-                best, spot = worst_air(self, D)
+                best, spot = self._worst if self._worst is not None else worst_air(self, D)
                 self._far = (best, spot) if spot is not None else far      # (nothing found: the witness)
                 return self._far
             if self.sub.any():
@@ -1570,12 +1627,15 @@ def _scores(p, cands):
     if ex is not None:
         from concurrent.futures.process import BrokenProcessPool
         V, T = p.V, p.T
-        n_chunks = min(len(cands), _bf.WORKERS)          # (one chunk per worker: the mesh goes over once each)
+        # (a few batches per worker: a worker still judging a part (judge_later) or slowed by a kernel cut takes
+        #  fewer; the mesh goes over with each batch (1.6 MB on a 45k-triangle body, 2 ms) but its scorer is built
+        #  once per worker (brushfit._LAST))
+        n_chunks = min(len(cands), 3 * _bf.WORKERS)
         chunks = [list(range(k, len(cands), n_chunks)) for k in range(n_chunks)]
         try:
             with _bf._NoMain():
                 futs = [ex.submit(_bf._organic_task, (V, T, [(cands[i][1], cands[i][2]) for i in ch], G["D"], SLIVER,
-                                                      p.vol, composed, scorer)) for ch in chunks]
+                                                      p.vol, composed, scorer, p.uid)) for ch in chunks]
             got = [f.result() for f in futs]
             out = [None] * len(cands)
             for ch, res in zip(chunks, got):
@@ -1622,23 +1682,35 @@ def merge_pass(done, deadline):
     D = G["D"]
     changed = True
     tried = set()                   # (pairs found not to join: the same pair isn't tested again from the other side)
+    apart = set()                   # (pairs found not to touch: a piece never changes, so that stands too)
     while changed and time.time() < deadline:
         changed = False
         order = sorted(range(len(done)), key=lambda i: done[i].vol)
+        lo = np.array([p.V.min(0) for p in done])
+        hi = np.array([p.V.max(0) for p in done])
         for i in order:
             if time.time() > deadline:
                 break
-            for j in range(len(done)):
+            # (only pairs whose boxes come within reach are measured in the kernel: 35 finished pieces of a statue
+            #  are 600 pairs, and the kernel's gap took most of the pass)
+            gap = np.maximum(np.maximum(lo - hi[i], lo[i] - hi), 0.0).max(axis=1)
+            for j in np.nonzero(gap <= 0.25)[0]:
                 if i == j:
                     continue
                 A_, B_ = done[i], done[j]
                 pair = (min(A_.uid, B_.uid), max(A_.uid, B_.uid))
-                if pair in tried or A_.m.min_gap(B_.m, 0.5) > 0.25:
+                if pair in tried or pair in apart:
+                    continue
+                if A_.m.min_gap(B_.m, 0.5) > 0.25:
+                    apart.add(pair)
                     continue
                 tried.add(pair)
-                m = A_.m + B_.m
-                if m.hull().volume() - m.volume() - A_.air - B_.air >= max(D ** 3, 0.01 * m.volume()):
+                # (the joined piece's air from the hulls alone: its hull is the hull of theirs and its volume their
+                #  sum - they don't overlap. The boolean join is made only for a pair that adds little enough)
+                vol = A_.vol + B_.vol
+                if Manifold.batch_hull([A_.hull, B_.hull]).volume() - vol - A_.air - B_.air >= max(D ** 3, 0.01 * vol):
                     continue
+                m = A_.m + B_.m
                 q = Piece(m, source=lambda A_=A_, B_=B_: union_mask(A_, B_), check=False)
                 if q.done():
                     done = [x for k, x in enumerate(done) if k not in (i, j)] + [q]
@@ -1856,9 +1928,14 @@ def _convert_one(V, T, detail, max_pieces, limit, cancel, max_sides):
                 done.append(p)
                 continue
             cuts += 1
+            ex = _bf.active_pool()
             for q in best[1]:
                 heapq.heappush(heap, (-q.air, uid, q))
                 uid += 1
+                if ex is not None:
+                    # (the parts are judged in the workers at once, side by side - each will be popped and asked;
+                    #  measured on a statue, judging the pieces one by one here was a third of the conversion)
+                    q.judge_later(ex)
     finally:
         _bf.shutdown_pool()             # (no idle processes left behind)
     done = merge_pass(done, t0 + limit * 1.25)

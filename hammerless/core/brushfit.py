@@ -620,7 +620,31 @@ def _cc(a, b, n):
             return lab
 
 
+def _cycles(a, b, n):
+    """_cc for a graph whose every node has exactly two edge ends (the section loops: a crossing edge is in the
+    segments of its two triangles): by doubling along each cycle, log2 of the longest cycle rounds of plain gathers
+    (_cc's hooking took dozens of rounds of scatters on a 1000-edge loop). Any other graph goes to _cc."""
+    ends = np.concatenate([a, b])
+    if len(ends) != 2 * n or not np.all(np.bincount(ends, minlength=n) == 2):
+        return _cc(a, b, n)
+    o = np.argsort(ends, kind="stable")
+    nb = np.concatenate([b, a])[o].reshape(n, 2)                    # a node's two neighbours
+    ar = np.arange(n)
+    end = nb.copy()                                                  # the node 2^k steps away, per direction
+    # (which of that node's slots leads on, away from here; in a 2-cycle both lead back: either will do)
+    cont = np.where(nb[end, 1] == ar[:, None], 0, 1)
+    mn = np.minimum(ar[:, None], end)                                # the least node on the way, that node included
+    while True:
+        nxt = np.minimum(mn, mn[end, cont])
+        if np.array_equal(nxt, mn):
+            break
+        mn = nxt
+        end, cont = end[end, cont], cont[end, cont]
+    return np.minimum(mn[:, 0], mn[:, 1])
+
+
 KERNEL = "kernel"           # CutScorer.score's answer for a cut it leaves to the kernel (along a face of the piece)
+SORT_DIR = np.array([1.0, 0.6180339887, 0.3819660113]) / 1.2360679775   # (a part's points are hulled in this order)
 
 
 class CutScorer:
@@ -859,7 +883,7 @@ class CutScorer:
         if len(cross) == 0:
             return None
         pv = pos[T]
-        npos = pv.sum(1)
+        npos = pv[:, 0].view(np.uint8) + pv[:, 1].view(np.uint8) + pv[:, 2].view(np.uint8)   # (9x pv.sum(1))
         # (the crossed triangles, turned so the pattern is + - - or + + -; their clipped parts and cap segments)
         ct = np.nonzero((npos == 1) | (npos == 2))[0]
         pa = pv[ct]
@@ -889,7 +913,7 @@ class CutScorer:
         # (the section loops: crossing edges chained by the segments)
         cid = np.full(len(ea), -1)
         cid[cross] = np.arange(len(cross))
-        loop_of_cross = _cc(cid[e_from], cid[e_to], len(cross))
+        loop_of_cross = _cycles(cid[e_from], cid[e_to], len(cross))
         _loops, seg_loop = np.unique(loop_of_cross[cid[e_from]], return_inverse=True)
         seg_loop = seg_loop.ravel()
         nl = seg_loop.max() + 1
@@ -1053,8 +1077,10 @@ class CutScorer:
             vol = sum(q[0] for q in g)
             pts = g[0][1] if len(g) == 1 else np.concatenate([q[1] for q in g])
             # (sorted: the kernel's hull depends on the order of the points - measured 0.4% too big on a hand's part
-            #  in mesh order, right in sorted or any shuffled order - so every part is hulled the same way)
-            pts = pts[np.lexsort(pts.T[::-1])]
+            #  in mesh order, right in sorted or any shuffled order - so every part is hulled the same way: along
+            #  a slanted direction, one sort (lexsort by x, y, z was three, 27% of a score on a 45k-triangle body;
+            #  measured on 132 of its parts, the hull's volume is the same to 1e-9 in either order)
+            pts = pts[np.argsort(pts @ SORT_DIR, kind="stable")]
             hv = Manifold.hull_points(np.ascontiguousarray(pts)).volume()
             out.append((vol, max(0.0, hv - vol)))
         return out
@@ -1082,11 +1108,17 @@ class _UF:
             self.p[max(a, b)] = min(a, b)
 
 
+_LAST = {}                  # (in a worker: the piece scored last, by key - its scorer and solid are kept for the
+#                             next batch of its cuts; a step's cuts come in several batches per worker)
+
+
 def _organic_task(args):
     """In a worker: General's candidate cuts of one piece, scored only: per cut None or [(volume, air)] per part."""
-    V, T, cuts, D, sliver, pvol, composed, scorer = args
-    sc = CutScorer(V, T, composed) if scorer else None
-    m = None
+    V, T, cuts, D, sliver, pvol, composed, scorer, key = args
+    if _LAST.get("key") != key:
+        _LAST.clear()
+        _LAST.update(key=key, sc=CutScorer(V, T, composed) if scorer else None, m=None)
+    sc = _LAST["sc"]
     out = []
     for n, d in cuts:
         if sc is not None and sc.ok:
@@ -1094,15 +1126,33 @@ def _organic_task(args):
             if got is not KERNEL:
                 out.append(got)
                 continue
-        if m is None:
-            m = to_manifold64(V, T)
-        got = plane_parts(m, n, d, D, sliver, pvol)
+        if _LAST["m"] is None:
+            _LAST["m"] = to_manifold64(V, T)
+        got = plane_parts(_LAST["m"], n, d, D, sliver, pvol)
         if got is None:
             out.append(None)
             continue
         groups, _owner = fold_crumbs(*got)
         out.append([group_score(g) for g in groups])
     return out
+
+
+def _organicfit():
+    """organicfit in a worker process, where this file was loaded on its own (as STABLE_NAME): the core folder is
+    registered as a package of its own, so organicfit's relative imports resolve to a copy of this file in it."""
+    import importlib
+    import types
+    name = "hl_core"
+    if name not in sys.modules:
+        pkg = types.ModuleType(name)
+        pkg.__path__ = [os.path.dirname(os.path.abspath(__file__))]
+        sys.modules[name] = pkg
+    return importlib.import_module(name + ".organicfit")
+
+
+def _judge_task(args):
+    """In a worker: organicfit.judge of one piece - is it within Fit, and where is its worst air."""
+    return _organicfit().judge(*args)
 
 
 STABLE_NAME = "hl_brushfit"   # (this module's name in the workers: an installed add-on's own module path,
@@ -1157,6 +1207,7 @@ def pool(n):
         sys.modules[STABLE_NAME] = mod               # (tasks are pickled by module name: the stable one)
         _cut_task.__module__ = STABLE_NAME
         _organic_task.__module__ = STABLE_NAME       # (General's: picked from the same module)
+        _judge_task.__module__ = STABLE_NAME
         ctx = multiprocessing.get_context("spawn")
         ctx.set_executable(exe)          # (process-wide for multiprocessing: Blender's own Python, the same anyway)
         # (the worker's setup runs through exec, a built-in every Python has: it loads this file as STABLE_NAME)
@@ -1173,6 +1224,11 @@ def pool(n):
         _POOL = concurrent.futures.ProcessPoolExecutor(n, mp_context=ctx, initializer=exec, initargs=(loader, {}))
         _POOL_SIZE = n
     return _POOL
+
+
+def active_pool():
+    """The worker pool if one is running (started by a cut step that needed it), else None."""
+    return None if _BROKEN[0] else _POOL
 
 
 def shutdown_pool():
