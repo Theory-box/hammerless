@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.20.5 (test release, 2026-10-20)
+
+- **General is faster on dense sculpts, with the same result**: new pieces are checked against Fit in the worker processes while cutting carries on, the cheap worst-air search runs before the exact Fit check, cuts that don't depend on the aim are scored ahead of time, the workers start with the conversion, and the merge pass and cut scorer do less work. A user's 26,000-face statue (Fit 1%, Max 32): 24 s -> 14 s, the same 35 brushes and 8.7% extra collision.
+
 ## 0.20.4 (test release, 2026-10-20)
 
 - **General: Fit is checked exactly**: whether a piece is within Fit is now decided against the mesh's own triangles, not voxels, so Fit means the same at any size; the panel minimum is 0.1% (half a game unit is still the floor, and the message says so).
