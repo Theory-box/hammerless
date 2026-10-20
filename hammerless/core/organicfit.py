@@ -12,10 +12,13 @@ from the solid; its collision is its hull. Leftovers thinner than Detail fold in
 end neighbours whose joined piece is still within Detail and adds little air are joined.
 
 Whether a piece is within Detail is decided exactly against its triangles (certify: cubic cells over its hull,
-refined until each is certainly within Detail or a hull point farther than Detail is found; the cost follows the
-surface, not the volume). Where its worst air lies is found on voxels (Detail / 4, the model voxelised once; every
-piece keeps the voxels of its own box): a cut aimed there needs only roughly the right place. Developed against
-Extend-or-Fill, CoACD and V-HACD on organic and hard-surface test meshes (docs/knowledge/models/collision.md).
+refined until each is certainly within Detail or a hull point farther than Detail is found; a cell over the hull's
+own faces and edges, or straddling a surface patch within Detail, passes at the coarsest level, so the cost follows
+the air, not the surface). Where its worst air lies is found by a branch-and-bound search over the same kind of
+cells (worst_air: exact distances at cell centres, to AIM_RES x Detail): a cut aimed there needs only roughly the
+right place. (AIM_VOXELS: the older way, a voxel distance field of Detail / 4 per piece, kept for comparison.)
+Developed against Extend-or-Fill, CoACD and V-HACD on organic and hard-surface test meshes
+(docs/knowledge/models/collision.md).
 Input in game units. Geometry kernel: manifold3d, via brushfit.
 
     meshes, info = convert(vertices, triangles, detail=4.0, max_pieces=32)   # meshes: [(corners, triangles)]
@@ -34,6 +37,9 @@ from .brushfit import Manifold, NotSolid, arrays, fold_crumbs, plane_parts, soli
 MAX_PIECES = 32
 H_FRAC = 4.0                # voxels of Fit / this (they aim the cuts at the worst air; the finish test is exact)
 VOXEL_BUDGET = 8_000_000    # voxels in a part's grid at most (about 250 MB at peak); they only aim the cuts
+AIM_VOXELS = False          # aim the cuts from a voxel distance field (the old way) instead of the worst-air search
+AIM_RES = 0.25              # of Fit: the worst-air search stops at cells this size, and takes a spot this close to the worst
+AIM_CAP = 100_000           # cells kept in the worst-air search's frontier at most (the best-bounded)
 POOL_AFTER = 1.0            # seconds of cutting in one process before the worker processes start (small shapes never)
 POOL_WORK = 100_000         # ...or a cut step this big (triangles x candidate cuts, ~0.1 s here): workers at once
 MAX_SIDES = 64              # faces per piece (a curved hull has hundreds: its face directions in 64 groups)
@@ -86,18 +92,66 @@ def parity_mask(V, T, lo, h, a, b):
 
 
 def _min_plus(f, axis):
-    """Along one axis: out[i] = min_j f[j] + (i - j)^2 (exact squared distance, one axis at a time)."""
+    """Along one axis: out[i] = min_j f[j] + (i - j)^2 (exact squared distance, one axis at a time). The lower
+    envelope of the parabolas (Felzenszwalb-Huttenlocher), every line of the grid at once: linear in the line's
+    length, where a plain min over all (i, j) is quadratic (a 300-voxel line: 20x less work)."""
     f = np.moveaxis(f, axis, -1)
     shape = f.shape
     n = shape[-1]
-    g = f.reshape(-1, n)
-    ar = np.arange(n, dtype=np.float32)
-    d2 = (ar[:, None] - ar[None, :]) ** 2
+    g = np.ascontiguousarray(f.reshape(-1, n), dtype=np.float64)
+    L = len(g)
+    if L * n * n <= 40_000_000:                         # (a small grid: every (i, j) at once is quicker)
+        ar = np.arange(n, dtype=np.float64)
+        d2 = (ar[:, None] - ar[None, :]) ** 2
+        out = np.empty_like(g)
+        step = max(1, int(4_000_000 // (n * n)))
+        for s in range(0, L, step):
+            out[s:s + step] = (g[s:s + step, None, :] + d2[None, :, :]).min(axis=2)
+        return np.moveaxis(out.reshape(shape).astype(np.float32), -1, axis)
+    out = g.copy()
+    # (a line of one value - no solid anywhere on it, or all solid - is its own transform)
+    work = np.nonzero(g.max(axis=1) > g.min(axis=1))[0]
+    if len(work):
+        out[work] = _envelope(g[work])
+    return np.moveaxis(out.reshape(shape).astype(np.float32), -1, axis)
+
+
+def _envelope(g):
+    """out[i] = min_j g[j] + (i - j)^2 per row of g (L, n): the rows' parabola envelopes, built side by side."""
+    L, n = g.shape
+    q2 = np.arange(n, dtype=np.float64) ** 2
+    gq = (g + q2).ravel()                               # (g[j] + j^2, flat: parabola j's height term)
+    vf = np.zeros(L * n, np.int64)                      # (the envelope's parabolas, per row)
+    zf = np.full(L * (n + 1), np.inf)                   # (where each takes over from the one before)
+    base = np.arange(L, dtype=np.int64) * n
+    basez = np.arange(L, dtype=np.int64) * (n + 1)
+    zf[basez] = -np.inf
+    k = np.zeros(L, np.int64)
+    for q in range(1, n):
+        fq = gq[base + q]
+        while True:
+            vk = vf.take(base + k)
+            s = (fq - gq.take(base + vk)) / (2.0 * (q - vk))
+            pop = (s <= zf.take(basez + k)) & (k > 0)
+            if not pop.any():
+                break
+            k[pop] -= 1
+        k += 1
+        vf[base + k] = q
+        zf[basez + k] = s
+        zf[basez + k + 1] = np.inf
     out = np.empty_like(g)
-    step = max(1, int(4_000_000 // (n * n)))
-    for s in range(0, len(g), step):
-        out[s:s + step] = (g[s:s + step, None, :] + d2[None, :, :]).min(axis=2)
-    return np.moveaxis(out.reshape(shape), -1, axis)
+    k[:] = 0
+    gf = g.ravel()
+    for q in range(n):
+        while True:
+            adv = zf.take(basez + k + 1) < q
+            if not adv.any():
+                break
+            k[adv] += 1
+        vk = vf.take(base + k)
+        out[:, q] = (q - vk) ** 2 + gf.take(base + vk)
+    return out
 
 
 def distance_to(solid, h):
@@ -176,7 +230,7 @@ def setup(V, T, D):
     pad = 2 * D + 4 * h
     lo = V.min(0) - pad + h * GRID_SHIFT
     shape = np.ceil((V.max(0) + pad - lo) / h).astype(int) + 1
-    occ = voxelise(V, T, lo, h, np.zeros(3, int), shape)
+    occ = voxelise(V, T, lo, h, np.zeros(3, int), shape) if AIM_VOXELS else None
     G.clear()
     G.update(h=h, lo=lo, shape=shape, D=D, occ=occ)
 
@@ -354,14 +408,13 @@ class TriBuckets:
         st = np.zeros((N, 27), np.int64)
         if len(self.keys) == 0:
             return cnt, st
-        for o, off in enumerate(self.offsets):
-            c = cell + off
-            ok = np.all((c >= 0) & (c < self.dim), axis=1)
-            key = (c[:, 0] * self.dim[1] + c[:, 1]) * self.dim[2] + c[:, 2]
-            pos = np.minimum(np.searchsorted(self.keys, key), len(self.keys) - 1)
-            hit = ok & (self.keys[pos] == key)
-            cnt[hit, o] = self.count[pos[hit]]
-            st[hit, o] = self.start[pos[hit]]
+        c = cell[:, None, :] + self.offsets[None, :, :]                   # (N, 27, 3): all neighbours at once
+        ok = ((c >= 0) & (c < self.dim)).all(axis=2)
+        key = (c[:, :, 0] * self.dim[1] + c[:, :, 1]) * self.dim[2] + c[:, :, 2]
+        pos = np.minimum(np.searchsorted(self.keys, key.ravel()), len(self.keys) - 1).reshape(N, 27)
+        hit = ok & (self.keys[pos] == key)
+        cnt[hit] = self.count[pos[hit]]
+        st[hit] = self.start[pos[hit]]
         return cnt, st
 
     def _query(self, P, cnt, st, d, t, Q):
@@ -514,6 +567,7 @@ def certify(V, T, Vh, Th, D):
     -> (ok, witness point or None, its distance)"""
     if len(T) == 0 or len(Th) == 0:
         return True, None, 0.0
+    _tp = time.time()
     lo, hi = Vh.min(0), Vh.max(0)
     ext = float((hi - lo).max())
     if ext <= 0:
@@ -540,6 +594,8 @@ def certify(V, T, Vh, Th, D):
             grids[b] = TriBuckets(V, T, b)
         return grids[b]
     tb = buckets(D)
+    # (which triangles lie on a hull plane: the hull coincides with the solid there - no air on them)
+    coin = _coincident(tb, N, Dp)
     # (how far from the surface the far points are, coarsely: buckets of D, or coarser for a huge part)
     bc = D
     while np.prod(np.ceil((V.max(0) - V.min(0)) / bc) + 3) > 20_000_000:
@@ -559,6 +615,8 @@ def certify(V, T, Vh, Th, D):
     pp = np.tile(np.arange(len(N)), len(cells))
     s = s0
     hb = None
+    if TRACE:
+        print(f"      certify setup {time.time() - _tp:.3f} s ({len(T)} tris, {len(N)} hull planes)")
     while True:
         half = 0.5 * s
         centre = org + (cells + 0.5) * s
@@ -639,7 +697,19 @@ def certify(V, T, Vh, Th, D):
         rest = np.nonzero(~ok)[0]
         if len(rest):
             pts20, valid = _clipped(P, inv[rest], rest, pc, pp, N, Dp, len(cells))
-            ub = _corner_bound(pts20, valid, dc[rest], tc[rest], insc[rest], tb, buckets(float(max(D, half))), D)
+            tbs = buckets(float(max(D, half)))
+            airless = _no_air(pts20, valid, insc[rest], tbs, coin, N, Dp, D)
+            ok[rest[airless]] = True
+            rest = rest[~airless]
+            pts20, valid = pts20[~airless], valid[~airless]
+        if len(rest):
+            pb = _patch_bound(pts20, valid, insc[rest], tbs, coin, s, eps)
+            fine = pb <= D
+            ok[rest[fine]] = True
+            rest = rest[~fine]
+            pts20, valid = pts20[~fine], valid[~fine]
+        if len(rest):
+            ub = _corner_bound(pts20, valid, dc[rest], tc[rest], insc[rest], tb, tbs, D)
             ok[rest[ub <= D]] = True
         rest = np.nonzero(~ok)[0]
         if TRACE:
@@ -665,6 +735,116 @@ CORNERS = np.array([(i, j, k) for i in (0, 1) for j in (0, 1) for k in (0, 1)])
 
 
 EDGES = np.array([(a, b_) for a in range(8) for b_ in range(a + 1, 8) if bin(a ^ b_).count("1") == 1])
+
+
+class SurfaceDist:
+    """Exact distance from any points to a mesh's surface: triangle buckets of Fit, then 4x coarser levels
+    (built when first needed) for the points nothing finer reached."""
+
+    def __init__(self, V, T, b):
+        self.V, self.T, self.b = V, T, float(b)
+        self.levels = {}
+        self.ext = float((V.max(0) - V.min(0)).max()) if len(V) else 0.0
+
+    def __call__(self, P, cap=None):
+        """Distances; inf where farther than cap (or than the whole mesh)."""
+        d = np.full(len(P), np.inf)
+        b = self.b
+        left = np.arange(len(P))
+        stop = 4.0 * self.ext + 4.0 * self.b if cap is None else min(cap, 4.0 * self.ext + 4.0 * self.b)
+        while len(left):
+            if b not in self.levels:
+                self.levels[b] = TriBuckets(self.V, self.T, b)
+            dd, _t, _X = self.levels[b].query(P[left])
+            got = np.isfinite(dd)
+            d[left[got]] = dd[got]
+            left = left[~got]
+            if b >= stop:
+                break
+            b *= 4.0
+        return d
+
+
+def worst_air(p, D):
+    """(distance, point): about the hull point of the piece farthest from its solid - its worst air - to AIM_RES
+    x Fit, by branch and bound over cells of the hull's box: a cell can hold no point farther than its centre's
+    distance plus its half diagonal (or the half diagonal, with its centre inside the solid), so cells that
+    cannot beat the best point found by AIM_RES x Fit are dropped, the rest halved, down to cells of AIM_RES x
+    Fit; then the winning cell is followed down to Fit / 64 (its best child's centre each time: the spot is a
+    real local worst, not a cell centre). The cost follows the air, not the box: no voxel grid, and the same at
+    any Fit. (best, None) when no air point was found (a cell centre in the hull and out of the solid)."""
+    V, T = p.V, p.T
+    N, Dp = p.N, p.Dp
+    Vh, _Th = arrays(p.hull)
+    lo, hi = Vh.min(0), Vh.max(0)
+    ext = float((hi - lo).max())
+    best, spot, cell_at = 0.0, None, None
+    if ext <= 0 or len(T) == 0 or len(N) == 0:
+        return best, spot
+    dist = SurfaceDist(V, T, max(D, ext / 64.0))         # (buckets no finer than the piece needs: exact either way)
+    ray = RayParity(V, T, max(D, float((V.max(0) - V.min(0)).max()) / 256))
+    eps = AIM_RES * D
+    s_min = 2.0 * eps / SQ3                 # (the last cells: half a diagonal of eps - a centre is within eps of the worst)
+    levels = max(0, int(np.ceil(np.log2(ext / (8.0 * s_min))))) if ext > 8.0 * s_min else 0
+    s = s_min * 2 ** levels
+    org = lo - s * CELL_SHIFT
+    n0 = np.ceil((hi - org) / s).astype(np.int64) + 1
+    I, J, K = np.meshgrid(*(np.arange(n) for n in n0), indexing="ij")
+    cells = np.c_[I.ravel(), J.ravel(), K.ravel()]
+    absN1 = np.abs(N).sum(1)
+    tiny = 1e-9 * ext
+    while len(cells):
+        half = 0.5 * s
+        r = half * SQ3
+        centre = org + (cells + 0.5) * s
+        # (cells wholly outside a hull plane are dropped)
+        v = centre @ N.T - Dp[None, :]
+        keep = ~(v - half * absN1[None, :] > tiny).any(axis=1)
+        cells, centre, v = cells[keep], centre[keep], v[keep]
+        if len(cells) == 0:
+            break
+        ins = ray.inside(centre)
+        d = np.full(len(centre), np.inf)
+        out = np.nonzero(~ins)[0]
+        if len(out):
+            d[out] = dist(centre[out])
+        # (a centre in the hull and out of the solid is a point of the air: the best of them may be the spot)
+        cand = ~ins & (v <= tiny).all(axis=1) & np.isfinite(d)
+        if cand.any():
+            k = np.argmax(np.where(cand, d, -np.inf))
+            if d[k] > best:
+                best, spot, cell_at = float(d[k]), centre[k].copy(), (cells[k].copy(), s)
+        if s <= s_min:
+            break
+        # (a cell's points are within its centre's distance plus r of the surface; with the centre inside the
+        #  solid, a point outside is within r minus that distance - deeper than r, the cell is all solid)
+        bound = d + r
+        inside = np.nonzero(ins)[0]
+        if len(inside):
+            di = dist(centre[inside], cap=r)
+            bound[inside] = np.where(np.isfinite(di), r - di, 0.0)
+        live = np.nonzero(bound > best + eps)[0]
+        if len(live) > AIM_CAP:                                     # (the best-bounded ones; a fixed order)
+            live = live[np.lexsort((live, -bound[live]))[:AIM_CAP]]
+            live.sort()
+        cells = (cells[live][:, None, :] * 2 + CORNERS[None]).reshape(-1, 3)
+        s = half
+    if cell_at is not None:
+        # (polish: the winning cell's children, the best child's children... to a 64th of Fit)
+        cell, s = cell_at
+        org_c = org
+        while s > D / 64.0:
+            kids = cell[None, :] * 2 + CORNERS
+            s *= 0.5
+            centre = org_c + (kids + 0.5) * s
+            v = centre @ N.T - Dp[None, :]
+            ins = ray.inside(centre)
+            d = np.where(~ins & (v <= tiny).all(axis=1), dist(centre), -np.inf)
+            k = int(np.argmax(d))
+            if d[k] > best:
+                best, spot = float(d[k]), centre[k].copy()
+            cell = kids[k]
+    return best, spot
 
 
 def _clipped(P, inv, rest, pc, pp, N, Dp, ncells):
@@ -734,9 +914,12 @@ def _corner_bound(Q, valid, dc, tc, insc, tb, tbs, D):
 
 def _bound_with(Q, valid, t, insc, tb, tbs):
     """Farthest of each cell's points from its given triangle - or, where the cell meets the surface only on
-    that triangle's plane (every point of it projects onto the face, no other triangle's box touches the cell,
-    the corners behind the plane are inside the solid), its farthest point in front of the face: a cell
-    straddling a flat face is within Fit as soon as its outside part is."""
+    that triangle's plane (no triangle off the plane touches the cell, the corners behind the plane are inside
+    the solid), its farthest point in front of the face: a cell straddling a flat face is within Fit as soon as
+    its outside part is. A point in front counts only where it projects onto the face itself; a point on or
+    behind the plane is in the solid once a corner behind it is (the cell's half behind the plane holds no
+    surface, so it is all inside with that corner) - it need not project onto the triangle: on a face of two
+    triangles, half the cells' points land on the other one."""
     k = Q.shape[1]
     out = np.empty(len(Q))
     step = max(1, 400_000 // k)
@@ -755,13 +938,170 @@ def _bound_with(Q, valid, t, insc, tb, tbs):
         n /= np.maximum(np.linalg.norm(n, axis=1), 1e-300)[:, None]
         ht = np.einsum("ij,ij->i", Qz - A, n)                          # (height over the face's plane, out +)
         Y = Qz - ht[:, None] * n
-        onface = (np.linalg.norm(X - Y, axis=1) <= 1e-9 * (1.0 + np.abs(ht))).reshape(-1, k)
-        hc = ht.reshape(-1, k)[:, :8]
-        flat = (onface | ~va).all(axis=1) & ((hc >= 0) | insc[s:s + step]).all(axis=1)
+        tol = 1e-9 * (1.0 + np.abs(ht))
+        onface = (np.linalg.norm(X - Y, axis=1) <= tol).reshape(-1, k)
+        hk = ht.reshape(-1, k)
+        hc = hk[:, :8]
+        ins = insc[s:s + step]
+        behind = ((hc < -tol.reshape(-1, k)[:, :8]) & ins).any(axis=1)         # (a corner inside, behind the plane)
+        onplane = hk <= tol.reshape(-1, k)
+        flat = (onface | ~va | (onplane & behind[:, None])).all(axis=1) & ((hc >= 0) | ins).all(axis=1)
         if flat.any():
             flat[flat] = _only_plane(Q[s:s + step][flat, :8], ts[flat], tbs)
-        front = np.where(va, np.maximum(ht, 0.0).reshape(-1, k), -np.inf).max(axis=1)
+        front = np.where(va, np.maximum(hk, 0.0), -np.inf).max(axis=1)
         out[s:s + step] = np.where(flat, np.minimum(far, front), far)
+    return out
+
+
+def _coincident(tb, N, Dp):
+    """Per triangle of tb: its unit normal, plane offset, and the hull plane (N, Dp) facing most its way (-1
+    with no hull planes) -> (n, d, j)."""
+    n = np.cross(tb.B - tb.A, tb.C - tb.A)
+    ln = np.linalg.norm(n, axis=1)
+    n = n / np.maximum(ln, 1e-300)[:, None]
+    d = np.einsum("ij,ij->i", n, tb.A)
+    j = np.full(len(n), -1, np.int64)
+    if len(N):
+        for s in range(0, len(n), 20_000):
+            j[s:s + 20_000] = np.argmax(n[s:s + 20_000] @ N.T, axis=1)
+    j[ln <= 0] = -1
+    return n, d, j
+
+
+def _no_air(Q, valid, insc, tb, coin, N, Dp, D):
+    """Per cell (its clipped points Q (n, 20, 3) with validity, the 8 corners' insideness): holds it no air -
+    every hull point in it inside the solid, or as good as? True where every triangle touching the cell's box
+    lies on a plane behind which the cell is solid (a corner behind all those planes by an eighth of the cell,
+    and inside: the cell's part behind them holds no surface, so it is all inside with that corner), and the
+    hull keeps within delta in front of each plane across the cell - the hull plane facing its way does (the
+    gap at the cell's corners is exact for the cell: at a slightly bent quad it closes as the cells shrink), or
+    every clipped point is. A hull point then reaches the solid part within delta x cell diagonal / margin,
+    14 delta at most: delta is CERT_TOL x Fit / 64, far inside the tolerance. The cells over the hull's own
+    faces and edges pass at the coarsest level; only cells over real air are ever refined."""
+    n = len(Q)
+    out = np.zeros(n, bool)
+    if n == 0:
+        return out
+    corners = Q[:, :8]
+    lo, hi = corners.min(axis=1), corners.max(axis=1)
+    c = 0.5 * (lo + hi)
+    cnt, st = tb._ranges(c)
+    idx, blk = _expand(st.ravel(), cnt.ravel())
+    cell = blk // 27
+    tri = tb.tri[idx]
+    pair = np.unique(cell * len(tb.A) + tri)                     # (a triangle in several buckets: once per cell)
+    cell, tri = pair // len(tb.A), pair % len(tb.A)
+    touch = np.all((tb.lo[tri] <= hi[cell]) & (tb.hi[tri] >= lo[cell]), axis=1)
+    cell, tri = cell[touch], tri[touch]
+    if len(cell) == 0:
+        return out
+    nt, dt, jh = coin
+    delta = CERT_TOL * D / 64.0
+    margin = 0.125 * (hi - lo).max(axis=1)
+    h = np.einsum("ijk,ik->ij", Q[cell], nt[tri]) - dt[tri][:, None]     # (pairs, 20): heights over the plane
+    hc = h[:, :8]
+    # (corners behind every touching plane by the margin: AND over the cell's pairs)
+    behind = _segall(hc <= -margin[cell][:, None], cell, n)
+    solid_behind = (behind & insc).any(axis=1)
+    # (each plane: the hull's facing plane within delta in front of it over the cell, or every clipped point)
+    j = jh[tri]
+    has = j >= 0
+    gap = np.full(len(cell), np.inf)
+    if has.any():
+        hj = np.einsum("ijk,ik->ij", corners[cell[has]], N[j[has]]) - Dp[j[has]][:, None]
+        gap[has] = (hc[has] - hj).max(axis=1)
+    plane_ok = (gap <= delta) | (np.where(valid[cell], h, -np.inf) <= delta).all(axis=1)
+    all_ok = _segall(plane_ok[:, None], cell, n)[:, 0]
+    touched = np.bincount(cell, minlength=n) > 0
+    return touched & solid_behind & all_ok
+
+
+def _patch_bound(Q, valid, insc, tb, coin, s, eps):
+    """Per cell: how far at most its clipped points are from the solid, from the surface patch around it - inf
+    where that gives nothing. Every triangle in the cell's bucket neighbourhood B' lies on a plane; with a corner
+    inside and behind all those planes by an eighth of the cell, the part of B' behind them holds no surface and
+    is solid with that corner. A clipped point in front of some planes is then within reach of its projection
+    into that part (dropped onto the plane it is most in front of, up to four times): the distance stands as the
+    bound for the point, the farthest point for the cell. A cell straddling a curved or folded surface within
+    Fit of the hull certifies at the coarsest level whose neighbourhood holds a corner deep enough inside."""
+    n = len(Q)
+    out = np.full(n, np.inf)
+    if n == 0:
+        return out
+    corners = Q[:, :8]
+    c = 0.5 * (corners.min(axis=1) + corners.max(axis=1))
+    cnt, st = tb._ranges(c)
+    idx, blk = _expand(st.ravel(), cnt.ravel())
+    cell = blk // 27
+    tri = tb.tri[idx]
+    pair = np.unique(cell * len(tb.A) + tri)
+    cell, tri = pair // len(tb.A), pair % len(tb.A)
+    if len(cell) == 0:
+        return out
+    nt, dt, _j = coin
+    h = np.einsum("ijk,ik->ij", corners[cell], nt[tri]) - dt[tri][:, None]
+    behind = _segall(h <= -0.125 * s, cell, n)
+    good = (behind & insc).any(axis=1) & (np.bincount(cell, minlength=n) > 0)
+    if not good.any():
+        return out
+    keep = good[cell]                                   # (only the cells that can pass go through the projections)
+    cell, tri = cell[keep], tri[keep]
+    k = Q.shape[1]
+    q = np.where(valid[:, :, None], Q, 0.0)
+    npair = len(cell)
+    # ((point, cell) segments, point-major: the pairs are sorted by cell, so each point's run is sorted too)
+    seg = (np.arange(k)[:, None] * n + cell[None, :]).ravel()
+    va = valid[cell]
+    nt_tri, dt_tri = nt[tri], dt[tri]
+
+    def heights():
+        hq = np.einsum("ijk,ik->ij", q[cell], nt_tri) - dt_tri[:, None]
+        return np.where(va, hq, -np.inf).T.ravel()                       # (k x npair, point-major)
+    for _ in range(4):
+        hq = heights()
+        hmax = _segmax(hq, seg, n * k)
+        over = hmax > eps
+        if not over.any():
+            break
+        is_max = (hq >= hmax[seg]) & over[seg]
+        sel = np.full(n * k, -1, np.int64)
+        sel[seg[is_max]] = np.nonzero(is_max)[0] % npair              # (one pair per point: whichever wrote last)
+        pts = np.nonzero(sel >= 0)[0]
+        pr = sel[pts]
+        q[pts % n, pts // n] -= hmax[pts][:, None] * nt_tri[pr]
+    hmax = _segmax(heights(), seg, n * k).reshape(k, n).T
+    # (the projection must have stayed in the neighbourhood B', where the planes are known to hold the surface)
+    cidx = np.floor((c - tb.org) / tb.b)
+    blo = tb.org + (cidx - 1) * tb.b - eps
+    bhi = tb.org + (cidx + 2) * tb.b + eps
+    inb = np.all((q >= blo[:, None, :]) & (q <= bhi[:, None, :]), axis=2)
+    ok = (hmax <= eps) & inb
+    dq = np.linalg.norm(q - np.where(valid[:, :, None], Q, 0.0), axis=2)
+    dq = np.where(valid, np.where(ok, dq, np.inf), -np.inf)
+    bound = dq.max(axis=1)
+    out[good] = bound[good]
+    return out
+
+
+def _segall(m, seg, n):
+    """Per segment id (seg ascending) the AND over its rows of m (rows, c); True for empty ones -> (n, c)."""
+    cnt = np.bincount(seg, minlength=n)
+    starts = np.cumsum(cnt) - cnt
+    out = np.ones((n, m.shape[1]), bool)
+    has = cnt > 0
+    if has.any():
+        out[has] = np.logical_and.reduceat(m, starts[has], axis=0)
+    return out
+
+
+def _segmax(val, seg, n):
+    """Per segment id (seg ascending) the greatest value; -inf for empty ones."""
+    cnt = np.bincount(seg, minlength=n)
+    starts = np.cumsum(cnt) - cnt
+    out = np.full(n, -np.inf)
+    has = cnt > 0
+    if has.any():
+        out[has] = np.maximum.reduceat(val, starts[has])
     return out
 
 
@@ -789,10 +1129,10 @@ def _only_plane(corners, t, tb):
 # ------------------------------------------------------------------ pieces
 
 class Piece:
-    """A solid, its hull and its voxels (a crop of the model grid: `sub`, grid index of its corner `a`).
-    The voxels and the hull's planes are worked out only when asked for: a cut is tried ~100 ways per step and
-    almost none of those parts are ever looked at again (measured: 2-2.5x faster, the same pieces). Whether it
-    is within Fit (done) is exact, from its triangles; a piece found within Fit never needs its voxels."""
+    """A solid, its hull and (with AIM_VOXELS) its voxels (a crop of the model grid: `sub`, grid index of its
+    corner `a`). The voxels and the hull's planes are worked out only when asked for: a cut is tried ~100 ways per
+    step and almost none of those parts are ever looked at again (measured: 2-2.5x faster, the same pieces).
+    Whether it is within Fit (done) is exact, from its triangles; a piece found within Fit never needs its voxels."""
 
     def __init__(self, m, a=None, sub=None, check=True, source=None, extra=()):
         # (m with its folded crumbs `extra`: kept apart until something needs the joined solid - see fold_crumbs)
@@ -879,6 +1219,11 @@ class Piece:
     def done(self):
         """Exact (to CERT_TOL of Fit): no point of the hull is farther than Fit from the solid."""
         if self._ok is None:
+            if self.air <= 1e-9 * max(self.vol, 1e-12):
+                # (no air: the hull IS the solid, so every hull point is in it - within Fit, nothing to measure. A
+                #  boxy prop's peel search asks this of dozens of exactly convex parts per step)
+                self._ok, self._wit = True, (None, 0.0)
+                return self._ok
             Vh, Th = arrays(self.hull)
             ok, wit, dw = certify(self.V, self.T, Vh, Th, G["D"])
             self._ok, self._wit = ok, (wit, dw)
@@ -886,8 +1231,9 @@ class Piece:
 
     def far(self):
         """(largest distance from the hull's air to the solid, where it is); (0, None) when within Fit. The spot is
-        the worst voxel of the piece's air (coarse: a cut aimed at it needs only roughly the right place), or the
-        certification's witness where the voxels miss it."""
+        the worst air the search (worst_air) finds - or, with AIM_VOXELS, the worst voxel of the piece's air -
+        (coarse: a cut aimed at it needs only roughly the right place), or the certification's witness where
+        nothing was found."""
         if self._far is None:
             if self.done():
                 self._far = (0.0, None)
@@ -895,6 +1241,10 @@ class Piece:
             h, D = G["h"], G["D"]
             wit, dw = self._wit
             far = (max(dw, D * (1 + 1e-9)), wit)
+            if not AIM_VOXELS:
+                best, spot = worst_air(self, D)
+                self._far = (best, spot) if spot is not None else far      # (nothing found: the witness)
+                return self._far
             if self.sub.any():
                 dist = distance_to(self.sub, h)
                 cand = np.argwhere(dist > max(D - h, 0.0))       # (air the voxels see as about Fit or beyond)
