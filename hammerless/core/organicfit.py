@@ -1666,9 +1666,17 @@ def _submit(p, cands, ex):
     chunks = [list(range(k, len(cands), n_chunks)) for k in range(n_chunks)]
     with _bf._NoMain():
         futs = [ex.submit(_bf._organic_task, (p.V, p.T, [(cands[i][1], cands[i][2]) for i in ch], G["D"], SLIVER,
-                                              p.vol, len(p._parts) > 1, len(p.T) >= SCORER_FROM, p.uid))
+                                              p.vol, len(p._parts) > 1, _scorer_mode(p), p.uid))
                 for ch in chunks]
     return cands, chunks, futs
+
+
+def _scorer_mode(p):
+    """What scores the piece's cuts in a worker: the kernel under SCORER_FROM triangles, else the compiled scorer
+    or the Python one, as Settings says (brushfit.NATIVE) and as this process could load it."""
+    if len(p.T) < SCORER_FROM:
+        return False
+    return "native" if _bf.NATIVE[0] and _bf.native_lib() is not None else "python"
 
 
 def _collect(sub):
@@ -1763,10 +1771,13 @@ def _scores(p, cands):
         except BrokenProcessPool as e:
             print(f"General: worker processes failed ({e}); carrying on in one process")
             _bf._BROKEN[0] = True
+            if _bf.NATIVE[0] and _bf.native_lib() is not None:
+                print("General: the compiled scorer may have crashed a worker: scoring in Python for the rest of the session")
+                _bf.native_crashed()
             _bf.shutdown_pool()
     t = time.time()
     out = []
-    sc = _bf.CutScorer(p.V, p.T, composed) if scorer else None
+    sc = _bf.cut_scorer(p.V, p.T, composed) if scorer else None
     for _kind, n, d, _pk in cands:
         if time.time() > G.get("deadline", float("inf")):       # (out of time: the rest aren't tried)
             out.append((None, None))

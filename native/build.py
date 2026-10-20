@@ -1,6 +1,7 @@
 """Build the native parts with zig (pip install ziglang):
 
 - hammerless/core/_hlnav.dll from native/hlnav.c (nav sampling, flood fill, nav visibility)
+- hammerless/core/_hlgeneral.dll from native/hlgeneral/*.c (General's cut scorer; Python's CutScorer is its fallback)
 - hammerless/core/hlvvis.exe from native/hlvvis.c (the visibility compiler, a drop-in for vvis)
 - hammerless/core/hlvbsp.exe from native/hlvbsp/*.c (the map compiler, a drop-in for vbsp)
 - hammerless/core/hlvrad.exe from native/hlvrad/*.c (the lighting compiler, a drop-in for vrad, 64-bit)
@@ -26,6 +27,8 @@ FLAGS = ["-O2", "-ffp-contract=off", "-fno-fast-math", "-target", "x86_64-window
 FLAGS32 = ["-O2", "-ffp-contract=off", "-fno-fast-math", "-target", "x86-windows-gnu", "-mcpu=pentium4", "-mfpmath=sse"]
 TARGETS = {
     "hlnav": (["-shared"], "_hlnav.dll", "hlnav.c"),
+    # General's cut scorer (brushfit.CutScorer's twin, with an exact hull); Python is its fallback
+    "hlgeneral": (["-shared"], "_hlgeneral.dll", ["hlgeneral/setup.c", "hlgeneral/score.c", "hlgeneral/hull.c"]),
     "hlvvis": (["-I" + os.path.join(HERE, "third_party", "vulkan")], "hlvvis.exe", ["hlvvis.c", "hlvvis_gpu.c"]),
     "hlvbsp": (["32bit"], "hlvbsp.exe", ["hlvbsp/main.c", "hlvbsp/poly.c", "hlvbsp/map.c", "hlvbsp/instance.c", "hlvbsp/brush.c", "hlvbsp/csg.c",
                                   "hlvbsp/portals.c", "hlvbsp/faces.c", "hlvbsp/detail.c", "hlvbsp/write.c",
@@ -120,7 +123,9 @@ for name in sys.argv[1:] or list(TARGETS):
     print(" ".join(cmd))
     subprocess.run(cmd, check=True)
     stem = out[:-4]
-    for leftover in (stem + ".lib", stem + ".pdb", os.path.join(CORE, name + ".lib"), os.path.join(CORE, name + ".pdb")):
+    first = os.path.splitext(os.path.basename(srcs[0]))[0]       # (a shared build of several files names its .lib after the first)
+    for leftover in (stem + ".lib", stem + ".pdb", os.path.join(CORE, name + ".lib"), os.path.join(CORE, name + ".pdb"),
+                     os.path.join(CORE, first + ".lib"), first + ".lib"):
         if os.path.exists(leftover):
             os.remove(leftover)
     print("built", out, os.path.getsize(out), "bytes")

@@ -1,6 +1,8 @@
 """General's worker pipeline: the scorer cache in a worker (brushfit._organic_task) and scoring the heap's next
 piece ahead (organicfit.prescore_next) change nothing about the picks; the cut scorer (brushfit.CutScorer)
-answers as the kernel does. Run with `python -m unittest discover tests/unit` (no Blender needed)."""
+answers as the kernel does, and the compiled one (brushfit.NativeScorer, core/_hlgeneral.dll) as the Python one,
+with Python as the fallback and Settings' toggle honoured. Run with `python -m unittest discover tests/unit` (no
+Blender needed)."""
 import os
 import sys
 import unittest
@@ -8,10 +10,10 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import numpy as np  # noqa: E402
-from manifold3d import Manifold  # noqa: E402
 
-from hammerless.core import brushfit as B  # noqa: E402
+from hammerless.core import brushfit as B  # noqa: E402  (first: it puts the vendored kernel on the path)
 from hammerless.core import organicfit as OF  # noqa: E402
+from manifold3d import Manifold  # noqa: E402
 
 
 def lumpy():
@@ -93,49 +95,7 @@ def kernel_score(m, n, d, D, pvol):
 
 
 class TestCutScorer(unittest.TestCase):
-    """The cut scorer (brushfit.CutScorer) that scores a cut from the mesh alone, its cost following the cut: its
-    spanning forest and Euler tour, the boxes around the cycles of the non-tree edges, and its answers against the
-    kernel's, through grid cells or one dense pass alike."""
-
-    def test_tour_and_cycle_boxes(self):
-        V, T, _m = hollow_and_bars()
-        sc = B.CutScorer(V, T)
-        self.assertTrue(sc.ok)
-        m, ne = len(T), sc.ne
-        self.assertEqual(sc.nshell, 3)                     # (the outer shell with its bar, the hollow, the cube)
-        roots = sc.parent == np.arange(m)
-        self.assertEqual(int(roots.sum()), 3)
-        self.assertTrue(np.all(sc.tree_edge[roots] == ne))
-        others = np.nonzero(~roots)[0]
-        te = sc.tree_edge[others]
-        self.assertTrue(np.all(te < ne))
-        # (a tree edge joins the triangle and its parent)
-        pair = np.sort(sc.et[te], axis=1)
-        self.assertTrue(np.all(pair == np.sort(np.c_[others, sc.parent[others]], axis=1)))
-        # (tin/tout: a child's range inside its parent's; the ranges a permutation; sizes add up)
-        self.assertTrue(np.all(sc.tin[sc.parent[others]] < sc.tin[others]))
-        self.assertTrue(np.all(sc.tout[others] <= sc.tout[sc.parent[others]]))
-        self.assertEqual(sorted(sc.tin.tolist()), list(range(m)))
-        size = np.ones(m, int)
-        order = np.argsort(-sc.tin)                        # (deepest first: children before parents)
-        for t in order:
-            if not roots[t]:
-                size[sc.parent[t]] += size[t]
-        self.assertTrue(np.all(sc.tout - sc.tin == size))
-        self.assertEqual(sorted((sc.tout - sc.tin)[roots].tolist()), sorted(np.bincount(sc.shell).tolist()))
-        # (every non-tree edge's tree path lies in its cycle box)
-        depth = np.zeros(m, int)
-        for t in np.argsort(sc.tin):
-            depth[t] = 0 if roots[t] else depth[sc.parent[t]] + 1
-        for i, e in enumerate(sc.nontree):
-            a, b = sc.et[e]
-            lo, hi = np.minimum(sc.tlo[a], sc.tlo[b]), np.maximum(sc.thi[a], sc.thi[b])
-            while a != b:
-                if depth[a] < depth[b]:
-                    a, b = b, a
-                lo, hi = np.minimum(lo, sc.tlo[a]), np.maximum(hi, sc.thi[a])
-                a = sc.parent[a]
-            self.assertTrue(np.all(sc.plo[i] <= lo + 1e-9) and np.all(sc.phi[i] >= hi - 1e-9), f"edge {e}")
+    """The cut scorer (brushfit.CutScorer) that scores a cut from the mesh alone: its answers against the kernel's."""
 
     def planes(self, V, rnd):
         c = V.mean(0)
@@ -189,17 +149,130 @@ class TestCutScorer(unittest.TestCase):
         V, T, m = hollow_and_bars()
         self.check_against_kernel(V, T, m, False)
 
-    def test_cells_same_as_dense(self):
-        V, T, m = hollow_and_bars()
+
+@unittest.skipIf(B.native_lib() is None, "the compiled scorer (_hlgeneral.dll) isn't built")
+class TestNativeScorer(unittest.TestCase):
+    """The compiled scorer answers as the Python one: the same None / KERNEL / parts, volumes equal to rounding, the
+    same point sets in the same order where the plane meets no vertex, and its hull is the exact one."""
+
+    def check_same(self, V, T, m, composed):
         D, pvol = 3.0, float(m.volume())
-        sc = B.CutScorer(V, T, True)
-        rnd = np.random.default_rng(3)
-        planes = self.planes(V, rnd)
-        dense = [sc.score(n, d, D, B.SLIVER, pvol) for n, d in planes]
-        sc.dense = False
-        cells = [sc.score(n, d, D, B.SLIVER, pvol) for n, d in planes]
-        self.assertEqual(repr(dense), repr(cells))
-        self.assertGreater(sum(x not in (None, B.KERNEL) for x in dense), 20)
+        py, nat = B.CutScorer(V, T, composed), B.NativeScorer(V, T, composed)
+        self.assertEqual((py.ok, py.sheet), (nat.ok, nat.sheet))
+        rnd = np.random.default_rng(11)
+        captured = []
+        _hp = B.Manifold.hull_points
+
+        def hp(pts, *a):
+            captured.append(np.asarray(pts))
+            return _hp(pts, *a)
+        scored = 0
+        try:
+            for n, d in TestCutScorer.planes(self, V, rnd):
+                captured.clear()
+                B.Manifold.hull_points = staticmethod(hp)
+                a = py.score(n, d, D, B.SLIVER, pvol)
+                B.Manifold.hull_points = staticmethod(_hp)
+                b = nat.score(n, d, D, B.SLIVER, pvol)
+                if a is None or a is B.KERNEL:
+                    self.assertIs(a, b, f"plane {n} {d}: python {a} native {b}")
+                    continue
+                self.assertNotIn(b, (None, B.KERNEL), f"plane {n} {d}: python {a} native {b}")
+                self.assertEqual(len(a), len(b), f"plane {n} {d}: python {a} native {b}")
+                scored += 1
+                for (v1, a1), (v2, a2) in zip(sorted(a), sorted(b)):
+                    self.assertAlmostEqual(v1, v2, delta=1e-9 * pvol, msg=f"plane {n} {d}")
+                    self.assertLessEqual(abs(a1 - a2), 0.02 * max(a1, a2) + 1e-5 * pvol, f"plane {n} {d}: air {a1} vs {a2}")
+                if np.any(np.abs(V @ n - d) <= 1e-9 * max(nat_scale(V), 1.0)):
+                    continue                    # (a vertex on the plane: the Python one folds a noise sheet of its own)
+                pts_py = sorted(captured[-len(b):], key=len)
+                pts_nat = sorted([nat.last_points(g) for g in range(len(b))], key=len)
+                for pa, pb in zip(pts_py, pts_nat):
+                    self.assertEqual(pa.shape, pb.shape, f"plane {n} {d}: point counts")
+                    self.assertTrue(np.allclose(pa, pb, rtol=0, atol=1e-9), f"plane {n} {d}: point sets or order")
+        finally:
+            B.Manifold.hull_points = staticmethod(_hp)
+        self.assertGreater(scored, 20)
+
+    def test_same_as_python(self):
+        V, T = lumpy()
+        self.check_same(V, T, OF.to_manifold(V, T), False)
+
+    def test_same_as_python_hollow_shells(self):
+        V, T, m = hollow_and_bars()
+        self.check_same(V, T, m, True)
+
+    def test_against_kernel(self):
+        V, T, m = hollow_and_bars()
+        t = TestCutScorer()
+        CutScorer = B.CutScorer
+        try:
+            B.CutScorer = B.NativeScorer
+            t.check_against_kernel(V, T, m, False)
+        finally:
+            B.CutScorer = CutScorer
+
+    def test_hull_is_exact(self):
+        # (the kernel's hull is order-dependent and was measured up to 6% too big on real parts; ours is the exact
+        #  volume: a box with points inside, a tetrahedron, a sphere's points)
+        rnd = np.random.default_rng(5)
+        pts = np.concatenate([rnd.uniform(-10, 10, (500, 3)), [[-10, -10, -10], [10, 10, 10], [-10, 10, 10], [10, -10, -10],
+                                                               [10, 10, -10], [-10, -10, 10], [10, -10, 10], [-10, 10, -10]]])
+        self.assertAlmostEqual(B.native_hull_volume(pts), 8000.0, places=9)
+        self.assertAlmostEqual(B.native_hull_volume(np.array([[0, 0, 0], [6, 0, 0], [0, 6, 0], [0, 0, 6]], float)), 36.0, places=12)
+        self.assertEqual(B.native_hull_volume(np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], float)), 0.0)
+        Vs, _T = OF.arrays(Manifold.sphere(10.0, 64))
+        self.assertAlmostEqual(B.native_hull_volume(Vs), float(Manifold.sphere(10.0, 64).volume()), delta=1e-6)
+
+    def test_fallback_and_toggle(self):
+        V, T = lumpy()
+        self.assertIsInstance(B.cut_scorer(V, T), B.NativeScorer)              # (on by default)
+        self.assertIsInstance(B.cut_scorer(V, T, native="python"), B.CutScorer)
+        self.assertIsInstance(B.cut_scorer(V, T, native="native"), B.NativeScorer)
+        native, state = B.NATIVE[0], dict(B._native)
+        try:
+            B.NATIVE[0] = False                                              # (Settings: the toggle off)
+            self.assertIsInstance(B.cut_scorer(V, T), B.CutScorer)
+            self.assertIsInstance(B.cut_scorer(V, T, native=True), B.CutScorer)
+            B.NATIVE[0] = True
+            B._native["lib"] = False                                         # (the DLL missing or not loading)
+            self.assertIsNone(B.native_lib())
+            self.assertIsInstance(B.cut_scorer(V, T), B.CutScorer)
+            self.assertIsInstance(B.cut_scorer(V, T, native="native"), B.CutScorer)
+            B._native.update(state)
+            B.native_crashed()                                               # (a worker died with the DLL in use)
+            self.assertIsNone(B.native_lib())
+            self.assertIsInstance(B.cut_scorer(V, T), B.CutScorer)
+        finally:
+            B.NATIVE[0] = native
+            B._native.clear()
+            B._native.update(state)
+        self.assertIsInstance(B.cut_scorer(V, T), B.NativeScorer)
+
+    def test_worker_task_mode(self):
+        V, T = lumpy()
+        D, cuts = 2.0, [(np.array([1.0, 0.0, 0.0]), 10.0)]
+        vol = float(OF.to_manifold(V, T).volume())
+        B._LAST.clear()
+        B._organic_task((V, T, cuts, D, 2.0, vol, False, "python", 31))
+        self.assertIsInstance(B._LAST[31]["sc"], B.CutScorer)
+        B._organic_task((V, T, cuts, D, 2.0, vol, False, "native", 32))
+        self.assertIsInstance(B._LAST[32]["sc"], B.NativeScorer)
+        B._LAST.clear()
+        m = OF.to_manifold(V, T)
+        OF.setup(V, T, D)
+        p = OF.Piece(m, np.zeros(3, int), OF.G["occ"])
+        self.assertEqual(OF._scorer_mode(p), "native")
+        native = B.NATIVE[0]
+        try:
+            B.NATIVE[0] = False
+            self.assertEqual(OF._scorer_mode(p), "python")
+        finally:
+            B.NATIVE[0] = native
+
+
+def nat_scale(V):
+    return float(np.linalg.norm(V.max(0) - V.min(0)))
 
 
 if __name__ == "__main__":

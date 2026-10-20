@@ -292,6 +292,7 @@ class HL_OT_make_collision(bpy.types.Operator):
                     why = ("Hard Surface took too long" if "longer than" in str(e)
                            else "too detailed for Hard Surface")
             if meshes is None:
+                brushfit.NATIVE[0] = bool(bpy.context.scene.hammerless.general_native)
                 limit = float(hs.brush_time_limit)
                 left = limit - (time.time() - t0 if algo == "AUTO" else 0.0)
                 size = float(np.linalg.norm(co.max(axis=0) - co.min(axis=0))) * scale

@@ -23,9 +23,9 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for f in files:
             if f.endswith(".pyc") or f.startswith("."):
                 continue
-            # the only DLL the add-on ships is the nav library; others in core/ (embree4.dll, tbb12.dll for
-            # hlvrad's shelved -embree build) are gitignored local leftovers
-            if f.lower().endswith(".dll") and f != "_hlnav.dll" and os.path.basename(folder) != "_vendor":
+            # the DLLs the add-on ships: the nav library and General's cut scorer; others in core/ (embree4.dll,
+            # tbb12.dll for hlvrad's shelved -embree build) are gitignored local leftovers
+            if f.lower().endswith(".dll") and f not in ("_hlnav.dll", "_hlgeneral.dll") and os.path.basename(folder) != "_vendor":
                 continue
             full = os.path.join(folder, f)
             z.write(full, os.path.join("hammerless", os.path.relpath(full, SRC)))

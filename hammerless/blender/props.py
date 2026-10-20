@@ -767,6 +767,11 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
          "Hammerless's map compiler: the same map as vbsp, byte for byte on 132 of Valve's 134 sample maps. "
          "If it ever fails, Valve's vbsp runs (and the build says so)"),
         ("VALVE", "Valve vbsp", "L4D2's own map compiler (vbsp.exe)")])
+    general_native: BoolProperty(
+        name="General: Compiled Scorer", default=True,
+        description="Convert to Brushes (General) scores its candidate cuts with a compiled library "
+                    "(_hlgeneral.dll, Windows), several times faster than the Python version with the same "
+                    "result. Off, or where the library isn't there or can't load: the Python version")
     model_compiler: EnumProperty(name="Model Compiler", default="HAMMERLESS", items=[
         ("HAMMERLESS", "Hammerless", "Hammerless writes Custom Models' game files itself (no extra tools needed)"),
         ("STUDIOMDL", "Valve studiomdl", "L4D2's own model compiler (studiomdl.exe, from the Authoring Tools)")])

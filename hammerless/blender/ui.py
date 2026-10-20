@@ -1196,6 +1196,7 @@ class HL_PT_compilers(_Sub, bpy.types.Panel):
         col.prop(s, "map_tool", text="Map Compiler")
         col.prop(s, "model_compiler", text="Model Compiler")
         col.prop(s, "extra_vbsp", text="Extra vbsp Options")
+        col.prop(s, "general_native")
 
 
 class HL_PT_scene(_Sub, bpy.types.Panel):
