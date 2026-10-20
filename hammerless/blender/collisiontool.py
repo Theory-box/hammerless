@@ -233,7 +233,8 @@ class HL_OT_make_collision(bpy.types.Operator):
                 msg += (f"; Fit raised to {info['half_unit']:.2f}% - half a game unit, the finest General goes (finer "
                         "isn't felt in game)")
             if info["stopped"]:
-                msg += "; it ran out of time, so the last pieces are looser than Fit"
+                msg += ("; it ran out of time, so the last pieces are looser than Fit (their hulls): raise Time Limit for "
+                        "a full fit")
             elif info["pieces"] >= src.hammerless.brush_max_pieces:
                 msg += "; it used all of Max Pieces: raise it or Detail for a closer or simpler fit"
         elif eof:
@@ -290,12 +291,13 @@ class HL_OT_make_collision(bpy.types.Operator):
                     why = ("Hard Surface took too long" if "longer than" in str(e)
                            else "too detailed for Hard Surface")
             if meshes is None:
-                left = organicfit.TIME_LIMIT - (time.time() - t0 if algo == "AUTO" else 0.0)
+                limit = float(hs.brush_time_limit)
+                left = limit - (time.time() - t0 if algo == "AUTO" else 0.0)
                 size = float(np.linalg.norm(co.max(axis=0) - co.min(axis=0))) * scale
                 asked = size * hs.brush_fit / 100.0               # (Fit: a share of the object's diagonal)
                 fit = max(asked, 0.5)                             # (and never under half a game unit)
                 meshes, info = organicfit.convert(co * scale, tri, detail=fit,
-                                                  max_pieces=hs.brush_max_pieces, time_limit=max(left, 20.0))
+                                                  max_pieces=hs.brush_max_pieces, time_limit=max(left, min(20.0, limit)))
                 info["method"], info["why"] = "General", why
                 if info.get("fit", 0.0) > fit * 1.05 and size > 0:
                     info["raised"] = 100.0 * info["fit"] / size

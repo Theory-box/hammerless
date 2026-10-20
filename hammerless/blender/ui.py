@@ -548,6 +548,7 @@ class HL_PT_obj_brushes(_Panel, bpy.types.Panel):
             if hs.brush_algorithm in ("AUTO", "ORGANIC"):
                 col.prop(hs, "brush_fit")
                 col.prop(hs, "brush_max_pieces")
+                col.prop(hs, "brush_time_limit")
         col.prop(hs, "collision_mode", text="As")
         col.prop(hs, "collision_blocks_vis")
         row = self.layout.row()

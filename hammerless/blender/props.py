@@ -402,6 +402,10 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
     brush_max_pieces: IntProperty(
         name="Max Pieces", default=32, min=2, max=256,
         description="General: at most this many pieces. Fewer pieces fit more loosely")
+    brush_time_limit: IntProperty(
+        name="Time Limit (s)", default=60, min=5, soft_max=600, max=3600,
+        description="General: seconds of cutting at most. Pieces still uncut then are kept as their hull (looser "
+                    "than Fit, can be boxy): raise it for big, dense meshes")
     collision_blocks_vis: BoolProperty(
         name="Blocks Vis", default=False,
         description="Convert to Brushes: the pieces also block visibility like world brushes, so the game skips "
