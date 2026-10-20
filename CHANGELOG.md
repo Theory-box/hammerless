@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.20.6 (test release, 2026-10-20)
 
-- **General's cut scorer is compiled** (`core/_hlgeneral.dll`, Windows; *Settings > Map & Model Compilers > General: Compiled Scorer*, on by default): candidate cuts are scored in C over plain arrays - the per-cut design (the crossed triangles from grid cells, a spanning forest with its Euler tour, cycle boxes for the joins, pre-sorted points) with an **exact convex hull** of its own; the kernel's `hull_points` was found up to 6% too big on real sculpt parts (112 of 465, 35 by more than 1e-6), so the scores are now exact where they were noisy. The same parts and point sets as the Python scorer (about 2,600 real candidates on 8 meshes: 0 mismatches, volumes equal to 3e-11), the 20-mesh regression set 0 WORSE. Per candidate on the statue's 45k-triangle body 17 ms -> 8 ms in one process (the hull is two thirds of what is left), small pieces 3-12x. Off, on another OS, or when the DLL isn't there or can't load, the Python scorer runs (the 0.20.5 one; a worker lost with the DLL in use switches the rest of the session to Python). Blender A/B on the user's statue (Fit 1, Max 32, 8 workers under a 3-core cap, installed 0.20.5 against this build): identical 35 brushes, 8.7% extra collision, 1,864 faces; 30.9 s -> 21.4, 21.6, 20.9 s.
+- **General's cut scorer is compiled** (`core/_hlgeneral.dll`, Windows): candidate cuts are scored in C, about 2x faster on big pieces and 3-12x on small ones, with the same pieces as before. A user's 26,000-face statue (Fit 1%, Max 32): 14.3 s -> 10.2 s, the same 35 brushes and 8.7% extra collision (24 s in 0.20.4).
+- **More exact scores**: the compiled scorer has its own exact convex hull; the geometry kernel's hull was found up to 6-10% too big on some sculpt parts.
+- **Python fallback**: on other systems, when the DLL is missing or can't load, or after a crash in it, the Python scorer runs. *Settings > Map & Model Compilers > General: Compiled Scorer* (on by default) switches it off.
+- General scores the next piece's cuts while the worker processes would otherwise sit idle (same result).
+- The release zip no longer packs build leftovers.
 
 ## 0.20.5 (test release, 2026-10-20)
 
