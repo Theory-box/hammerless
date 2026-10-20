@@ -46,6 +46,7 @@ POOL_AFTER = 1.0            # seconds of cutting in one process before the worke
 POOL_WORK = 100_000         # ...or a cut step this big (triangles x candidate cuts, ~0.1 s here): workers at once
 SCORER_FROM = 1500          # triangles: a piece this big is scored without the kernel (brushfit.CutScorer); under it
 #                             the kernel's split is the faster (0.8 ms a cut on 600 triangles, 1 ms the scorer)
+NEXT_PIECES = 1             # heap pieces scored ahead in the workers while the main process is busy (prescore_next)
 MAX_SIDES = 64              # faces per piece (a curved hull has hundreds: its face directions in 64 groups)
 SLIVER = 2.0                # units: a piece thinner than this is a sliver (it joins a neighbour if that stays in Fit)
 MIN_BRUSH = 1.0             # units: thinner than this, a piece joins a neighbour regardless (the smallest safe brush)
@@ -1301,6 +1302,7 @@ class Piece:
         self._pending = None                # (done's answer on its way from a worker process: see judge_later)
         self._faces = self._snapfaces = None    # (its face planes, for candidates and snapped)
         self._pre = None                    # (candidates scored in the workers while it was judged: see prescore)
+        self._precands = None               # (its full candidate list, when _pre covers all of it: prescore_next)
         self.uid = next(_UIDS)
         self._vox = None
 
@@ -1604,7 +1606,9 @@ def best_cut(p, budget):
     has the least air, so the pieces keep shrinking."""
     D = G["D"]
     need = max(D ** 3, 0.02 * p.air)
-    cands = candidates(p)
+    # (the same list candidates() gives - it depends only on the piece - when prescore_next listed it already)
+    cands = p._precands if p._precands is not None else candidates(p)
+    p._precands = None
     scores = _scores(p, cands)          # (per cut: None or [(volume, air)] per part; parts kept when cut here)
     made = {}
 
@@ -1691,6 +1695,43 @@ def prescore(p):
         p._pre = None
 
 
+def prescore_next(heap, budget, ex):
+    """While the main process goes on with the popped piece - splitting the winning cut, checking a peel's parts,
+    judging what no worker judged - the workers would sit idle: they score the full candidate set of the heap's
+    next piece(s) instead (the ones popped next, by air). A piece's scores depend only on its own geometry and
+    worst air (judge_later found it; budget and need are applied when it is picked), so the picks are the same;
+    only more is done before the Time Limit. Called from _scores, after the popped piece's own batches are queued
+    (the next piece's go behind them) and again after they came back (its judgement may have landed since).
+    Only a piece whose judgement is in (no waiting here), that isn't within Fit, and that _scores would hand to
+    the workers anyway; only while the budget (as it will be once this cut is made) still lets it be cut."""
+    if ex is None or budget < 2 or _bf.WORKERS < 2 or time.time() > G.get("deadline", float("inf")):
+        return
+    for _neg, _u, q in heapq.nsmallest(NEXT_PIECES, heap):
+        if q._pre is not None or q._ok is True or len(q.T) < SCORER_FROM:
+            continue
+        if q._ok is None and (q._pending is None or not q._pending.done()):
+            continue                                # (judged in the main process when popped, or still judging)
+        try:
+            if q.done():
+                continue
+            cands = candidates(q)
+            if not _use_pool(q, cands):
+                continue
+            q._pre = _submit(q, cands, ex)
+            q._precands = cands
+        except Exception:                           # (a broken pool: _scores finds it out, and carries on here)
+            q._pre = q._precands = None
+            return
+
+
+def _use_pool(p, cands):
+    """Whether the piece's candidates are scored in the workers: once cutting has taken a while, or a big step
+    (triangles x cuts: a 40k-triangle piece is worth it from the first cut)."""
+    work = len(p.T) * len(cands)
+    return _bf.WORKERS > 1 and len(cands) >= 16 and not _bf._BROKEN[0] and \
+        (work > POOL_WORK or G.get("cut_time", 0.0) > POOL_AFTER)
+
+
 def _scores(p, cands):
     """Every candidate cut's parts as [(volume, air)], scored without the kernel (brushfit.CutScorer: the chosen
     cut is then really made, by parts_of) - in worker processes once cutting has taken a while, else here.
@@ -1698,16 +1739,22 @@ def _scores(p, cands):
     ex = None
     composed = len(p._parts) > 1
     scorer = len(p.T) >= SCORER_FROM
-    work = len(p.T) * len(cands)        # (triangles x cuts: a 40k-triangle piece is worth it from the first cut)
-    if _bf.WORKERS > 1 and len(cands) >= 16 and not _bf._BROKEN[0] and             (work > POOL_WORK or G.get("cut_time", 0.0) > POOL_AFTER):
+    work = len(p.T) * len(cands)
+    if _use_pool(p, cands):
         ex = _bf.pool(_bf.WORKERS)
     if ex is not None:
         from concurrent.futures.process import BrokenProcessPool
+        idle = G.get("idle")
         try:
             known = _collect(p._pre) if p._pre is not None else {}      # (scored while the piece was judged)
             p._pre = None
             todo = [i for i, c in enumerate(cands) if _plane_key(c) not in known]
-            got = _collect(_submit(p, [cands[i] for i in todo], ex)) if todo else {}
+            sub = _submit(p, [cands[i] for i in todo], ex) if todo else None
+            if idle is not None:
+                idle(ex)                # (the heap's next piece's candidates queued behind these: prescore_next)
+            got = _collect(sub) if sub is not None else {}
+            if idle is not None:
+                idle(ex)                # (...or now, if its judgement wasn't in yet)
             out = [None] * len(cands)
             for i, c in enumerate(cands):
                 k = _plane_key(c)
@@ -1998,7 +2045,11 @@ def _convert_one(V, T, detail, max_pieces, limit, cancel, max_sides):
             if budget < 2 or p.done():
                 done.append(p)
                 continue
+            # (while this piece is cut: the workers score the heap's next piece - with the pieces counted now,
+            #  the budget drops by at least one when this cut is made)
+            G["idle"] = lambda ex, budget=budget: prescore_next(heap, budget - 1, ex)
             best = best_cut(p, budget)
+            G["idle"] = None
             if best is None:
                 done.append(p)
                 continue

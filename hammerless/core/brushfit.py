@@ -1108,17 +1108,24 @@ class _UF:
             self.p[max(a, b)] = min(a, b)
 
 
-_LAST = {}                  # (in a worker: the piece scored last, by key - its scorer and solid are kept for the
-#                             next batch of its cuts; a step's cuts come in several batches per worker)
+_LAST = {}                  # (in a worker: the last LAST_PIECES pieces scored, by key -> {sc, m}: a piece's scorer
+#                             and solid are kept for the next batch of its cuts; a step's cuts come in several
+#                             batches per worker, and the heap's next piece is scored between them (organicfit's
+#                             prescore_next), so the popped piece's own batches may come back after it)
+LAST_PIECES = 2             # (a scorer is a few arrays over the triangles: tens of MB on a 45k-triangle piece)
 
 
 def _organic_task(args):
     """In a worker: General's candidate cuts of one piece, scored only: per cut None or [(volume, air)] per part."""
     V, T, cuts, D, sliver, pvol, composed, scorer, key = args
-    if _LAST.get("key") != key:
-        _LAST.clear()
-        _LAST.update(key=key, sc=CutScorer(V, T, composed) if scorer else None, m=None)
-    sc = _LAST["sc"]
+    kept = _LAST.get(key)
+    if kept is None:
+        while len(_LAST) >= LAST_PIECES:
+            del _LAST[next(iter(_LAST))]            # (the one longest unused: a dict keeps insertion order)
+        kept = _LAST[key] = dict(sc=CutScorer(V, T, composed) if scorer else None, m=None)
+    else:
+        _LAST[key] = _LAST.pop(key)                 # (used now: to the back)
+    sc = kept["sc"]
     out = []
     for n, d in cuts:
         if sc is not None and sc.ok:
@@ -1126,9 +1133,9 @@ def _organic_task(args):
             if got is not KERNEL:
                 out.append(got)
                 continue
-        if _LAST["m"] is None:
-            _LAST["m"] = to_manifold64(V, T)
-        got = plane_parts(_LAST["m"], n, d, D, sliver, pvol)
+        if kept["m"] is None:
+            kept["m"] = to_manifold64(V, T)
+        got = plane_parts(kept["m"], n, d, D, sliver, pvol)
         if got is None:
             out.append(None)
             continue
