@@ -1299,6 +1299,8 @@ class Piece:
         self._ok = self._wit = None
         self._worst = None                  # (worst_air's answer, found by done: far reuses it)
         self._pending = None                # (done's answer on its way from a worker process: see judge_later)
+        self._faces = self._snapfaces = None    # (its face planes, for candidates and snapped)
+        self._pre = None                    # (candidates scored in the workers while it was judged: see prescore)
         self.uid = next(_UIDS)
         self._vox = None
 
@@ -1475,13 +1477,11 @@ def split(p, n, d):
     return [Piece(g[0], extra=g[1:], source=(lambda i=i: (masks()[0], masks()[1][i]))) for i, g in enumerate(groups)]
 
 
-def candidates(p):
-    """[(kind, normal, offset, may_peel)]"""
-    D = G["D"]
-    _far, spot = p.far()
-    out = []
-    V, T = p.V, p.T
-    if spot is not None:
+def _face_planes(p):
+    """The piece's face planes grouped (to a thousandth in direction, half a unit in offset): normals, offsets,
+    their areas, and the hull's corners; kept on the piece."""
+    if p._faces is None:
+        V, T = p.V, p.T
         n_t, area = tri_normals(V, T)
         ok = area > 1e-9
         n_t = n_t[ok]
@@ -1490,25 +1490,63 @@ def candidates(p):
         _u, first, inv = np.unique(q, axis=0, return_index=True, return_inverse=True)
         Ng, Dg = n_t[first], d_t[first]
         Ag = np.bincount(inv.ravel(), weights=area[ok], minlength=len(first))
-        # (planes that really cut the piece: a plane's reach over the solid is that over its hull's corners.
-        #  Tested only as far as the picks go, in chunks: all vertices x all planes was 7.7 GB on a 26k-face body)
         Vh = arrays(p.hull)[0]
         if len(Vh) == 0:
             Vh = V
+        p._faces = (Ng, Dg, Ag, Vh)
+    return p._faces
 
-        def through_first(order, want):
-            got = []
-            for s0 in range(0, len(order), 256):
-                ks = order[s0:s0 + 256]
-                S = Vh @ Ng[ks].T - Dg[ks]
-                for k in ks[(S.max(0) > 0.5) & (S.min(0) < -0.5)]:
-                    got.append(int(k))
-                    if len(got) >= want:
-                        return got
-            return got
+
+def _through_first(Vh, Ng, Dg, order, want):
+    """The first `want` planes of `order` that really cut the piece: a plane's reach over the solid is that over
+    its hull's corners. Tested only as far as the picks go, in chunks: all vertices x all planes was 7.7 GB on a
+    26k-face body."""
+    got = []
+    for s0 in range(0, len(order), 256):
+        ks = order[s0:s0 + 256]
+        S = Vh @ Ng[ks].T - Dg[ks]
+        for k in ks[(S.max(0) > 0.5) & (S.min(0) < -0.5)]:
+            got.append(int(k))
+            if len(got) >= want:
+                return got
+    return got
+
+
+def _plain_cuts(p):
+    """Plain cuts across the piece: a quarter, half and three quarters along each axis."""
+    V = p.V
+    lo, hi = V.min(0), V.max(0)
+    out = []
+    for ax in range(3):
+        e = np.zeros(3)
+        e[ax] = 1.0
+        for f in (0.25, 0.5, 0.75):
+            out.append(("blind", e, float(lo[ax] + f * (hi[ax] - lo[ax])), False))
+    return out
+
+
+def blind_candidates(p):
+    """The candidates that don't depend on where the piece's worst air is - its biggest faces, the plain cuts,
+    and their snaps: scored in the workers while the piece is still being judged (prescore). The same planes,
+    by value, as candidates() lists them."""
+    Ng, Dg, Ag, Vh = _face_planes(p)
+    out = [("face", Ng[k], float(Dg[k]), True) for k in _through_first(Vh, Ng, Dg, np.argsort(-Ag, kind="stable"), 12)]
+    out += _plain_cuts(p)
+    return out + snapped(p, out)
+
+
+def candidates(p):
+    """[(kind, normal, offset, may_peel)]"""
+    D = G["D"]
+    _far, spot = p.far()
+    out = []
+    V = p.V
+    if spot is not None:
+        Ng, Dg, Ag, Vh = _face_planes(p)
         gap = np.abs(Ng @ spot - Dg)
-        picked = through_first(np.argsort(gap, kind="stable"), 10)              # (the faces nearest the worst air...)
-        picked += [k for k in through_first(np.argsort(-Ag, kind="stable"), 12) if k not in picked]   # (...the biggest: peels)
+        picked = _through_first(Vh, Ng, Dg, np.argsort(gap, kind="stable"), 10)     # (the faces nearest the worst air...)
+        picked += [k for k in _through_first(Vh, Ng, Dg, np.argsort(-Ag, kind="stable"), 12)
+                   if k not in picked]                                              # (...the biggest: peels)
         out += [("face", Ng[k], float(Dg[k]), True) for k in picked]
         dirs = list(np.eye(3))
         _u, _s, vt = np.linalg.svd(V - V.mean(0), full_matrices=False)
@@ -1519,12 +1557,7 @@ def candidates(p):
             nn = nn / np.linalg.norm(nn)
             for off in (-D, 0.0, D):
                 out.append(("spot", nn, float(np.dot(nn, spot)) + off, False))
-    lo, hi = V.min(0), V.max(0)
-    for ax in range(3):
-        e = np.zeros(3)
-        e[ax] = 1.0
-        for f in (0.25, 0.5, 0.75):
-            out.append(("blind", e, float(lo[ax] + f * (hi[ax] - lo[ax])), False))
+    out += _plain_cuts(p)
     return out + snapped(p, out)
 
 
@@ -1532,16 +1565,18 @@ def snapped(p, cuts):
     """Each cut nearly along one of the piece's own faces (within 2 degrees, and near it) also tried exactly on that
     face: a cut a little off the underside of a beam leaves a thin slice of the beam on the post below, and the
     post's hull grows a slanted wedge. On the face, the post stays a box."""
-    V, T = p.V, p.T
-    n_t, area = tri_normals(V, T)
-    ok = area > 1e-9
-    if not ok.any():
+    if p._snapfaces is None:
+        V, T = p.V, p.T
+        n_t, area = tri_normals(V, T)
+        ok = area > 1e-9
+        n_t = n_t[ok]
+        d_t = np.einsum("ij,ij->i", n_t, V[T[ok, 0]])
+        q = np.c_[np.round(n_t * 1000).astype(np.int64), np.round(d_t / 0.05).astype(np.int64)]
+        _u, first = np.unique(q, axis=0, return_index=True)
+        p._snapfaces = (n_t[first], d_t[first])
+    Nf, Df = p._snapfaces
+    if len(Nf) == 0:
         return []
-    n_t = n_t[ok]
-    d_t = np.einsum("ij,ij->i", n_t, V[T[ok, 0]])
-    q = np.c_[np.round(n_t * 1000).astype(np.int64), np.round(d_t / 0.05).astype(np.int64)]
-    _u, first = np.unique(q, axis=0, return_index=True)
-    Nf, Df = n_t[first], d_t[first]
     reach = 2.0 * max(G["D"], SLIVER)
     cos2 = np.cos(np.radians(2.0))
     out = []
@@ -1614,6 +1649,48 @@ def best_cut(p, budget):
     return (pick[1], parts) if parts is not None else None
 
 
+def _plane_key(c):
+    _kind, n, d, _pk = c
+    return (float(n[0]), float(n[1]), float(n[2]), float(d))
+
+
+def _submit(p, cands, ex):
+    """The candidates' scoring handed to the workers: -> (cands, chunks, futures). A few batches per worker: a
+    worker still judging a part (judge_later) or slowed by a kernel cut takes fewer; the mesh goes over with
+    each batch (1.6 MB on a 45k-triangle body, 2 ms) but its scorer is built once per worker (brushfit._LAST)."""
+    n_chunks = min(len(cands), 3 * _bf.WORKERS)
+    chunks = [list(range(k, len(cands), n_chunks)) for k in range(n_chunks)]
+    with _bf._NoMain():
+        futs = [ex.submit(_bf._organic_task, (p.V, p.T, [(cands[i][1], cands[i][2]) for i in ch], G["D"], SLIVER,
+                                              p.vol, len(p._parts) > 1, len(p.T) >= SCORER_FROM, p.uid))
+                for ch in chunks]
+    return cands, chunks, futs
+
+
+def _collect(sub):
+    """The workers' answers: {plane key: info}."""
+    cands, chunks, futs = sub
+    out = {}
+    for ch, res in zip(chunks, [f.result() for f in futs]):
+        for i, info in zip(ch, res):
+            out[_plane_key(cands[i])] = info
+    return out
+
+
+def prescore(p):
+    """While a popped piece is still being judged in a worker (judge_later), the candidates that don't need its
+    worst air (blind_candidates) are scored in the other workers: _scores finds them done. Only for a piece with
+    air to spare (WORST_FIRST, as judge): one likely to be cut."""
+    ex = _bf.active_pool()
+    if ex is None or p._pending is None or p._ok is not None or p._pre is not None or len(p.T) < SCORER_FROM or \
+            _bf.WORKERS < 2 or p.air <= WORST_FIRST * G["D"] * p.hull.surface_area():
+        return
+    try:
+        p._pre = _submit(p, blind_candidates(p), ex)
+    except Exception:
+        p._pre = None
+
+
 def _scores(p, cands):
     """Every candidate cut's parts as [(volume, air)], scored without the kernel (brushfit.CutScorer: the chosen
     cut is then really made, by parts_of) - in worker processes once cutting has taken a while, else here.
@@ -1626,21 +1703,15 @@ def _scores(p, cands):
         ex = _bf.pool(_bf.WORKERS)
     if ex is not None:
         from concurrent.futures.process import BrokenProcessPool
-        V, T = p.V, p.T
-        # (a few batches per worker: a worker still judging a part (judge_later) or slowed by a kernel cut takes
-        #  fewer; the mesh goes over with each batch (1.6 MB on a 45k-triangle body, 2 ms) but its scorer is built
-        #  once per worker (brushfit._LAST))
-        n_chunks = min(len(cands), 3 * _bf.WORKERS)
-        chunks = [list(range(k, len(cands), n_chunks)) for k in range(n_chunks)]
         try:
-            with _bf._NoMain():
-                futs = [ex.submit(_bf._organic_task, (V, T, [(cands[i][1], cands[i][2]) for i in ch], G["D"], SLIVER,
-                                                      p.vol, composed, scorer, p.uid)) for ch in chunks]
-            got = [f.result() for f in futs]
+            known = _collect(p._pre) if p._pre is not None else {}      # (scored while the piece was judged)
+            p._pre = None
+            todo = [i for i, c in enumerate(cands) if _plane_key(c) not in known]
+            got = _collect(_submit(p, [cands[i] for i in todo], ex)) if todo else {}
             out = [None] * len(cands)
-            for ch, res in zip(chunks, got):
-                for i, info in zip(ch, res):
-                    out[i] = (info, None)
+            for i, c in enumerate(cands):
+                k = _plane_key(c)
+                out[i] = (known[k] if k in known else got[k], None)
             return out
         except BrokenProcessPool as e:
             print(f"General: worker processes failed ({e}); carrying on in one process")
@@ -1906,6 +1977,8 @@ def _convert_one(V, T, detail, max_pieces, limit, cancel, max_sides):
         raise NotSolid("the mesh is inside out (its normals point inward): recalculate normals outside first")
     setup(V, T, D)
     G["deadline"] = t0 + limit
+    if _bf.WORKERS > 1 and len(T) >= SCORER_FROM and not _bf._BROKEN[0]:
+        _bf.warm_pool(_bf.WORKERS)      # (the workers spawn while the first piece is judged here)
     heap, done, uid, cuts, stopped = [], [], 0, 0, False
     for s in solids(model):
         p = Piece(s, np.zeros(3, int), G["occ"])
@@ -1920,6 +1993,8 @@ def _convert_one(V, T, detail, max_pieces, limit, cancel, max_sides):
                 done.append(p)
                 continue
             budget = max_pieces - (len(done) + len(heap))
+            if budget >= 2:
+                prescore(p)             # (its blind candidates are scored while its judgement is on the way)
             if budget < 2 or p.done():
                 done.append(p)
                 continue

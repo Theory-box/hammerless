@@ -1231,6 +1231,25 @@ def active_pool():
     return None if _BROKEN[0] else _POOL
 
 
+def _noop():
+    return None
+
+
+def warm_pool(n):
+    """Start the n worker processes now, in the background: they spawn (Blender's Python, numpy, the kernel:
+    about a second) while the main process judges the first piece, instead of when the first cut step
+    needs them."""
+    ex = pool(n)
+    if ex is not None:
+        _noop.__module__ = STABLE_NAME
+        try:
+            with _NoMain():
+                for _ in range(n):
+                    ex.submit(_noop)
+        except Exception:
+            pass
+
+
 def shutdown_pool():
     global _POOL, _POOL_SIZE
     if _POOL is not None:
