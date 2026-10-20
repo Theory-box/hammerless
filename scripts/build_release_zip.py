@@ -21,7 +21,7 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     for folder, dirs, files in os.walk(SRC):
         dirs[:] = [d for d in dirs if d != "__pycache__" and not d.startswith(".")]
         for f in files:
-            if f.endswith(".pyc") or f.startswith("."):
+            if f.endswith(".pyc") or f.startswith(".") or f.lower().endswith((".lib", ".pdb", ".exp")):  # (build leftovers)
                 continue
             # the DLLs the add-on ships: the nav library and General's cut scorer; others in core/ (embree4.dll,
             # tbb12.dll for hlvrad's shelved -embree build) are gitignored local leftovers
