@@ -49,7 +49,13 @@ SCORER_FROM = 1500          # triangles: a piece this big is scored without the 
 NEXT_PIECES = 1             # heap pieces scored ahead in the workers while the main process is busy (prescore_next)
 MAX_SIDES = 64              # faces per piece (a curved hull has hundreds: its face directions in 64 groups)
 SLIVER = 2.0                # units: a piece thinner than this is a sliver (it joins a neighbour if that stays in Fit)
-MIN_BRUSH = 1.0             # units: thinner than this, a piece joins a neighbour regardless (the smallest safe brush)
+MIN_BRUSH = 1.0             # units: thinner than this, a piece joins a neighbour or is thickened (the smallest safe brush)
+SPECK = 64.0                # units^3: a sub-unit piece with a hull smaller than this (4 units each way) joins a neighbour
+#                             regardless, like before: too small to be a brush of its own
+FIT_TRIES = 3               # a sub-unit piece's joins tested against the model (fits_model): the least-air ones
+SAMPLE_N = 6                # fits_model's quick check: this many steps along each facet edge of a hull
+JOIN_OVER = 2.0             # a sub-unit piece is thickened only when joining would add more than this x the thickening's
+#                             own volume: joins are preferred (fewer pieces) unless they cost clearly more
 TIME_LIMIT = 60.0           # seconds: past this every piece left is finished as it is (its hull)
 GRID_SHIFT = np.array([0.2345, 0.3456, 0.4567])   # (voxels: on an integer grid, rays along exact edges miscount)
 
@@ -237,7 +243,7 @@ def setup(V, T, D):
     shape = np.ceil((V.max(0) + pad - lo) / h).astype(int) + 1
     occ = voxelise(V, T, lo, h, np.zeros(3, int), shape) if AIM_VOXELS else None
     G.clear()
-    G.update(h=h, lo=lo, shape=shape, D=D, occ=occ)
+    G.update(h=h, lo=lo, shape=shape, D=D, occ=occ, model=(V, T))     # (model: the whole solid, for join_slivers)
 
 
 def hull_planes(Vh, Th):
@@ -685,12 +691,14 @@ TRACE = False
 SQ3 = float(np.sqrt(3.0))
 
 
-def certify(V, T, Vh, Th, D):
+def certify(V, T, Vh, Th, D, cache=None):
     """Is every point of the hull (Vh, Th) within D of the solid (V, T)? Exact against the triangles, to a
     tolerance of CERT_TOL * D: cubic cells over the hull are refined until each is certainly within D (the
     distance to a single triangle is convex, so a cell is within the farthest its corners are from the nearest
     triangle of one of them; a cell with a corner inside the solid farther than its diagonal from the surface is
     inside), or a point of the hull outside the solid farther than D is found - the witness.
+    cache: a dict kept by the caller for many hulls against the same solid and D (join_slivers against the whole
+    model): the solid's ray table, real triangles, buckets and clearance are built once (a third of a call).
     -> (ok, witness point or None, its distance)"""
     if len(T) == 0 or len(Th) == 0:
         return True, None, 0.0
@@ -704,17 +712,25 @@ def certify(V, T, Vh, Th, D):
         return True, None, 0.0
     eps = 1e-9 * ext
     absN1 = np.abs(N).sum(1)
-    ray = RayParity(V, T, _ray_bucket(V))
-    # (only faces with solid behind them: a cut exactly along a cavity's ceiling leaves a sheet of no thickness
-    #  across the cavity - by its triangles the cavity would be within Fit of it)
-    nt, area = tri_normals(V, T)
-    cen = (V[T[:, 0]] + V[T[:, 1]] + V[T[:, 2]]) / 3.0
-    real = (area > 0) & ray.inside(cen - nt * (1e-4 * D))
-    if not real.all():
-        T = T[real]
+    if cache is not None and "ray" in cache:
+        ray, T, grids, clearance = cache["ray"], cache["T"], cache["grids"], cache["clearance"]
         if len(T) == 0:
             return True, None, 0.0
-    grids = {}
+    else:
+        ray = RayParity(V, T, _ray_bucket(V))
+        # (only faces with solid behind them: a cut exactly along a cavity's ceiling leaves a sheet of no thickness
+        #  across the cavity - by its triangles the cavity would be within Fit of it)
+        nt, area = tri_normals(V, T)
+        cen = (V[T[:, 0]] + V[T[:, 1]] + V[T[:, 2]]) / 3.0
+        real = (area > 0) & ray.inside(cen - nt * (1e-4 * D))
+        if not real.all():
+            T = T[real]
+        grids = {}
+        clearance = None
+        if cache is not None:
+            cache.update(ray=ray, T=T, grids=grids, clearance=None)
+        if len(T) == 0:
+            return True, None, 0.0
 
     def buckets(b):
         if b not in grids:
@@ -723,11 +739,14 @@ def certify(V, T, Vh, Th, D):
     tb = buckets(D)
     # (which triangles lie on a hull plane: the hull coincides with the solid there - no air on them)
     coin = _coincident(tb, N, Dp)
-    # (how far from the surface the far points are, coarsely: buckets of D, or coarser for a huge part)
-    bc = D
-    while np.prod(np.ceil((V.max(0) - V.min(0)) / bc) + 3) > 20_000_000:
-        bc *= 2
-    clearance = Clearance(tb if bc == D else TriBuckets(V, T, bc))
+    if clearance is None:
+        # (how far from the surface the far points are, coarsely: buckets of D, or coarser for a huge part)
+        bc = D
+        while np.prod(np.ceil((V.max(0) - V.min(0)) / bc) + 3) > 20_000_000:
+            bc *= 2
+        clearance = Clearance(tb if bc == D else TriBuckets(V, T, bc))
+        if cache is not None:
+            cache["clearance"] = clearance
 
     # (cell sizes: 0.55 Fit doubled up to about an eighth of the hull - cells straddling a flat surface certify
     #  from there down - and halved to the tolerance)
@@ -808,7 +827,9 @@ def certify(V, T, Vh, Th, D):
             if near.any():
                 dw, _tw, _Xw = tb.query(wit[near])
                 dw = np.where(np.isfinite(dw), dw, D * (1 + 1e-9))
-                bad = dw > D
+                # (a hull point inside the solid is no witness: a hull face can lie deep in the solid when the
+                #  hull is judged against the whole model (join_slivers), never against the piece's own surface)
+                bad = (dw > D) & ~ray.inside(wit[near])
                 if bad.any():
                     k = np.argmax(dw)
                     return False, wit[near][k], float(dw[k])
@@ -1899,16 +1920,102 @@ def thinnest(p):
     return float((w.max(axis=0) - w.min(axis=0)).min())
 
 
+def _model_tools():
+    """Inside/outside and nearest-triangle queries against the whole solid (G["model"]), built once per part."""
+    if "model_tools" not in G:
+        Vm, Tm = G["model"]
+        G["model_tools"] = (RayParity(Vm, Tm, _ray_bucket(Vm)), TriBuckets(Vm, Tm, 1.01 * G["D"]))
+    return G["model_tools"]
+
+
+def fits_model(hull_m):
+    """Is a hull within Fit of the whole solid (G["model"]) - not of a piece's own surface? A joined hull that
+    runs through the neighbouring solid is harmless (buried collision); one that bridges a cavity or fills a
+    fillet is not. Exact (certify, with the model's tables cached across calls), as for a piece; first a quick no
+    from a grid of points over the hull's facets - one outside the solid and farther than Fit is a witness (half
+    the refused joins go in a millisecond; the rest bulge near a thin end that no sampling finds)."""
+    Vm, Tm = G["model"]
+    D = G["D"]
+    Vh, Th = arrays(hull_m)
+    if len(Th) == 0:
+        return True
+    ray, tb = _model_tools()
+    A, B, C = Vh[Th[:, 0]], Vh[Th[:, 1]], Vh[Th[:, 2]]
+    # (a grid of points over every facet: a join's bulge sits near the thin end of a long bridging facet, where
+    #  corners and midpoints alone missed it)
+    P = [Vh]
+    for i in range(SAMPLE_N + 1):
+        for j in range(SAMPLE_N + 1 - i):
+            k = SAMPLE_N - i - j
+            if i == SAMPLE_N or j == SAMPLE_N or k == SAMPLE_N:
+                continue                                # (the corners: Vh already)
+            P.append((i * A + j * B + k * C) / SAMPLE_N)
+    P = np.vstack(P)
+    outside = ~ray.inside(P)
+    if outside.any():
+        d, _t, _q = tb.query(P[outside], D * (1 + CERT_TOL))
+        if (d > D * (1 + CERT_TOL)).any():
+            return False
+    # (certify alone: judge's worst-air search first was 0.44 s a hull on a gear against 0.15, since a buried hull
+    #  has nothing to find and the search looks everywhere)
+    ok, _wit, _dw = certify(Vm, Tm, Vh, Th, D, cache=G.setdefault("model_cert", {}))
+    return bool(ok)
+
+
+def thicken(p):
+    """A piece thinner than MIN_BRUSH across its hull, made a safe brush: its hull swept along its thinnest
+    direction up to MIN_BRUSH, into the side where the swept hull stays within Fit of the model (its neighbour's
+    solid, usually: the sweep is buried; the side with more swept corners inside the model is tried first), else
+    half each way (never more than half a unit out: within any Fit). Up to three directions, for a piece thin
+    more than one way."""
+    ray, _tb = _model_tools()
+    h = p.hull
+    for _ in range(3):
+        Vh, Th = arrays(h)
+        N, _Dp = hull_planes(Vh, Th)
+        if len(N) == 0:
+            break
+        w = Vh @ N.T
+        wd = w.max(axis=0) - w.min(axis=0)
+        k = int(np.argmin(wd))
+        if wd[k] >= MIN_BRUSH:
+            break
+        n, t = N[k], MIN_BRUSH * (1 + 1e-6) - float(wd[k])
+        sides = []
+        for sign in (1.0, -1.0):
+            sides.append((int(ray.inside(Vh + sign * t * n).sum()), sign))
+        swept = None
+        for _inside, sign in sorted(sides, reverse=True):
+            cand = Manifold.batch_hull([h, h.translate((sign * t * n).tolist())])
+            if fits_model(cand):
+                swept = cand
+                break
+        if swept is None:
+            swept = Manifold.batch_hull([h.translate((0.5 * t * n).tolist()), h.translate((-0.5 * t * n).tolist())])
+        h = swept
+    q = Piece(h, source=lambda p=p: (p.a, p.sub), check=False)
+    q._thick = True
+    return q
+
+
 def join_slivers(done):
     """A piece thinner than SLIVER (a hair-thin leftover between two cuts) joins the touching neighbour whose
     joined hull adds the least air - as long as the joined piece is still within Fit. A piece that is thin because
-    the mesh is thin there (a hat's crown at its real size) stays: joined regardless, it filled the hat's cavity."""
+    the mesh is thin there (a hat's crown at its real size) stays: joined regardless, it filled the hat's cavity.
+    A piece thinner than MIN_BRUSH can't stay (the smallest safe brush): it joins the first neighbour, by added
+    air, whose joined hull is within Fit of the whole model (fits_model: buried in the neighbouring solid is
+    fine); if none is, it is thickened (thicken) when that costs less than the join - the sweep's volume, hull x
+    (MIN_BRUSH / width - 1), against JOIN_OVER x the join's added air - and it isn't a speck (SPECK); else it joins
+    the least-air neighbour as before. Measured on a gear at Fit 0.5: its 0.95-unit strips joined into blocks
+    added 190-290 units^3 of real air each (all of the gear's 2% invisible collision and its overlapping wedges);
+    thickening them by 0.05 units costs 5. A hat's specks (0.7-12 units^3) still join: a brush that small is
+    worth nothing."""
     kept = set()
     changed = True
     while changed:
         changed = False
         for i, p in enumerate(done):
-            if id(p) in kept or thinnest(p) >= SLIVER:
+            if id(p) in kept or getattr(p, "_thick", False) or thinnest(p) >= SLIVER:
                 continue
             if thinnest(p) >= MIN_BRUSH and time.time() > G.get("deadline", float("inf")) + 15.0:
                 continue                    # (late: only brushes too thin to keep are still joined)
@@ -1920,11 +2027,24 @@ def join_slivers(done):
                 options.append((m.hull().volume() - m.volume() - p.air - q.air, j, m))
             joined = None
             must = thinnest(p) < MIN_BRUSH
-            for _added, j, m in sorted(options, key=lambda o: o[0]):
+            hv = p.hull.volume()
+            options.sort(key=lambda o: o[0])
+            for n_try, (added, j, m) in enumerate(options):
+                if must and (n_try >= FIT_TRIES or hv < SPECK):
+                    break                   # (a speck joins the least-air neighbour below, untested, as before)
                 cand = Piece(m, source=lambda p=p, q=done[j]: union_mask(p, q), check=False)
-                if must or cand.done():
+                if fits_model(cand.hull) if must else cand.done():
                     joined = (j, cand)
                     break
+            if joined is None and must:
+                cost = hv * (MIN_BRUSH / max(thinnest(p), 1e-6) - 1.0)
+                if hv >= SPECK and (not options or options[0][0] > JOIN_OVER * cost):
+                    done = [x for k, x in enumerate(done) if k != i] + [thicken(p)]
+                    changed = True
+                    break
+                if options:
+                    added, j, m = options[0]
+                    joined = (j, Piece(m, source=lambda p=p, q=done[j]: union_mask(p, q), check=False))
             if joined is None:
                 kept.add(id(p))
                 continue

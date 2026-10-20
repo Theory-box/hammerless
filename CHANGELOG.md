@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **General: no more overlapping wedges from thin leftovers.** A piece thinner than a game unit (the smallest safe brush) used to be joined to a neighbour no matter what the joined brush looked like; on a gear at Fit 0.5 units those forced joins made every bit of its 2.3% extra collision and the wedges poking through other pieces. Now such a piece joins a neighbour only when the joined brush stays within Fit of the whole mesh (buried in neighbouring solid is fine), and otherwise is thickened to one unit into the neighbouring solid instead - unless it is a speck (under 4 units each way), which still just joins. The gear: 43 pieces / 2.3% extra collision / 0.63% of the pieces' volume overlapping and visible -> 50 pieces / 0.9% / 0.01% visible overlap, in the same time. A statue's hat and body, and the regression set, are unchanged (the hat at 4x size: one piece more, 6.9% -> 4.5% extra collision).
+- General: the exact Fit check (`certify`) no longer takes a hull point buried inside the solid for a point outside it (it could only happen when a hull is checked against the whole mesh, which the join pass now does).
+
 ## 0.20.6 (test release, 2026-10-20)
 
 - **General's cut scorer is compiled** (`core/_hlgeneral.dll`, Windows): candidate cuts are scored in C, about 2x faster on big pieces and 3-12x on small ones, with the same pieces as before. A user's 26,000-face statue (Fit 1%, Max 32): 14.3 s -> 10.2 s, the same 35 brushes and 8.7% extra collision (24 s in 0.20.4).
