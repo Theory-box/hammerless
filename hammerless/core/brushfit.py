@@ -603,12 +603,499 @@ def group_score(group):
     return vol, max(0.0, hull.volume() - vol)
 
 
+def _cc(a, b, n):
+    """Connected components of nodes 0..n-1 joined by the edges (a[i], b[i]): the smallest node id of each
+    component, per node (min-label hooking with pointer jumping: a handful of vectorised rounds)."""
+    lab = np.arange(n)
+    while True:
+        mn = np.minimum(lab[a], lab[b])
+        np.minimum.at(lab, a, mn)
+        np.minimum.at(lab, b, mn)
+        while True:
+            nxt = lab[lab]
+            if np.array_equal(nxt, lab):
+                break
+            lab = nxt
+        if np.array_equal(lab[a], lab[b]):
+            return lab
+
+
+KERNEL = "kernel"           # CutScorer.score's answer for a cut it leaves to the kernel (along a face of the piece)
+
+
+class CutScorer:
+    """Scores General's candidate plane cuts of one piece without the kernel: per cut, what plane_parts +
+    fold_crumbs + group_score would answer - None, or [(volume, air)] per part - from the mesh alone. Only the
+    chosen cut is then really made (organicfit.split).
+
+    How: every vertex takes a side of the plane (one on the plane counts as above). A side's surface is its whole
+    triangles plus the clipped part of each crossed triangle (a triangle or a quad, its corners the triangle's own
+    and the crossing points of its edges), closed by the cap on the plane. Its volume is the signed cone from the
+    origin over all of that: the whole triangles' cones are kept per triangle, the crossed ones' are few, and the
+    cap's comes from its boundary, the section loops (the crossing points chained through the crossed triangles).
+    The hull of a part is the hull of its points, exactly.
+    The separate parts of a side are the connected pieces of its surface, with the caps joining them: the pieces
+    come from a spanning tree of the triangles (kept once per piece; a side's forest is labelled by pointer
+    jumping, then joined across the non-tree edges); a section loop winding the other way from the outermost is a
+    hole, and its cap joins the part owning it with the part of the smallest outer loop around it, on both sides.
+    The same loop seen from both sides says which parts touch across the plane (a crumb joins the biggest part it
+    touches); on one side, parts pinched together at a point, or cut from different shells of a composed piece
+    (a part with its folded crumbs), touch too.
+    A cut exactly along a face of the piece (a face or snap candidate) is answered KERNEL when the face's
+    placement changes the score (see score): the kernel's split leaves such a face as a zero-thickness sheet on one
+    part or the other by rules of its own, and the real cut's hull counts that sheet. Measured: 3-5x faster than
+    the kernel's split (15 ms a cut on a 50k-triangle body, 1.7 ms on a 45k one at Fit); and the kernel's own hull
+    depends on the order of its points (up to 10% either way on a sculpt's parts), so its scores were noisy where
+    these are exact."""
+
+    def __init__(self, V, T, composed=False):
+        # (composed: the mesh is a part with its folded crumbs side by side - shells that touch)
+        V = np.asarray(V, float)
+        T = np.asarray(T, np.int64)
+        self.V, self.T = V, T
+        self.composed = composed
+        m, nv = len(T), len(V)
+        E = np.stack([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]], axis=1).reshape(-1, 2)
+        key = np.minimum(E[:, 0], E[:, 1]) * nv + np.maximum(E[:, 0], E[:, 1])
+        uniq, inv = np.unique(key, return_inverse=True)
+        inv = inv.ravel()
+        ne = len(uniq)
+        self.ok = m > 0 and bool(np.all(np.bincount(inv, minlength=ne) == 2))     # (closed: every edge twice)
+        if not self.ok:
+            return
+        self.eid = inv.reshape(m, 3)                     # a triangle's edges: (a,b), (b,c), (c,a)
+        self.ea, self.eb = uniq // nv, uniq % nv
+        self.et = (np.argsort(inv, kind="stable") // 3).reshape(ne, 2)      # an edge's two triangles
+        vt = np.zeros(nv, np.int64)                      # a triangle of each vertex
+        vt[T[:, 2]] = np.arange(m)
+        vt[T[:, 1]] = np.arange(m)
+        vt[T[:, 0]] = np.arange(m)
+        self.vt = vt
+        A, Bv, C = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+        self.nrm = np.cross(Bv - A, C - A)
+        self.w = np.einsum("ij,ij->i", A, self.nrm) / 6.0            # (a triangle's cone from the origin)
+        # (a spanning forest of the triangles, breadth first, one tree per shell)
+        src = np.concatenate([self.et[:, 0], self.et[:, 1]])
+        dst = np.concatenate([self.et[:, 1], self.et[:, 0]])
+        eof = np.concatenate([np.arange(ne), np.arange(ne)])
+        o = np.argsort(src, kind="stable")
+        src, dst, eof = src[o], dst[o], eof[o]
+        indptr = np.searchsorted(src, np.arange(m + 1))
+        parent = np.arange(m)
+        tree_edge = np.full(m, ne)                       # (ne: none - a root)
+        shell = np.full(m, -1)
+        seen = np.zeros(m, bool)
+        maxdepth, nshell = 0, 0
+        while not seen.all():
+            r = int(np.argmin(seen))
+            seen[r] = True
+            shell[r] = nshell
+            front = np.array([r])
+            depth = 0
+            while len(front):
+                st, en = indptr[front], indptr[front + 1]
+                cnt = en - st
+                tot = int(cnt.sum())
+                if tot == 0:
+                    break
+                rep = np.repeat(np.arange(len(front)), cnt)
+                idx = st[rep] + (np.arange(tot) - np.repeat(np.cumsum(cnt) - cnt, cnt))
+                cand, via, frm = dst[idx], eof[idx], front[rep]
+                keep = ~seen[cand]
+                cand, via, frm = cand[keep], via[keep], frm[keep]
+                cand, first = np.unique(cand, return_index=True)
+                if len(cand) == 0:
+                    break
+                via, frm = via[first], frm[first]
+                seen[cand] = True
+                parent[cand], tree_edge[cand], shell[cand] = frm, via, nshell
+                front = cand
+                depth += 1
+            maxdepth = max(maxdepth, depth)
+            nshell += 1
+        self.parent, self.tree_edge, self.shell, self.nshell = parent, tree_edge, shell, nshell
+        self.rounds = int(np.ceil(np.log2(maxdepth + 1))) + 1
+        is_tree = np.zeros(ne + 1, bool)
+        is_tree[tree_edge] = True
+        self.nontree = np.nonzero(~is_tree[:ne])[0]
+        self.scale = float(np.linalg.norm(V.max(0) - V.min(0)))
+        self.ar = np.arange(m)
+        self.sheet = self._sheet_area() > 0.01 * np.linalg.norm(self.nrm, axis=1).sum() / 2
+
+    def _sheet_area(self):
+        """The area of the piece's zero-thickness sheets: triangles whose centre lies in an oppositely facing
+        triangle of the same plane. A cut exactly along a face leaves such a sheet (the face, on the part whose
+        solid is on the other side); the kernel's later cuts keep or drop its remnants by rules of their own, so a
+        piece carrying a sheet worth more than 1% of its area is the kernel's to score. A sculpt's flap, one
+        triangle, is far under that."""
+        V, T = self.V, self.T
+        area2 = np.linalg.norm(self.nrm, axis=1)
+        ok = np.nonzero(area2 > 1e-12)[0]
+        if len(ok) == 0:
+            return 0.0
+        n = self.nrm[ok] / area2[ok][:, None]
+        d = np.einsum("ij,ij->i", n, V[T[ok, 0]])
+        q = np.c_[np.round(n * 1e4), np.round(d * 1e3)].astype(np.int64)
+
+        def keys(sign):
+            r = q * sign
+            return ((r[:, 0] + 20_000) * 40_001 + r[:, 1] + 20_000) * 40_001 * 4_000_000_007 + \
+                (r[:, 2] + 20_000) * 4_000_000_007 + r[:, 3]
+        key, opp = keys(1), keys(-1)
+        has = np.isin(key, opp)
+        if not has.any():
+            return 0.0
+        groups = {}
+        for t, k in zip(ok[has], key[has]):
+            groups.setdefault(int(k), []).append(int(t))
+        opp_of = {int(k): int(o) for k, o in zip(key[has], opp[has])}
+        total = 0.0
+        for k, ts in groups.items():
+            ko = opp_of[k]
+            if ko not in groups:
+                continue
+            A, Bt = np.array(ts), np.array(groups[ko])
+            nn = self.nrm[A[0]] / area2[A[0]]
+            u = np.cross(nn, [1.0, 0.0, 0.0] if abs(nn[0]) < 0.9 else [0.0, 1.0, 0.0])
+            u /= np.linalg.norm(u)
+            v = np.cross(nn, u)
+            C = (V[T[A, 0]] + V[T[A, 1]] + V[T[A, 2]]) / 3.0
+            cu, cv = C @ u, C @ v
+            pu = np.stack([V[T[Bt, i]] @ u for i in range(3)], 1)
+            pv = np.stack([V[T[Bt, i]] @ v for i in range(3)], 1)
+            inside = np.zeros(len(A), bool)
+            for s0 in range(0, len(Bt), 256):           # (centres of A against the triangles of B, in 2D)
+                bu, bv = pu[s0:s0 + 256], pv[s0:s0 + 256]
+                e = []
+                for i in range(3):
+                    j = (i + 1) % 3
+                    e.append((bu[:, j] - bu[:, i])[None] * (cv[:, None] - bv[:, i][None])
+                             - (bv[:, j] - bv[:, i])[None] * (cu[:, None] - bu[:, i][None]))
+                inside |= (((e[0] >= 0) & (e[1] >= 0) & (e[2] >= 0)) |
+                           ((e[0] <= 0) & (e[1] <= 0) & (e[2] <= 0))).any(1)
+            total += float(area2[A][inside].sum() / 2)
+        return total
+
+    def _label(self, act, act_e):
+        """The connected pieces of a side's surface (act: its triangles, act_e: the edges joining them): a compact
+        label per triangle (-1 off the side) and their number."""
+        m = len(self.T)
+        act_e_pad = np.append(act_e, False)
+        root = act & ~act_e_pad[self.tree_edge]
+        lab = np.where(root | ~act, self.ar, self.parent)
+        for _ in range(self.rounds):
+            nxt = lab[lab]
+            if np.array_equal(nxt, lab):
+                break
+            lab = nxt
+        nt = self.nontree[act_e[self.nontree]]
+        a, b = lab[self.et[nt, 0]], lab[self.et[nt, 1]]
+        diff = a != b
+        if diff.any():
+            a, b = a[diff], b[diff]
+            nodes, inv = np.unique(np.concatenate([a, b]), return_inverse=True)
+            inv = inv.ravel()
+            rep = _cc(inv[:len(a)], inv[len(a):], len(nodes))
+            lab = lab.copy()
+            lab[nodes] = nodes[rep]          # (every root hooked to its component's smallest)
+            lab = lab[lab]
+        roots = np.nonzero(root)[0]
+        comps = np.unique(lab[roots])
+        remap = np.full(m, -1)
+        remap[comps] = np.arange(len(comps))
+        tri_comp = np.where(act, remap[lab], -1)
+        return tri_comp, len(comps)
+
+    def score(self, n, d, D, sliver, pvol, max_shards=None, rule=None):
+        """plane_parts + fold_crumbs + group_score of the cut (n, d): None or [(volume, air)] per part.
+        A face lying in the plane is placed by the kernel's split as a whole, on the + part (a zero-thickness
+        sheet when its solid is below) or with its solid, by rules of its own (measured: never on the - part as a
+        sheet). Both are scored; when they agree (to 1% of the air) the answer is the "plus" one, else KERNEL -
+        only then does the sheet's fate matter and only the kernel knows it. (On a sculpt such a face is one
+        triangle and they always agree: 424 cuts a step on a 45k-triangle body, 90 ms each in the kernel.)
+        rule forces one: "plus", "solid" or "minus" (vertices on the plane above / with a face's solid / below)."""
+        max_shards = MAX_SHARDS if max_shards is None else max_shards
+        if self.sheet and rule is None:
+            return KERNEL
+        V, T, ea, eb = self.V, self.T, self.ea, self.eb
+        n = np.asarray(n, float)
+        s = V @ n - d
+        tol = 1e-9 * max(self.scale, 1.0)
+        zero = np.abs(s) <= tol
+        pos = s > tol
+        if not zero.any():
+            return self._score(n, d, s, pos, D, sliver, pvol, max_shards)
+        s = np.where(zero, 0.0, s)
+        z3 = zero[T].all(1)
+        if not z3.any() or rule == "plus":
+            return self._score(n, d, s, pos | zero, D, sliver, pvol, max_shards)
+        if rule == "minus":
+            return self._score(n, d, s, pos, D, sliver, pvol, max_shards)
+        side = self.nrm[z3] @ n < 0                      # (solid above the face: above)
+        if side.all() and rule is None:                  # (every such face's solid is above: the placements agree)
+            return self._score(n, d, s, pos | zero, D, sliver, pvol, max_shards)
+        vs = np.zeros(len(V), np.int8)
+        vs[T[z3].ravel()] = np.repeat(np.where(side, 1, -1).astype(np.int8), 3)
+        solid = self._score(n, d, s, np.where(zero, vs >= 0, pos), D, sliver, pvol, max_shards)
+        if rule == "solid":
+            return solid
+        plus = self._score(n, d, s, pos | zero, D, sliver, pvol, max_shards)
+        if (plus is None) != (solid is None):
+            return KERNEL
+        if plus is None:
+            return None
+        if len(plus) != len(solid):
+            return KERNEL
+        for (v1, a1), (v2, a2) in zip(sorted(plus), sorted(solid)):
+            if abs(v1 - v2) > 1e-6 * pvol or abs(a1 - a2) > 0.01 * max(a1, a2) + 1e-6 * pvol:
+                return KERNEL
+        return plus
+
+    def _score(self, n, d, s, pos, D, sliver, pvol, max_shards):
+        """The score with each vertex's side given (pos; s is 0 on the plane)."""
+        V, T, ea, eb = self.V, self.T, self.ea, self.eb
+        pea, peb = pos[ea], pos[eb]
+        cross = np.nonzero(pea != peb)[0]
+        if len(cross) == 0:
+            return None
+        pv = pos[T]
+        npos = pv.sum(1)
+        # (the crossed triangles, turned so the pattern is + - - or + + -; their clipped parts and cap segments)
+        ct = np.nonzero((npos == 1) | (npos == 2))[0]
+        pa = pv[ct]
+        n1 = npos[ct]
+        one = n1 == 1
+        r = np.where(one, np.argmax(pa, axis=1), (np.argmin(pa, axis=1) + 1) % 3)
+        rot = (r[:, None] + np.arange(3)[None, :]) % 3
+        Tr = T[ct[:, None], rot]
+        Er = self.eid[ct[:, None], rot]
+        X = np.zeros((len(ea), 3))
+        sa, sb = s[ea[cross]], s[eb[cross]]
+        den = sa - sb
+        # (both ends on the plane but apart, a vertex shared by a face of each side: the end that is on this side)
+        t = np.where(den != 0, sa / np.where(den != 0, den, 1.0), np.where(pea[cross], 0.0, 1.0))
+        X[cross] = V[ea[cross]] + t[:, None] * (V[eb[cross]] - V[ea[cross]])
+        Qa, Qb, Qc = V[Tr[:, 0]], V[Tr[:, 1]], V[Tr[:, 2]]
+        Xab, Xbc, Xca = X[Er[:, 0]], X[Er[:, 1]], X[Er[:, 2]]
+        det = _det3
+        # + part: (a, Xab, Xca) or (a, b, Xbc, Xca); - part: (b, c, Xca, Xab) or (c, Xca, Xbc)
+        wp = np.where(one, det(Qa, Xab, Xca), det(Qa, Qb, Xbc) + det(Qa, Xbc, Xca)) / 6.0
+        wm = np.where(one, det(Qb, Qc, Xca) + det(Qb, Xca, Xab), det(Qc, Xca, Xbc)) / 6.0
+        e_from = np.where(one, Er[:, 0], Er[:, 1])
+        e_to = Er[:, 2]
+        Xf, Xt = X[e_from], X[e_to]
+        o = n * d
+        wcap = (o @ np.cross(Xt, Xf).T) / 6.0           # (the + cap's cone, per segment; the - cap's is minus it)
+        # (the section loops: crossing edges chained by the segments)
+        cid = np.full(len(ea), -1)
+        cid[cross] = np.arange(len(cross))
+        loop_of_cross = _cc(cid[e_from], cid[e_to], len(cross))
+        _loops, seg_loop = np.unique(loop_of_cross[cid[e_from]], return_inverse=True)
+        seg_loop = seg_loop.ravel()
+        nl = seg_loop.max() + 1
+        u = np.cross(n, [1.0, 0.0, 0.0] if abs(n[0]) < 0.9 else [0.0, 1.0, 0.0])
+        u /= np.linalg.norm(u)
+        v = np.cross(n, u)
+        F, G_ = Xf - o, Xt - o
+        fu, fv, gu, gv = F @ u, F @ v, G_ @ u, G_ @ v
+        area = np.bincount(seg_loop, weights=(fu * gv - fv * gu) / 2.0, minlength=nl)
+        loop_seg = np.zeros(nl, int)
+        loop_seg[seg_loop[::-1]] = np.arange(len(seg_loop))[::-1]       # (a first segment of each loop)
+        # (each side's parts)
+        sides = []
+        for sgn in (1, -1):
+            if sgn > 0:
+                act, act_e, full, vi = npos > 0, pea | peb, npos == 3, np.nonzero(pos)[0]
+                w_part, w_cap, ss = wp, wcap, s
+            else:
+                act, act_e, full, vi = npos < 3, ~(pea & peb), npos == 0, np.nonzero(~pos)[0]
+                w_part, w_cap, ss = wm, -wcap, -s
+            tri_comp, nc = self._label(act, act_e)
+            cc = tri_comp[ct]
+            vol = np.zeros(nc)
+            vol += np.bincount(tri_comp[full], weights=self.w[full], minlength=nc)
+            vol += np.bincount(cc, weights=w_part, minlength=nc)
+            vol += np.bincount(cc, weights=w_cap, minlength=nc)
+            sides.append(dict(sgn=sgn, tri_comp=tri_comp, nc=nc, vol=vol, vi=vi, ss=ss, uf=_UF(nc),
+                              vcomp=tri_comp[self.vt[vi]], xcomp=tri_comp[self.et[cross, 0]]))
+        lp, lm = sides[0]["tri_comp"][ct[loop_seg]], sides[1]["tri_comp"][ct[loop_seg]]
+        # (holes: loops winding against the outermost; each joins the smallest outer loop around it)
+        big = int(np.argmax(np.abs(area)))
+        osg = 1.0 if area[big] >= 0 else -1.0
+        eps_a = 1e-12 * max(self.scale, 1.0) ** 2
+        holes = np.nonzero(area * osg < -eps_a)[0]
+        if len(holes):
+            outers = np.nonzero(area * osg > eps_a)[0]
+            if len(outers) == 1:
+                pairs = [(h, outers[0]) for h in holes]
+            else:
+                qu, qv = fu[loop_seg[holes]], fv[loop_seg[holes]]
+                # (the crossing number of each hole's first point against every segment)
+                y0, y1, x0, x1 = fv[None, :], gv[None, :], fu[None, :], gu[None, :]
+                qy, qx = qv[:, None], qu[:, None]
+                straddle = (y0 > qy) != (y1 > qy)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    xi = x0 + (qy - y0) * (x1 - x0) / (y1 - y0)
+                hit = straddle & (xi > qx)
+                cnt = np.zeros((len(holes), nl), int)
+                hh, ss_ = np.nonzero(hit)
+                np.add.at(cnt, (hh, seg_loop[ss_]), 1)
+                inside = (cnt[:, outers] % 2) == 1
+                pairs = []
+                for k, h in enumerate(holes):
+                    cand = outers[inside[k]]
+                    if len(cand):
+                        pairs.append((h, cand[np.argmin(np.abs(area[cand]))]))
+            for h, oo in pairs:
+                sides[0]["uf"].union(lp[h], lp[oo])
+                sides[1]["uf"].union(lm[h], lm[oo])
+        parts = []                 # [vol, points, extent, side, key, shells]
+        touch = {}                 # key -> keys of the parts it touches
+        key_of = {}
+        for sd in sides:
+            sgn, nc, uf, vol = sd["sgn"], sd["nc"], sd["uf"], sd["vol"]
+            groups = {}
+            for c in range(nc):
+                groups.setdefault(uf.find(c), []).append(c)
+            if (vol < 0).any():
+                # (a hollow - a part of negative volume - belongs to the part whose box holds it, the smallest)
+                P = np.concatenate([V[sd["vi"]], X[cross]])
+                pc = np.concatenate([sd["vcomp"], sd["xcomp"]])
+                lo = np.full((nc, 3), np.inf)
+                hi = np.full((nc, 3), -np.inf)
+                np.minimum.at(lo, pc, P)
+                np.maximum.at(hi, pc, P)
+                for c in np.nonzero(vol < 0)[0]:
+                    g = uf.find(c)
+                    if len(groups.get(g, [])) > 1:
+                        continue            # (already joined through the section)
+                    holders = []
+                    for g2, cs in groups.items():
+                        if g2 == g or sum(vol[cs]) <= 0:
+                            continue
+                        if np.all(lo[cs].min(0) <= lo[c] + 1e-6) and np.all(hi[cs].max(0) >= hi[c] - 1e-6):
+                            holders.append((sum(vol[cs]), g2))
+                    groups.pop(g, None)
+                    if holders:
+                        groups[min(holders)[1]].append(c)
+            gid = np.full(nc, -1)
+            for g, cs in groups.items():
+                gid[cs] = g
+            vg = sd["vcomp"]
+            xg = sd["xcomp"]
+            if len(groups) > 1:
+                vg, xg = gid[vg], gid[xg]
+            for g, cs in groups.items():
+                v_ = float(sum(vol[cs]))
+                if v_ <= 1e-3:
+                    continue
+                key = (sgn, g)
+                if len(groups) == 1:
+                    pts = np.concatenate([V[sd["vi"]], X[cross]])
+                    ext = float(sd["ss"][sd["vi"]].max()) if len(sd["vi"]) else 0.0
+                else:
+                    mv, mx = vg == g, xg == g
+                    pts = np.concatenate([V[sd["vi"][mv]], X[cross[mx]]])
+                    ext = float(sd["ss"][sd["vi"][mv]].max()) if mv.any() else 0.0
+                parts.append([v_, pts, max(ext, 0.0), sgn, key])
+                for c in cs:
+                    key_of[(sgn, c)] = key
+        if len(parts) < 2 or len(parts) > max_shards:
+            return None
+        # (touching across the plane: the two parts of a section loop)
+        for L in range(nl):
+            a, b = key_of.get((1, int(lp[L]))), key_of.get((-1, int(lm[L])))
+            if a is not None and b is not None:
+                touch.setdefault(a, set()).add(b)
+                touch.setdefault(b, set()).add(a)
+        thin = max(D, sliver)
+        big, crumbs = [], []
+        for q in parts:
+            (crumbs if q[0] < 0.05 * pvol and q[2] < thin else big).append(q)
+        if len(big) < 2:
+            return None
+        # (same side: parts pinched together at a point - a crumb's corner on a big part's - and parts of
+        #  different shells of a composed piece: the kernel's min_gap says they touch)
+        if crumbs:
+            tri_shell = {}
+            if self.composed and self.nshell > 1:
+                for sd in sides:
+                    sh = np.full(sd["nc"], -1)
+                    sh[sd["tri_comp"][sd["tri_comp"] >= 0]] = self.shell[sd["tri_comp"] >= 0]
+                    for c in range(sd["nc"]):
+                        tri_shell.setdefault(key_of.get((sd["sgn"], c)), set()).add(int(sh[c]))
+            keys = {}
+
+            def pkeys(q):               # (a part's points on a 1e-6 grid, as one number each)
+                if q[4] not in keys:
+                    g = np.round(q[1] * 1e6).astype(np.int64)
+                    keys[q[4]] = (g[:, 0] * 1_000_003 + g[:, 1]) * 1_000_033 + g[:, 2]
+                return keys[q[4]]
+            for cm in crumbs:
+                for q in big:
+                    if q[3] != cm[3] or q[4] in touch.get(cm[4], ()):
+                        continue
+                    if (tri_shell and any(x != y for x in tri_shell[cm[4]] for y in tri_shell[q[4]])) or \
+                            np.isin(pkeys(cm), pkeys(q)).any():
+                        touch.setdefault(cm[4], set()).add(q[4])
+                        touch.setdefault(q[4], set()).add(cm[4])
+        groups = [[q] for q in big]
+        bigkey = {q[4]: k for k, q in enumerate(big)}
+        for cm in crumbs:
+            touching = [bigkey[k] for k in touch.get(cm[4], ()) if k in bigkey]
+            if touching:
+                j = max(touching, key=lambda k: big[k][0])
+                groups[j].append(cm)
+            else:
+                groups.append([cm])
+        out = []
+        for g in groups:
+            vol = sum(q[0] for q in g)
+            pts = g[0][1] if len(g) == 1 else np.concatenate([q[1] for q in g])
+            # (sorted: the kernel's hull depends on the order of the points - measured 0.4% too big on a hand's part
+            #  in mesh order, right in sorted or any shuffled order - so every part is hulled the same way)
+            pts = pts[np.lexsort(pts.T[::-1])]
+            hv = Manifold.hull_points(np.ascontiguousarray(pts)).volume()
+            out.append((vol, max(0.0, hv - vol)))
+        return out
+
+
+def _det3(a, b, c):
+    """Per row: a . (b x c)."""
+    return (a[:, 0] * (b[:, 1] * c[:, 2] - b[:, 2] * c[:, 1]) + a[:, 1] * (b[:, 2] * c[:, 0] - b[:, 0] * c[:, 2])
+            + a[:, 2] * (b[:, 0] * c[:, 1] - b[:, 1] * c[:, 0]))
+
+
+class _UF:
+    def __init__(self, n):
+        self.p = list(range(n))
+
+    def find(self, x):
+        while self.p[x] != x:
+            self.p[x] = self.p[self.p[x]]
+            x = self.p[x]
+        return x
+
+    def union(self, a, b):
+        a, b = self.find(a), self.find(b)
+        if a != b:
+            self.p[max(a, b)] = min(a, b)
+
+
 def _organic_task(args):
     """In a worker: General's candidate cuts of one piece, scored only: per cut None or [(volume, air)] per part."""
-    V, T, cuts, D, sliver, pvol = args
-    m = to_manifold64(V, T)
+    V, T, cuts, D, sliver, pvol, composed, scorer = args
+    sc = CutScorer(V, T, composed) if scorer else None
+    m = None
     out = []
     for n, d in cuts:
+        if sc is not None and sc.ok:
+            got = sc.score(n, d, D, sliver, pvol)
+            if got is not KERNEL:
+                out.append(got)
+                continue
+        if m is None:
+            m = to_manifold64(V, T)
         got = plane_parts(m, n, d, D, sliver, pvol)
         if got is None:
             out.append(None)

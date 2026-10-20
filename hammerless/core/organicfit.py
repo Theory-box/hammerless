@@ -42,6 +42,8 @@ AIM_RES = 0.25              # of Fit: the worst-air search stops at cells this s
 AIM_CAP = 100_000           # cells kept in the worst-air search's frontier at most (the best-bounded)
 POOL_AFTER = 1.0            # seconds of cutting in one process before the worker processes start (small shapes never)
 POOL_WORK = 100_000         # ...or a cut step this big (triangles x candidate cuts, ~0.1 s here): workers at once
+SCORER_FROM = 1500          # triangles: a piece this big is scored without the kernel (brushfit.CutScorer); under it
+#                             the kernel's split is the faster (0.8 ms a cut on 600 triangles, 1 ms the scorer)
 MAX_SIDES = 64              # faces per piece (a curved hull has hundreds: its face directions in 64 groups)
 SLIVER = 2.0                # units: a piece thinner than this is a sliver (it joins a neighbour if that stays in Fit)
 MIN_BRUSH = 1.0             # units: thinner than this, a piece joins a neighbour regardless (the smallest safe brush)
@@ -469,6 +471,13 @@ class Clearance:
         return out | (n == 0)
 
 
+def _ray_bucket(V):
+    """RayParity's column size for a mesh: its answer is exact at any size, the size only sets how many triangles a
+    ray tests (measured on a 45k-triangle body at Fit: 150 a point, 55 s of a 54 s conversion; at 1/512 of the
+    extent, a few; at 1/512 the table itself cost 45 s: a cut's cap triangles span the extent)."""
+    return max(float((V.max(0) - V.min(0)).max()) / 128, 1e-6)
+
+
 class RayParity:
     """Inside/outside of a closed mesh for any points: rays along +x, crossings counted with a consistent
     tie-break (a ray exactly through an edge or corner counts once, not once per triangle)."""
@@ -503,6 +512,8 @@ class RayParity:
         s = np.where(tie & (s == 0), np.sign(by - ay), s)
         return s
 
+    PAIRS = 1_000_000           # point-triangle pairs tested at once at most (memory: ~20 arrays of them)
+
     def inside(self, P, chunk=100_000):
         out = np.zeros(len(P), bool)
         for s in range(0, len(P), chunk):
@@ -519,6 +530,9 @@ class RayParity:
         pos = np.minimum(np.searchsorted(self.keys, key), len(self.keys) - 1)
         hit = ok & (self.keys[pos] == key)
         cnt = np.where(hit, self.count[pos], 0)
+        if cnt.sum() > self.PAIRS and N > 1:          # (too many pairs for one go: halves - 6.7M on a 45k-tri body)
+            h = N // 2
+            return np.concatenate([self._inside(P[:h]), self._inside(P[h:])])
         idx, pt = _expand(np.where(hit, self.start[pos], 0), cnt)
         if len(idx) == 0:
             return np.zeros(N, bool)
@@ -577,7 +591,7 @@ def certify(V, T, Vh, Th, D):
         return True, None, 0.0
     eps = 1e-9 * ext
     absN1 = np.abs(N).sum(1)
-    ray = RayParity(V, T, max(D, float((V.max(0) - V.min(0)).max()) / 256))
+    ray = RayParity(V, T, _ray_bucket(V))
     # (only faces with solid behind them: a cut exactly along a cavity's ceiling leaves a sheet of no thickness
     #  across the cavity - by its triangles the cavity would be within Fit of it)
     nt, area = tri_normals(V, T)
@@ -782,7 +796,7 @@ def worst_air(p, D):
     if ext <= 0 or len(T) == 0 or len(N) == 0:
         return best, spot
     dist = SurfaceDist(V, T, max(D, ext / 64.0))         # (buckets no finer than the piece needs: exact either way)
-    ray = RayParity(V, T, max(D, float((V.max(0) - V.min(0)).max()) / 256))
+    ray = RayParity(V, T, _ray_bucket(V))
     eps = AIM_RES * D
     s_min = 2.0 * eps / SQ3                 # (the last cells: half a diagonal of eps - a centre is within eps of the worst)
     levels = max(0, int(np.ceil(np.log2(ext / (8.0 * s_min))))) if ext > 8.0 * s_min else 0
@@ -1321,12 +1335,25 @@ def candidates(p):
         _u, first, inv = np.unique(q, axis=0, return_index=True, return_inverse=True)
         Ng, Dg = n_t[first], d_t[first]
         Ag = np.bincount(inv.ravel(), weights=area[ok], minlength=len(first))
-        S = V @ Ng.T - Dg
-        through = (S.max(0) > 0.5) & (S.min(0) < -0.5)          # (planes that really cut the piece)
-        Ng, Dg, Ag = Ng[through], Dg[through], Ag[through]
+        # (planes that really cut the piece: a plane's reach over the solid is that over its hull's corners.
+        #  Tested only as far as the picks go, in chunks: all vertices x all planes was 7.7 GB on a 26k-face body)
+        Vh = arrays(p.hull)[0]
+        if len(Vh) == 0:
+            Vh = V
+
+        def through_first(order, want):
+            got = []
+            for s0 in range(0, len(order), 256):
+                ks = order[s0:s0 + 256]
+                S = Vh @ Ng[ks].T - Dg[ks]
+                for k in ks[(S.max(0) > 0.5) & (S.min(0) < -0.5)]:
+                    got.append(int(k))
+                    if len(got) >= want:
+                        return got
+            return got
         gap = np.abs(Ng @ spot - Dg)
-        picked = list(np.argsort(gap)[:10])                     # (the faces nearest the worst air...)
-        picked += [k for k in np.argsort(-Ag)[:12] if k not in picked]     # (...and the biggest: peels)
+        picked = through_first(np.argsort(gap, kind="stable"), 10)              # (the faces nearest the worst air...)
+        picked += [k for k in through_first(np.argsort(-Ag, kind="stable"), 12) if k not in picked]   # (...the biggest: peels)
         out += [("face", Ng[k], float(Dg[k]), True) for k in picked]
         dirs = list(np.eye(3))
         _u, _s, vt = np.linalg.svd(V - V.mean(0), full_matrices=False)
@@ -1416,7 +1443,8 @@ def best_cut(p, budget):
             if moved >= 0.15 * p.vol and (peel is None or key > peel[0]) and \
                     time.time() < G.get("deadline", float("inf")):
                 parts = parts_of(i)
-                if parts is not None and all(parts[k].done() for k in exact):
+                # (the air-free parts, found again among the real parts: the scores' order isn't theirs)
+                if parts is not None and all(q.done() for q in parts if q.air <= 0.005 * q.vol + 1e-6):
                     peel = (key, "peel", i)
     pick = None
     if peel is not None:
@@ -1432,9 +1460,12 @@ def best_cut(p, budget):
 
 
 def _scores(p, cands):
-    """Every candidate cut's parts as [(volume, air)] - in worker processes once cutting has taken a while (they
-    only score; the chosen cut is made again here), else here, keeping the parts. -> [(info, parts or None)]"""
+    """Every candidate cut's parts as [(volume, air)], scored without the kernel (brushfit.CutScorer: the chosen
+    cut is then really made, by parts_of) - in worker processes once cutting has taken a while, else here.
+    -> [(info, parts or None)]"""
     ex = None
+    composed = len(p._parts) > 1
+    scorer = len(p.T) >= SCORER_FROM
     work = len(p.T) * len(cands)        # (triangles x cuts: a 40k-triangle piece is worth it from the first cut)
     if _bf.WORKERS > 1 and len(cands) >= 16 and not _bf._BROKEN[0] and             (work > POOL_WORK or G.get("cut_time", 0.0) > POOL_AFTER):
         ex = _bf.pool(_bf.WORKERS)
@@ -1446,7 +1477,7 @@ def _scores(p, cands):
         try:
             with _bf._NoMain():
                 futs = [ex.submit(_bf._organic_task, (V, T, [(cands[i][1], cands[i][2]) for i in ch], G["D"], SLIVER,
-                                                      p.vol)) for ch in chunks]
+                                                      p.vol, composed, scorer)) for ch in chunks]
             got = [f.result() for f in futs]
             out = [None] * len(cands)
             for ch, res in zip(chunks, got):
@@ -1459,12 +1490,20 @@ def _scores(p, cands):
             _bf.shutdown_pool()
     t = time.time()
     out = []
+    sc = _bf.CutScorer(p.V, p.T, composed) if scorer else None
     for _kind, n, d, _pk in cands:
         if time.time() > G.get("deadline", float("inf")):       # (out of time: the rest aren't tried)
             out.append((None, None))
             continue
-        parts = split(p, n, d)
-        out.append((None if parts is None else [(q.vol, q.air) for q in parts], parts))
+        if sc is not None and sc.ok:
+            got = sc.score(n, d, G["D"], SLIVER, p.vol)
+            if got is not _bf.KERNEL:
+                out.append((got, None))
+                continue
+        parts = split(p, n, d)                                   # (small, along a face, or not closed: the kernel)
+        # (the parts are kept for parts_of only while they are small: hundreds of cuts of a 45k-triangle body
+        #  kept would be gigabytes; the chosen one is cut again)
+        out.append((None if parts is None else [(q.vol, q.air) for q in parts], parts if work <= POOL_WORK else None))
     G["cut_time"] = G.get("cut_time", 0.0) + time.time() - t
     return out
 
