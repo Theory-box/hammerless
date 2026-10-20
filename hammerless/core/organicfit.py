@@ -306,6 +306,14 @@ def _segmin(val, seg, n):
     return out, arg
 
 
+def _segmin_into(out, val, seg):
+    """out[s] = min(out[s], least val of segment s), seg ascending."""
+    if len(seg):
+        starts = np.r_[0, np.nonzero(seg[1:] != seg[:-1])[0] + 1]
+        ids = seg[starts]
+        out[ids] = np.minimum(out[ids], np.minimum.reduceat(val, starts))
+
+
 def _expand(starts, counts):
     """[starts[i] + r for r in range(counts[i])] for all i, in order; and which i each came from."""
     tot = int(counts.sum())
@@ -323,6 +331,7 @@ class TriBuckets:
         self.A, self.B, self.C = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
         self.b = float(b)
         self.lo = np.minimum(np.minimum(self.A, self.B), self.C)
+        self.cen = (self.A + self.B + self.C) / 3.0
         self.hi = np.maximum(np.maximum(self.A, self.B), self.C)
         self.org = self.lo.min(0) - 0.5 * b
         ia = np.floor((self.lo - self.org) / b).astype(np.int64)
@@ -349,6 +358,7 @@ class TriBuckets:
         keys, self.tri = keys[order], tri[order]
         self.keys, self.start, self.count = np.unique(keys, return_index=True, return_counts=True)
         self.offsets = np.array([(i, j, k) for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1)])
+        self._lv = None
 
     def _slab(self, ti, ia, ib):
         """Bucket keys of one triangle's box that its plane passes through (each column along the normal's main
@@ -384,26 +394,52 @@ class TriBuckets:
         return (idx[:, 0] * self.dim[1] + idx[:, 1]) * self.dim[2] + idx[:, 2]
 
     PAIRS = 1_500_000           # (point, triangle) pairs worked on at once
+    FEW = 8                     # a cell's triangles are measured outright (no walking down) when this few or fewer
 
-    def query(self, P):
-        """(distance, triangle, closest point) of each point's nearest triangle within b: farther, (inf, -1, nan)."""
-        d = np.full(len(P), np.inf)
-        t = np.full(len(P), -1, np.int64)
-        Q = np.full((len(P), 3), np.nan)
-        for s in range(0, len(P), 200_000):
-            e = s + 200_000
-            cnt, st = self._ranges(P[s:e])
-            tot = cnt.sum(1)
-            # (points in runs of about PAIRS pairs)
-            edges = np.searchsorted(np.cumsum(tot), np.arange(self.PAIRS, tot.sum() + self.PAIRS, self.PAIRS))
-            a = 0
-            for b_ in np.unique(np.minimum(edges + 1, len(tot))):
-                if b_ > a:
-                    self._query(P[s + a:s + b_], cnt[a:b_], st[a:b_], d[s + a:s + b_], t[s + a:s + b_], Q[s + a:s + b_])
-                a = b_
-        return d, t, Q
+    def _tree(self):
+        """The buckets as a pyramid (each level's cells twice the size, merging 8): per level the cells' keys (in
+        level-0 numbering), their integer coordinates, the tight box of the surface in each (a triangle's box
+        clipped to the bucket: its part in the bucket lies in both), one point of the surface near each (on its
+        first triangle) and the cell's triangles (each once). A query walks it down: a cell farther than the
+        nearest surface point found so far is dropped with everything in it; one with few triangles is measured
+        outright."""
+        if self._lv is None:
+            dim = self.dim
+            keys = self.keys
+            co = np.c_[keys // (dim[1] * dim[2]), (keys // dim[2]) % dim[1], keys % dim[2]]
+            # (level 0: the triangles' boxes clipped to their bucket, the tightest over each bucket)
+            seg = np.repeat(np.arange(len(keys)), self.count)
+            clo = self.org + co[seg] * self.b
+            lo = np.minimum.reduceat(np.maximum(self.lo[self.tri], clo), self.start, axis=0)
+            hi = np.maximum.reduceat(np.minimum(self.hi[self.tri], clo + self.b), self.start, axis=0)
+            # (a surface point near each bucket: its first triangle's nearest point to the bucket's centre - a
+            #  vertex of a big triangle could be far away, a useless bound)
+            t0 = self.tri[self.start]
+            rep = closest_on_triangles(self.org + (co + 0.5) * self.b, self.A[t0], self.B[t0], self.C[t0])
+            tri, start, count = self.tri, self.start, self.count
+            levels = [(keys, co, lo, hi, rep, tri, start, count)]
+            while len(keys) > 1:
+                pco = co // 2
+                pk = (pco[:, 0] * dim[1] + pco[:, 1]) * dim[2] + pco[:, 2]
+                keys, first, inv = np.unique(pk, return_index=True, return_inverse=True)
+                inv = inv.ravel()
+                plo = np.full((len(keys), 3), np.inf)
+                phi = np.full((len(keys), 3), -np.inf)
+                np.minimum.at(plo, inv, lo)
+                np.maximum.at(phi, inv, hi)
+                # (the parents' triangles: the children's, each once per parent)
+                pair = np.unique(inv[seg] * len(self.A) + tri)
+                cell, tri = pair // len(self.A), pair % len(self.A)
+                count = np.bincount(cell, minlength=len(keys))
+                start = np.cumsum(count) - count
+                seg = cell
+                co, lo, hi, rep = pco[first], plo, phi, rep[first]
+                levels.append((keys, co, lo, hi, rep, tri, start, count))
+            self._lv = levels
+        return self._lv
 
     def _ranges(self, P):
+        """Per point its 27 neighbouring buckets' (count, start) into tri."""
         N = len(P)
         cell = np.floor((P - self.org) / self.b).astype(np.int64)
         cnt = np.zeros((N, 27), np.int64)
@@ -419,28 +455,95 @@ class TriBuckets:
         st[hit] = self.start[pos[hit]]
         return cnt, st
 
-    def _query(self, P, cnt, st, d, t, Q):
+    def query(self, P, cap=None):
+        """(distance, triangle, closest point) of each point's nearest triangle within cap (b unless given):
+        farther, (inf, -1, nan). Exact: the pyramid is walked down, keeping only the cells no farther than the
+        nearest surface point known for the point (cap at first, then the cells' sample points, then measured
+        triangles), to the triangles of the cells left. Among triangles equally near, the lowest."""
+        d = np.full(len(P), np.inf)
+        t = np.full(len(P), -1, np.int64)
+        Q = np.full((len(P), 3), np.nan)
+        if len(self.keys) == 0 or len(P) == 0:
+            return d, t, Q
+        cap = self.b if cap is None else float(cap)
+        levels = self._tree()
+        for s in range(0, len(P), 50_000):
+            self._query(P[s:s + 50_000], cap, levels, d[s:s + 50_000], t[s:s + 50_000], Q[s:s + 50_000])
+        return d, t, Q
+
+    def _query(self, P, cap, levels, d, t, Q):
         N = len(P)
-        if cnt.sum() == 0:
-            return
-        idx, blk = _expand(st.ravel(), cnt.ravel())
-        pt = blk // 27
-        tri = self.tri[idx]
-        pair = np.sort(pt * len(self.A) + tri)               # (a triangle in several buckets: once per point)
-        pair = pair[np.r_[True, pair[1:] != pair[:-1]]]
+        dim = self.dim
+        top = len(levels) - 1
+        ub = np.full(N, cap)
+        # (the walk starts where the cells are at least cap: the 27 around a point's hold all within cap of it - at
+        #  cap b that is the buckets themselves, one level; with no cap, the top)
+        L = top if not np.isfinite(cap) else min(top, max(0, int(np.ceil(np.log2(max(cap / self.b, 1e-300))))))
+        if L == top and len(levels[top][0]) == 1:
+            pt = np.arange(N)
+            cell = np.zeros(N, np.int64)
+        else:
+            c = np.floor((P - self.org) / self.b).astype(np.int64) >> L
+            c = (c[:, None, :] + self.offsets[None, :, :]).reshape(-1, 3)
+            ok = ((c >= 0) & ((c << L) < dim)).all(axis=1)
+            kk = (c[:, 0] * dim[1] + c[:, 1]) * dim[2] + c[:, 2]
+            lk = levels[L][0]
+            pos = np.minimum(np.searchsorted(lk, kk), len(lk) - 1)
+            hit = ok & (lk[pos] == kk)
+            pt, cell = np.repeat(np.arange(N), 27)[hit], pos[hit]
+        while len(pt):
+            keys, co, lo, hi, rep, tri, start, count = levels[L]
+            Pp = P[pt]
+            # (the nearest surface point known: the cell's sample point tightens it)
+            _segmin_into(ub, np.linalg.norm(Pp - rep[cell], axis=1), pt)
+            lb = np.linalg.norm(np.maximum(np.maximum(lo[cell] - Pp, Pp - hi[cell]), 0.0), axis=1)
+            keep = lb <= ub[pt]
+            pt, cell = pt[keep], cell[keep]
+            # (cells of few triangles, and every cell at the bottom: measured)
+            few = count[cell] <= self.FEW if L > 0 else np.ones(len(cell), bool)
+            if few.any():
+                idx, blk = _expand(start[cell[few]], count[cell[few]])
+                self._measure(P, pt[few][blk], tri[idx], ub, d, t, Q)
+            if L == 0:
+                break
+            pt, cell = pt[~few], cell[~few]
+            kids = (co[cell][:, None, :] * 2 + CORNERS[None]).reshape(-1, 3)
+            kk = (kids[:, 0] * dim[1] + kids[:, 1]) * dim[2] + kids[:, 2]
+            nk = levels[L - 1][0]
+            pos = np.minimum(np.searchsorted(nk, kk), len(nk) - 1)
+            hit = nk[pos] == kk
+            pt, cell = np.repeat(pt, 8)[hit], pos[hit]
+            L -= 1
+
+    def _measure(self, P, pt, tri, ub, d, t, Q):
+        """The (point, triangle) pairs' real distances into d, t, Q and the bound ub, each pair once, in a fixed
+        order; a triangle's box no nearer than the nearest surface point known is dropped before the real
+        distance."""
+        N = len(P)
+        pair = np.unique(pt * len(self.A) + tri)
         pt, tri = pair // len(self.A), pair % len(self.A)
-        # (the box of each triangle no nearer than the point's nearest centroid: dropped before the real distance)
-        lo, hi = self.lo[tri], self.hi[tri]
-        box = np.linalg.norm(np.maximum(np.maximum(lo - P[pt], P[pt] - hi), 0.0), axis=1)
-        cen = np.linalg.norm((self.A[tri] + self.B[tri] + self.C[tri]) / 3.0 - P[pt], axis=1)
-        ub, _a = _segmin(cen, pt, N)
-        keep = box <= ub[pt]
-        pt, tri = pt[keep], tri[keep]
-        X = closest_on_triangles(P[pt], self.A[tri], self.B[tri], self.C[tri])
-        dist = np.linalg.norm(X - P[pt], axis=1)
-        best, arg = _segmin(dist, pt, N)
-        got = (arg >= 0) & (best <= self.b)
-        d[got], t[got], Q[got] = best[got], tri[arg[got]], X[arg[got]]
+        for s in range(0, len(pt), self.PAIRS):
+            ps, ts = pt[s:s + self.PAIRS], tri[s:s + self.PAIRS]
+            Pp = P[ps]
+            # (the triangle of the nearest centroid first, its real distance the bound for the rest: a point by a
+            #  dense surface then measures a few triangles, not every one in reach of the cells' sample points)
+            _c, argc = _segmin(np.linalg.norm(self.cen[ts] - Pp, axis=1), ps, N)
+            one = argc[argc >= 0]
+            p1, t1 = ps[one], ts[one]
+            X1 = closest_on_triangles(P[p1], self.A[t1], self.B[t1], self.C[t1])
+            ub[p1] = np.minimum(ub[p1], np.linalg.norm(X1 - P[p1], axis=1))
+            box = np.linalg.norm(np.maximum(np.maximum(self.lo[ts] - Pp, Pp - self.hi[ts]), 0.0), axis=1)
+            keep = box <= ub[ps]
+            ps, ts = ps[keep], ts[keep]
+            if len(ps) == 0:
+                continue
+            X = closest_on_triangles(P[ps], self.A[ts], self.B[ts], self.C[ts])
+            dist = np.linalg.norm(X - P[ps], axis=1)
+            best, arg = _segmin(dist, ps, N)
+            tb = np.where(arg >= 0, ts[np.maximum(arg, 0)], -1)
+            got = (arg >= 0) & (best <= ub) & ((best < d) | ((best == d) & (tb < t)))
+            d[got], t[got], Q[got] = best[got], tb[got], X[arg[got]]
+            ub[got] = best[got]
 
 
 class Clearance:
@@ -487,6 +590,10 @@ class RayParity:
         self.d2 = (B[:, 1] - A[:, 1]) * (C[:, 2] - A[:, 2]) - (C[:, 1] - A[:, 1]) * (B[:, 2] - A[:, 2])
         self.A, self.B, self.C = A, B, C
         self.b = float(b)
+        # (a triangle wholly behind a point along x is never crossed: skipped before the crossing test, with a
+        #  margin far above the rounding of the crossing's x)
+        self.xmax = np.maximum(np.maximum(A[:, 0], B[:, 0]), C[:, 0])
+        self.tiny = 1e-9 * float((V.max(0) - V.min(0)).max()) if len(V) else 0.0
         lo = np.minimum(np.minimum(A, B), C)[:, 1:]
         hi = np.maximum(np.maximum(A, B), C)[:, 1:]
         self.org = lo.min(0) - 0.5 * b
@@ -537,6 +644,8 @@ class RayParity:
         if len(idx) == 0:
             return np.zeros(N, bool)
         tri = self.tri[idx]
+        ahead = self.xmax[tri] > P[pt, 0] - self.tiny
+        tri, pt = tri[ahead], pt[ahead]
         A, B, C = self.A[tri], self.B[tri], self.C[tri]
         py, pz = P[pt, 1], P[pt, 2]
         s1 = self._side(A[:, 1], A[:, 2], B[:, 1], B[:, 2], py, pz)
@@ -709,22 +818,24 @@ def certify(V, T, Vh, Th, D):
         ok = deep[inv].any(axis=1)
         ok[miss] = True
         rest = np.nonzero(~ok)[0]
+        # (three sufficient tests, the cheap one first and the others only on what it leaves: on a dense organic
+        #  mesh the corners' triangles settle three cells in four at a tenth of the cost of the other two)
         if len(rest):
             pts20, valid = _clipped(P, inv[rest], rest, pc, pp, N, Dp, len(cells))
             tbs = buckets(float(max(D, half)))
+            ub = _corner_bound(pts20, valid, dc[rest], tc[rest], insc[rest], tb, tbs, D)
+            fine = ub <= D
+            ok[rest[fine]] = True
+            rest = rest[~fine]
+            pts20, valid = pts20[~fine], valid[~fine]
+        if len(rest):
             airless = _no_air(pts20, valid, insc[rest], tbs, coin, N, Dp, D)
             ok[rest[airless]] = True
             rest = rest[~airless]
             pts20, valid = pts20[~airless], valid[~airless]
         if len(rest):
             pb = _patch_bound(pts20, valid, insc[rest], tbs, coin, s, eps)
-            fine = pb <= D
-            ok[rest[fine]] = True
-            rest = rest[~fine]
-            pts20, valid = pts20[~fine], valid[~fine]
-        if len(rest):
-            ub = _corner_bound(pts20, valid, dc[rest], tc[rest], insc[rest], tb, tbs, D)
-            ok[rest[ub <= D]] = True
+            ok[rest[pb <= D]] = True
         rest = np.nonzero(~ok)[0]
         if TRACE:
             print(f"      certify s {s / D:.4f} D: {len(cells)} cells, {len(P)} points, {len(rest)} left; b {b / D:.2f} D "
@@ -752,31 +863,18 @@ EDGES = np.array([(a, b_) for a in range(8) for b_ in range(a + 1, 8) if bin(a ^
 
 
 class SurfaceDist:
-    """Exact distance from any points to a mesh's surface: triangle buckets of Fit, then 4x coarser levels
-    (built when first needed) for the points nothing finer reached."""
+    """Exact distance from any points to a mesh's surface: triangle buckets of Fit (built when first needed),
+    walked as a pyramid for any distance."""
 
     def __init__(self, V, T, b):
         self.V, self.T, self.b = V, T, float(b)
-        self.levels = {}
-        self.ext = float((V.max(0) - V.min(0)).max()) if len(V) else 0.0
+        self.tb = None
 
     def __call__(self, P, cap=None):
         """Distances; inf where farther than cap (or than the whole mesh)."""
-        d = np.full(len(P), np.inf)
-        b = self.b
-        left = np.arange(len(P))
-        stop = 4.0 * self.ext + 4.0 * self.b if cap is None else min(cap, 4.0 * self.ext + 4.0 * self.b)
-        while len(left):
-            if b not in self.levels:
-                self.levels[b] = TriBuckets(self.V, self.T, b)
-            dd, _t, _X = self.levels[b].query(P[left])
-            got = np.isfinite(dd)
-            d[left[got]] = dd[got]
-            left = left[~got]
-            if b >= stop:
-                break
-            b *= 4.0
-        return d
+        if self.tb is None:
+            self.tb = TriBuckets(self.V, self.T, self.b)
+        return self.tb.query(P, cap=np.inf if cap is None else cap)[0]
 
 
 def worst_air(p, D):
