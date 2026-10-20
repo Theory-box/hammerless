@@ -406,6 +406,11 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
         name="Time Limit (s)", default=60, min=5, soft_max=600, max=3600,
         description="General: seconds of cutting at most. Pieces still uncut then are kept as their hull (looser "
                     "than Fit, can be boxy): raise it for big, dense meshes")
+    brush_max_sides: IntProperty(
+        name="Max Sides", default=64, min=6, max=128,
+        description="Convert to Brushes: at most this many sides per brush (the engine allows 128). A curved piece "
+                    "is rounded off to this many flat sides, pushed out so it still covers the shape: fewer sides "
+                    "are simpler brushes that stand a little further off")
     collision_blocks_vis: BoolProperty(
         name="Blocks Vis", default=False,
         description="Convert to Brushes: the pieces also block visibility like world brushes, so the game skips "

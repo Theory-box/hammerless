@@ -1564,7 +1564,10 @@ def fewer_sides(hull, max_sides):
         return hull
     # (directions: the facets' normals grouped into max_sides clusters, area-weighted (k-means on the sphere);
     #  each plane is pushed out to touch the hull, so the result holds all of it)
-    k = max(4, max_sides - 6)        # (the box it starts from can keep up to 6 sides of its own)
+    k = max_sides - 6                # (the box it starts from can keep up to 6 sides of its own)
+    if k <= 0:
+        lo, hi = Vh.min(0), Vh.max(0)
+        return Manifold.cube((hi - lo).tolist()).translate(lo.tolist())
     rng = np.random.default_rng(1)
     C = n[rng.choice(len(n), min(k, len(n)), replace=False, p=area / area.sum())]
     for _ in range(12):

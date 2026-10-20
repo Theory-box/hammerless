@@ -245,8 +245,9 @@ class HL_OT_make_collision(bpy.types.Operator):
             if info["stuck"]:
                 msg += "; some of it couldn't be split into convex pieces: those pieces are their convex hull"
             if info.get("capped"):
-                msg += (f"; {info['capped']} curved pieces had more than {64} sides: each is a slightly larger "
-                        "64-sided brush")
+                ms = src.hammerless.brush_max_sides
+                msg += (f"; {info['capped']} curved pieces had more than {ms} sides (Max Sides): each is a slightly "
+                        f"larger {ms}-sided brush")
         else:
             msg = (f"{what} from {r.kept_regions} flat areas "
                    f"({100 * r.kept_share:.1f}% of the surface; {r.paired_walls} two-sided walls as one brush each); "
@@ -297,7 +298,8 @@ class HL_OT_make_collision(bpy.types.Operator):
                 asked = size * hs.brush_fit / 100.0               # (Fit: a share of the object's diagonal)
                 fit = max(asked, 0.5)                             # (and never under half a game unit)
                 meshes, info = organicfit.convert(co * scale, tri, detail=fit,
-                                                  max_pieces=hs.brush_max_pieces, time_limit=max(left, min(20.0, limit)))
+                                                  max_pieces=hs.brush_max_pieces, time_limit=max(left, min(20.0, limit)),
+                                                  max_sides=hs.brush_max_sides)
                 info["method"], info["why"] = "General", why
                 if info.get("fit", 0.0) > fit * 1.05 and size > 0:
                     info["raised"] = 100.0 * info["fit"] / size
@@ -317,10 +319,10 @@ class HL_OT_make_collision(bpy.types.Operator):
         brushes, capped = [], 0
         for k, (V, T) in enumerate(meshes):
             faces = brushfit.hull_faces(V, T)
-            if len(faces) > organicfit.MAX_SIDES:
+            if len(faces) > hs.brush_max_sides:
                 capped += 1
                 V, T = brushfit.arrays(organicfit.fewer_sides(brushfit.Manifold.hull_points(V.tolist()),
-                                                              organicfit.MAX_SIDES))
+                                                              hs.brush_max_sides))
                 faces = brushfit.hull_faces(V, T)
             # (only the corners the faces use: one inside a face or on a straight edge would be a loose point)
             used = sorted({i for f in faces for i in f})
