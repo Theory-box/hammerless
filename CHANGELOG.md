@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.4 (test release, 2026-10-20)
+
+- **General: Fit is checked exactly**: whether a piece is within Fit is now decided against the mesh's own triangles, not voxels, so Fit means the same at any size; the panel minimum is 0.1% (half a game unit is still the floor, and the message says so).
+- **General: faster, and no memory blowups on dense sculpts**: candidate cuts are scored without the boolean engine on big pieces, cuts are aimed by an exact worst-air search, nearest-triangle lookups skip whole regions that can't hold the answer, and the within-Fit check runs its quickest test first. A 26,000-face statue body that needed about 16 GB now peaks under 2 GB; the user's statue (Fit 2%, Max 16) converts in about 31 s instead of 40-52 s.
+- **General: no more stray box pieces**: when rounding a curved piece down to its side limit, a rounding hair in the geometry kernel made it fall back to the piece's bounding box (a cube in a statue's chest, 4.5x the piece; extra collision 45% -> 15%). It now keeps the rounded piece, nudges its sides out, or keeps the exact piece - never the box.
+- **Time Limit (s)** setting for General (default 60): pieces still uncut when it runs out are kept as their hulls, and the message says to raise it.
+- **Max Sides** setting for General and Hard Surface (6-128, default 64): curved pieces are rounded off to at most this many sides.
+
 ## 0.20.3 (test release, 2026-10-19)
 
 - **General: thin shells keep their shape at any size**: a piece 1-2 units thin joins a neighbour only if the joined piece stays within Fit (under 1 unit it always joins: the smallest safe brush). A statue's hat at its real size had its cavity filled (1 piece, 57% extra collision); now 12 pieces at 10%, about the same at any scale.
