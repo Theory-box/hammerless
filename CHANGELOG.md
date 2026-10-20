@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **General's cut scorer works per cut, not per piece**: scoring a candidate cut no longer walks the whole piece's triangles - the crossed triangles, the parts' volumes (prefix sums along a spanning tree's Euler tour) and the joins across the plane are found from the cut itself - and a part's points come pre-sorted. The same picks (20-mesh regression set: 0 WORSE, every row the same; volumes equal to 1e-11); on the statue's 45k-triangle body a candidate costs about 25% less, and cuts along a face that used to go to the boolean engine mostly don't any more. A hollow-shaped part of zero volume (rounding noise) is no longer folded into another part at random. In Blender under a 3-core limit the statue converts in the same time with 2 workers (33.6 vs 33.1 s) and slower with 8 (40.6 vs 29.8 s): each worker builds the piece's scorer and that setup is now about 2x (90-120 ms on the 45k-triangle body); identical 35 brushes, 8.7% extra collision, 1,864 faces.
+
 ## 0.20.5 (test release, 2026-10-20)
 
 - **General is faster on dense sculpts, with the same result**: new pieces are checked against Fit in the worker processes while cutting carries on, the cheap worst-air search runs before the exact Fit check, cuts that don't depend on the aim are scored ahead of time, the workers start with the conversion, and the merge pass and cut scorer do less work. A user's 26,000-face statue (Fit 1%, Max 32): 24 s -> 14 s, the same 35 brushes and 8.7% extra collision.

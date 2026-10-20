@@ -606,7 +606,7 @@ def group_score(group):
 def _cc(a, b, n):
     """Connected components of nodes 0..n-1 joined by the edges (a[i], b[i]): the smallest node id of each
     component, per node (min-label hooking with pointer jumping: a handful of vectorised rounds)."""
-    lab = np.arange(n)
+    lab = np.arange(n, dtype=np.int64)          # (int64 throughout: numpy 1.26 on Windows defaults to int32)
     while True:
         mn = np.minimum(lab[a], lab[b])
         np.minimum.at(lab, a, mn)
@@ -644,6 +644,8 @@ def _cycles(a, b, n):
 
 
 KERNEL = "kernel"           # CutScorer.score's answer for a cut it leaves to the kernel (along a face of the piece)
+CELLS_FROM = 100_000        # triangles: a piece this big finds a plane's triangles and edges through its grid cells;
+#                             under it one pass over every box is cheaper (numpy: a dozen calls cost more than it)
 SORT_DIR = np.array([1.0, 0.6180339887, 0.3819660113]) / 1.2360679775   # (a part's points are hulled in this order)
 
 
@@ -659,12 +661,19 @@ class CutScorer:
     cap's comes from its boundary, the section loops (the crossing points chained through the crossed triangles).
     The hull of a part is the hull of its points, exactly.
     The separate parts of a side are the connected pieces of its surface, with the caps joining them: the pieces
-    come from a spanning tree of the triangles (kept once per piece; a side's forest is labelled by pointer
-    jumping, then joined across the non-tree edges); a section loop winding the other way from the outermost is a
-    hole, and its cap joins the part owning it with the part of the smallest outer loop around it, on both sides.
-    The same loop seen from both sides says which parts touch across the plane (a crumb joins the biggest part it
-    touches); on one side, parts pinched together at a point, or cut from different shells of a composed piece
-    (a part with its folded crumbs), touch too.
+    come from a spanning tree of the triangles (kept once per piece); a section loop winding the other way from
+    the outermost is a hole, and its cap joins the part owning it with the part of the smallest outer loop around
+    it, on both sides. The same loop seen from both sides says which parts touch across the plane (a crumb joins
+    the biggest part it touches); on one side, parts pinched together at a point, or cut from different shells of
+    a composed piece (a part with its folded crumbs), touch too.
+    The cost of a cut follows the cut, not the piece: the crossed triangles come from a grid of cells over the
+    piece (only the cells the plane passes through are looked at); the tree's pieces on a side are read off its
+    Euler tour - a side's roots are the crossed triangles whose tree edge is on the other side, a root's piece is
+    its subtree minus the subtrees hanging off its crossed triangles across the plane, and prefix sums of the
+    cones along the tour give a piece's volume in one subtraction per hanging subtree; the non-tree edges that
+    could join two pieces are only those whose cycle in the tree (its box, kept per edge; the tree is built cell
+    by cell so the cycles are short) reaches the plane. The points of a part are its side's vertices, read in
+    their hull order from one sort kept per piece, with the crossing points merged in.
     A cut exactly along a face of the piece (a face or snap candidate) is answered KERNEL when the face's
     placement changes the score (see score): the kernel's split leaves such a face as a zero-thickness sheet on one
     part or the other by rules of its own, and the real cut's hull counts that sheet. Measured: 3-5x faster than
@@ -687,6 +696,7 @@ class CutScorer:
         self.ok = m > 0 and bool(np.all(np.bincount(inv, minlength=ne) == 2))     # (closed: every edge twice)
         if not self.ok:
             return
+        self.ne = ne
         self.eid = inv.reshape(m, 3)                     # a triangle's edges: (a,b), (b,c), (c,a)
         self.ea, self.eb = uniq // nv, uniq % nv
         self.et = (np.argsort(inv, kind="stable") // 3).reshape(ne, 2)      # an edge's two triangles
@@ -694,57 +704,222 @@ class CutScorer:
         vt[T[:, 2]] = np.arange(m)
         vt[T[:, 1]] = np.arange(m)
         vt[T[:, 0]] = np.arange(m)
-        self.vt = vt
         A, Bv, C = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
         self.nrm = np.cross(Bv - A, C - A)
         self.w = np.einsum("ij,ij->i", A, self.nrm) / 6.0            # (a triangle's cone from the origin)
-        # (a spanning forest of the triangles, breadth first, one tree per shell)
-        src = np.concatenate([self.et[:, 0], self.et[:, 1]])
-        dst = np.concatenate([self.et[:, 1], self.et[:, 0]])
-        eof = np.concatenate([np.arange(ne), np.arange(ne)])
-        o = np.argsort(src, kind="stable")
-        src, dst, eof = src[o], dst[o], eof[o]
-        indptr = np.searchsorted(src, np.arange(m + 1))
-        parent = np.arange(m)
-        tree_edge = np.full(m, ne)                       # (ne: none - a root)
-        shell = np.full(m, -1)
-        seen = np.zeros(m, bool)
-        maxdepth, nshell = 0, 0
-        while not seen.all():
-            r = int(np.argmin(seen))
-            seen[r] = True
-            shell[r] = nshell
-            front = np.array([r])
-            depth = 0
-            while len(front):
-                st, en = indptr[front], indptr[front + 1]
-                cnt = en - st
-                tot = int(cnt.sum())
-                if tot == 0:
-                    break
-                rep = np.repeat(np.arange(len(front)), cnt)
-                idx = st[rep] + (np.arange(tot) - np.repeat(np.cumsum(cnt) - cnt, cnt))
-                cand, via, frm = dst[idx], eof[idx], front[rep]
-                keep = ~seen[cand]
-                cand, via, frm = cand[keep], via[keep], frm[keep]
-                cand, first = np.unique(cand, return_index=True)
+        self.vnoise = 1e-12 * float(np.abs(self.w).sum())           # (what a summed volume may be off by)
+        self.tlo = np.minimum(np.minimum(A, Bv), C)                  # (a triangle's box)
+        self.thi = np.maximum(np.maximum(A, Bv), C)
+        self._forest()
+        self._tour()
+        self._cells()
+        self._path_boxes()
+        self.dense = m < CELLS_FROM
+        # (the vertices in hull order, and in tour order: a part's points are read off these)
+        self.vkey = V @ SORT_DIR
+        self.vsorted = np.argsort(self.vkey, kind="stable")
+        self.vkey_s = self.vkey[self.vsorted]
+        vtin = self.tin[vt]
+        self.vorder = np.argsort(vtin, kind="stable")
+        self.vtin_s = vtin[self.vorder]
+        inv = np.empty(nv, np.int64)
+        inv[self.vsorted] = np.arange(nv)
+        self.tour_to_sorted = inv[self.vorder]           # (a vertex's place in hull order, per place in tour order)
+        self.Vs = V[self.vsorted]                        # (the vertices in hull order)
+        self.Vt = V[self.vorder]                         # (...and in tour order)
+        self.scale = float(np.linalg.norm(V.max(0) - V.min(0)))
+        self.sheet = self._sheet_area() > 0.01 * np.linalg.norm(self.nrm, axis=1).sum() / 2
+
+    # ---------------------------------------------------------------- per piece
+
+    def _forest(self):
+        """A spanning forest of the triangles (one tree per shell), grown cell by cell: the triangles are binned
+        on a grid by their centres, joined inside each cell first (Boruvka rounds: every piece hooks to its
+        smallest neighbour), then inside each cell of the next coarser grid, up to one cell. So the tree path
+        between two neighbouring triangles stays near them, mostly: the cycle a non-tree edge closes is short
+        (a breadth-first tree sent most cycles up to the root and back - the whole piece away).
+        -> self.tree (edges), self.shell, self.nshell, self.roots (a shell's smallest triangle), self.cell (the
+        finest grid cell of each triangle, ordered along the grid)"""
+        T, et, ne = self.T, self.et, self.ne
+        m = len(T)
+        Cn = (self.tlo + self.thi) / 2.0
+        lo, hi = Cn.min(0), Cn.max(0)
+        LB = max(2, int(np.ceil(np.log2(max(2.0, np.sqrt(m / 32.0))))))
+        G = 1 << LB
+        q = np.clip(((Cn - lo) / np.maximum(hi - lo, 1e-12) * G).astype(np.int64), 0, G - 1)
+        t0, t1 = et[:, 0], et[:, 1]
+        comp = np.arange(m, dtype=np.int64)
+        tree = np.zeros(ne, bool)
+        join = np.full(ne, -1, np.int64)                   # (the level whose cell first held both triangles of an edge, joined)
+        big = np.iinfo(np.int64).max
+        for L in range(LB + 1):
+            ck = ((q[:, 0] >> L) << (2 * LB)) | ((q[:, 1] >> L) << LB) | (q[:, 2] >> L)
+            if L == 0:
+                self.cell, self.LB = ck, LB
+            same = ck[t0] == ck[t1]
+            while True:
+                ca, cb = comp[t0], comp[t1]
+                cand = np.nonzero(same & (ca != cb))[0]
                 if len(cand) == 0:
                     break
-                via, frm = via[first], frm[first]
-                seen[cand] = True
-                parent[cand], tree_edge[cand], shell[cand] = frm, via, nshell
-                front = cand
-                depth += 1
-            maxdepth = max(maxdepth, depth)
-            nshell += 1
-        self.parent, self.tree_edge, self.shell, self.nshell = parent, tree_edge, shell, nshell
-        self.rounds = int(np.ceil(np.log2(maxdepth + 1))) + 1
-        is_tree = np.zeros(ne + 1, bool)
-        is_tree[tree_edge] = True
-        self.nontree = np.nonzero(~is_tree[:ne])[0]
-        self.scale = float(np.linalg.norm(V.max(0) - V.min(0)))
-        self.ar = np.arange(m)
-        self.sheet = self._sheet_area() > 0.01 * np.linalg.norm(self.nrm, axis=1).sum() / 2
+                a, b = ca[cand], cb[cand]
+                best = np.full(m, big)
+                np.minimum.at(best, a, b * ne + cand)
+                np.minimum.at(best, b, a * ne + cand)
+                chosen = np.unique(best[best != big] % ne)
+                tree[chosen] = True
+                lab = _cc(comp[t0[chosen]], comp[t1[chosen]], m)
+                comp = lab[comp]
+            join[(join < 0) & (comp[t0] == comp[t1])] = L
+        self.join = join
+        self.tree = np.nonzero(tree)[0]
+        self.nontree = np.nonzero(~tree)[0]
+        self.roots, self.shell = np.unique(comp, return_inverse=True)
+        self.shell = self.shell.ravel()
+        self.nshell = len(self.roots)
+
+    def _tour(self):
+        """The forest rooted at each shell's smallest triangle, by its Euler tour (the tour of darts ranked by
+        pointer jumping, so no walk the height of the tree): parent, tree_edge (ne: none), depth, tin/tout (a
+        subtree is the tour range [tin, tout)), and prefix sums of the cones along the tour (a subtree's cone
+        is one subtraction)."""
+        m, ne = len(self.T), self.ne
+        TE = self.tree
+        u, v = self.et[TE, 0], self.et[TE, 1]
+        nd = 2 * len(TE)
+        src = np.empty(nd, np.int64)
+        dst = np.empty(nd, np.int64)
+        src[0::2], dst[0::2] = u, v
+        src[1::2], dst[1::2] = v, u
+        order = np.argsort(src, kind="stable")
+        deg = np.bincount(src, minlength=m)
+        start = np.concatenate([[0], np.cumsum(deg)])
+        p = np.empty(nd, np.int64)
+        p[order] = np.arange(nd, dtype=np.int64)
+        roots = self.roots
+        parent = np.arange(m, dtype=np.int64)
+        tree_edge = np.full(m, ne, np.int64)
+        size = np.bincount(self.shell, minlength=self.nshell)[self.shell]
+        entry = np.full(m, -1, np.int64)
+        if nd:
+            su = src
+            around = order[start[su] + (p - start[su] + 1) % deg[su]]      # (the next dart out of the same node)
+            succ = around[np.arange(nd, dtype=np.int64) ^ 1]                                # (after u->v comes the dart after v->u)
+            startd = order[start[roots]]                                    # (a shell's first dart: its root's)
+            pred = np.empty(nd, np.int64)
+            pred[succ] = np.arange(nd, dtype=np.int64)
+            succ[pred[startd]] = nd                                         # (the end: a sentinel that stays put)
+            dist = np.ones(nd + 1, np.int64)
+            dist[nd] = 0
+            nx = np.append(succ, nd)
+            while True:
+                d2 = dist + dist[nx]
+                if np.array_equal(d2, dist):
+                    break
+                dist, nx = d2, nx[nx]
+            dist = dist[:nd]
+            dsh = self.shell[src]
+            rank = dist[startd[dsh]] - dist                                 # (0 at a shell's first dart)
+            o = np.lexsort((rank, dsh))
+            nodes, first = np.unique(dst[o], return_index=True)
+            f = o[first]                                                    # (the dart first entering each node)
+            isroot = np.zeros(m, bool)
+            isroot[roots] = True
+            keep = ~isroot[nodes]
+            nodes, f = nodes[keep], f[keep]
+            parent[nodes] = src[f]
+            tree_edge[nodes] = TE[f >> 1]
+            size[nodes] = (rank[f ^ 1] - rank[f] + 1) // 2
+            entry[nodes] = rank[f]
+        tin = np.empty(m, np.int64)
+        tour = np.lexsort((entry, self.shell))
+        tin[tour] = np.arange(m, dtype=np.int64)
+        self.parent, self.tree_edge, self.tin, self.tout = parent, tree_edge, tin, tin + size
+        self.pre = np.concatenate([[0.0], np.cumsum(self.w[tour])])
+
+    def _path_boxes(self):
+        """Per non-tree edge, a box around the tree path between its two triangles (the cycle it closes; the
+        path's tree edges lie in those triangles): a side's forest can only be joined across that edge when a
+        tree edge on the path is on the other side, so only edges whose box reaches the plane are looked at.
+        The path lies inside the grid cell that first held both triangles joined (the tree inside a cell is
+        finished before the cell is joined to others), so that cell's box will do: no walk up the tree."""
+        LB, mask = self.LB, (1 << self.LB) - 1
+        nt = self.nontree
+        key = self.cell[self.et[nt, 0]]
+        lo = np.empty((len(nt), 3))
+        hi = np.empty((len(nt), 3))
+        keys, lo_c, hi_c = self.tcells["keys"], self.tcells["lo"], self.tcells["hi"]
+        o = np.argsort(keys, kind="stable")                      # (the index keeps them by parent: sort by key)
+        keys, lo_c, hi_c = keys[o], lo_c[o], hi_c[o]
+        for L in range(LB + 1):
+            if L:
+                par = ((keys >> (2 * LB + 1)) << (2 * LB)) | ((((keys >> LB) & mask) >> 1) << LB) | ((keys & mask) >> 1)
+                o = np.argsort(par, kind="stable")
+                par = par[o]
+                start = np.concatenate([[0], np.nonzero(par[1:] != par[:-1])[0] + 1])
+                keys = par[start]
+                lo_c = np.minimum.reduceat(lo_c[o], start, axis=0)
+                hi_c = np.maximum.reduceat(hi_c[o], start, axis=0)
+                key = ((key >> (2 * LB + 1)) << (2 * LB)) | ((((key >> LB) & mask) >> 1) << LB) | ((key & mask) >> 1)
+            at = np.nonzero(self.join[nt] == L)[0]
+            if len(at):
+                c = np.searchsorted(keys, key[at])
+                lo[at], hi[at] = lo_c[c], hi_c[c]
+        self.plo, self.phi = lo, hi
+        self.ecells = self._index(self.cell[self.et[nt, 0]], lo, hi)
+        del self._index
+
+    def _cells(self):
+        """The finest grid's cells: each one's triangles (sorted) and box; and the same for the non-tree edges by
+        their first triangle's cell, with the box of their tree cycles. The cells are grouped 4x4x4 into parents
+        (boxes too), so a plane's cells are found among the parents it passes through first."""
+        LB = self.LB
+
+        def index(cell, lo, hi):
+            mask = (1 << LB) - 1
+            par = ((cell >> (2 * LB + 2)) << (2 * LB)) | ((((cell >> LB) & mask) >> 2) << LB) | ((cell & mask) >> 2)
+            o = np.lexsort((cell, par))                                 # (by parent, then cell: both contiguous)
+            cs, ps = cell[o], par[o]
+            start = np.concatenate([[0], np.nonzero(cs[1:] != cs[:-1])[0] + 1])
+            pstart = np.nonzero(np.concatenate([[True], ps[start[1:]] != ps[start[:-1]]]))[0]  # (a parent's first cell)
+            keys = cs[start]
+            clo = np.minimum.reduceat(lo[o], start, axis=0)
+            chi = np.maximum.reduceat(hi[o], start, axis=0)
+            return dict(items=o, start=np.append(start, len(o)), lo=clo, hi=chi, keys=keys,
+                        plo=np.minimum.reduceat(clo, pstart, axis=0), phi=np.maximum.reduceat(chi, pstart, axis=0),
+                        pstart=np.append(pstart, len(keys)))
+        self.tcells = index(self.cell, self.tlo, self.thi)
+        self._index = index
+
+    @staticmethod
+    def _straddle(lo, hi, n, d, tol):
+        """Which boxes the plane (n, d) could pass through (a vertex at most tol above and one at most tol below)."""
+        npos = np.maximum(n, 0.0)
+        nneg = np.minimum(n, 0.0)
+        smin = lo @ npos + hi @ nneg - d
+        smax = hi @ npos + lo @ nneg - d
+        return (smin <= tol) & (smax >= -tol)
+
+    @staticmethod
+    def _ranges(start, which):
+        """The items of the ranges [start[w], start[w + 1]) of the given w, in order."""
+        st, en = start[which], start[which + 1]
+        cnt = en - st
+        tot = int(cnt.sum())
+        return np.repeat(st - (np.cumsum(cnt) - cnt), cnt) + np.arange(tot)
+
+    def _near(self, cells, n, d, tol):
+        """The items (sorted) of the cells the plane (n, d) could pass through (dense: None, meaning all)."""
+        if self.dense:
+            return None
+        par = np.nonzero(self._straddle(cells["plo"], cells["phi"], n, d, tol))[0]
+        if len(par) == 0:
+            return par
+        cs = self._ranges(cells["pstart"], par)
+        cs = cs[self._straddle(cells["lo"][cs], cells["hi"][cs], n, d, tol)]
+        if len(cs) == 0:
+            return cs
+        return np.sort(cells["items"][self._ranges(cells["start"], cs)])
 
     def _sheet_area(self):
         """The area of the piece's zero-thickness sheets: triangles whose centre lies in an oppositely facing
@@ -800,35 +975,7 @@ class CutScorer:
             total += float(area2[A][inside].sum() / 2)
         return total
 
-    def _label(self, act, act_e):
-        """The connected pieces of a side's surface (act: its triangles, act_e: the edges joining them): a compact
-        label per triangle (-1 off the side) and their number."""
-        m = len(self.T)
-        act_e_pad = np.append(act_e, False)
-        root = act & ~act_e_pad[self.tree_edge]
-        lab = np.where(root | ~act, self.ar, self.parent)
-        for _ in range(self.rounds):
-            nxt = lab[lab]
-            if np.array_equal(nxt, lab):
-                break
-            lab = nxt
-        nt = self.nontree[act_e[self.nontree]]
-        a, b = lab[self.et[nt, 0]], lab[self.et[nt, 1]]
-        diff = a != b
-        if diff.any():
-            a, b = a[diff], b[diff]
-            nodes, inv = np.unique(np.concatenate([a, b]), return_inverse=True)
-            inv = inv.ravel()
-            rep = _cc(inv[:len(a)], inv[len(a):], len(nodes))
-            lab = lab.copy()
-            lab[nodes] = nodes[rep]          # (every root hooked to its component's smallest)
-            lab = lab[lab]
-        roots = np.nonzero(root)[0]
-        comps = np.unique(lab[roots])
-        remap = np.full(m, -1)
-        remap[comps] = np.arange(len(comps))
-        tri_comp = np.where(act, remap[lab], -1)
-        return tri_comp, len(comps)
+    # ---------------------------------------------------------------- per cut
 
     def score(self, n, d, D, sliver, pvol, max_shards=None, rule=None):
         """plane_parts + fold_crumbs + group_score of the cut (n, d): None or [(volume, air)] per part.
@@ -841,29 +988,30 @@ class CutScorer:
         max_shards = MAX_SHARDS if max_shards is None else max_shards
         if self.sheet and rule is None:
             return KERNEL
-        V, T, ea, eb = self.V, self.T, self.ea, self.eb
+        V, T = self.V, self.T
         n = np.asarray(n, float)
         s = V @ n - d
         tol = 1e-9 * max(self.scale, 1.0)
+        near = self._near(self.tcells, n, d, tol)
         zero = np.abs(s) <= tol
         pos = s > tol
         if not zero.any():
-            return self._score(n, d, s, pos, D, sliver, pvol, max_shards)
+            return self._score(n, d, s, pos, near, D, sliver, pvol, max_shards)
         s = np.where(zero, 0.0, s)
-        z3 = zero[T].all(1)
-        if not z3.any() or rule == "plus":
-            return self._score(n, d, s, pos | zero, D, sliver, pvol, max_shards)
+        z3 = np.nonzero(zero[T].all(1))[0] if near is None else near[zero[T[near]].all(1)]
+        if len(z3) == 0 or rule == "plus":
+            return self._score(n, d, s, pos | zero, near, D, sliver, pvol, max_shards)
         if rule == "minus":
-            return self._score(n, d, s, pos, D, sliver, pvol, max_shards)
+            return self._score(n, d, s, pos, near, D, sliver, pvol, max_shards)
         side = self.nrm[z3] @ n < 0                      # (solid above the face: above)
         if side.all() and rule is None:                  # (every such face's solid is above: the placements agree)
-            return self._score(n, d, s, pos | zero, D, sliver, pvol, max_shards)
+            return self._score(n, d, s, pos | zero, near, D, sliver, pvol, max_shards)
         vs = np.zeros(len(V), np.int8)
         vs[T[z3].ravel()] = np.repeat(np.where(side, 1, -1).astype(np.int8), 3)
-        solid = self._score(n, d, s, np.where(zero, vs >= 0, pos), D, sliver, pvol, max_shards)
+        solid = self._score(n, d, s, np.where(zero, vs >= 0, pos), near, D, sliver, pvol, max_shards)
         if rule == "solid":
             return solid
-        plus = self._score(n, d, s, pos | zero, D, sliver, pvol, max_shards)
+        plus = self._score(n, d, s, pos | zero, near, D, sliver, pvol, max_shards)
         if (plus is None) != (solid is None):
             return KERNEL
         if plus is None:
@@ -875,46 +1023,154 @@ class CutScorer:
                 return KERNEL
         return plus
 
-    def _score(self, n, d, s, pos, D, sliver, pvol, max_shards):
-        """The score with each vertex's side given (pos; s is 0 on the plane)."""
+    def _events(self, tin, tout, lab):
+        """The piece label along the tour, from a laminar family of subtrees [tin, tout) labelled lab (-1: none),
+        sorted by tin, the outer ones first: at tin the label starts, at tout the enclosing one resumes.
+        -> (positions, labels): the label at tour position x is labels[searchsorted(positions, x, 'right') - 1]"""
+        k = len(tin)
+        encl = np.arange(k, dtype=np.int64) - 1                              # (the nearest earlier interval containing this one)
+        while True:                                          # (one that ends before this starts is skipped, to
+            idx = np.nonzero(encl >= 0)[0]                   #  its own enclosing one: pointer jumping)
+            bad = idx[tout[encl[idx]] < tout[idx]]
+            if len(bad) == 0:
+                break
+            encl = encl.copy()
+            encl[bad] = encl[encl[bad]]
+        after = np.where(encl >= 0, lab[np.maximum(encl, 0)], -1)
+        posn = np.concatenate([tout, tin])
+        val = np.concatenate([after, lab])
+        # (at one position: ends before starts, and of the ends the outermost last)
+        o = np.lexsort((np.concatenate([-tin, np.full(k, -1)]), np.r_[np.zeros(k, int), np.ones(k, int)], posn))
+        return posn[o], val[o]
+
+    def _side(self, posS, ct, E3, ntc, wpart, wcap_s):
+        """One side's pieces (posS: its vertices; ntc: the non-tree edges whose tree cycle reaches the plane). -> dict(nc, vol, cc (piece of each crossed triangle), vlab
+        (piece of each vertex, -1 off the side), xcomp (piece of each crossing edge's first triangle), shells
+        (shell of each piece))"""
+        T, ea, eb, et, ne = self.T, self.ea, self.eb, self.et, self.ne
+        tin, tout, tree_edge, pre = self.tin, self.tout, self.tree_edge, self.pre
+        def eact(e):                                          # (edges with an end on this side)
+            return posS[ea[e]] | posS[eb[e]]
+        # (roots: crossed triangles whose tree edge is across, and shell roots wholly on this side)
+        tec = tree_edge[ct]
+        croot = ~eact(np.minimum(tec, ne - 1)) | (tec == ne)
+        sr = self.roots[posS[T[self.roots]].all(1)]
+        R = np.concatenate([ct[croot], sr])
+        R = R[np.argsort(tin[R], kind="stable")]
+        # (hangers: the subtrees across the plane under the crossed triangles)
+        Eflat = E3.ravel()
+        other = et[Eflat].sum(1) - np.repeat(ct, 3)
+        hang = (~eact(Eflat)) & (tree_edge[other] == Eflat)
+        H = other[hang]
+        Hc = np.repeat(np.arange(len(ct)), 3)[hang]           # (index in ct of a hanger's parent)
+        Hin = H[~(posS[T[H]].any(1))]                         # (the inactive hangers: nothing of theirs is here)
+        fam_t = np.concatenate([tin[R], tin[Hin]])
+        fam_o = np.concatenate([tout[R], tout[Hin]])
+        fam_l = np.concatenate([R, np.full(len(Hin), -1)])
+        o = np.argsort(fam_t, kind="stable")
+        epos, elab = self._events(fam_t[o], fam_o[o], fam_l[o])
+
+        def at(x):
+            return elab[np.searchsorted(epos, x, "right") - 1]
+        root_c = at(tin[ct])
+        if (root_c < 0).any():
+            raise RuntimeError("cut scorer: a crossed triangle without a root")
+        # (joins across the non-tree edges whose tree cycle reaches the plane)
+        cand = ntc[eact(ntc)]
+        lab_of = None
+        if len(cand):
+            ra, rb = at(tin[et[cand, 0]]), at(tin[et[cand, 1]])
+            diff = ra != rb
+            if diff.any():
+                ra, rb = ra[diff], rb[diff]
+                nodes, inv = np.unique(np.concatenate([ra, rb]), return_inverse=True)
+                inv = inv.ravel()
+                rep = _cc(inv[:len(ra)], inv[len(ra):], len(nodes))
+                lab_of = (nodes, nodes[rep])
+        labR = R
+        if lab_of:
+            nodes, to = lab_of
+            i = np.minimum(np.searchsorted(nodes, R), len(nodes) - 1)
+            labR = np.where(nodes[i] == R, to[i], R)
+        comps = np.unique(labR)
+        nc = len(comps)
+        compR = np.searchsorted(comps, labR)                  # (compact piece id per root)
+        rix = np.searchsorted(tin[R], tin[root_c])            # (root index of each crossed triangle)
+        # (volumes: whole triangles from the tour's prefix sums - a root's subtree minus its hangers minus its own
+        #  crossed triangles' cones - then the crossed triangles' clipped cones and the cap's, as bincounts in
+        #  ct order; a root with nothing but crossed triangles has exactly no whole ones)
+        S = pre[tout[R]] - pre[tin[R]]
+        S -= np.bincount(rix[Hc], weights=pre[tout[H]] - pre[tin[H]], minlength=len(R))
+        S -= np.bincount(rix, weights=self.w[ct], minlength=len(R))
+        ntri = (tout[R] - tin[R]) - np.bincount(rix[Hc], weights=tout[H] - tin[H], minlength=len(R)) \
+            - np.bincount(rix, minlength=len(R))
+        S[ntri == 0] = 0.0
+        cc = compR[rix]
+        vol = np.zeros(nc)
+        vol += np.bincount(compR, weights=S, minlength=nc)
+        vol += np.bincount(cc, weights=wpart, minlength=nc)
+        vol += np.bincount(cc, weights=wcap_s, minlength=nc)
+        # (the side's vertices' pieces as compact ids, in hull order: the label along the tour, read over the
+        #  vertices in tour order)
+        elab_c = np.where(elab >= 0, compR[np.searchsorted(tin[R], tin[np.maximum(elab, 0)])], -1)
+        bounds = np.searchsorted(self.vtin_s, epos, "left")
+        cnt = np.diff(np.append(bounds, len(self.vtin_s)))
+        vl = np.repeat(elab_c, cnt)
+        if bounds[0] > 0:
+            vl = np.concatenate([np.full(bounds[0], -1), vl])
+        vlab_s = np.empty(len(self.V), np.int64)
+        vlab_s[self.tour_to_sorted] = vl
+        vlab_s[~posS[self.vsorted]] = -1
+        return dict(nc=nc, vol=vol, cc=cc, vlab_s=vlab_s, shells=self.shell[comps], root_c=root_c)
+
+    def _score(self, n, d, s, pos, near, D, sliver, pvol, max_shards):
+        """The score with each vertex's side given (pos; s is 0 on the plane; near: the triangles the plane could
+        cross)."""
         V, T, ea, eb = self.V, self.T, self.ea, self.eb
-        pea, peb = pos[ea], pos[eb]
-        cross = np.nonzero(pea != peb)[0]
-        if len(cross) == 0:
+        pvn = pos[T if near is None else T[near]]
+        nposn = pvn[:, 0].view(np.uint8) + pvn[:, 1].view(np.uint8) + pvn[:, 2].view(np.uint8)
+        crossed = np.nonzero((nposn == 1) | (nposn == 2))[0]
+        ct = crossed if near is None else near[crossed]
+        if len(ct) == 0:
             return None
-        pv = pos[T]
-        npos = pv[:, 0].view(np.uint8) + pv[:, 1].view(np.uint8) + pv[:, 2].view(np.uint8)   # (9x pv.sum(1))
+        tol = 1e-9 * max(self.scale, 1.0)
+        if near is None:
+            ntc = self.nontree[self._straddle(self.plo, self.phi, n, d, tol)]
+        else:
+            nti = self._near(self.ecells, n, d, tol)              # (positions in nontree)
+            ntc = self.nontree[nti[self._straddle(self.plo[nti], self.phi[nti], n, d, tol)]]
         # (the crossed triangles, turned so the pattern is + - - or + + -; their clipped parts and cap segments)
-        ct = np.nonzero((npos == 1) | (npos == 2))[0]
-        pa = pv[ct]
-        n1 = npos[ct]
+        pa = pvn[crossed]
+        n1 = nposn[crossed]
         one = n1 == 1
         r = np.where(one, np.argmax(pa, axis=1), (np.argmin(pa, axis=1) + 1) % 3)
         rot = (r[:, None] + np.arange(3)[None, :]) % 3
         Tr = T[ct[:, None], rot]
         Er = self.eid[ct[:, None], rot]
-        X = np.zeros((len(ea), 3))
+        E3 = self.eid[ct]
+        cross = np.unique(E3[pos[ea[E3]] != pos[eb[E3]]])
+        k = len(cross)
+        pea = pos[ea[cross]]
         sa, sb = s[ea[cross]], s[eb[cross]]
         den = sa - sb
         # (both ends on the plane but apart, a vertex shared by a face of each side: the end that is on this side)
-        t = np.where(den != 0, sa / np.where(den != 0, den, 1.0), np.where(pea[cross], 0.0, 1.0))
-        X[cross] = V[ea[cross]] + t[:, None] * (V[eb[cross]] - V[ea[cross]])
+        t = np.where(den != 0, sa / np.where(den != 0, den, 1.0), np.where(pea, 0.0, 1.0))
+        X = V[ea[cross]] + t[:, None] * (V[eb[cross]] - V[ea[cross]])
+        Erc = np.minimum(np.searchsorted(cross, Er), k - 1)   # (an uncrossed edge's slot is never used)
         Qa, Qb, Qc = V[Tr[:, 0]], V[Tr[:, 1]], V[Tr[:, 2]]
-        Xab, Xbc, Xca = X[Er[:, 0]], X[Er[:, 1]], X[Er[:, 2]]
+        Xab, Xbc, Xca = X[Erc[:, 0]], X[Erc[:, 1]], X[Erc[:, 2]]
         det = _det3
         # + part: (a, Xab, Xca) or (a, b, Xbc, Xca); - part: (b, c, Xca, Xab) or (c, Xca, Xbc)
         wp = np.where(one, det(Qa, Xab, Xca), det(Qa, Qb, Xbc) + det(Qa, Xbc, Xca)) / 6.0
         wm = np.where(one, det(Qb, Qc, Xca) + det(Qb, Xca, Xab), det(Qc, Xca, Xbc)) / 6.0
-        e_from = np.where(one, Er[:, 0], Er[:, 1])
-        e_to = Er[:, 2]
-        Xf, Xt = X[e_from], X[e_to]
+        c_from = np.where(one, Erc[:, 0], Erc[:, 1])
+        c_to = Erc[:, 2]
+        Xf, Xt = X[c_from], X[c_to]
         o = n * d
         wcap = (o @ np.cross(Xt, Xf).T) / 6.0           # (the + cap's cone, per segment; the - cap's is minus it)
         # (the section loops: crossing edges chained by the segments)
-        cid = np.full(len(ea), -1)
-        cid[cross] = np.arange(len(cross))
-        loop_of_cross = _cycles(cid[e_from], cid[e_to], len(cross))
-        _loops, seg_loop = np.unique(loop_of_cross[cid[e_from]], return_inverse=True)
+        loop_of_cross = _cycles(c_from, c_to, k)
+        _loops, seg_loop = np.unique(loop_of_cross[c_from], return_inverse=True)
         seg_loop = seg_loop.ravel()
         nl = seg_loop.max() + 1
         u = np.cross(n, [1.0, 0.0, 0.0] if abs(n[0]) < 0.9 else [0.0, 1.0, 0.0])
@@ -927,22 +1183,16 @@ class CutScorer:
         loop_seg[seg_loop[::-1]] = np.arange(len(seg_loop))[::-1]       # (a first segment of each loop)
         # (each side's parts)
         sides = []
+        x0 = np.searchsorted(ct, self.et[cross, 0])         # (a crossing edge's first triangle, in ct)
         for sgn in (1, -1):
             if sgn > 0:
-                act, act_e, full, vi = npos > 0, pea | peb, npos == 3, np.nonzero(pos)[0]
-                w_part, w_cap, ss = wp, wcap, s
+                posS, w_part, w_cap, ss = pos, wp, wcap, s
             else:
-                act, act_e, full, vi = npos < 3, ~(pea & peb), npos == 0, np.nonzero(~pos)[0]
-                w_part, w_cap, ss = wm, -wcap, -s
-            tri_comp, nc = self._label(act, act_e)
-            cc = tri_comp[ct]
-            vol = np.zeros(nc)
-            vol += np.bincount(tri_comp[full], weights=self.w[full], minlength=nc)
-            vol += np.bincount(cc, weights=w_part, minlength=nc)
-            vol += np.bincount(cc, weights=w_cap, minlength=nc)
-            sides.append(dict(sgn=sgn, tri_comp=tri_comp, nc=nc, vol=vol, vi=vi, ss=ss, uf=_UF(nc),
-                              vcomp=tri_comp[self.vt[vi]], xcomp=tri_comp[self.et[cross, 0]]))
-        lp, lm = sides[0]["tri_comp"][ct[loop_seg]], sides[1]["tri_comp"][ct[loop_seg]]
+                posS, w_part, w_cap, ss = ~pos, wm, -wcap, -s
+            sd = self._side(posS, ct, E3, ntc, w_part, w_cap)
+            sd.update(sgn=sgn, ss_s=ss[self.vsorted], uf=_UF(sd["nc"]), xcomp=sd["cc"][x0])
+            sides.append(sd)
+        lp, lm = sides[0]["cc"][loop_seg], sides[1]["cc"][loop_seg]
         # (holes: loops winding against the outermost; each joins the smallest outer loop around it)
         big = int(np.argmax(np.abs(area)))
         osg = 1.0 if area[big] >= 0 else -1.0
@@ -955,41 +1205,56 @@ class CutScorer:
             else:
                 qu, qv = fu[loop_seg[holes]], fv[loop_seg[holes]]
                 # (the crossing number of each hole's first point against every segment)
-                y0, y1, x0, x1 = fv[None, :], gv[None, :], fu[None, :], gu[None, :]
+                y0, y1, x0_, x1 = fv[None, :], gv[None, :], fu[None, :], gu[None, :]
                 qy, qx = qv[:, None], qu[:, None]
                 straddle = (y0 > qy) != (y1 > qy)
                 with np.errstate(divide="ignore", invalid="ignore"):
-                    xi = x0 + (qy - y0) * (x1 - x0) / (y1 - y0)
+                    xi = x0_ + (qy - y0) * (x1 - x0_) / (y1 - y0)
                 hit = straddle & (xi > qx)
                 cnt = np.zeros((len(holes), nl), int)
                 hh, ss_ = np.nonzero(hit)
                 np.add.at(cnt, (hh, seg_loop[ss_]), 1)
                 inside = (cnt[:, outers] % 2) == 1
                 pairs = []
-                for k, h in enumerate(holes):
-                    cand = outers[inside[k]]
+                for k_, h in enumerate(holes):
+                    cand = outers[inside[k_]]
                     if len(cand):
                         pairs.append((h, cand[np.argmin(np.abs(area[cand]))]))
             for h, oo in pairs:
                 sides[0]["uf"].union(lp[h], lp[oo])
                 sides[1]["uf"].union(lm[h], lm[oo])
-        parts = []                 # [vol, points, extent, side, key, shells]
+        parts = []                 # [vol, points, extent, side, key]
         touch = {}                 # key -> keys of the parts it touches
         key_of = {}
+        vkey_s = self.vkey_s
+        xkey = X @ SORT_DIR
+        xo = np.argsort(xkey, kind="stable")
         for sd in sides:
-            sgn, nc, uf, vol = sd["sgn"], sd["nc"], sd["uf"], sd["vol"]
+            sgn, nc, uf, vol, vlab_s, xcomp, ss_s = (sd["sgn"], sd["nc"], sd["uf"], sd["vol"], sd["vlab_s"],
+                                                     sd["xcomp"], sd["ss_s"])
             groups = {}
             for c in range(nc):
                 groups.setdefault(uf.find(c), []).append(c)
-            if (vol < 0).any():
-                # (a hollow - a part of negative volume - belongs to the part whose box holds it, the smallest)
-                P = np.concatenate([V[sd["vi"]], X[cross]])
-                pc = np.concatenate([sd["vcomp"], sd["xcomp"]])
+            if (vol < -self.vnoise).any():
+                # (a hollow - a part of negative volume, beyond the noise of the sums - belongs to the part whose box
+                #  holds it, the smallest)
                 lo = np.full((nc, 3), np.inf)
                 hi = np.full((nc, 3), -np.inf)
-                np.minimum.at(lo, pc, P)
-                np.maximum.at(hi, pc, P)
-                for c in np.nonzero(vol < 0)[0]:
+                # (the vertices in tour order are runs of one piece each: a min per run, then per piece)
+                vl = vlab_s[self.tour_to_sorted]
+                runs = np.nonzero(np.diff(vl) != 0)[0] + 1
+                starts = np.concatenate([[0], runs])
+                Pv = self.Vt
+                off = vl < 0
+                Plo = np.where(off[:, None], np.inf, Pv)
+                Phi = np.where(off[:, None], -np.inf, Pv)
+                rl = vl[starts]
+                keep = rl >= 0
+                np.minimum.at(lo, rl[keep], np.minimum.reduceat(Plo, starts, axis=0)[keep])
+                np.maximum.at(hi, rl[keep], np.maximum.reduceat(Phi, starts, axis=0)[keep])
+                np.minimum.at(lo, xcomp, X)
+                np.maximum.at(hi, xcomp, X)
+                for c in np.nonzero(vol < -self.vnoise)[0]:
                     g = uf.find(c)
                     if len(groups.get(g, [])) > 1:
                         continue            # (already joined through the section)
@@ -1005,22 +1270,29 @@ class CutScorer:
             gid = np.full(nc, -1)
             for g, cs in groups.items():
                 gid[cs] = g
-            vg = sd["vcomp"]
-            xg = sd["xcomp"]
             if len(groups) > 1:
-                vg, xg = gid[vg], gid[xg]
+                vg = np.where(vlab_s >= 0, gid[np.maximum(vlab_s, 0)], -1)     # (in hull order)
+                xg = gid[xcomp]
             for g, cs in groups.items():
                 v_ = float(sum(vol[cs]))
                 if v_ <= 1e-3:
                     continue
                 key = (sgn, g)
+                # (the part's points in hull order: its vertices from the piece's one sort, the crossing points
+                #  merged in behind any vertex with the same key)
                 if len(groups) == 1:
-                    pts = np.concatenate([V[sd["vi"]], X[cross]])
-                    ext = float(sd["ss"][sd["vi"]].max()) if len(sd["vi"]) else 0.0
+                    sel = np.nonzero(vlab_s >= 0)[0]
+                    xs = xo
                 else:
-                    mv, mx = vg == g, xg == g
-                    pts = np.concatenate([V[sd["vi"][mv]], X[cross[mx]]])
-                    ext = float(sd["ss"][sd["vi"][mv]].max()) if mv.any() else 0.0
+                    sel = np.nonzero(vg == g)[0]
+                    xs = xo[xg[xo] == g]
+                before = np.searchsorted(vkey_s[sel], xkey[xs], "right")       # (vertices before each point)
+                shift = np.cumsum(np.bincount(before, minlength=len(sel) + 1))[:len(sel)]
+                order = np.empty(len(sel) + len(xs), np.int64)
+                place = np.concatenate([np.arange(len(sel)) + shift, before + np.arange(len(xs))])
+                order[place] = np.arange(len(sel) + len(xs))
+                pts = np.concatenate([self.Vs[sel], X[xs]])[order]
+                ext = float(ss_s[sel].max()) if len(sel) else 0.0
                 parts.append([v_, pts, max(ext, 0.0), sgn, key])
                 for c in cs:
                     key_of[(sgn, c)] = key
@@ -1044,23 +1316,27 @@ class CutScorer:
             tri_shell = {}
             if self.composed and self.nshell > 1:
                 for sd in sides:
-                    sh = np.full(sd["nc"], -1)
-                    sh[sd["tri_comp"][sd["tri_comp"] >= 0]] = self.shell[sd["tri_comp"] >= 0]
                     for c in range(sd["nc"]):
-                        tri_shell.setdefault(key_of.get((sd["sgn"], c)), set()).add(int(sh[c]))
+                        tri_shell.setdefault(key_of.get((sd["sgn"], c)), set()).add(int(sd["shells"][c]))
             keys = {}
 
-            def pkeys(q):               # (a part's points on a 1e-6 grid, as one number each)
+            def pkeys(q):               # (a part's points on a 1e-6 grid, as one number each, sorted)
                 if q[4] not in keys:
                     g = np.round(q[1] * 1e6).astype(np.int64)
-                    keys[q[4]] = (g[:, 0] * 1_000_003 + g[:, 1]) * 1_000_033 + g[:, 2]
+                    keys[q[4]] = np.sort((g[:, 0] * 1_000_003 + g[:, 1]) * 1_000_033 + g[:, 2])
                 return keys[q[4]]
+
+            def shares(a, b):           # (a point of both)
+                ka, kb = pkeys(a), pkeys(b)
+                i = np.searchsorted(kb, ka)
+                i = np.minimum(i, len(kb) - 1)
+                return len(kb) > 0 and bool((kb[i] == ka).any())
             for cm in crumbs:
                 for q in big:
                     if q[3] != cm[3] or q[4] in touch.get(cm[4], ()):
                         continue
                     if (tri_shell and any(x != y for x in tri_shell[cm[4]] for y in tri_shell[q[4]])) or \
-                            np.isin(pkeys(cm), pkeys(q)).any():
+                            shares(cm, q):
                         touch.setdefault(cm[4], set()).add(q[4])
                         touch.setdefault(q[4], set()).add(cm[4])
         groups = [[q] for q in big]
@@ -1078,9 +1354,10 @@ class CutScorer:
             pts = g[0][1] if len(g) == 1 else np.concatenate([q[1] for q in g])
             # (sorted: the kernel's hull depends on the order of the points - measured 0.4% too big on a hand's part
             #  in mesh order, right in sorted or any shuffled order - so every part is hulled the same way: along
-            #  a slanted direction, one sort (lexsort by x, y, z was three, 27% of a score on a 45k-triangle body;
-            #  measured on 132 of its parts, the hull's volume is the same to 1e-9 in either order)
-            pts = pts[np.argsort(pts @ SORT_DIR, kind="stable")]
+            #  a slanted direction (measured on 132 of its parts, the hull's volume is the same to 1e-9 in either
+            #  order). A lone part comes already in that order.)
+            if len(g) > 1:
+                pts = pts[np.argsort(pts @ SORT_DIR, kind="stable")]
             hv = Manifold.hull_points(np.ascontiguousarray(pts)).volume()
             out.append((vol, max(0.0, hv - vol)))
         return out
