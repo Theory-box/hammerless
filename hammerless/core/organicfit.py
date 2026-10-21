@@ -57,6 +57,10 @@ SAMPLE_N = 6                # fits_model's quick check: this many steps along ea
 JOIN_OVER = 2.0             # a sub-unit piece is thickened only when joining would add more than this x the thickening's
 #                             own volume: joins are preferred (fewer pieces) unless they cost clearly more
 TIME_LIMIT = 60.0           # seconds: past this every piece left is finished as it is (its hull)
+STOP_GAIN = 0.02            # a cut is taken only if it removes at least this share of the piece's air (or Fit^3)
+MAX_CANDIDATES = 0          # candidate cuts tried per step at most (0: all); the aimed ones are kept, snaps cut
+MERGE = True                # the merge pass: neighbours whose joined piece is still within Fit become one
+JOIN = True                 # the sliver pass: thin leftovers join a neighbour (or are thickened to 1 unit)
 GRID_SHIFT = np.array([0.2345, 0.3456, 0.4567])   # (voxels: on an integer grid, rays along exact edges miscount)
 
 G: dict = {}
@@ -913,7 +917,7 @@ def worst_air(p, D):
     return worst_air_of(p.V, p.T, arrays(p.hull)[0], p.N, p.Dp, D)
 
 
-def judge(V, T, Vh, Th, air, vol, D):
+def judge(V, T, Vh, Th, air, vol, D, tune=None):
     """Is a piece (solid V, T; hull Vh, Th; its air and volume) within Fit? -> (ok, (witness point or None, its
     distance), worst air (best, spot) or None where it wasn't searched). The worst air first, for a piece with
     air to spare - thicker than WORST_FIRST x Fit over its hull on average: a real point of the hull, outside the
@@ -923,6 +927,8 @@ def judge(V, T, Vh, Th, air, vol, D):
     on a statue certify failed 24 pieces in 32, at 0.25 s each, and the search then ran anyway. A piece with
     thinner air likely passes certify at its coarsest cells, where the search would still have to look
     everywhere. Arrays in, plain values out: it runs in a worker process too (brushfit._judge_task)."""
+    if tune is not None:                     # (in a worker: the conversion's fine tuning)
+        apply_tune(tune)
     worst = None
     if not AIM_VOXELS and air > WORST_FIRST * D * _area(Vh, Th):
         N, Dp = hull_planes(Vh, Th)
@@ -1419,7 +1425,8 @@ class Piece:
             Vh, Th = arrays(self.hull)
             try:
                 with _bf._NoMain():
-                    self._pending = ex.submit(_bf._judge_task, (self.V, self.T, Vh, Th, self.air, self.vol, G["D"]))
+                    self._pending = ex.submit(_bf._judge_task, (self.V, self.T, Vh, Th, self.air, self.vol, G["D"],
+                                                                 _TUNE_NOW))
             except Exception:
                 self._pending = None
 
@@ -1555,7 +1562,7 @@ def blind_candidates(p):
     Ng, Dg, Ag, Vh = _face_planes(p)
     out = [("face", Ng[k], float(Dg[k]), True) for k in _through_first(Vh, Ng, Dg, np.argsort(-Ag, kind="stable"), 12)]
     out += _plain_cuts(p)
-    return out + snapped(p, out)
+    return _capped(out, snapped(p, out))
 
 
 def candidates(p):
@@ -1581,7 +1588,14 @@ def candidates(p):
             for off in (-D, 0.0, D):
                 out.append(("spot", nn, float(np.dot(nn, spot)) + off, False))
     out += _plain_cuts(p)
-    return out + snapped(p, out)
+    return _capped(out, snapped(p, out))
+
+
+def _capped(out, snaps):
+    """Fine tuning (Max Candidates): every aimed cut, the snapped ones (most of them) up to the cap."""
+    if MAX_CANDIDATES > 0:
+        snaps = snaps[:max(0, MAX_CANDIDATES - len(out))]
+    return out + snaps
 
 
 def snapped(p, cuts):
@@ -1626,7 +1640,7 @@ def best_cut(p, budget):
     bowl: halving it leaves the same air in two hulls until the pieces are nearly flat) the cut whose worst part
     has the least air, so the pieces keep shrinking."""
     D = G["D"]
-    need = max(D ** 3, 0.02 * p.air)
+    need = max(D ** 3, STOP_GAIN * p.air)
     # (the same list candidates() gives - it depends only on the piece - when prescore_next listed it already)
     cands = p._precands if p._precands is not None else candidates(p)
     p._precands = None
@@ -2099,10 +2113,30 @@ def loose_parts(V, T):
     return out
 
 
-def convert(V, T, detail=4.0, max_pieces=MAX_PIECES, time_limit=None, cancel=None, max_sides=MAX_SIDES):
+TUNE_KEYS = ("STOP_GAIN", "MAX_CANDIDATES", "MERGE", "JOIN", "CERT_TOL", "AIM_RES")
+_TUNE_DEFAULTS = None
+_TUNE_NOW = None            # (this conversion's fine tuning, sent to the workers with each piece they judge)
+
+
+def apply_tune(tune):
+    """Fine tuning (the panel's Fine Tuning settings): {name: value} for the TUNE_KEYS constants; missing ones
+    are this module's defaults, so a conversion never inherits the last one's settings. In workers too (judge)."""
+    global _TUNE_DEFAULTS
+    g = globals()
+    if _TUNE_DEFAULTS is None:
+        _TUNE_DEFAULTS = {k: g[k] for k in TUNE_KEYS}
+    for k in TUNE_KEYS:
+        g[k] = (tune or {}).get(k, _TUNE_DEFAULTS[k])
+
+
+def convert(V, T, detail=4.0, max_pieces=MAX_PIECES, time_limit=None, cancel=None, max_sides=MAX_SIDES,
+            tune=None):
     """Mesh (game units) -> convex pieces [(corners, triangles)] and info (pieces, seconds, air, volume, cuts,
     stopped). Raises NotSolid (not a closed solid / inside out). Each loose part is converted on its own (Max
     Pieces shared out by volume, at least 2 each)."""
+    global _TUNE_NOW
+    apply_tune(tune)
+    _TUNE_NOW = dict(tune) if tune else None
     t0 = time.time()
     limit = TIME_LIMIT if time_limit is None else time_limit
     V, T = weld(np.asarray(V, float), np.asarray(T, int))
@@ -2195,8 +2229,10 @@ def _convert_one(V, T, detail, max_pieces, limit, cancel, max_sides):
                     q.judge_later(ex)
     finally:
         _bf.shutdown_pool()             # (no idle processes left behind)
-    done = merge_pass(done, t0 + limit * 1.25)
-    done = join_slivers(done)
+    if MERGE:
+        done = merge_pass(done, t0 + limit * 1.25)
+    if JOIN:
+        done = join_slivers(done)
     meshes, total = [], 0.0
     for p in done:
         h = fewer_sides(p.hull, max_sides)

@@ -128,6 +128,13 @@ class _Pieces:
         self.brushes, self.info = brushes, info
 
 
+def _tune(hs):
+    """General's Fine Tuning settings as organicfit's constants."""
+    return dict(STOP_GAIN=hs.brush_stop_gain / 100.0, MAX_CANDIDATES=int(hs.brush_max_candidates),
+                CERT_TOL=hs.brush_fit_tolerance / 100.0, AIM_RES=hs.brush_aim_precision / 100.0,
+                MERGE=bool(hs.brush_merge_pass), JOIN=bool(hs.brush_sliver_pass))
+
+
 class HL_OT_make_collision(bpy.types.Operator):
     bl_idname = "hammerless.make_collision"
     bl_label = "Convert to Brushes"
@@ -300,7 +307,7 @@ class HL_OT_make_collision(bpy.types.Operator):
                 fit = max(asked, 0.5)                             # (and never under half a game unit)
                 meshes, info = organicfit.convert(co * scale, tri, detail=fit,
                                                   max_pieces=hs.brush_max_pieces, time_limit=max(left, min(20.0, limit)),
-                                                  max_sides=hs.brush_max_sides)
+                                                  max_sides=hs.brush_max_sides, tune=_tune(hs))
                 info["method"], info["why"] = "General", why
                 if info.get("fit", 0.0) > fit * 1.05 and size > 0:
                     info["raised"] = 100.0 * info["fit"] / size

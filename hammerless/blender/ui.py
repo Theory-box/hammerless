@@ -561,6 +561,29 @@ class HL_PT_obj_brushes(_Panel, bpy.types.Panel):
             _hint(self.layout, "Set this model's Collision to None, so it doesn't collide twice")
 
 
+class HL_PT_obj_brushes_tuning(_Sub, bpy.types.Panel):
+    """Convert to Brushes > Fine Tuning: General's speed against quality."""
+    bl_label = "Fine Tuning"
+    bl_parent_id = "HL_PT_obj_brushes"
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.object
+        return (obj is not None and obj.type == "MESH" and obj.get("hl_collision_of") is None
+                and obj.hammerless.brush_algorithm in ("AUTO", "ORGANIC"))
+
+    def draw(self, context):
+        hs = context.object.hammerless
+        col = _settings(self.layout)
+        col.prop(hs, "brush_quality")
+        col.prop(hs, "brush_stop_gain")
+        col.prop(hs, "brush_max_candidates")
+        col.prop(hs, "brush_fit_tolerance")
+        col.prop(hs, "brush_aim_precision")
+        col.prop(hs, "brush_merge_pass")
+        col.prop(hs, "brush_sliver_pass")
+
+
 class HL_PT_obj_light(_Panel, bpy.types.Panel):
     bl_label = "Light"
     bl_parent_id = "HL_PT_object"
@@ -1331,7 +1354,7 @@ def _add_menu(self, context):
 
 CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_MT_weather,
            HL_PT_build, HL_PT_problems,
-           HL_PT_object, HL_PT_obj_model, HL_PT_obj_brushes, HL_PT_obj_light, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
+           HL_PT_object, HL_PT_obj_model, HL_PT_obj_brushes, HL_PT_obj_brushes_tuning, HL_PT_obj_light, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
            HL_PT_bake, HL_PT_lighting, HL_PT_view_light, HL_PT_environment, HL_PT_sun, HL_PT_fog, HL_PT_light_quality,
            HL_PT_light_advanced,
            HL_PT_visibility, HL_PT_navmesh, HL_PT_view_nav, HL_PT_sound, HL_PT_control_volumes, HL_PT_director,

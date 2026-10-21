@@ -345,6 +345,50 @@ class HL_BehaviourSlot(bpy.types.PropertyGroup):
                                        "sharing one all run it; Make Unique gives this object its own copy")
 
 
+_BRUSH_PRESETS = {
+    "BALANCED": dict(brush_stop_gain=2.0, brush_max_candidates=0, brush_fit_tolerance=0.1, brush_aim_precision=25.0,
+                     brush_merge_pass=True, brush_sliver_pass=True),
+    "FAST": dict(brush_stop_gain=5.0, brush_max_candidates=120, brush_fit_tolerance=2.0, brush_aim_precision=50.0,
+                 brush_merge_pass=True, brush_sliver_pass=True),
+}
+_PRESET_BUSY = [False]
+
+
+def _brush_preset(self, context):
+    vals = _BRUSH_PRESETS.get(self.brush_quality)
+    if not vals:
+        return
+    _PRESET_BUSY[0] = True
+    try:
+        for k, v in vals.items():
+            setattr(self, k, v)
+    finally:
+        _PRESET_BUSY[0] = False
+
+
+def _brush_custom(self, context):
+    """A fine-tuning value changed by hand: the preset says Custom unless the values are a preset's again."""
+    if _PRESET_BUSY[0]:
+        return
+    for name, vals in _BRUSH_PRESETS.items():
+        if all(abs(getattr(self, k) - v) < 1e-6 if isinstance(v, float) else getattr(self, k) == v
+               for k, v in vals.items()):
+            if self.brush_quality != name:
+                _PRESET_BUSY[0] = True
+                try:
+                    self.brush_quality = name
+                finally:
+                    _PRESET_BUSY[0] = False
+            return
+    if self.brush_quality != "CUSTOM":
+        _PRESET_BUSY[0] = True
+        try:
+            self.brush_quality = "CUSTOM"
+        finally:
+            _PRESET_BUSY[0] = False
+
+
+
 class HL_ObjectSettings(bpy.types.PropertyGroup):
     role: EnumProperty(name="Role", items=OBJECT_ROLES, default="AUTO")
     classname: StringProperty(name="Class", description="Entity classname",
@@ -411,6 +455,44 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
         description="Convert to Brushes: at most this many sides per brush (the engine allows 128). A curved piece "
                     "is rounded off to this many flat sides, pushed out so it still covers the shape: fewer sides "
                     "are simpler brushes that stand a little further off")
+    brush_quality: EnumProperty(
+        name="Preset",
+        items=[("BALANCED", "Balanced", "The default: General as tested - exact Fit, every candidate cut tried"),
+               ("FAST", "Fast", "Quicker, a little looser: fewer candidate cuts, stops cutting sooner, a coarser "
+                                "Fit check and cut aim. Pieces may stand a little past Fit"),
+               ("CUSTOM", "Custom", "Your own values below (chosen when you change one)")],
+        default="BALANCED", update=_brush_preset,
+        description="General's speed against quality. Picking one sets the values below")
+    brush_stop_gain: FloatProperty(
+        name="Stop When Gain Below", default=2.0, min=0.1, max=50.0, subtype="PERCENTAGE", precision=1,
+        update=_brush_custom,
+        description="General: a piece is cut again only if the best cut removes at least this share of its extra "
+                    "collision (air). Higher: stops sooner - faster, fewer pieces, looser. Default 2%")
+    brush_max_candidates: IntProperty(
+        name="Max Candidates", default=0, min=0, max=5000, update=_brush_custom,
+        description="General: candidate cuts tried for each cut, at most (0: all of them). The cuts aimed at the "
+                    "worst air are always tried; the ones lined up with the mesh's own faces (usually most of them) "
+                    "are dropped first. Lower: faster, but a slightly worse cut may win. Try 100-200 for dense meshes")
+    brush_fit_tolerance: FloatProperty(
+        name="Fit Check Tolerance", default=0.1, min=0.01, max=25.0, subtype="PERCENTAGE", precision=2,
+        update=_brush_custom,
+        description="General: how exactly 'within Fit' is checked, as a share of Fit. A piece passes when no part "
+                    "of it stands more than Fit plus this off the mesh. Higher: a faster check, pieces may stand a "
+                    "little past Fit. Default 0.1%")
+    brush_aim_precision: FloatProperty(
+        name="Aim Precision", default=25.0, min=5.0, max=100.0, subtype="PERCENTAGE", precision=0,
+        update=_brush_custom,
+        description="General: how finely the worst gap between a piece and the mesh is searched before aiming a "
+                    "cut there, as a share of Fit. Higher: a faster search, cuts aimed more roughly. Default 25%")
+    brush_merge_pass: BoolProperty(
+        name="Merge Pass", default=True, update=_brush_custom,
+        description="General: at the end, join neighbouring pieces whose joined piece is still within Fit. Off: "
+                    "faster finish, more pieces")
+    brush_sliver_pass: BoolProperty(
+        name="Sliver Pass", default=True, update=_brush_custom,
+        description="General: at the end, join thin leftovers (under 2 units) to a neighbour, or thicken ones "
+                    "under 1 unit (the smallest safe brush). Off: faster finish, but brushes thinner than a unit "
+                    "can be left, which the map compiler may drop or mishandle")
     collision_blocks_vis: BoolProperty(
         name="Blocks Vis", default=False,
         description="Convert to Brushes: the pieces also block visibility like world brushes, so the game skips "
