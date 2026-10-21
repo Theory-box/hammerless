@@ -831,7 +831,7 @@ def certify(V, T, Vh, Th, D, cache=None):
                 #  hull is judged against the whole model (join_slivers), never against the piece's own surface)
                 bad = (dw > D) & ~ray.inside(wit[near])
                 if bad.any():
-                    k = np.argmax(dw)
+                    k = int(np.argmax(np.where(bad, dw, -np.inf)))      # (the farthest of the real witnesses)
                     return False, wit[near][k], float(dw[k])
         else:
             miss = np.zeros(0, np.int64)
