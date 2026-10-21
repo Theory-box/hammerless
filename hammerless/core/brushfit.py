@@ -383,14 +383,33 @@ def cut(piece, normal, offset, crease_mid):
 
 def absorb_crumbs(parts, n, total):
     """A cut through a face a fraction of a degree off flat leaves hair-thin wedges: a part thinner than CRUMB
-    along the cut and under 0.5% of the piece joins the neighbour it touches."""
+    along the cut and under 0.5% of the piece joins the neighbour it touches - when it lies flat on it: joined
+    across the crack, the two are one piece whose hull must not gain more air than the crumb itself. (A crumb
+    beside a part's corner joined it once: the pair had no inward crease to resolve, so the piece ended as the hull
+    of both, bridging the air between them into four neighbouring pieces.) A crumb that fits nowhere stays a
+    part of its own."""
     big = [p for p in parts if not (p.volume() < 0.005 * total and extent(p, n) < CRUMB)]
+    hull_vol = {}
     for c in [p for p in parts if not any(p is b for b in big)]:
         if not big:
             big.append(c)
             continue
-        k = min(range(len(big)), key=lambda i: big[i].min_gap(c, 4 * GAP))
-        big[k] = big[k] + c
+        cv = c.volume()
+        joined = False
+        for k in sorted(range(len(big)), key=lambda i: big[i].min_gap(c, 4 * GAP)):
+            if big[k].min_gap(c, 4 * GAP) >= 4 * GAP:
+                break
+            if k not in hull_vol:
+                hull_vol[k] = big[k].hull().volume()
+            both = big[k] + c
+            grown = both.hull().volume() - hull_vol[k]
+            if grown <= 1.5 * cv + 1e-6:
+                big[k] = both
+                hull_vol[k] += grown
+                joined = True
+                break
+        if not joined:
+            big.append(c)
     return big
 
 
@@ -1519,6 +1538,9 @@ def run_once(start, rnd=None, cancel=None):
             dirs.append(nrm)
             cut_planes.append((nrm, off))
         log.append(f"{kind}, cost {cost:.2f}")
+    # (a piece of several separate solids - a crumb joined across a crack - is never hulled as one: each solid
+    #  is a piece; merge_convex joins back whatever makes a convex pair)
+    pieces = [q for p in pieces for q in solids(p)]
     pieces = [p for p in merge_convex(pieces) if p.volume() > 1e-2]
     return pieces, cut_planes, log, filled, model.volume()
 
@@ -1546,7 +1568,7 @@ def merge_convex(pieces):
 
 
 def result_score(pieces, cut_planes, log, filled, volume):
-    if "stuck" in log:
+    if "stuck" in log or "cancelled" in log:       # (a polishing pass the time limit cut short never wins)
         return 1e9
     if not all(is_convex(p, rel=1e-3) for p in pieces):
         return 1e8
