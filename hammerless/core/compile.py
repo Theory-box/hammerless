@@ -573,6 +573,19 @@ def bsp_signature(path: str) -> str:
     return _SIGNATURES[path][1]
 
 
+def verify_deployed_bsp(built, deployed):
+    """Do not launch an older map after a successful-looking copy."""
+    import struct
+    try:
+        matches = bsp_signature(built) == bsp_signature(deployed)
+    except (OSError, ValueError, struct.error) as ex:
+        raise RuntimeError("Cannot verify the map in L4D2's maps folder. Run Build & Play again; "
+                           "if copying fails, close the loaded map and retry.") from ex
+    if not matches:
+        raise RuntimeError("The BSP in L4D2's maps folder differs from the completed build. "
+                           "The old map will not be launched. Run Build & Play again to deploy it.")
+
+
 def bsp_lump_hash(path: str, index: int) -> str | None:
     """Fingerprint of one lump of a compiled map (e.g. 4, the visibility), or None when it can't be read."""
     import hashlib
@@ -1367,6 +1380,7 @@ class CompileJob:
                         stringtables.put_dictionary(dest, stringtables.for_map(dictionary, self.name))
                     except Exception as ex:          # never fail a build over it: the game makes its own
                         self._q.put(f"(stringtable dictionary not kept: {ex})")
+                verify_deployed_bsp(self.base + ".bsp", dest)
                 return
             except PermissionError:
                 if attempt == 0:
@@ -1816,9 +1830,11 @@ def parse_flow(line: str) -> dict | None:
     state = parts[1].lower()
     if state == "ok":
         return {"state": "ok", "length": float(parts[2]) if len(parts) > 2 else 0.0}
-    if state == "broken" and len(parts) >= 6:
-        return {"state": "broken", "connected": parts[2] == "connected",
-                "location": tuple(float(v) for v in parts[3:6])}
+    if state == "broken" and len(parts) >= 3:
+        result = {"state": "broken", "connected": parts[2] == "connected"}
+        if len(parts) >= 6:  # Older installed scripts include a heuristic marker; readers may retain it.
+            result["location"] = tuple(float(v) for v in parts[3:6])
+        return result
     return {"state": state}
 
 
@@ -1846,7 +1862,7 @@ def _watch_ready(log: str, start: int, launch_id: int, timeout: float = 660.0):
                 LOAD_STATUS["seconds"] = time.time() - t0
             elif low.startswith(FLOW):
                 report = parse_flow(line)
-                if report and report["state"] in ("ok", "broken"):
+                if report and report["state"] in ("ok", "broken", "nonav", "noexit", "nostart", "noend"):
                     LOAD_STATUS["flow"] = report
                     LOAD_STATUS["flow_seq"] += 1
 

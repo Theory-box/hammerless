@@ -37,8 +37,8 @@ require playtesting. Elevator controls and imported entity outputs remain unchan
   player clip brushes; the user subsequently confirmed the elevator worked during manual play. Run
   `python tests/ingame/test_elevator.py <report.json>` to repeat. It regenerates nav against the stock
   hotel BSP and uses only the `hl_test_elevator_generated` map copy. Waits for the intro to detach players.
-- The generated hotel's complete route still has a separate break on the starting rooftop, before
-  reaching the elevator. Elevator support does not establish full-map gameplay equivalence.
+- The early generated-hotel fixture had a separate rooftop break; this was not evidence that the
+  elevator route itself was broken. The later repaired hotel test below verifies complete Director flow.
 
 After installing this change, restart Blender and rebuild the nav. Existing imports do not need to be
 reimported. Organize Scene can be rerun to create the World material collections.
@@ -46,3 +46,28 @@ reimported. Organize Scene can be rerun to create the World material collections
 Builds now evaluate hidden contents of the assigned Map Collection, including excluded subcollections,
 for nav, lighting and sound inputs. Viewport visibility is restored afterward. Objects outside the map
 remain excluded; legacy scenes without an assigned map collection retain their previous behavior.
+
+
+## Flow diagnostics and deployment
+
+Play exports the current scene and uses the smart build path. It checks that the game BSP matches the
+completed local build before launching; runtime pakfile dictionary changes are excluded from that
+comparison. Nav baking alone may compile a preview BSP without deploying it. The Problems panel now
+explicitly directs the user to Build & Play when the game BSP differs.
+
+A CHECKPOINT Nav Attribute Region marks nav areas but does not replace an `info_changelevel` campaign
+endpoint. Validation explains how to add its volume, Next Map and matching Landmark. Runtime results
+separate missing nav, missing exit, missing PLAYER_START, missing end markings, no structural route,
+and a connected route with zero Director flow. The last two do not claim to identify a blocking object.
+The engine's `NavAreaBuildPath` checks runtime elevator/ladder travel while ignoring temporary blockers.
+
+Old game reports become stale on object/data edits, export, a new nav preview, or reopening a file.
+Their markers are removed; newer builds and game reports replace them. A result from a game launch
+started before a subsequent scene edit is discarded.
+
+Validation on the repaired hotel: Director flow 6849.71 and 41 naturally spawned infected. The runtime
+diagnostic also correctly reports a connected route when its flow input alone is forced to zero;
+it does not point at the unrelated balcony. Isolated missing-data cases exercise all four setup errors.
+Repeat against a prepared elevator map using:
+`python tests/ingame/test_flow_diagnostics.py <map-name> <report.json>`.
+This loads the supplied map and executes isolated diagnostic copies without modifying Director flow.

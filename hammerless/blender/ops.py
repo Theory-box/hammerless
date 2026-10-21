@@ -196,6 +196,8 @@ def launch(context, root, nav_written: bool = False, analyzed: bool = False) -> 
     already analyzed: then the game just loads the map)."""
     s = context.scene.hammerless
     tools = cc.Tools(root)
+    cc.verify_deployed_bsp(os.path.join(work_dir(context), s.map_name + ".bsp"),
+                           os.path.join(tools.maps_dir, s.map_name + ".bsp"))
     generate = False if nav_written else needs_nav(context, root, by_game=True)
     if nav_written:
         analyze = not analyzed
@@ -561,6 +563,9 @@ def export_prepare(op, context, defer_scripts: bool = False):
 def export_after(context, prep, out) -> None:
     """After export_finish, on Blender's thread: what needs the scene again (an imported map's instances)."""
     path, root, rep2 = out
+    if path:
+        from .problems import stale_flow
+        stale_flow(context, "Map exported; Build & Play to test the current scene")
     if path and prep.imported and getattr(prep, "has_instances", False):
         from . import vmfimport
         scene = bpy.data.scenes.get(prep.scene_name) or context.scene
@@ -1149,6 +1154,9 @@ def _watch_load(before_launch: float, timing: str, nav: bool, timeline=None, lau
     launch_id = cc.LOAD_STATUS["launch_id"]
     state = {"waited": 0.0, "logged": False, "flow_seq": cc.LOAD_STATUS["flow_seq"]}
     owner = (bpy.context.scene.name, bpy.context.scene.hammerless.map_name)
+    settings = bpy.context.scene.hammerless
+    revision = settings.get("game_test_revision", 0)
+    settings["game_test_pending"] = True
 
     def check():
         if cc.LOAD_STATUS["launch_id"] != launch_id or state["waited"] > 660:
@@ -1161,6 +1169,8 @@ def _watch_load(before_launch: float, timing: str, nav: bool, timeline=None, lau
             _popup(cc.LOAD_STATUS["error"])
         if (bpy.context.scene.name, bpy.context.scene.hammerless.map_name) != owner:
             return 1.0          # another scene / map is active: its problem list isn't this map's
+        if bpy.context.scene.hammerless.get("game_test_revision", 0) != revision:
+            return None  # Scene/export changed while an older game test was loading.
         secs = cc.LOAD_STATUS["seconds"]
         if secs is not None and not state["logged"]:
             state["logged"] = True
@@ -1175,9 +1185,8 @@ def _watch_load(before_launch: float, timing: str, nav: bool, timeline=None, lau
             state["flow_seq"] = cc.LOAD_STATUS["flow_seq"]
             report = cc.LOAD_STATUS["flow"]
             scene = bpy.context.scene
-            scene.hammerless["ingame_flow"] = (
-                f"In game: path from start to end works ({report['length']:.0f} units)"
-                if report["state"] == "ok" else "In game: no path from start to end")
+            from ..core.flowdiagnostics import message as flow_message
+            scene.hammerless["ingame_flow"] = flow_message(report)[1]
             write_log([scene.hammerless["ingame_flow"]], append=True)
             try:        # the game saved its nav mesh by now: read it for the viewport and islands
                 from . import navview
@@ -1851,7 +1860,13 @@ class HL_OT_build(bpy.types.Operator):
             nav = needs_nav(context, self._root, by_game=True) and not written
             nav_note = ("" if analyzed else " (the game adds its visibility data: one reload)" if written else
                         " (building its nav mesh first: the map reloads twice)" if nav else "")
-            launch(context, self._root, nav_written=written, analyzed=analyzed)
+            try:
+                launch(context, self._root, nav_written=written, analyzed=analyzed)
+            except RuntimeError as ex:
+                self.report({"ERROR"}, str(ex))
+                from .problems import add_rows
+                add_rows(context, [("ERROR", str(ex), "", None)], kind="deployment")
+                return self._finish(context, {"CANCELLED"})
             _watch_load(time.time() - self._t0, timing, nav, tl, time.time())
             self.report({"INFO"}, f"{compiled}. Launching L4D2 on {s.map_name}{nav_note}  [{timing}]")
         elif self.vis_only:
@@ -2022,25 +2037,11 @@ class HL_OT_start_fresh(bpy.types.Operator):
 class HL_OT_launch(bpy.types.Operator):
     bl_idname = "hammerless.launch"
     bl_label = "Play"
-    bl_description = "Start Left 4 Dead 2 on the last build (without building again)"
+    bl_description = "Check the current scene, build and deploy any changes, then play. Unchanged work is reused."
 
     def execute(self, context):
-        import time
-        root = game_root(context)
-        if not root:
-            self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Game & Folders > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
-            return {"CANCELLED"}
-        s = context.scene.hammerless
-        if not os.path.exists(os.path.join(cc.Tools(root).maps_dir, f"{s.map_name}.bsp")):
-            self.report({"ERROR"}, f"'{s.map_name}' hasn't been built yet: press Build & Play (or Build)")
-            return {"CANCELLED"}
-        if cc.compile_running(os.path.join(work_dir(context), f"{s.map_name}.vmf")):
-            self.report({"ERROR"}, "The map is still compiling: launch when it has finished")
-            return {"CANCELLED"}
-        nav = needs_nav(context, root, by_game=True)
-        launch(context, root)
-        _watch_load(0.0, "Play", nav)
-        return {"FINISHED"}
+        # Always read the current scene: unsaved changes and nav-only previews may differ from the game.
+        return bpy.ops.hammerless.build(play=True)
 
 
 class HL_OT_load_leak(bpy.types.Operator):

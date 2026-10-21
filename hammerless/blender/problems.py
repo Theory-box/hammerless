@@ -21,15 +21,17 @@ def store(context, rep, new_build: bool = False) -> None:
     report from the last Build & Play is kept until the next build."""
     s = context.scene.hammerless
     scale = s.units_per_meter
-    kept = [] if new_build else [(p.name, p.severity, tuple(p.location), p.has_location, p.kind)
+    if new_build:
+        stale_flow(context, "New build started")
+    kept = [] if new_build else [(p.name, p.severity, tuple(p.location), p.has_location, p.kind, p.stale)
                                  for p in s.problems if p.ingame]
     s.problems.clear()
     if new_build:
         s["ingame_flow"] = ""
-    for name, severity, loc, has_loc, kind in kept:
+    for name, severity, loc, has_loc, kind, stale in kept:
         item = s.problems.add()
         item.name, item.severity, item.location, item.has_location, item.ingame = name, severity, loc, has_loc, True
-        item.kind = kind
+        item.kind, item.stale = kind, stale
     located = {p.message for p in rep.problems}
     rows = [("ERROR", m, "", None) for m in rep.errors if m not in located]
     rows += [(p.severity, p.message, p.source, p.location) for p in rep.problems]
@@ -67,34 +69,50 @@ def add_rows(context, rows, kind: str = "") -> None:
     _redraw(context)
 
 
-INGAME_BROKEN = ("In the game, survivors can't get from the start to the end safe room: its nav mesh "
-                 "stops at the marker. Look there for a drop the nav doesn't connect, a gap, a step "
-                 "that's too tall or a blocked path. Without this path no zombies wander")
-INGAME_CONNECTED = ("In the game, the nav mesh reaches the end safe room but the Director still has no "
-                    "start-to-end path. Check the end room's Next Map and both landmarks")
+INGAME_BROKEN = ("The saved nav has no start-to-end route with recognized elevator and ladder links. "
+                 "Inspect the main route and boarding areas, rebuild nav, then Build & Play. "
+                 "This check does not identify a particular blocking object.")
+
+
+def stale_flow(context, reason="Scene changed; Build & Play to test it again"):
+    """Retire old game claims and markers instead of presenting them as current failures."""
+    s = context.scene.hammerless
+    s["game_test_revision"] = s.get("game_test_revision", 0) + 1
+    s["game_test_pending"] = False
+    had = bool(s.get("ingame_flow", ""))
+    for p in s.problems:
+        if p.ingame and not p.stale:
+            p.name = "Previous game test (stale): " + p.name
+            p.stale, p.has_location = True, False
+            p.source, p.severity = "", "INFO"
+            had = True
+    if had:
+        s["ingame_flow"] = "Previous game test is stale. " + reason + "."
 
 
 def store_flow(report: dict) -> None:
-    """Show the game's flow report (see gamefiles.READY_SCRIPT) in the problem list."""
+    from ..core.flowdiagnostics import message
     scene = bpy.context.scene
     s = scene.hammerless
+    s["game_test_pending"] = False
     for n in reversed(range(len(s.problems))):
         if s.problems[n].kind == "flow":
             s.problems.remove(n)
-    if report["state"] == "broken":
+    severity, text = message(report)
+    s["ingame_flow"] = (f"In game: Director flow works ({report['length']:.0f} units)"
+                         if report["state"] == "ok" else "In game: " + text.split(". ")[0])
+    if report["state"] != "ok":
         item = s.problems.add()
-        item.name = INGAME_CONNECTED if report.get("connected") else INGAME_BROKEN
-        item.severity, item.ingame, item.kind = "ERROR", True, "flow"
-        if not report.get("connected"):
-            item.location = Vector(report["location"]) / s.units_per_meter
-            item.has_location = True
+        item.name, item.severity, item.ingame, item.kind = text, severity, True, "flow"
+        # A nearest reached area is not the obstruction. Never send users to an arbitrary dead end.
+        item.has_location = False
         s.problems.move(len(s.problems) - 1, 0)
     set_problem_index(s, -1)
     _redraw(bpy.context)
 
 
 PREDICTED_BROKEN = ("The generated nav has no route from the start to the end room. Recognized elevator "
-                    "travel links are included. The marker shows a reachable area near the end; check for "
+                    "travel links are included. Check the main route for "
                     "missing floor nav, an unconnected ledge, or a blocked path. Elevator controls and doors "
                     "still need to allow travel in-game")
 
@@ -113,13 +131,7 @@ def store_nav(context, mesh, rep, predicted: bool = False) -> None:
         rows.append(("ERROR", "The nav has no start safe room (no area is marked as the start): add a Start "
                      "Safe Room, or check its box covers the room's floor", None))
     if rep.end and not rep.end_reached and rep.break_area is not None:
-        # mark the spot of the last reachable area nearest the end room (where the path stops),
-        # not its middle: areas can be hundreds of units across
-        a = by[rep.break_area]
-        goal = [sum(by[e].centre[i] for e in rep.end) / len(rep.end) for i in range(3)]
-        x = min(max(goal[0], a.nw[0]), a.se[0])
-        y = min(max(goal[1], a.nw[1]), a.se[1])
-        rows.append(("ERROR", PREDICTED_BROKEN if predicted else INGAME_BROKEN, (x, y, a.z_at(x, y))))
+        rows.append(("ERROR", PREDICTED_BROKEN if predicted else INGAME_BROKEN, None))
     goal = None
     if rep.end:
         goal = tuple(sum(by[e].centre[i] for e in rep.end) / len(rep.end) for i in range(3))
@@ -147,7 +159,7 @@ def store_nav(context, mesh, rep, predicted: bool = False) -> None:
                      "drop of 65+ for a drop-down, or 18 or less to walk it", spot))
     for severity, msg, loc in reversed(rows):
         item = s.problems.add()
-        item.name, item.severity, item.ingame, item.kind = msg, severity, True, "nav"
+        item.name, item.severity, item.ingame, item.kind = msg, severity, not predicted, "nav"
         if loc is not None:
             item.location = Vector(loc) / scale + Vector((0, 0, 0.3))
             item.has_location = True
@@ -261,7 +273,7 @@ def draw_panel(layout, context):
     elif not s.problems:
         box.label(text="No problems found", icon="CHECKMARK")
     if flow:
-        box.label(text=flow, icon="CHECKMARK" if flow.startswith("In game: path") else "ERROR")
+        box.label(text=flow, icon="CHECKMARK" if flow.startswith("In game: Director flow works") else "INFO" if flow.startswith("Previous") else "ERROR")
     if s.problems:
         box.template_list("HL_UL_problems", "", s, "problems", s, "problem_index",
                           rows=min(max(len(s.problems), 2), 6))
@@ -275,7 +287,32 @@ def draw_panel(layout, context):
 CLASSES = (HL_UL_problems,)
 
 
+@bpy.app.handlers.persistent
+def _scene_changed(scene, depsgraph):
+    if not hasattr(scene, "hammerless"):
+        return
+    s = scene.hammerless
+    if not (s.get("game_test_pending") or str(s.get("ingame_flow", "")).startswith("In game:")):
+        return
+    kinds = (bpy.types.Object, bpy.types.Mesh, bpy.types.Light, bpy.types.Material, bpy.types.Collection, bpy.types.NodeTree)
+    if any(isinstance(u.id, kinds) for u in depsgraph.updates):
+        # Use the handler's scene even if a different one is currently active.
+        from types import SimpleNamespace
+        stale_flow(SimpleNamespace(scene=scene))
+
+
+@bpy.app.handlers.persistent
+def _file_loaded(_):
+    for scene in bpy.data.scenes:
+        if hasattr(scene, "hammerless"):
+            from types import SimpleNamespace
+            stale_flow(SimpleNamespace(scene=scene), "Reopened file; Build & Play for a fresh game test")
+
+
 def register():
+    bpy.app.handlers.depsgraph_update_post.append(_scene_changed)
+    bpy.app.handlers.load_post.append(_file_loaded)
+    _file_loaded(None)
     for c in CLASSES:
         bpy.utils.register_class(c)
     _handlers.append((bpy.types.SpaceView3D.draw_handler_add(_draw_3d, (), "WINDOW", "POST_VIEW"), "WINDOW"))
@@ -283,6 +320,9 @@ def register():
 
 
 def unregister():
+    for handlers, fn in ((bpy.app.handlers.depsgraph_update_post, _scene_changed), (bpy.app.handlers.load_post, _file_loaded)):
+        if fn in handlers:
+            handlers.remove(fn)
     for h, region in _handlers:
         bpy.types.SpaceView3D.draw_handler_remove(h, region)
     _handlers.clear()

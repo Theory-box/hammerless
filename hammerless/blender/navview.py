@@ -720,7 +720,11 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         except (OSError, ValueError):
             same = False
         if not same:
-            return "Build puts it in the game (the walls changed since the last Build)"
+            message = ("Nav preview updated; the game BSP differs from this preview. Build & Play is required "
+                       "to deploy the current geometry, entities and nav. Bake Nav alone does not update the game map.")
+            from .problems import add_rows
+            add_rows(context, [("WARNING", message, "", None)], kind="deployment")
+            return message
         s = context.scene.hammerless
         key = _nav_key(self._path, self._rep, s, compile_options(s))
         try:
@@ -729,7 +733,9 @@ class HL_OT_nav_analyze(bpy.types.Operator):
         except OSError as ex:
             return f"Couldn't put it in the game ({ex}): Build does"
         _disk["key"] = None                           # (the panel's 'on disk' status: read again)
-        return "In the game now: Play uses it"
+        from .problems import add_rows
+        add_rows(context, [], kind="deployment")
+        return "Nav saved beside the matching game BSP. Play verifies the current scene before launching"
 
 
 def _progress(box, stage, **more) -> None:
@@ -766,6 +772,8 @@ def _end_job(context, timer) -> None:
 
 
 def finish_prediction(context, mesh) -> None:
+    from .problems import stale_flow
+    stale_flow(context, "Nav preview updated; Build & Play to test the current map")
     set_predicted(mesh, _owner(context))
     context.scene.hammerless.show_nav = True
     from .problems import store_nav
@@ -773,6 +781,8 @@ def finish_prediction(context, mesh) -> None:
     from .ops import _quoted_object
     from .problems import add_rows
     add_rows(context, [("WARNING", p, _quoted_object(p), None) for p in mesh.problems], kind="navgen")
+    add_rows(context, [("INFO", "Nav preview updated. Build & Play to deploy and test the current scene; "
+                       "baking nav alone does not replace the game BSP.", "", None)], kind="deployment")
 
 
 _disk = {"key": None, "time": 0.0, "value": None}

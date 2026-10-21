@@ -105,39 +105,37 @@ function HLR_Think() {
     }
 }
 
-// Tells Build & Play whether the Director found the path from the start to the end safe
-// room (the "flow"; without it no zombies wander). If not, walks the nav mesh from the
-// start room and prints the reached spot closest to the end room: where the path breaks.
+// Use the engine's path search: it understands ladders and runtime elevator links.
+// Ignore temporary blockers here to distinguish missing structural connectivity from event/door state.
+function HLR_HasRoute(starts, ends) {
+    foreach (a in starts) foreach (b in ends) {
+        if (NavMesh.NavAreaBuildPath(a, b, b.GetCenter(), 0.0, 2, true)) return true;
+    }
+    return false;
+}
+
 function HLR_FlowReport() {
     local areas = {};
     NavMesh.GetAllAreas(areas);
     if (areas.len() == 0) { printl("HAMMERLESS_FLOW nonav"); return; }
     local max = GetMaxFlowDistance();
     if (max > 0) { printl("HAMMERLESS_FLOW ok " + max); return; }
-    local queue = [], seen = {}, goal = Vector(0, 0, 0), ends = 0;
+    if (Entities.FindByClassname(null, "info_changelevel") == null &&
+        Entities.FindByClassname(null, "trigger_finale") == null) {
+        printl("HAMMERLESS_FLOW noexit"); return;
+    }
+    local starts = [], ends = [];
     foreach (id, a in areas) {
         local f = a.GetSpawnAttributes();
-        if (f & 128) { queue.append(a); seen[a.GetID()] <- true; }
-        else if (f & 2048) { goal += a.GetCenter(); ends++; }
+        if (f & 128) starts.append(a);
+        else if (f & (2048 | 64)) ends.append(a);
     }
-    if (ends == 0 || queue.len() == 0) { printl("HAMMERLESS_FLOW noend"); return; }
-    goal = goal * (1.0 / ends);
-    local best = queue[0], bestD = 1e12, reachedEnd = false;
-    while (queue.len() > 0) {
-        local a = queue.pop();
-        local f = a.GetSpawnAttributes();
-        if ((f & 2048) && !(f & 128)) reachedEnd = true;
-        local d = (a.GetCenter() - goal).Length();
-        if (d < bestD) { bestD = d; best = a; }
-        for (local dir = 0; dir < 4; dir++) {
-            local adj = {};
-            a.GetAdjacentAreas(dir, adj);
-            foreach (k, b in adj) if (!(b.GetID() in seen)) { seen[b.GetID()] <- true; queue.append(b); }
-        }
-    }
-    local c = best.GetCenter();
-    printl("HAMMERLESS_FLOW broken " + (reachedEnd ? "connected" : "at") + " " + c.x + " " + c.y + " " + c.z);
+    if (starts.len() == 0) { printl("HAMMERLESS_FLOW nostart"); return; }
+    if (ends.len() == 0) { printl("HAMMERLESS_FLOW noend"); return; }
+    // No guessed obstruction coordinates: an arbitrary nearby dead end is not the cause.
+    printl("HAMMERLESS_FLOW broken " + (HLR_HasRoute(starts, ends) ? "connected" : "disconnected"));
 }
+
 '''
 
 

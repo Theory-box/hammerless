@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Play now checks the current scene, builds changed content, and verifies the deployed BSP before launching. Unchanged builds are reused. Nav previews explicitly say when Build & Play is needed to deploy current geometry and entities.
+- Flow diagnostics distinguish missing campaign exits, missing start/end nav markings, disconnected navigation, and a connected route with zero Director flow. Messages explain the relevant repair, including why a CHECKPOINT region alone is not a campaign endpoint.
+- The in-game fallback route check uses the engine path search, including elevators and ladders. It no longer presents the nearest reached area as a blocking object or places a misleading marker at an unrelated dead end.
+- Previous game results become stale after scene edits, exports, nav baking, or reopening a file. Stale reports lose their error markers and are replaced by fresh game results.
+
 - Zombie spawn simulation and population diagnostics follow elevator travel links, matching the nav reachability preview. Elevator maps no longer show an empty simulation solely because their route uses a lift.
 
 - Treat tools/toolsblocklight as non-solid during navigation baking, matching its game material. Hidden light-blocking brushes no longer cut doorway routes. Collision-code changes invalidate cached nav builds.

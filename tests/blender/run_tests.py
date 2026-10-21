@@ -333,9 +333,9 @@ def test_map_check_problem_list():
     ir, _ = extract_scene(bpy.context, Report(), None)
     text, _rep = build_vmf(ir)
     finish_prediction(bpy.context, predict(text, collect_regions(ir)[0]))
-    path = next(p for p in s.problems if p.ingame and p.severity == "ERROR")
-    assert "generated nav" in path.name and "elevator" in path.name and path.has_location
-    assert 17 <= path.location.x <= 21, tuple(path.location)   # break at the edge of ground_a
+    path = next(p for p in s.problems if p.kind == "nav" and p.severity == "ERROR")
+    assert "generated nav" in path.name and "elevator" in path.name
+    assert not path.ingame and not path.has_location  # Prediction is not a measured game result or obstruction   # break at the edge of ground_a
     # the buttons turn into Clear buttons; clearing the analysis keeps the navmesh, Clear Navmesh removes it
     from hammerless.blender import navview
     from hammerless.core import navpredict
@@ -418,8 +418,8 @@ def test_game_nav_view():
     rep = navview.report()
     assert rep and not rep.end_reached and rep.break_area == 3
     broken = [p for p in s.problems if p.ingame and p.severity == "ERROR"]
-    assert broken and broken[0].has_location
-    assert abs(broken[0].location.x - 400 / s.units_per_meter) < 0.1, tuple(broken[0].location)   # edge nearest the end
+    assert broken and not broken[0].has_location
+    assert "does not identify a particular blocking object" in broken[0].name
 
 
 def test_horde_presets_and_outputs():
@@ -2774,6 +2774,44 @@ def test_hidden_map_bake_inputs():
     except ValueError:
         pass
     assert floor.hide_get() and light.hide_viewport
+
+
+def test_flow_warnings_stale_and_actionable():
+    from hammerless.blender import problems, ops, navview
+    from hammerless.core.build import Report
+    from unittest.mock import patch
+    reset_scene()
+    obj = add_box("floor", (4,4,1), (0,0,0))
+    bpy.context.view_layer.update()
+    problems.store_flow({"state":"broken", "connected":False, "location":(100,200,300)})
+    s = bpy.context.scene.hammerless
+    row = next(p for p in s.problems if p.kind == "flow")
+    assert not row.has_location and "blocking object" in row.name
+    obj.location.x += 1
+    bpy.context.view_layer.update()
+    assert row.stale and row.severity == "INFO" and not row.has_location
+    problems.store(bpy.context, Report())
+    assert next(p for p in s.problems if p.kind == "flow").stale
+    problems.store_flow({"state":"noexit"})
+    row = next(p for p in s.problems if p.kind == "flow")
+    assert not row.stale and "Change Level Volume" in row.name
+    problems.stale_flow(bpy.context, "Nav preview updated")
+    assert row.stale and not row.has_location
+    problems.store_flow({"state":"ok", "length":1000})
+    assert not [p for p in s.problems if p.kind == "flow"]
+    assert "works" in s.get("ingame_flow", "")
+    problems.store(bpy.context, Report(), new_build=True)
+    assert s.get("ingame_flow") == ""
+    # Play must use the smart build path even when an old game BSP already exists.
+    class FakeBuild:
+        def __call__(self, **kw):
+            assert kw == {"play":True}
+            return {"RUNNING_MODAL"}
+    with patch.object(ops.bpy, "ops") as calls:
+        calls.hammerless.build.side_effect = FakeBuild()
+        result = ops.HL_OT_launch.execute(None, bpy.context)
+        assert result == {"RUNNING_MODAL"}
+        calls.hammerless.build.assert_called_once_with(play=True)
 
 
 # ---------------------------------------------------------------- runner

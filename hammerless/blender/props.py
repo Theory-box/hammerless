@@ -702,6 +702,7 @@ def preferences():
 
 class HL_Problem(bpy.types.PropertyGroup):
     """One map check result (name = message)."""
+    stale: BoolProperty()                  # from an earlier scene/build; never a current error marker
     severity: StringProperty()              # ERROR / WARNING / INFO
     source: StringProperty()                # object to select
     location: FloatVectorProperty(size=3, subtype="TRANSLATION")   # Blender units

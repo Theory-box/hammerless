@@ -163,8 +163,12 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
         r.warnings.append("The Director entity was renamed, but hordes and crescendos send their outputs to "
                           "'director': name it 'director' again")
     if SURVIVOR_SPAWNS & set(classes) and "info_changelevel" not in classes:
-        r.warnings.append("No End Safe Room: without a path from start to end the Director doesn't place "
-                          "wandering zombies, Tanks or Witches (only timed hordes come)")
+        if "trigger_finale" not in classes:
+            r.warnings.append("No End Safe Room: missing Change Level Volume (info_changelevel). A CHECKPOINT "
+                              "Nav Attribute Region only marks nav; it does not provide a campaign endpoint. "
+                              "Add a Change Level Volume covering the safe-room floor, set Next Map and Landmark, "
+                              "and add an info_landmark with that name. Keep them in the map collection, then "
+                              "Build & Play. A finale map needs its finale setup instead.")
     for e in ir.entities:
         nxt = e.keyvalues.get("map", "").strip().lower() if e.classname == "info_changelevel" else ""
         if nxt and content is not None and not _map_exists(content, nxt):
@@ -187,9 +191,15 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
     landmarks = {e.keyvalues.get("targetname") for e in ir.entities if e.classname == "info_landmark"}
     for cl in changelevels:
         if not cl.brushes:
-            r.errors.append(f"info_changelevel '{cl.source}' has no brush volume.")
-        if cl.keyvalues.get("landmark") and cl.keyvalues["landmark"] not in landmarks:
-            r.warnings.append(f"info_changelevel refers to landmark '{cl.keyvalues['landmark']}' which doesn't exist.")
+            r.errors.append(f"Change Level Volume '{cl.source}' has no brush geometry. Use a mesh box covering the safe-room floor, set Kind to Brush Entity and Class to info_changelevel, then Build & Play.")
+        if not cl.keyvalues.get("landmark", "").strip():
+            r.warnings.append(f"Change Level Volume '{cl.source}' has no Landmark name. Add an info_landmark in "
+                              "the safe room and enter its targetname in this volume's Landmark setting; the next "
+                              "map must have the matching landmark. Then Build & Play.")
+        elif cl.keyvalues["landmark"] not in landmarks:
+            r.warnings.append(f"Change Level Volume '{cl.source}' refers to missing Landmark '{cl.keyvalues['landmark']}'. "
+                              "Add an info_landmark with that targetname inside the map collection, or correct the "
+                              "volume's Landmark setting, then Build & Play.")
         if bad_next_map(cl, ir.settings.name):
             r.warnings.append(f"End safe room's Next Map is {'empty' if not cl.keyvalues.get('map') else 'this map itself'}. "
                               "The game then can't work out the path from start to end, so no wandering "
