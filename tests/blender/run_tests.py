@@ -2099,6 +2099,29 @@ def test_organize_imported_scene():
         mc.organize(bpy.context)
         assert places == {o.name: tuple(o.users_collection) for o in bpy.context.scene.objects}
         assert _tree(_imported_export(text)) == before
+        # Clearing parenting does not change source VMF ownership; even individually hidden brushes sort.
+        owner = next(o for o in bpy.context.scene.objects
+                     if o.get(vmfimport.KIND) == "entity" and o.hammerless.classname == brush_class)
+        brushes = list(owner.children)
+        assert brushes
+        for brush in brushes:
+            matrix = brush.matrix_world.copy()
+            brush.parent = None
+            brush.matrix_world = matrix
+            for c in list(brush.users_collection):
+                c.objects.unlink(brush)
+            mc._child(coll, "World").objects.link(brush)
+        brushes[0].hide_set(True)
+        bpy.context.view_layer.update()
+        detached_export = _tree(_imported_export(text))
+        mc.organize(bpy.context)
+        bpy.context.view_layer.update()
+        assert owner.users_collection[0].get("hl_category") == category
+        for brush in brushes:
+            assert brush.parent is None
+            assert brush.users_collection[0].get("hl_category") == category
+        assert brushes[0].hide_get() and not brushes[0].visible_get()
+        assert _tree(_imported_export(text)) == detached_export
 
 
 def test_new_objects_sorted():

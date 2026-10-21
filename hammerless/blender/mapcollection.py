@@ -83,13 +83,51 @@ def sync_name(scene) -> None:
 
 # ---------------------------------------------------------------- organizing
 
-def _category(obj) -> str | None:
+def _brush_entity_category(cls):
+    if cls == "func_detail":
+        return DETAIL
+    if cls.startswith("trigger_") or cls in {"fog_volume", "func_nav_blocker", "func_viscluster",
+                                            "func_areaportal", "func_areaportalwindow", "func_occluder"}:
+        return VOLUMES
+    return BRUSH_ENTITIES
+
+
+def _imported_categories(scene):
+    """Stored solid IDs retain entity ownership even after users clear Blender parenting."""
+    from .vmfimport import SOURCE_KEY, KIND, ID, INDEX, _document, _originals
+    source = bpy.data.texts.get(scene.get(SOURCE_KEY, ""))
+    if source is None:
+        return {}
+    doc = _document(source, scene.hammerless.lightmap_scale_imported)
+    entities = _originals(scene.objects, "entity", INDEX)
+    solids = {}
+    categories = {}
+    for index, entity in enumerate(doc.entities):
+        brushes = entity.blocks("solid")
+        if not brushes:
+            continue
+        obj = entities.get(index)
+        cls = obj.hammerless.classname if obj is not None else entity.get("classname", "")
+        category = _brush_entity_category(cls)
+        if obj is not None:
+            categories[obj.name] = category
+        for brush in brushes:
+            solids[int(brush.get("id"))] = category
+    for obj in scene.objects:
+        if obj.get(KIND) in ("solid", "disp") and obj.get(ID) in solids:
+            categories[obj.name] = solids[obj.get(ID)]
+    return categories
+
+
+def _category(obj, imported=None) -> str | None:
     """Where an object goes under the map collection ("A/B": a collection inside another), or None: it isn't
     built, so it stays where it is."""
     from ..core.entities import CATALOG
     from .extract import detail_choice, effective_role
     from .vmfimport import KIND
     hs = obj.hammerless
+    if imported and obj.name in imported:
+        return imported[obj.name]
     kind = obj.get(KIND)
     if kind == "world":
         return WORLD
@@ -98,13 +136,7 @@ def _category(obj) -> str | None:
     if kind == "solid":
         return WORLD
     if kind == "entity" and any(c.get(KIND) in ("solid", "disp") for c in obj.children):
-        cls = hs.classname or ""
-        if cls == "func_detail":
-            return DETAIL
-        if cls.startswith("trigger_") or cls in {"fog_volume", "func_nav_blocker", "func_viscluster",
-                                                "func_areaportal", "func_areaportalwindow", "func_occluder"}:
-            return VOLUMES
-        return BRUSH_ENTITIES
+        return _brush_entity_category(hs.classname or "")
     if hs.preset:
         return PREFABS
     if obj.instance_type == "COLLECTION" and obj.instance_collection is not None:
@@ -175,15 +207,21 @@ def organize(context) -> dict:
         scene.hammerless.map_collection = coll
     sync_name(scene)
     sources = _instance_sources(scene)
+    imported_categories = _imported_categories(scene)
     moved = left = 0
     imported = 0
     for obj in list(scene.objects):
         if obj.parent is not None:
             continue                  # (children go with their parent)
-        if obj.name in sources or not obj.visible_get():
+        # Individually hidden imported objects can be sorted without revealing them. Collections hidden
+        # or excluded in the view layer stay untouched: moving out could make their objects visible.
+        hidden_import = obj.get(KIND) is not None and (obj.hide_get() or obj.hide_viewport)
+        if hidden_import:
+            hidden_import = not any(_layer_hidden(context.view_layer, c) for c in obj.users_collection)
+        if obj.name in sources or (not obj.visible_get() and not hidden_import):
             left += 1
             continue                  # (hidden or an asset kit's: not built, stays outside)
-        cat = _category(obj)
+        cat = _category(obj, imported_categories)
         if cat is None:
             left += 1
             continue

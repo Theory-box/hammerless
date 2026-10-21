@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Organize Scene sorts imported VMF and game/BSP maps into the usual collections instead of keeping the entire import together. Brush entity geometry stays with its parent; fog, triggers and visibility volumes go into Volumes. Original entity identities, parenting and exported map data are preserved. Existing imports can be organized again without reimporting.
+- Imported brush ownership is resolved from stored VMF IDs even when Blender parenting has been cleared. Individually hidden imported brushes are sorted while preserving their hidden state.
 
 ## 0.20.9 (test release, 2026-10-21)
 
