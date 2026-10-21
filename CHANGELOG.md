@@ -1,13 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.20.9 (test release, 2026-10-21)
 
-- Corrected inferred start flags: a survivor spawn implies PLAYER_START only, not CHECKPOINT. In-game Deadline regression: adding CHECKPOINT spawned all four survivors 500 units below their entities; removing only that bit restored floor-level spawning with the original coordinates unchanged. Explicit checkpoint volumes remain unchanged.
+- **Imported maps: spawn and safe-room metadata reaches navigation and validation.** Imported entities are recognized without exporting duplicates. End-room volumes contribute their checkpoint markings, and imported spawns no longer produce a false missing-spawn warning.
+- **Correct starting nav flags.** When no explicit start region exists, Blender nav generation marks the floor beneath survivor spawns as PLAYER_START. It does not infer CHECKPOINT from a spawn point: that extra flag caused under-map spawning in Deadline. Original spawn coordinates are preserved.
+- **Native entity previews on import.** Survivors, weapons, checkpoint doors and other supported entities use the same model previews as native entities. Point, spot and sun lights become Blender lights. Untouched entity properties and outputs remain preserved.
+- **Empty export protection.** Imported maps with no exported geometry report a collection/visibility error before compilation. Instance-only maps remain allowed.
 
-- VMF imports now expose their rebuilt entity metadata to gameplay validation and nav marking, including end-room volumes, without exporting duplicate entities. Imported worlds are not checked against an empty native geometry list.
-- Blender nav generation seeds survivor starts and marks the floor directly beneath them as PLAYER_START when no explicit start region exists. Missing floors produce a diagnostic. Full-room and other manually painted nav attributes still require authored regions; they cannot all be recovered from a VMF.
-- Imported entities use native model previews (including survivors, weapons and checkpoint doors), and imported point/spot/sun lights become Blender lights. Untouched light values and entity outputs remain exact; edits to light controls update the corresponding exported values.
-- Import exports with no geometry are blocked with a collection/visibility diagnostic (instance-only maps remain allowed).
+Validation: 79 Blender tests passed; core tests passed with native code and Python fallbacks. Deadline chapter 1 retained all 199 original entity blocks. In-game testing verified all four survivors spawn on the floor; user playtesting also confirmed spawning works.
+
+A VMF does not contain every manually painted attribute from its original .nav. Full-room markings and other custom nav attributes may still require authored regions. Map events and chapter transitions have not been exhaustively verified by this release's tests.
+
+After updating, restart Blender and rebuild the navmesh before Build & Play. Existing imported scenes do not need to be reimported for the nav fix; reimport to get the new entity representations.
 
 ## 0.20.8 (test release, 2026-10-20)
 
