@@ -342,6 +342,7 @@ void PairEdges(void);
 void SaveVertexNormals(void);
 void FindFacePatches(void);
 int FaceHasPatches(int facenum);
+int FaceIsNonRendering(int facenum);
 extern vec3_t *face_offset;
 
 /* winding.c */

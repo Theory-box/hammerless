@@ -299,13 +299,13 @@ void MakePatches(void) {
     for (int m = 0; m < nummodels; m++) {
         for (int j = 0; j < models[m].numfaces; j++) {
             int fn = models[m].firstface + j;
-            if (g_pFaces[fn].dispinfo != -1) continue;
+            if (g_pFaces[fn].dispinfo != -1 || FaceIsNonRendering(fn)) continue;
             winding_t *w = WindingFromFace(&g_pFaces[fn], face_offset[fn]);
             MakePatchForFace(fn, w);
         }
     }
     for (int i = 0; i < numdispsurfs; i++)
-        if (dispsurfs[i].face >= 0) CreateDispParentPatch(&dispsurfs[i]);
+        if (dispsurfs[i].face >= 0 && !FaceIsNonRendering(dispsurfs[i].face)) CreateDispParentPatch(&dispsurfs[i]);
 }
 
 /* ------------------------------------------------------------------ subdividing */

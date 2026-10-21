@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .lightmap import (DISPINFO_SIZE, FACE_SIZE, MODEL_SIZE, SURF_BUMPLIGHT, SURF_NOLIGHT, SURF_SKY, SURF_SKY2D,
-                       TEXINFO_SIZE, _displacement, _entity_origins, _lumps, disp_luxels)
+                       TEXINFO_SIZE, nonrendering_faces, _displacement, _entity_origins, _lumps, disp_luxels)
 
 OO_SQRT_2 = 0.70710676908493042
 OO_SQRT_3 = 0.57735025882720947
@@ -106,7 +106,10 @@ def read_faces(data: bytes) -> tuple[list[BakeFace], int]:
             for f in range(first, first + count):
                 model_of[f] = origins[m]
     out = []
+    hidden_faces = nonrendering_faces(lump, faces)
     for k in range(len(faces) // FACE_SIZE):
+        if k in hidden_faces:
+            continue
         b = FACE_SIZE * k
         planenum = struct.unpack_from("<H", faces, b)[0]     # (the side byte is already in the plane)
         first_edge, num_edges, ti, di = struct.unpack_from("<ihhh", faces, b + 4)

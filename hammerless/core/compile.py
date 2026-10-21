@@ -49,6 +49,7 @@ class CompileOptions:
     map_tool: str = "HAMMERLESS"  # HAMMERLESS: hlvbsp.exe (same map as vbsp) / VALVE: L4D2's vbsp.exe
     light_tool: str = "HAMMERLESS"  # VALVE: vrad's lightmaps / HAMMERLESS: hlvrad.exe (vrad's lighting, faster) /
                                 # CYCLES: Blender bakes them after vrad (bake_handler)
+    light_receiver_revision: int = 1  # Invalidate old bakes that lightmapped logical volumes.
     light_exact: bool = False   # hlvrad on the CPU, byte for byte vrad's (else -gpu: much faster, looks the same)
     cycles_samples: int = 1024
     cycles_stitch: bool = True     # make neighbouring faces' lightmaps agree along shared edges
@@ -144,7 +145,7 @@ VIS_RANK = {"SKIP": 0, "FAST": 1, "FULL": 2}
 # not with vrad -fast, the Hammerless light compiler's own only when it's used (the sky picture too), Cycles' with it
 _LIGHT_FIELDS = ("hdr", "static_prop_lighting", "extra_vrad", "prop_polys")
 _NORMAL_FIELDS = ("sky_rays", "supersample", "bounces", "patch_size")
-_HLVRAD_FIELDS = ("light_exact", "ss_points", "ss_passes", "ss_threshold", "fix_quirks", "sky_key", "gi", "gi_rays",
+_HLVRAD_FIELDS = ("light_receiver_revision", "light_exact", "ss_points", "ss_passes", "ss_threshold", "fix_quirks", "sky_key", "gi", "gi_rays",
                   "no_bake", "keep_light")
 # (settings added later: a build from before them was baked as their default)
 _FIELD_DEFAULTS = {"gi": "False", "gi_rays": "1024", "no_bake": "''", "keep_light": "False"}

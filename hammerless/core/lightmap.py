@@ -26,6 +26,86 @@ SURF_SKY2D, SURF_SKY, SURF_NOLIGHT = 0x2, 0x4, 0x400
 SURF_BUMPLIGHT = 0x800
 
 
+NON_RENDERING_MATERIALS = {
+    'tools/fogvolume',
+    'tools/toolsareaportal',
+    'tools/toolsblock_los',
+    'tools/toolsblocklight',
+    'tools/toolsclip',
+    'tools/toolshint',
+    'tools/toolsinvisible',
+    'tools/toolsinvisibleladder',
+    'tools/toolsnodraw',
+    'tools/toolsnpcclip',
+    'tools/toolsoccluder',
+    'tools/toolsorigin',
+    'tools/toolsplayerclip',
+    'tools/toolsskip',
+    'tools/toolstrigger',
+}
+NON_RENDERING_CLASSES = {
+    'fog_volume',
+    'func_areaportal',
+    'func_areaportalwindow',
+    'func_clip_vphysics',
+    'func_dustcloud',
+    'func_dustmotes',
+    'func_ladder',
+    'func_nav_attribute_region',
+    'func_nav_avoid',
+    'func_nav_blocker',
+    'func_nav_prefer',
+    'func_occluder',
+    'func_precipitation',
+    'func_precipitation_blocker',
+    'func_simpleladder',
+    'func_smokevolume',
+    'func_viscluster',
+    'info_changelevel',
+}
+
+
+def _hidden_models(text):
+    hidden = set()
+    for block in re.findall(rb"\{([^{}]*)\}", text):
+        kv = dict(re.findall(rb'"([^"]*)"\s+"([^"]*)"', block))
+        cls = kv.get(b"classname", b"").decode("latin-1").lower()
+        model = kv.get(b"model", b"")
+        if model.startswith(b"*") and (cls.startswith("trigger_") or cls in NON_RENDERING_CLASSES):
+            try:
+                hidden.add(int(model[1:]))
+            except ValueError:
+                pass
+    return hidden
+
+
+def nonrendering_faces(lump, faces):
+    """Indices of logical volume/tool faces, even in old BSPs that contain lightmaps for them."""
+    hidden = set()
+    models = lump(14)
+    for m in _hidden_models(lump(0)):
+        if 0 <= m < len(models) // MODEL_SIZE:
+            first, count = struct.unpack_from("<2i", models, m * MODEL_SIZE + 40)
+            hidden.update(range(first, first + count))
+    ti, td, table, strings = lump(6), lump(2), lump(44), lump(43)
+    hidden_ti = set()
+    for i in range(len(ti) // TEXINFO_SIZE):
+        flags, material = struct.unpack_from("<2i", ti, i * TEXINFO_SIZE + 64)
+        if flags & (0x40 | 0x80 | 0x100 | 0x200):
+            hidden_ti.add(i)
+        if 0 <= material < len(td) // 32:
+            name_id = struct.unpack_from("<i", td, material * 32 + 12)[0]
+            if 0 <= name_id < len(table) // 4:
+                at = struct.unpack_from("<i", table, name_id * 4)[0]
+                name = strings[at:strings.find(b"\0", at)].decode("latin-1").lower().replace("\\", "/")
+                if name in NON_RENDERING_MATERIALS:
+                    hidden_ti.add(i)
+    for i in range(len(faces) // FACE_SIZE):
+        if struct.unpack_from("<h", faces, i * FACE_SIZE + 10)[0] in hidden_ti:
+            hidden.add(i)
+    return hidden
+
+
 @dataclass
 class Lightmaps:
     positions: np.ndarray       # (n*3, 3) float32 triangle corners, Hammer units
@@ -112,6 +192,7 @@ def read_lightmaps(data: bytes, style: int | None = 0) -> Lightmaps:
 
     # which brush model each face belongs to (for the entity origin offset)
     model_of = {}
+    hidden_faces = nonrendering_faces(lump, faces)
     for m in range(len(models) // MODEL_SIZE):
         first, count = struct.unpack_from("<2i", models, MODEL_SIZE * m + 40)
         if m in origins:
@@ -122,6 +203,8 @@ def read_lightmaps(data: bytes, style: int | None = 0) -> Lightmaps:
     face_nums = []
     luxels = 0
     for k in range(len(faces) // FACE_SIZE):
+        if k in hidden_faces:
+            continue
         b = FACE_SIZE * k
         first_edge, num_edges, ti, di = struct.unpack_from("<ihhh", faces, b + 4)
         styles = faces[b + 16:b + 20]
@@ -131,7 +214,7 @@ def read_lightmaps(data: bytes, style: int | None = 0) -> Lightmaps:
         if light_ofs < 0 or num_edges < 3 or ti < 0 or (style not in styles if style is not None else styles[0] == 255):
             continue
         flags = struct.unpack_from("<i", texinfo, TEXINFO_SIZE * ti + 64)[0]
-        if flags & (SURF_SKY | SURF_SKY2D | SURF_NOLIGHT):
+        if flags & (SURF_SKY | SURF_SKY2D | SURF_NOLIGHT | 0x40 | 0x80 | 0x100 | 0x200):
             continue
         lvecs = np.array(struct.unpack_from("<8f", texinfo, TEXINFO_SIZE * ti + 32), dtype=np.float64).reshape(2, 4)
         tvecs = np.array(struct.unpack_from("<8f", texinfo, TEXINFO_SIZE * ti), dtype=np.float64).reshape(2, 4)
@@ -148,6 +231,8 @@ def read_lightmaps(data: bytes, style: int | None = 0) -> Lightmaps:
                 material_of[td] = len(materials)
                 materials.append(name)
         mat = material_of.get(td, -1)
+        if mat >= 0 and materials[mat] in NON_RENDERING_MATERIALS:
+            continue
         w, h = size[0] + 1, size[1] + 1
         per_style = w * h * (4 if flags & SURF_BUMPLIGHT else 1)      # bumped: flat + 3 directions
         pages = [styles.index(style)] if style is not None else [k for k in range(4) if styles[k] != 255]
