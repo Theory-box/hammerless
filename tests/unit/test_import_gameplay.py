@@ -41,7 +41,7 @@ class ImportGameplayTests(unittest.TestCase):
         basement = NavArea(3, 0, (0, 0, -128), (100, 100, -128), -128, -128)
         mesh = NavMesh(areas=[floor, roof, basement])
         self.assertEqual(mark_survivor_starts(mesh, [(50, 50, 2)], []), [])
-        self.assertEqual(floor.spawn_attributes, 128 | 2048)
+        self.assertEqual(floor.spawn_attributes, 128)  # no inferred CHECKPOINT: changes game spawn selection
         self.assertEqual(roof.spawn_attributes | basement.spawn_attributes, 0)
         self.assertTrue(mark_survivor_starts(mesh, [(200, 200, 2)], []))
 

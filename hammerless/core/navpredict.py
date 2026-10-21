@@ -227,7 +227,10 @@ def mark_survivor_starts(mesh, positions, regions):
                             "Check the spawn height, floor collision and nav exclusions.")
             continue
         area = min(candidates, key=lambda a: abs(z - a.z_at(x, y)))
-        area.spawn_attributes |= PLAYER_START | 2048  # CHECKPOINT
+        # A spawn point does not imply a checkpoint room. Adding CHECKPOINT here changes
+        # the Director's spawn selection (Deadline's floor-level spawns then land 500 units
+        # below the map). Checkpoints come only from explicitly authored volumes.
+        area.spawn_attributes |= PLAYER_START
     return problems
 
 

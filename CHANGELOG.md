@@ -2,8 +2,10 @@
 
 ## Unreleased
 
+- Corrected inferred start flags: a survivor spawn implies PLAYER_START only, not CHECKPOINT. In-game Deadline regression: adding CHECKPOINT spawned all four survivors 500 units below their entities; removing only that bit restored floor-level spawning with the original coordinates unchanged. Explicit checkpoint volumes remain unchanged.
+
 - VMF imports now expose their rebuilt entity metadata to gameplay validation and nav marking, including end-room volumes, without exporting duplicate entities. Imported worlds are not checked against an empty native geometry list.
-- Blender nav generation seeds survivor starts and marks the floor directly beneath them as PLAYER_START and CHECKPOINT when no explicit start region exists. Missing floors produce a diagnostic. Full-room and other manually painted nav attributes still require authored regions; they cannot all be recovered from a VMF.
+- Blender nav generation seeds survivor starts and marks the floor directly beneath them as PLAYER_START when no explicit start region exists. Missing floors produce a diagnostic. Full-room and other manually painted nav attributes still require authored regions; they cannot all be recovered from a VMF.
 - Imported entities use native model previews (including survivors, weapons and checkpoint doors), and imported point/spot/sun lights become Blender lights. Untouched light values and entity outputs remain exact; edits to light controls update the corresponding exported values.
 - Import exports with no geometry are blocked with a collection/visibility diagnostic (instance-only maps remain allowed).
 
