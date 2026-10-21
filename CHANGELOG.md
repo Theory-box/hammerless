@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.20.8 (test release, 2026-10-20)
+
+- **Hard Surface: no more overlapping pieces.** A hair-thin leftover of a cut was joined to the nearest piece even when it only sat beside that piece's corner, across a tiny gap; the joined piece's hull then bridged the gap into its neighbours (a gear: one block overlapping four others, up to 82% of one). Now a leftover joins a piece only when it lies flat against it, and a piece made of separate solids is never hulled as one. On the gear: 52 -> 53 brushes, no overlaps; the hard-surface test props are unchanged.
+- **General: Fine Tuning** (a sub-panel under Convert to Brushes, with tooltips): a **Preset** - **Fast** (quick previews: one candidate cut per step, stops early, coarse checks, no clean-up passes), **Balanced** (the default, General as before) or **High** (cuts longer, aims finer; helps only while Max Pieces has room to spare) - and the knobs behind it: Stop When Gain Below, Max Candidates, Fit Check Tolerance, Aim Precision, Merge Pass and Sliver Pass. A statue at 3 cores: Fast 11 s, High 30 s.
+
 ## 0.20.7 (test release, 2026-10-20)
 
 - **General: no more overlapping wedges from thin leftovers.** At fine Fits, cutting a curved arc leaves strips thinner than a game unit (the smallest safe brush). They used to be forced into a neighbour whatever the joined brush looked like, which made wedges poking through other pieces and loose spots. Now such a strip joins a neighbour only when the joined brush stays within Fit of the whole mesh; otherwise it is thickened to one unit into the neighbouring solid, where it can't be seen. Tiny specks join as before. A user's gear (Fit 0.1%): extra collision 2.3% -> 0.8%, visible overlap 0.64% -> 0.003%, 44 -> 52 pieces.
