@@ -185,6 +185,36 @@ def _shape_key(obj, upm: float) -> str:
 
 # ---------------------------------------------------------------- entities
 
+
+def _light_state(obj):
+    lamp = obj.data
+    return [lamp.energy, *lamp.color, lamp.spot_size if lamp.type == "SPOT" else 0,
+            lamp.spot_blend if lamp.type == "SPOT" else 0]
+
+
+def _light_values(obj, values, upm):
+    """Keep exact imported keys until the corresponding Blender light controls change."""
+    from .extract import _linear_to_srgb, source_angles
+    lamp = obj.data
+    before = list(obj.get("hl_vmf_light_state", _light_state(obj)))
+    now = _light_state(obj)
+    if now[:4] != before[:4]:
+        col = " ".join(str(round(_linear_to_srgb(c) * 255)) for c in lamp.color)
+        bright = lamp.energy * (100 if lamp.type == "SUN" else upm * upm / (400 * math.pi))
+        values["_light"] = f"{col} {round(bright)}"
+    if now[4:] != before[4:] and lamp.type == "SPOT":
+        cone = math.degrees(lamp.spot_size) / 2
+        values["_cone"] = f"{cone:g}"
+        values["_inner_cone"] = f"{cone * (1 - lamp.spot_blend):g}"
+    rotation = [v for row in obj.matrix_world.to_3x3().normalized() for v in row]
+    old = obj.get("hl_vmf_light_rotation", rotation)
+    if any(abs(a - b) > 1e-4 for a, b in zip(rotation, old)):
+        angles = source_angles(obj.matrix_world @ Matrix.Rotation(math.radians(90), 4, "Y"))
+        values["angles"] = " ".join(f"{c:g}" for c in angles)
+        if "pitch" in values or lamp.type == "SUN":
+            values["pitch"] = f"{-angles[0]:g}"
+
+
 def _entity_object(e: Block, k: int, coll, upm: float):
     from .ops import preview_mesh, style_entity_object
     cls = e.get("classname", "") or ""
@@ -192,16 +222,44 @@ def _entity_object(e: Block, k: int, coll, upm: float):
     angles = _num3(e.get("angles")) if e.get("angles") is not None else (0.0, 0.0, 0.0)
     solids = e.blocks("solid")
     name = e.get("targetname") or cls or f"entity {k}"
-    if solids:
+    from .lamps import LAMP_OF, _apply_light, DEFAULT_LIGHT
+    lamp_kind = LAMP_OF.get(cls) if not solids else None
+    if lamp_kind:
+        lamp = bpy.data.lights.new(name, lamp_kind)
+        _apply_light(lamp, e.get("_light", DEFAULT_LIGHT[lamp_kind]), upm)
+        if lamp_kind == "SPOT":
+            try:
+                cone = float(e.get("_cone", "45"))
+                inner = float(e.get("_inner_cone", str(cone * 0.7)))
+                lamp.spot_size = math.radians(max(1, min(179, cone * 2)))
+                lamp.spot_blend = max(0, min(1, 1 - inner / cone)) if cone else 0
+            except ValueError:
+                pass
+        obj = bpy.data.objects.new(name, lamp)
+    elif solids:
         obj = bpy.data.objects.new(name, None)
         obj.empty_display_type = "PLAIN_AXES"
         obj.empty_display_size = 16 / upm
     else:
-        model = e.get("model", "") if cls.lower() in PROP_CLASSES else ""
+        from ..core.entities import preview_model
+        model = preview_model(cls, dict(it for it in e.items if isinstance(it, tuple)))
         obj = bpy.data.objects.new(name, preview_mesh(cls, upm, model))
     coll.objects.link(obj)
     if origin is not None:
         obj.matrix_world = _matrix(origin, angles, upm)
+    if lamp_kind:
+        light_angles = angles
+        try:
+            pitch = float(e.get("pitch", "0"))
+            if pitch:
+                light_angles = (-pitch, angles[1], angles[2])
+        except ValueError:
+            pass
+        obj.matrix_world = _matrix(origin or (0, 0, 0), light_angles, upm) @ Matrix.Rotation(math.radians(-90), 4, "Y")
+        obj["hl_vmf_light_state"] = _light_state(obj)
+        obj["hl_vmf_light_rotation"] = [v for row in obj.matrix_world.to_3x3() for v in row]
+    obj.hammerless.role = "ENTITY"
+    obj.hide_render = not bool(lamp_kind)
     obj.hammerless.classname = cls          # (sets the class's default keys: replaced below)
     obj.hammerless.keyvalues.clear()
     for key, value in [it for it in e.items if isinstance(it, tuple)]:
@@ -583,6 +641,9 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
                 values["origin"] = orig_origin
             if e.get("angles") is not None and e.blocks("solid"):
                 values["angles"] = e.get("angles")      # (a brush entity's brushes carry its shape)
+            elif obj.type == "LIGHT":
+                if e.get("angles") is not None:
+                    values["angles"] = e.get("angles")
             elif e.get("angles") is not None:
                 from .extract import source_angles
                 # (the same turn can be written several ways: 0 180 -180 is 180 0 0; compare the rotations)
@@ -594,6 +655,8 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
                     values["angles"] = e.get("angles")
         elif e.get("angles") is not None:
             values["angles"] = e.get("angles")
+        if obj.type == "LIGHT":
+            _light_values(obj, values, upm)
         outputs = _outputs(obj, e)
         block = vi.set_entity_values(e, values, outputs)
         kept = [b for b in (solid(x) for x in e.blocks("solid")) if b is not None] + new_solids(obj)

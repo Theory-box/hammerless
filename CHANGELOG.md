@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- VMF imports now expose their rebuilt entity metadata to gameplay validation and nav marking, including end-room volumes, without exporting duplicate entities. Imported worlds are not checked against an empty native geometry list.
+- Blender nav generation seeds survivor starts and marks the floor directly beneath them as PLAYER_START and CHECKPOINT when no explicit start region exists. Missing floors produce a diagnostic. Full-room and other manually painted nav attributes still require authored regions; they cannot all be recovered from a VMF.
+- Imported entities use native model previews (including survivors, weapons and checkpoint doors), and imported point/spot/sun lights become Blender lights. Untouched light values and entity outputs remain exact; edits to light controls update the corresponding exported values.
+- Import exports with no geometry are blocked with a collection/visibility diagnostic (instance-only maps remain allowed).
+
 ## 0.20.8 (test release, 2026-10-20)
 
 - **Hard Surface: no more overlapping pieces.** A hair-thin leftover of a cut was joined to the nearest piece even when it only sat beside that piece's corner, across a tiny gap; the joined piece's hull then bridged the gap into its neighbours (a gear: one block overlapping four others, up to 82% of one). Now a leftover joins a piece only when it lies flat against it, and a piece made of separate solids is never hulled as one. On the gear: 52 -> 53 brushes, no overlaps; the hard-surface test props are unchanged.

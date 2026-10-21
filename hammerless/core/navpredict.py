@@ -193,6 +193,44 @@ def top_seeds(world) -> list[tuple[float, float, float]]:
     return out
 
 
+
+def survivor_positions(vmf_text: str):
+    """Initial survivor locations; rescue closets are deliberately not start positions."""
+    groups = {"info_survivor_position": [], "info_player_start": []}
+    for block in parse_shared(vmf_text):
+        cls = block.get("classname", "") if block.name == "entity" else ""
+        if cls not in groups:
+            continue
+        try:
+            pos = tuple(float(v) for v in (block.get("origin") or "").split())
+            if len(pos) == 3:
+                groups[cls].append(pos)
+        except ValueError:
+            pass
+    return groups["info_survivor_position"] or groups["info_player_start"]
+
+
+def mark_survivor_starts(mesh, positions, regions):
+    """Fallback for VMFs without Hammerless's explicit start volume.
+
+    Mark the floor directly under each spawn, never a nearby roof or another floor.
+    A VMF cannot describe all the manually painted attributes of its original .nav.
+    """
+    if any(r.bits & PLAYER_START for r in regions):
+        return []
+    problems = []
+    for x, y, z in positions:
+        candidates = [a for a in mesh.areas if a.nw[0] <= x <= a.se[0] and a.nw[1] <= y <= a.se[1]
+                      and -2 <= z - a.z_at(x, y) <= 64]
+        if not candidates:
+            problems.append(f"No walkable nav floor under survivor spawn ({x:g}, {y:g}, {z:g}). "
+                            "Check the spawn height, floor collision and nav exclusions.")
+            continue
+        area = min(candidates, key=lambda a: abs(z - a.z_at(x, y)))
+        area.spawn_attributes |= PLAYER_START | 2048  # CHECKPOINT
+    return problems
+
+
 def _generator(vmf_text: str, regions=(), roofs=False) -> Generator:
     from .nav import nav_cuts
     world = CollisionWorld.from_vmf(vmf_text)
@@ -201,8 +239,9 @@ def _generator(vmf_text: str, regions=(), roofs=False) -> Generator:
         if props:
             world = CollisionWorld(world.brushes + props)
     gen = Generator(world)
+    gen.survivor_positions = survivor_positions(vmf_text)
     gen.cuts = nav_cuts(regions)          # (before the seeds: none start inside a No Nav Volume)
-    for p in seed_positions(vmf_text):
+    for p in seed_positions(vmf_text) + gen.survivor_positions:
         gen.add_seed(p)
     if roofs:                              # Nav on Every Rooftop (off: like the game, nav only grows from the seeds)
         from . import fastnav
@@ -308,6 +347,7 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     made, made_links = add_nav_areas(mesh, regions)
     walkable = {(a, b) for a, nxt in _links(mesh).items() for b in nxt
                 if (a, b) in made_links or (a in final and b in final and (final[a], final[b]) in walkable)}
+    problems += mark_survivor_starts(mesh, getattr(gen, "survivor_positions", ()), regions)
     blocked = spawn_block_problems(mesh, regions)        # (the user's own no-spawn boxes)
     start = [a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START]
     if start:

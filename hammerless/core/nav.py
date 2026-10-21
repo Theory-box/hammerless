@@ -91,7 +91,7 @@ def collect_regions(ir: MapIR) -> tuple[list[NavRegion], list[str]]:
             regions.append(NavRegion(v.mins, v.maxs, SPAWN_ATTRIBUTES["EMPTY"] | SPAWN_ATTRIBUTES["NO_MOBS"], v.name,
                                      _region_hulls(v.entity.brushes, padded=False)))
     from .entities import NAV_AREA
-    for e in ir.entities:
+    for e in ir.entities + ir.imported_entities:
         if e.classname == NAV_AREA:
             pts = [v for b in e.brushes for f in b.faces for v in f.verts]
             if pts:
@@ -155,7 +155,7 @@ def collect_climbs(ir: MapIR) -> tuple[list[NavClimb], list[str]]:
     """Pair up Zombie Climb points (same 'climb' name, one bottom and one top)."""
     ends: dict[str, dict[str, Entity]] = {}
     problems = []
-    for e in ir.entities:
+    for e in ir.entities + ir.imported_entities:
         if e.classname != CLIMB or e.origin is None:
             continue
         name = e.keyvalues.get("climb", "") or e.source

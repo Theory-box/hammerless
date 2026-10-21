@@ -145,6 +145,10 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
         r.info.append(f"{len(misses) - MAX_NEAR_MISSES} more near misses not listed.")
     r.problems = list(brush_problems)
 
+    if ir.imported_entities:
+        # The imported world is not in this IR; physical checks would test entities against missing floors.
+        physical = False
+        ir = dataclasses.replace(ir, entities=ir.entities + ir.imported_entities, imported_entities=[])
     classes = [e.classname for e in ir.entities]
     if not SURVIVOR_SPAWNS & set(classes):
         r.warnings.append("No survivor spawn (info_player_start / info_survivor_position): "
@@ -213,8 +217,8 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
                 r.warnings.append(f"'{e.source or e.classname}' starts crescendo '{o.parameter}', "
                                   "but no Crescendo Definition has that name.")
     if "info_changelevel" in classes and not any(x.bits & 128 for x in regions)             and "info_survivor_position" in classes:
-        r.info.append("No PLAYER_START nav region. Survivors may not spawn in the start safe room. "
-                      "The Start Safe Room preset includes one.")
+        r.info.append("No explicit PLAYER_START nav region: the Blender nav builder marks the floor under survivor spawns. "
+                      "Use a Nav Attribute Region to mark the full start room if needed.")
 
     for t in ir.terrains:
         if t.power not in (2, 3, 4):
@@ -505,6 +509,9 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
     if vis_only:                    # (our compiler: in the tree and vis like world brushes, but no collision and
         ir.brushes = [b for b in ir.brushes if b.detail != "VIS"]       # not in the brush list)
         ir.entities.append(Entity(VIS_ONLY_CLASS, brushes=vis_only, source="Vis Only brushes"))
+    if base is not None:
+        from .vmfimport import semantic_entities
+        ir.imported_entities = semantic_entities(base[2])
     report = validate(ir, content)
     if not report.ok:
         return None, report

@@ -140,6 +140,8 @@ class MapIR:
     brushes: list[Brush] = field(default_factory=list)
     terrains: list[Terrain] = field(default_factory=list)
     entities: list[Entity] = field(default_factory=list)
+    # Read-only semantic view of VMF entities; the original blocks own their export.
+    imported_entities: list[Entity] = field(default_factory=list)
     crescendos: dict[str, list[tuple[str, float]]] = field(default_factory=dict)
     extra_scripts: dict[str, str] = field(default_factory=dict)   # game file path -> text (logic graphs)
     models: dict = field(default_factory=dict)                    # custom model name -> models.ModelSpec

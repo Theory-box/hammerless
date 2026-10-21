@@ -482,3 +482,47 @@ def write_document(doc: Document, world: Block, entities: list[Block | None], ne
     for e in new_entities:
         e.write(out)
     return "".join(out)
+
+
+def semantic_entities(blocks):
+    """Gameplay metadata from rebuilt blocks, including deletions and moved brush volumes.
+
+    These entities are for validation/navigation only. Export still uses the original blocks
+    so unknown keys, output counts, instances and editor data survive unchanged.
+    """
+    from .ir import Entity, Brush, Polygon, Output
+    result = []
+    for block in blocks:
+        if block is None:
+            continue
+        kv = dict(it for it in block.items if isinstance(it, tuple))
+        cls = kv.pop("classname", "")
+        kv.pop("id", None)
+        origin = kv.pop("origin", None)
+        angles = kv.pop("angles", "0 0 0")
+        def vector(text):
+            try:
+                values = tuple(float(v) for v in text.split())
+                return values if len(values) == 3 else None
+            except (ValueError, AttributeError):
+                return None
+        source = kv.get("targetname") or cls
+        brushes = [Brush([Polygon(list(points), side.get("material", "tools/toolsnodraw"))
+                          for side, points in solid_faces(solid)], source=source)
+                   for solid in block.blocks("solid")]
+        outputs = []
+        for connections in block.blocks("connections"):
+            for item in connections.items:
+                if not isinstance(item, tuple):
+                    continue
+                name, value = item
+                fields = value.split("\x1b" if "\x1b" in value else ",")
+                if len(fields) != 5:
+                    continue
+                try:
+                    outputs.append(Output(name, *fields[:3], float(fields[3]), int(fields[4])))
+                except ValueError:
+                    continue
+        result.append(Entity(cls, vector(origin), vector(angles) or (0, 0, 0), kv,
+                             brushes, source, outputs))
+    return result

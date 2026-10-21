@@ -2593,6 +2593,43 @@ def test_make_collision_modes():
     assert any(w.endswith("hl_invisible.vtf") for w in written)
 
 
+def test_imported_gameplay_and_light_previews():
+    from hammerless.blender import vmfimport, ops
+    reset_scene()
+    text = SMALL_VMF + '\nentity { "id" "9000" "classname" "light_spot" "origin" "0 0 128" "angles" "15 40 0" "pitch" "-25" "_light" "200 100 50 123.45" "_cone" "40" "_inner_cone" "23" "custom_key" "keep me" connections { "OnUser1" "test,Trigger,,0.125,3" } }'
+    vmfimport.import_text(bpy.context, text, os.path.join(TMP, "gameplay.vmf"))
+    bpy.context.scene.hammerless.map_name = "test_map"
+    lamp = next(o for o in bpy.context.scene.objects if o.get("hl_vmf_id") == 9000)
+    assert lamp.type == "LIGHT" and lamp.data.type == "SPOT"
+    assert lamp.hammerless.role == "ENTITY"
+    bpy.context.view_layer.update()
+    actual = _tree(_imported_export(text))
+    expected = _tree(vmf.parse(text))
+    assert actual == expected, (actual, expected)
+    lamp.data.energy *= 2
+    lamp.rotation_euler.z += 0.2
+    bpy.context.view_layer.update()
+    block = next(b for b in _imported_export(text) if b.get("id") == "9000")
+    assert block.get("_light") == "200 100 50 247", block.items
+    assert block.get("angles") != "15 40 0"
+    assert block.get("custom_key") == "keep me"
+    assert block.blocks("connections")[0].items == [("OnUser1", "test,Trigger,,0.125,3")]
+    # Semantic metadata reaches validation, but original blocks are exported only once.
+    ir, args, rep = ops.read_map(bpy.context, None)
+    assert args is not None, rep.errors
+    ir, exported, rep = ops.map_text(*args)
+    assert exported is not None, rep.errors
+    assert len(ir.imported_entities) == len([b for b in vmf.parse(text) if b.name == "entity"])
+    assert len([b for b in vmf.parse(exported) if b.get("id") == "9000"]) == 1
+    for obj in list(bpy.context.scene.objects):
+        if obj.type == "MESH":
+            bpy.data.objects.remove(obj, do_unlink=True)
+    bpy.context.view_layer.update()
+    _, args, rep = ops.read_map(bpy.context, None)
+    assert args is None and any("no exported geometry" in e for e in rep.errors), rep.errors
+
+
+
 # ---------------------------------------------------------------- runner
 
 def main():
