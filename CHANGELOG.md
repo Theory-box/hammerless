@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.20.7 (test release, 2026-10-20)
 
-- **General: no more overlapping wedges from thin leftovers.** A piece thinner than a game unit (the smallest safe brush) used to be joined to a neighbour no matter what the joined brush looked like; on a gear at Fit 0.5 units those forced joins made every bit of its 2.3% extra collision and the wedges poking through other pieces. Now such a piece joins a neighbour only when the joined brush stays within Fit of the whole mesh (buried in neighbouring solid is fine), and otherwise is thickened to one unit into the neighbouring solid instead - unless it is a speck (under 4 units each way), which still just joins. The gear: 43 pieces / 2.3% extra collision / 0.63% of the pieces' volume overlapping and visible -> 50 pieces / 0.9% / 0.01% visible overlap, in the same time. A statue's hat and body, and the regression set, are unchanged (the hat at 4x size: one piece more, 6.9% -> 4.5% extra collision).
-- General: the exact Fit check (`certify`) no longer takes a hull point buried inside the solid for a point outside it (it could only happen when a hull is checked against the whole mesh, which the join pass now does).
+- **General: no more overlapping wedges from thin leftovers.** At fine Fits, cutting a curved arc leaves strips thinner than a game unit (the smallest safe brush). They used to be forced into a neighbour whatever the joined brush looked like, which made wedges poking through other pieces and loose spots. Now such a strip joins a neighbour only when the joined brush stays within Fit of the whole mesh; otherwise it is thickened to one unit into the neighbouring solid, where it can't be seen. Tiny specks join as before. A user's gear (Fit 0.1%): extra collision 2.3% -> 0.8%, visible overlap 0.64% -> 0.003%, 44 -> 52 pieces.
+- General: the exact Fit check no longer mistakes a hull point buried inside the solid for one outside it.
 
 ## 0.20.6 (test release, 2026-10-20)
 
