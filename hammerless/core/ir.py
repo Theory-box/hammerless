@@ -78,6 +78,7 @@ class Entity:
     brushes: list[Brush] = field(default_factory=list)  # brush entities
     source: str = ""
     outputs: list[Output] = field(default_factory=list)
+    imported_id: str = ""  # Stable original VMF identity for validation, never exported as a keyvalue.
 
 
 @dataclass
@@ -142,6 +143,7 @@ class MapIR:
     entities: list[Entity] = field(default_factory=list)
     # Read-only semantic view of VMF entities; the original blocks own their export.
     imported_entities: list[Entity] = field(default_factory=list)
+    original_entities: list[Entity] = field(default_factory=list)  # Import baseline, validation only.
     crescendos: dict[str, list[tuple[str, float]]] = field(default_factory=dict)
     extra_scripts: dict[str, str] = field(default_factory=dict)   # game file path -> text (logic graphs)
     models: dict = field(default_factory=dict)                    # custom model name -> models.ModelSpec

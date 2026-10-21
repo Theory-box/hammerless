@@ -484,7 +484,7 @@ def write_document(doc: Document, world: Block, entities: list[Block | None], ne
     return "".join(out)
 
 
-def semantic_entities(blocks):
+def semantic_entities(blocks, geometry=True):
     """Gameplay metadata from rebuilt blocks, including deletions and moved brush volumes.
 
     These entities are for validation/navigation only. Export still uses the original blocks
@@ -497,7 +497,7 @@ def semantic_entities(blocks):
             continue
         kv = dict(it for it in block.items if isinstance(it, tuple))
         cls = kv.pop("classname", "")
-        kv.pop("id", None)
+        imported_id = kv.pop("id", "")
         origin = kv.pop("origin", None)
         angles = kv.pop("angles", "0 0 0")
         def vector(text):
@@ -509,7 +509,7 @@ def semantic_entities(blocks):
         source = kv.get("targetname") or cls
         brushes = [Brush([Polygon(list(points), side.get("material", "tools/toolsnodraw"))
                           for side, points in solid_faces(solid)], source=source)
-                   for solid in block.blocks("solid")]
+                   for solid in block.blocks("solid")] if geometry else []
         outputs = []
         for connections in block.blocks("connections"):
             for item in connections.items:
@@ -524,5 +524,5 @@ def semantic_entities(blocks):
                 except ValueError:
                     continue
         result.append(Entity(cls, vector(origin), vector(angles) or (0, 0, 0), kv,
-                             brushes, source, outputs))
+                             brushes, source, outputs, imported_id))
     return result

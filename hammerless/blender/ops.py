@@ -348,6 +348,7 @@ def read_map(context, root: str | None):
         base = (doc, world, ents, writer)
         from ..core.vmfimport import semantic_entities
         ir.imported_entities = semantic_entities(ents)
+        ir.original_entities = semantic_entities(doc.entities, geometry=False)
         if (not world.blocks("solid") and not ir.brushes and not ir.terrains
                 and not any(e.brushes or e.classname == "func_instance" for e in ir.imported_entities)):
             rep.errors.append("The imported map has no exported geometry. Check Map Collection and "

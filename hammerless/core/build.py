@@ -206,12 +206,10 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
                               f"zombies spawn. Using '{FALLBACK_NEXT_MAP}'; set Next Map on "
                               f"'{cl.source or 'info_changelevel'}' to your next map.")
 
-    names = {e.keyvalues.get("targetname") for e in ir.entities} | {"director"}  # director is auto-added
-    for e in ir.entities:
-        for o in e.outputs:
-            if not o.target.startswith("!") and o.target not in names and o.target not in classes:
-                r.warnings.append(f"'{e.source or e.classname}' output {o.output} targets '{o.target}', "
-                                  "but no entity has that name.")
+    from .outputcheck import check_outputs
+    for severity, message, source in check_outputs(ir.entities, ir.original_entities):
+        r.problems.append(Problem(severity, message, source, None))
+        (r.warnings if severity == "WARNING" else r.info).append(message)
 
     regions, nav_problems = collect_regions(ir)
     r.errors += nav_problems
@@ -522,6 +520,7 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
     if base is not None:
         from .vmfimport import semantic_entities
         ir.imported_entities = semantic_entities(base[2])
+        ir.original_entities = semantic_entities(base[0].entities, geometry=False)
     report = validate(ir, content)
     if not report.ok:
         return None, report

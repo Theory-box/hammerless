@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Output validation recognizes case-insensitive names, wildcard targets, and explicit runtime renames. Unresolved outputs that were already present in the original imported map are grouped into one informational note; newly missing targets still warn with repair steps. Template declarations alone do not excuse a missing entity, and arbitrary script-created targets are reported as unverified rather than definitely absent.
+
 - Defer saved game-result invalidation until after addon registration. Blender startup restricts scene access during registration; all panels now register normally. Add a restricted-registration and re-enable regression test.
 
 - Play now checks the current scene, builds changed content, and verifies the deployed BSP before launching. Unchanged builds are reused. Nav previews explicitly say when Build & Play is needed to deploy current geometry and entities.
