@@ -25,6 +25,24 @@ def fixture():
 
 
 class ElevatorTests(unittest.TestCase):
+    def test_spawn_simulation_and_report_follow_elevator(self):
+        from hammerless.core.spawnsim import simulate
+        from hammerless.core.zombiereport import analyse as zombie_report
+        text, regions = fixture()
+        mesh = _predict(text, regions, native_areas=False)
+        links = mesh.elevator_links
+        mesh.elevator_links = []
+        self.assertEqual(simulate(mesh).budget, 0)
+        self.assertEqual(zombie_report(mesh).budget, 0)
+        mesh.elevator_links = links
+        plan = simulate(mesh, seed=5)
+        report = zombie_report(mesh)
+        self.assertGreater(plan.budget, 0)
+        self.assertEqual(len(plan.zombies), plan.budget)
+        self.assertEqual(plan.budget, report.budget)
+        self.assertAlmostEqual(plan.route, report.route)
+
+
     def test_stops_geometry_and_unrelated_marker(self):
         text, _ = fixture()
         text += '\nentity { "classname" "info_elevator_floor" "origin" "80 0 248" }'

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Zombie spawn simulation and population diagnostics follow elevator travel links, matching the nav reachability preview. Elevator maps no longer show an empty simulation solely because their route uses a lift.
+
 - Treat tools/toolsblocklight as non-solid during navigation baking, matching its game material. Hidden light-blocking brushes no longer cut doorway routes. Collision-code changes invalidate cached nav builds.
 
 - Builds and bakes include hidden objects and excluded subcollections inside the assigned Map Collection. Viewport hiding no longer removes map geometry, entities, lights or acoustic inputs. Editing visibility is restored after extraction, including on failure; outside objects and explicit Ignore roles remain excluded.

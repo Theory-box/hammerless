@@ -66,6 +66,10 @@ def analyse(mesh, horde_min: float = 90.0, horde_max: float = 180.0, hordes_off:
         ends = [i for i in (lad.bottom_area, lad.top_forward, lad.top_left, lad.top_right, lad.top_behind) if i in by]
         for i in ends:
             edges[i] = edges[i] + [j for j in ends if j != i]
+    # Elevator travel is runtime connectivity, not an ordinary serialized walk link.
+    for a, b in mesh.elevator_links:
+        if a in by and b in by and b not in edges[a]:
+            edges[a].append(b)
     start = [a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START]
     end = [a.id for a in mesh.areas if a.spawn_attributes & CHECKPOINT and not a.spawn_attributes & PLAYER_START]
     if not start or not end:
