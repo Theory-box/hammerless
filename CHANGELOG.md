@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.10 (test release, 2026-10-21)
 
 - Output validation recognizes case-insensitive names, wildcard targets, and explicit runtime renames. Unresolved outputs that were already present in the original imported map are grouped into one informational note; newly missing targets still warn with repair steps. Template declarations alone do not excuse a missing entity, and arbitrary script-created targets are reported as unverified rather than definitely absent.
 
