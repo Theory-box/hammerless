@@ -309,10 +309,16 @@ def _file_loaded(_):
             stale_flow(SimpleNamespace(scene=scene), "Reopened file; Build & Play for a fresh game test")
 
 
+def _registration_ready():
+    # Addon registration runs under RestrictBlend: scene data is only safe afterward.
+    _file_loaded(None)
+    return None
+
+
 def register():
     bpy.app.handlers.depsgraph_update_post.append(_scene_changed)
     bpy.app.handlers.load_post.append(_file_loaded)
-    _file_loaded(None)
+    bpy.app.timers.register(_registration_ready, first_interval=0.0)
     for c in CLASSES:
         bpy.utils.register_class(c)
     _handlers.append((bpy.types.SpaceView3D.draw_handler_add(_draw_3d, (), "WINDOW", "POST_VIEW"), "WINDOW"))
@@ -320,6 +326,8 @@ def register():
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_registration_ready):
+        bpy.app.timers.unregister(_registration_ready)
     for handlers, fn in ((bpy.app.handlers.depsgraph_update_post, _scene_changed), (bpy.app.handlers.load_post, _file_loaded)):
         if fn in handlers:
             handlers.remove(fn)

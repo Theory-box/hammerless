@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Defer saved game-result invalidation until after addon registration. Blender startup restricts scene access during registration; all panels now register normally. Add a restricted-registration and re-enable regression test.
+
 - Play now checks the current scene, builds changed content, and verifies the deployed BSP before launching. Unchanged builds are reused. Nav previews explicitly say when Build & Play is needed to deploy current geometry and entities.
 - Flow diagnostics distinguish missing campaign exits, missing start/end nav markings, disconnected navigation, and a connected route with zero Director flow. Messages explain the relevant repair, including why a CHECKPOINT region alone is not a campaign endpoint.
 - The in-game fallback route check uses the engine path search, including elevators and ladders. It no longer presents the nearest reached area as a blocking object or places a misleading marker at an unrelated dead end.
