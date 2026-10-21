@@ -88,7 +88,23 @@ def _category(obj) -> str | None:
     built, so it stays where it is."""
     from ..core.entities import CATALOG
     from .extract import detail_choice, effective_role
+    from .vmfimport import KIND
     hs = obj.hammerless
+    kind = obj.get(KIND)
+    if kind == "world":
+        return WORLD
+    if kind == "disp":
+        return TERRAIN
+    if kind == "solid":
+        return WORLD
+    if kind == "entity" and any(c.get(KIND) in ("solid", "disp") for c in obj.children):
+        cls = hs.classname or ""
+        if cls == "func_detail":
+            return DETAIL
+        if cls.startswith("trigger_") or cls in {"fog_volume", "func_nav_blocker", "func_viscluster",
+                                                "func_areaportal", "func_areaportalwindow", "func_occluder"}:
+            return VOLUMES
+        return BRUSH_ENTITIES
     if hs.preset:
         return PREFABS
     if obj.instance_type == "COLLECTION" and obj.instance_collection is not None:
@@ -160,18 +176,10 @@ def organize(context) -> dict:
     sync_name(scene)
     sources = _instance_sources(scene)
     moved = left = 0
-    imported_tops = set()
+    imported = 0
     for obj in list(scene.objects):
         if obj.parent is not None:
             continue                  # (children go with their parent)
-        if obj.get(KIND) is not None:
-            # an imported map's objects: its own collection goes in whole (its brushes and entities are written
-            # back from it)
-            for c in obj.users_collection:
-                top = _top_collection(scene, c)
-                if top is not None and top is not coll and top not in _all_children(coll):
-                    imported_tops.add(top)
-            continue
         if obj.name in sources or not obj.visible_get():
             left += 1
             continue                  # (hidden or an asset kit's: not built, stays outside)
@@ -182,6 +190,7 @@ def organize(context) -> dict:
         target = coll
         for part in cat.split("/"):
             target = _child(target, part)
+        imported += obj.get(KIND) is not None
         for o in [obj] + list(obj.children_recursive):
             if o.library is not None or o.override_library is not None:
                 continue                  # (linked: left where its file puts it)
@@ -192,11 +201,6 @@ def organize(context) -> dict:
                 if c is not target and c.library is None:
                     c.objects.unlink(o)
             moved += 1
-    for top in imported_tops:
-        for parent in [scene.collection] + list(_all_children(scene.collection)):
-            if top.name in parent.children:
-                parent.children.unlink(top)
-        coll.children.link(top)
     removed = _drop_empty(scene, coll)
     _known[scene.name] = {o.session_uid for o in scene.objects}
     for o in scene.objects:
@@ -205,7 +209,7 @@ def organize(context) -> dict:
     lc = _layer_collection(context.view_layer.layer_collection, coll)
     if lc is not None:
         context.view_layer.active_layer_collection = lc
-    return {"moved": moved, "left": left, "imported": len(imported_tops), "removed": removed}
+    return {"moved": moved, "left": left, "imported": imported, "removed": removed}
 
 
 def _top_collection(scene, coll):
@@ -483,7 +487,7 @@ class HL_OT_organize_scene(bpy.types.Operator):
     bl_idname = "hammerless.organize_scene"
     bl_label = "Organize Scene"
     bl_description = ("Put the map in a collection named after it, sorted by kind (world, detail, terrain, lights, "
-                      "props, entities, volumes, prefabs, instances; an imported map whole). Only what's in it is "
+                      "props, entities, volumes, prefabs, instances, including imported maps). Only what's in it is "
                       "built: things that aren't built (cameras, reference objects, hidden ones, asset kits) stay "
                       "outside. Ctrl+Z undoes it")
     bl_options = {"REGISTER", "UNDO"}
@@ -492,7 +496,7 @@ class HL_OT_organize_scene(bpy.types.Operator):
         r = organize(context)
         coll = map_collection(context.scene)
         self.report({"INFO"}, f"Organized into '{coll.name}': {r['moved']} object(s) sorted"
-                              + (f", {r['imported']} imported map(s) moved in" if r["imported"] else "")
+                              + (f", including {r['imported']} imported object group(s)" if r["imported"] else "")
                               + (f"; {r['left']} not built, left outside" if r["left"] else ""))
         return {"FINISHED"}
 

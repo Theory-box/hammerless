@@ -2071,6 +2071,36 @@ def test_organize_scene():
     assert coll.name == "renamed_map"
 
 
+def test_organize_imported_scene():
+    from hammerless.blender import mapcollection as mc, vmfimport
+    for brush_class, category in (("func_detail", "Detail"), ("fog_volume", "Volumes"),
+                                  ("trigger_once", "Volumes"), ("func_door", "Brush Entities")):
+        reset_scene()
+        text = SMALL_VMF.replace('"func_detail"', '"' + brush_class + '"')
+        vmfimport.import_text(bpy.context, text, os.path.join(TMP, "organize.vmf"))
+        bpy.context.view_layer.update()
+        before = _tree(_imported_export(text))
+        def identity(o):
+            return o.parent, tuple(o.get(k) for k in (vmfimport.KIND, vmfimport.ID, vmfimport.INDEX, vmfimport.NAME))
+        objects = {o.name: identity(o) for o in bpy.context.scene.objects}
+        mc.organize(bpy.context)
+        bpy.context.view_layer.update()
+        coll = mc.map_collection(bpy.context.scene)
+        assert set(objects) <= mc.map_objects(bpy.context.scene)
+        for o in bpy.context.scene.objects:
+            assert identity(o) == objects[o.name]
+            if o.get(vmfimport.KIND) == "entity" and o.hammerless.classname == brush_class:
+                assert o.users_collection[0].get("hl_category") == category
+                assert all(c.users_collection[:] == o.users_collection[:] for c in o.children)
+            if o.type == "LIGHT":
+                assert o.users_collection[0].get("hl_category") == "Lights"
+        assert _tree(_imported_export(text)) == before, "organizing changed imported export"
+        places = {o.name: tuple(o.users_collection) for o in bpy.context.scene.objects}
+        mc.organize(bpy.context)
+        assert places == {o.name: tuple(o.users_collection) for o in bpy.context.scene.objects}
+        assert _tree(_imported_export(text)) == before
+
+
 def test_new_objects_sorted():
     # after Organize Scene, what's added goes where its kind goes (even when added outside the map); a change of
     # kind moves it; objects in your own collections inside the map, cameras, and renames are left alone
