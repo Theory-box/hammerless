@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Treat tools/toolsblocklight as non-solid during navigation baking, matching its game material. Hidden light-blocking brushes no longer cut doorway routes. Collision-code changes invalidate cached nav builds.
+
 - Builds and bakes include hidden objects and excluded subcollections inside the assigned Map Collection. Viewport hiding no longer removes map geometry, entities, lights or acoustic inputs. Editing visibility is restored after extraction, including on failure; outside objects and explicit Ignore roles remain excluded.
 
 - Bake navigation for vertical `func_elevator` platforms at their initial and destination landings, including `info_elevator_floor` markers. Include elevator travel in reachability and spawn-island checks, without exporting fictitious walk or drop connections across the shaft. L4D2 supplies the actual elevator connections at runtime.

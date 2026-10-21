@@ -23,7 +23,7 @@ NEVER_UPDATED = -9999.0
 # brush contents that nav generation traces hit (MASK_NPCSOLID_BRUSHONLY): not player clip, not triggers
 NONSOLID = {"tools/toolstrigger", "tools/toolshint", "tools/toolsskip", "tools/toolsareaportal",
             "tools/toolsfog", "tools/toolsoccluder", "tools/toolsplayerclip", "tools/toolsinvisibleladder",
-            "tools/toolsclip"}
+            "tools/toolsclip", "tools/toolsblocklight"}
 SKY = {"tools/toolsskybox", "tools/toolsskybox2d"}
 # ladder brushes too: nav generation stands nodes on them (measured: the game's nav has a small
 # area on top of each ladder brush, and the ladder's bottom stays inside it)

@@ -107,7 +107,7 @@ def inputs_key(vmf_text: str, regions, climbs=(), wall_climbs=False, extra: str 
     h.update(_key("", regions, climbs, wall_climbs).encode() + extra.encode())
     here = os.path.dirname(os.path.abspath(__file__))
     for name in sorted(os.listdir(here)):            # (a new Hammerless version makes a new nav)
-        if "nav" in name.lower() and name.endswith((".py", ".dll")):
+        if ("nav" in name.lower() and name.endswith((".py", ".dll"))) or name == "collision.py":
             with open(os.path.join(here, name), "rb") as f:
                 h.update(f.read())
     return h.hexdigest()
