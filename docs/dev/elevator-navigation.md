@@ -42,3 +42,7 @@ require playtesting. Elevator controls and imported entity outputs remain unchan
 
 After installing this change, restart Blender and rebuild the nav. Existing imports do not need to be
 reimported. Organize Scene can be rerun to create the World material collections.
+
+Builds now evaluate hidden contents of the assigned Map Collection, including excluded subcollections,
+for nav, lighting and sound inputs. Viewport visibility is restored afterward. Objects outside the map
+remain excluded; legacy scenes without an assigned map collection retain their previous behavior.

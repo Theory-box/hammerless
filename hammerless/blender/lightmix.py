@@ -102,7 +102,8 @@ def _light_now(context, info: dict) -> np.ndarray | None:
         kv = light_entity(obj, context.scene.hammerless.units_per_meter).keyvalues
     else:                                    # (a light entity: its own keyvalues)
         kv = {k.key: k.value for k in obj.hammerless.keyvalues}
-    if obj.hide_get() or obj.hide_viewport:
+    from .mapcollection import map_collection
+    if map_collection(context.scene) is None and (obj.hide_get() or obj.hide_viewport):
         return np.zeros(3)
     return _key_light(kv, key, True)
 

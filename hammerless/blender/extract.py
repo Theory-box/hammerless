@@ -1391,7 +1391,7 @@ def extract_scene(context, report, game_dir: str | None = None, content=None,
                 report.warnings.append(f"'{obj.name}': a copy of an imported brush entity isn't built yet: add a "
                                        "new one (Add panel), or duplicate it in Hammer")
             continue
-        if not obj.visible_get():
+        if map_collection(context.scene) is None and not obj.visible_get():
             # hidden (H, the eye or monitor icon) or in an excluded / hidden collection: left out of
             # the map, like everything you can't see. Ones hidden by hand are listed
             in_layer = obj.name in context.view_layer.objects

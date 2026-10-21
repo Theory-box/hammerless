@@ -2700,6 +2700,19 @@ def test_imported_gameplay_and_light_previews():
     assert exported is not None, rep.errors
     assert len(ir.imported_entities) == len([b for b in vmf.parse(text) if b.name == "entity"])
     assert len([b for b in vmf.parse(exported) if b.get("id") == "9000"]) == 1
+    # Imported brushes and entities must survive hiding an entire map collection.
+    coll = bpy.data.collections.new("Imported bake map")
+    bpy.context.scene.collection.children.link(coll)
+    bpy.context.scene.hammerless.map_collection = coll
+    for obj in list(bpy.context.scene.objects):
+        coll.objects.link(obj)
+    coll.hide_viewport = True
+    _, hidden_args, hidden_rep = ops.read_map(bpy.context, None)
+    assert hidden_args is not None, hidden_rep.errors
+    _, hidden_text, hidden_rep = ops.map_text(*hidden_args)
+    assert hidden_text == exported, "Hiding imported map changed its bake inputs"
+    assert coll.hide_viewport
+    coll.hide_viewport = False
     for obj in list(bpy.context.scene.objects):
         if obj.type == "MESH":
             bpy.data.objects.remove(obj, do_unlink=True)
@@ -2707,6 +2720,60 @@ def test_imported_gameplay_and_light_previews():
     _, args, rep = ops.read_map(bpy.context, None)
     assert args is None and any("no exported geometry" in e for e in rep.errors), rep.errors
 
+
+
+def test_hidden_map_bake_inputs():
+    from hammerless.blender import ops
+    reset_scene()
+    scene = bpy.context.scene
+    coll = bpy.data.collections.new("test_map")
+    scene.collection.children.link(coll)
+    scene.hammerless.map_collection = coll
+    sub = bpy.data.collections.new("Hidden world")
+    coll.children.link(sub)
+    floor = add_box("floor", (8, 8, 1), (0, 0, -0.5))
+    for c in list(floor.users_collection):
+        c.objects.unlink(floor)
+    coll.objects.link(floor)
+    wall = add_box("excluded wall", (1, 8, 3), (4, 0, 1))
+    for c in list(wall.users_collection):
+        c.objects.unlink(wall)
+    sub.objects.link(wall)
+    bpy.ops.object.light_add(type="POINT", location=(0, 0, 2))
+    light = bpy.context.object
+    for c in list(light.users_collection):
+        c.objects.unlink(light)
+    coll.objects.link(light)
+    # An invalid outside brush must never enter the map, even while collections are enabled.
+    bpy.ops.mesh.primitive_torus_add()
+    bpy.context.view_layer.update()
+    def snapshot():
+        ir, args, rep = ops.read_map(bpy.context, None)
+        assert args is not None, rep.errors
+        _, text, rep = ops.map_text(*args)
+        assert text is not None, rep.errors
+        return text
+    baseline = snapshot()
+    floor.hide_set(True)
+    light.hide_viewport = True
+    lc = bpy.context.view_layer.layer_collection.children[coll.name]
+    child = lc.children[sub.name]
+    child.exclude = True
+    coll.hide_viewport = True
+    assert snapshot() == baseline, "Hidden map inputs changed export/bake geometry"
+    assert child.exclude and coll.hide_viewport and light.hide_viewport
+    coll.hide_viewport = False
+    child.exclude = False
+    bpy.context.view_layer.update()
+    assert floor.hide_get(), "Build changed the object's eye visibility"
+    # Restoration must also run when extraction raises.
+    from hammerless.blender.buildvisibility import map_visibility
+    try:
+        with map_visibility(bpy.context):
+            raise ValueError("test")
+    except ValueError:
+        pass
+    assert floor.hide_get() and light.hide_viewport
 
 
 # ---------------------------------------------------------------- runner

@@ -560,7 +560,8 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
     upm = s.units_per_meter
     doc = _document(bpy.data.texts[context.scene[SOURCE_KEY]], s.lightmap_scale_imported)
     writer._next_id = max(writer._next_id, doc.max_id() + 1)
-    from .mapcollection import map_objects
+    from .mapcollection import map_objects, map_collection
+    include_hidden = map_collection(context.scene) is not None
     inside = map_objects(context.scene)
     objs = [o for o in context.scene.objects if o.name in inside]
     solids = {**_originals(objs, "solid"), **_originals(objs, "disp")}
@@ -588,7 +589,7 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
 
     def _solid(block: Block):
         obj = solids.get(vi._id(block))
-        if obj is None or not obj.visible_get():
+        if obj is None or (not include_hidden and not obj.visible_get()):
             return None
         if obj.get(KIND) == "disp":
             if obj.get("hl_vmf_shape") != _shape_key(obj, upm):
@@ -606,7 +607,7 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
         out = []
         for o in children.get(parent.name, ()):
             if (o.type == "MESH" and o.name not in back and o.get(KIND) != "disp"
-                    and o.visible_get()):          # (new meshes, and copies of its imported brushes)
+                    and (include_hidden or o.visible_get())):          # (new meshes, and copies of its imported brushes)
                 for b in mesh_to_brushes(o, depsgraph, upm, materials):
                     out.append(writer.solid(b))
         return out
@@ -627,7 +628,7 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
     out_ents = []
     for k, e in enumerate(doc.entities):
         obj = entities.get(k)
-        if obj is None or not obj.visible_get():
+        if obj is None or (not include_hidden and not obj.visible_get()):
             out_ents.append(None)
             continue
         values = {"classname": obj.hammerless.classname, **object_keyvalues(obj)}

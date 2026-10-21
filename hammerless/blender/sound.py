@@ -11,6 +11,7 @@ from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 from ..core import acoustics
+from .buildvisibility import include_hidden_map
 
 _state = {"spots": None, "zones": None, "summary": "", "batches": None, "scale": None}
 _handlers = []
@@ -26,16 +27,17 @@ def _solid(obj) -> bool:
     return role == "BRUSH_ENTITY" and (obj.hammerless.classname or "func_detail") in SOLID_BRUSH_ENTITIES
 
 
+@include_hidden_map
 def scene_geometry(context):
     """The scene's solid geometry (walls, floors, terrain, solid brush entities) in Hammer units, as arrays:
     (vertices (n, 3), each polygon's corners one after another, each polygon's corner count)."""
     scale = context.scene.hammerless.units_per_meter
     depsgraph = context.evaluated_depsgraph_get()
     verts, corners, sizes, base = [], [], [], 0
-    from .mapcollection import map_objects
+    from .mapcollection import map_objects, map_collection
     inside = map_objects(context.scene)
     for obj in context.scene.objects:
-        if obj.name not in inside or obj.type != "MESH" or not obj.visible_get() or not _solid(obj):
+        if obj.name not in inside or obj.type != "MESH" or (map_collection(context.scene) is None and not obj.visible_get()) or not _solid(obj):
             continue
         ev = obj.evaluated_get(depsgraph)
         mesh = ev.to_mesh()
@@ -88,21 +90,22 @@ def scene_starts(context):
     """Where survivors start (Hammer units): the scene's survivor spawn objects."""
     from .extract import effective_role
     scale = context.scene.hammerless.units_per_meter
-    from .mapcollection import map_objects
+    from .mapcollection import map_objects, map_collection
     inside = map_objects(context.scene)
     return [tuple(o.matrix_world.translation * scale) for o in context.scene.objects
             if o.name in inside and effective_role(o) == "ENTITY" and o.hammerless.classname in START_CLASSES]
 
 
+@include_hidden_map
 def scene_volumes(context, aspect: str) -> list:
     """The map's Control Volumes (and older volumes) ticked for an aspect, from the scene (Hammer units)."""
     from ..core.control import of, volumes
     from ..core.entities import CONTROL, NAV_CUT, NO_BAKE
     from ..core.ir import Entity, MapIR
     from .extract import mesh_to_brushes, object_keyvalues
-    from .mapcollection import map_objects
+    from .mapcollection import map_objects, map_collection
     inside = map_objects(context.scene)
-    objs = [o for o in context.scene.objects if o.name in inside and o.type == "MESH" and o.visible_get()
+    objs = [o for o in context.scene.objects if o.name in inside and o.type == "MESH" and (map_collection(context.scene) is not None or o.visible_get())
             and o.hammerless.classname in (CONTROL, NAV_CUT, NO_BAKE)]
     if not objs:
         return []

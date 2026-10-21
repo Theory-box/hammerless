@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Builds and bakes include hidden objects and excluded subcollections inside the assigned Map Collection. Viewport hiding no longer removes map geometry, entities, lights or acoustic inputs. Editing visibility is restored after extraction, including on failure; outside objects and explicit Ignore roles remain excluded.
+
 - Bake navigation for vertical `func_elevator` platforms at their initial and destination landings, including `info_elevator_floor` markers. Include elevator travel in reachability and spawn-island checks, without exporting fictitious walk or drop connections across the shaft. L4D2 supplies the actual elevator connections at runtime.
 - Show elevator travel links in purple and report missing boarding areas. Saved-nav previews recover elevator associations from the matching BSP. End-room warnings distinguish missing nav markings from an unreachable end room.
 - World brushes organize into material subcollections. Nodraw backs and skip sides do not hide the main material; genuinely mixed brushes have a Mixed Materials collection. Geometry and materials are unchanged.

@@ -297,6 +297,10 @@ def map_text(ir, content, base, rep):
     return ir, text, rep2
 
 
+from .buildvisibility import include_hidden_map
+
+
+@include_hidden_map
 def read_map(context, root: str | None):
     """The first half of build_map_text: what it reads from the scene (Blender's thread). Returns (ir, args for
     map_text or None, report)."""
