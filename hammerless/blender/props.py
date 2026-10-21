@@ -348,7 +348,9 @@ class HL_BehaviourSlot(bpy.types.PropertyGroup):
 _BRUSH_PRESETS = {
     "BALANCED": dict(brush_stop_gain=2.0, brush_max_candidates=0, brush_fit_tolerance=0.1, brush_aim_precision=25.0,
                      brush_merge_pass=True, brush_sliver_pass=True),
-    "FAST": dict(brush_stop_gain=5.0, brush_max_candidates=120, brush_fit_tolerance=2.0, brush_aim_precision=50.0,
+    "FAST": dict(brush_stop_gain=50.0, brush_max_candidates=1, brush_fit_tolerance=25.0, brush_aim_precision=100.0,
+                 brush_merge_pass=False, brush_sliver_pass=False),
+    "HIGH": dict(brush_stop_gain=0.1, brush_max_candidates=0, brush_fit_tolerance=0.01, brush_aim_precision=5.0,
                  brush_merge_pass=True, brush_sliver_pass=True),
 }
 _PRESET_BUSY = [False]
@@ -457,9 +459,13 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
                     "are simpler brushes that stand a little further off")
     brush_quality: EnumProperty(
         name="Preset",
-        items=[("BALANCED", "Balanced", "The default: General as tested - exact Fit, every candidate cut tried"),
-               ("FAST", "Fast", "Quicker, a little looser: fewer candidate cuts, stops cutting sooner, a coarser "
-                                "Fit check and cut aim. Pieces may stand a little past Fit"),
+        items=[("FAST", "Fast", "As fast as it goes: one candidate cut per step, stops cutting early, a coarse Fit "
+                                "check and aim, no merge or sliver pass. Looser, and brushes thinner than a unit can "
+                                "be left (the map compiler may drop them) - for quick previews"),
+               ("BALANCED", "Balanced", "The default: General as tested - every candidate cut tried, an exact Fit "
+                                        "check, both clean-up passes"),
+               ("HIGH", "High", "Keeps cutting longer and aims more finely: slower. Helps only while Max Pieces has "
+                                "room to spare - once all pieces are used it can come out the same or a hair looser"),
                ("CUSTOM", "Custom", "Your own values below (chosen when you change one)")],
         default="BALANCED", update=_brush_preset,
         description="General's speed against quality. Picking one sets the values below")
@@ -470,9 +476,10 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
                     "collision (air). Higher: stops sooner - faster, fewer pieces, looser. Default 2%")
     brush_max_candidates: IntProperty(
         name="Max Candidates", default=0, min=0, max=5000, update=_brush_custom,
-        description="General: candidate cuts tried for each cut, at most (0: all of them). The cuts aimed at the "
-                    "worst air are always tried; the ones lined up with the mesh's own faces (usually most of them) "
-                    "are dropped first. Lower: faster, but a slightly worse cut may win. Try 100-200 for dense meshes")
+        description="General: candidate cuts tried for each cut, at most. 0 = no limit, all of them (best "
+                    "quality). The cuts aimed at the worst air are always tried; the ones lined up with the mesh's "
+                    "own faces (usually most of them) are dropped first. A number: faster, but a slightly worse cut "
+                    "may win. Try 100-200 for dense meshes")
     brush_fit_tolerance: FloatProperty(
         name="Fit Check Tolerance", default=0.1, min=0.01, max=25.0, subtype="PERCENTAGE", precision=2,
         update=_brush_custom,
