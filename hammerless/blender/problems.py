@@ -93,10 +93,10 @@ def store_flow(report: dict) -> None:
     _redraw(bpy.context)
 
 
-PREDICTED_BROKEN = ("Survivors won't be able to get from the start to the end safe room: the nav mesh the "
-                    "game will generate (built from the scene) stops at the marker. Look there for a gap, "
-                    "a ledge between 19 and 64 units (L4D2 links neither way) or a blocked path. Without this "
-                    "path no zombies wander")
+PREDICTED_BROKEN = ("The generated nav has no route from the start to the end room. Recognized elevator "
+                    "travel links are included. The marker shows a reachable area near the end; check for "
+                    "missing floor nav, an unconnected ledge, or a blocked path. Elevator controls and doors "
+                    "still need to allow travel in-game")
 
 
 def store_nav(context, mesh, rep, predicted: bool = False) -> None:

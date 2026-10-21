@@ -334,7 +334,7 @@ def test_map_check_problem_list():
     text, _rep = build_vmf(ir)
     finish_prediction(bpy.context, predict(text, collect_regions(ir)[0]))
     path = next(p for p in s.problems if p.ingame and p.severity == "ERROR")
-    assert "built from the scene" in path.name and path.has_location
+    assert "generated nav" in path.name and "elevator" in path.name and path.has_location
     assert 17 <= path.location.x <= 21, tuple(path.location)   # break at the edge of ground_a
     # the buttons turn into Clear buttons; clearing the analysis keeps the navmesh, Clear Navmesh removes it
     from hammerless.blender import navview
@@ -2052,7 +2052,7 @@ def test_organize_scene():
     assert coll is not None and coll.name == "test_map"
     kids = {c.get("hl_category"): c for c in coll.children}
     assert {"World", "Detail", "Lights", "Entities"} <= set(kids), set(kids)
-    assert bpy.data.objects["floor"].name in kids["World"].objects
+    assert bpy.data.objects["floor"].name in kids["World"].all_objects
     assert "pillar" in kids["Detail"].objects and bpy.data.objects["pillar"].hammerless.brush_detail == "DETAIL"
     assert cam.name not in coll.all_objects                       # (not built: stays outside)
     assert not bpy.data.collections["my details"].objects        # (emptied; kept: it has a Detail setting)
@@ -2069,6 +2069,32 @@ def test_organize_scene():
     assert "outside the map collection" in log and "wall" in log
     s.map_name = "renamed_map"
     assert coll.name == "renamed_map"
+
+
+def test_world_material_collections():
+    from hammerless.blender import mapcollection as mc
+    reset_scene()
+    cases = [("sky", ["tools/toolsskybox"], "tools/toolsskybox"),
+             ("hint", ["tools/toolshint", "tools/toolsskip"], "tools/toolshint"),
+             ("wall", ["brick/wall", "tools/toolsnodraw"], "brick/wall"),
+             ("mixed", ["brick/wall", "concrete/floor"], "Mixed Materials")]
+    for i, (name, paths, expected) in enumerate(cases):
+        obj = add_box(name, (1, 1, 1), (i * 3, 0, 0))
+        obj.data.materials.clear()
+        for path in paths:
+            mat = bpy.data.materials.new(path)
+            mat.hammerless.source_material = path
+            obj.data.materials.append(mat)
+        for face in obj.data.polygons:
+            face.material_index = face.index % len(paths)
+    before, log = export()
+    assert before is not None, log
+    mc.organize(bpy.context)
+    for name, paths, expected in cases:
+        obj = bpy.data.objects[name]
+        assert obj.users_collection[0].get("hl_category") == expected
+    after, log = export()
+    assert _tree(before) == _tree(after), log
 
 
 def test_organize_imported_scene():
@@ -2149,7 +2175,7 @@ def test_new_objects_sorted():
     bpy.ops.object.camera_add(location=(0, -5, 2))
     cam = bpy.context.object
     settle()
-    assert where(wall) == {"World"}, where(wall)
+    assert where(wall) == {mc._category_parts(mc._category(wall))[-1]}, where(wall)
     assert where(kit) == {"Items"}, where(kit)
     assert where(lamp) == {"Lights"}, where(lamp)
     assert cam.name not in coll.all_objects                       # (not built)

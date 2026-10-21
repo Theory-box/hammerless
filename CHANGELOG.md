@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bake navigation for vertical `func_elevator` platforms at their initial and destination landings, including `info_elevator_floor` markers. Include elevator travel in reachability and spawn-island checks, without exporting fictitious walk or drop connections across the shaft. L4D2 supplies the actual elevator connections at runtime.
+- Show elevator travel links in purple and report missing boarding areas. Saved-nav previews recover elevator associations from the matching BSP. End-room warnings distinguish missing nav markings from an unreachable end room.
+- World brushes organize into material subcollections. Nodraw backs and skip sides do not hide the main material; genuinely mixed brushes have a Mixed Materials collection. Geometry and materials are unchanged.
+
 - Organize Scene sorts imported VMF and game/BSP maps into the usual collections instead of keeping the entire import together. Brush entity geometry stays with its parent; fog, triggers and visibility volumes go into Volumes. Original entity identities, parenting and exported map data are preserved. Existing imports can be organized again without reimporting.
 - Imported brush ownership is resolved from stored VMF IDs even when Blender parenting has been cleared. Individually hidden imported brushes are sorted while preserving their hidden state.
 

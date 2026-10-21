@@ -28,6 +28,7 @@ COLORS = {
     "no_spawn": (0.95, 0.15, 0.15, 0.5), "no_wander": (0.95, 0.45, 0.6, 0.45), "no_mobs": (0.65, 0.3, 0.95, 0.45),
     "drop": (1.0, 0.55, 0.1, 1.0), "jump": (0.1, 0.9, 1.0, 1.0), "outline": (0.05, 0.05, 0.05, 0.6),
     "break": (1.0, 0.1, 0.1, 1.0), "ladder": (1.0, 0.9, 0.1, 1.0),
+    "elevator": (0.8, 0.3, 1.0, 1.0),
     "seen_complete": (0.2, 0.9, 0.3, 0.5), "seen_partly": (1.0, 0.85, 0.1, 0.45), "seen_both": (0.55, 0.95, 0.25, 0.5),
     "unseen": (0.25, 0.25, 0.28, 0.25), "viewer": (1.0, 1.0, 1.0, 0.7),
     "spot_cover": (0.2, 0.55, 1.0, 1.0), "spot_exposed": (1.0, 0.5, 0.1, 1.0),
@@ -82,6 +83,15 @@ def load(context) -> str:
         _state.update(path=path, mesh=None, report=None, batches=None)
         return "No nav mesh yet: Build & Play makes one"
     mesh = load_nav(path)
+    bsp_path = os.path.splitext(path)[0] + ".bsp"
+    if os.path.exists(bsp_path):
+        from ..core.navelevator import from_bsp, associate
+        try:
+            with open(bsp_path, "rb") as f:
+                elevators, notes = from_bsp(f.read())
+            mesh.problems += notes + associate(mesh, elevators)
+        except (OSError, ValueError, IndexError):
+            mesh.problems.append("Could not read elevator connections from the compiled map")
     _state.update(path=path, mtime=os.path.getmtime(path), mesh=mesh, report=analyse(mesh), batches=None,
                   source="game", vis=None, owner=_owner(context))
     _redraw()
@@ -288,7 +298,7 @@ def _build(scale: float, mode: str, links: bool, spots: bool = False, viewer=Non
         tri_cols += [col] * 6
         for i in range(4):
             outline += [c[i], c[(i + 1) % 4]]
-    link_lines = {"drop": [], "jump": [], "ladder": []}
+    link_lines = {"drop": [], "jump": [], "ladder": [], "elevator": []}
     if links:
         for lad in m.ladders:        # a rail from bottom to top, with rungs
             b, t = Vector(lad.bottom) / scale, Vector(lad.top) / scale
@@ -480,11 +490,6 @@ class HL_OT_nav_predict(bpy.types.Operator):
         finish_prediction(context, box["mesh"])
         for problem in box["mesh"].problems:
             self.report({"WARNING"}, problem)
-        if box["mesh"].problems:
-            from .ops import _quoted_object
-            from .problems import add_rows
-            add_rows(context, [("WARNING", p, _quoted_object(p), None) for p in box["mesh"].problems],
-                     kind="navgen")
         rep = _state["report"]
         if not rep.end:
             self.report({"INFO"}, f"Built {rep.total} nav areas (no end safe room to check the path)")
@@ -765,6 +770,9 @@ def finish_prediction(context, mesh) -> None:
     context.scene.hammerless.show_nav = True
     from .problems import store_nav
     store_nav(context, mesh, _state["report"], predicted=True)
+    from .ops import _quoted_object
+    from .problems import add_rows
+    add_rows(context, [("WARNING", p, _quoted_object(p), None) for p in mesh.problems], kind="navgen")
 
 
 _disk = {"key": None, "time": 0.0, "value": None}
@@ -919,7 +927,7 @@ def draw_panel(layout, context):
     box = layout.box()
     col = box.column(align=True)
     if not rep.end:
-        col.label(text="No end safe room in the nav", icon="INFO")
+        col.label(text="No end-room-marked nav areas", icon="INFO")
     elif rep.end_reached:
         far = max((rep.distance[e] for e in rep.end if e in rep.distance), default=0)
         col.label(text=f"Start to end: OK ({far:.0f} units)", icon="CHECKMARK")
@@ -933,6 +941,9 @@ def draw_panel(layout, context):
         r.alert = True
         r.label(text=f"{rep.unreachable} unreachable, in {len(rep.islands)} island(s)", icon="BLANK1")
     drops = sum(l.kind == "drop" for l in rep.links)
+    elevators = sum(l.kind == "elevator" for l in rep.links)
+    if elevators:
+        col.label(text=f"{elevators} elevator travel links (purple)", icon="SORTSIZE")
     jumps = sum(l.kind == "jump" for l in rep.links)
     col.label(text=f"{drops} drops, {jumps} jumps / climbs, {len(_state['mesh'].ladders)} ladders", icon="BLANK1")
     col = layout.column(align=True)

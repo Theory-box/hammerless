@@ -54,6 +54,9 @@ def analyse(mesh: NavMesh) -> NavReport:
     by_id = mesh.by_id()
     rep = NavReport(total=len(mesh.areas))
     out: dict[int, set[int]] = {a.id: {b for d in a.connections for b in d if b in by_id} for a in mesh.areas}
+    elevator_links = {(a, b) for a, b in mesh.elevator_links if a in by_id and b in by_id}
+    for a, b in elevator_links:
+        out[a].add(b)
     for lad in mesh.ladders:     # ladders connect their bottom area and top areas both ways
         tops = [t for t in (lad.top_forward, lad.top_left, lad.top_right, lad.top_behind) if t in by_id]
         if lad.bottom_area in by_id:
@@ -70,7 +73,9 @@ def analyse(mesh: NavMesh) -> NavReport:
         for b in targets:
             dz = _edge_z(by_id, a, b)
             back = a in out[b]
-            if dz < -STEP_HEIGHT and not back:
+            if (a, b) in elevator_links:
+                kind = "elevator"
+            elif dz < -STEP_HEIGHT and not back:
                 kind = "drop"
             elif dz > STEP_HEIGHT:
                 kind = "jump"

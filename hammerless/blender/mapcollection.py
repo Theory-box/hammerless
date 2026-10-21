@@ -83,6 +83,29 @@ def sync_name(scene) -> None:
 
 # ---------------------------------------------------------------- organizing
 
+def _world_category(obj):
+    if obj.type != "MESH":
+        return WORLD + "/Map Settings"
+    materials = set()
+    for index in {p.material_index for p in obj.data.polygons}:
+        mat = obj.material_slots[index].material if index < len(obj.material_slots) else None
+        if mat:
+            materials.add((mat.hammerless.source_material.strip() or mat.name).replace("\\", "/").lower())
+        else:
+            materials.add("Unassigned Material")
+    # Nodraw backs and skip sides do not obscure the brush's useful material (e.g. hint/skip brushes).
+    significant = materials - {"tools/toolsnodraw", "tools/toolsskip"}
+    if significant:
+        materials = significant
+    label = next(iter(materials)) if len(materials) == 1 else "Mixed Materials" if materials else "Unassigned Material"
+    return WORLD + "/" + label
+
+
+def _category_parts(category):
+    # A Source material path is one collection label, not a further collection hierarchy.
+    return category.split("/", 1) if category.startswith(WORLD + "/") else category.split("/")
+
+
 def _brush_entity_category(cls):
     if cls == "func_detail":
         return DETAIL
@@ -130,11 +153,11 @@ def _category(obj, imported=None) -> str | None:
         return imported[obj.name]
     kind = obj.get(KIND)
     if kind == "world":
-        return WORLD
+        return _world_category(obj)
     if kind == "disp":
         return TERRAIN
     if kind == "solid":
-        return WORLD
+        return _world_category(obj)
     if kind == "entity" and any(c.get(KIND) in ("solid", "disp") for c in obj.children):
         return _brush_entity_category(hs.classname or "")
     if hs.preset:
@@ -144,7 +167,7 @@ def _category(obj, imported=None) -> str | None:
     role = effective_role(obj)
     cls = hs.classname or ""
     if role == "BRUSH":
-        return DETAIL if detail_choice(obj) == "DETAIL" else WORLD
+        return DETAIL if detail_choice(obj) == "DETAIL" else _world_category(obj)
     if role == "TERRAIN":
         return TERRAIN
     if role == "LIGHT":
@@ -226,7 +249,7 @@ def organize(context) -> dict:
             left += 1
             continue
         target = coll
-        for part in cat.split("/"):
+        for part in _category_parts(cat):
             target = _child(target, part)
         imported += obj.get(KIND) is not None
         for o in [obj] + list(obj.children_recursive):
@@ -387,14 +410,14 @@ def place(scene, obj, new: bool, sources: set | None = None, new_colls: set | No
     if not new and not all(c in batch.places for c in users):
         return False
     probe = coll
-    for part in cat.split("/"):        # (a hidden or excluded kind collection, or one above it: left alone)
+    for part in _category_parts(cat):        # (a hidden or excluded kind collection, or one above it: left alone)
         probe = next((c for c in probe.children if c.get("hl_category") == part), None)
         if probe is None:
             break
         if batch.is_hidden(probe):
             return False
     target = coll
-    for part in cat.split("/"):
+    for part in _category_parts(cat):
         target = _child(target, part)
     if list(users) == [target]:
         return False

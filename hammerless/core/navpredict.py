@@ -236,15 +236,21 @@ def mark_survivor_starts(mesh, positions, regions):
 
 def _generator(vmf_text: str, regions=(), roofs=False) -> Generator:
     from .nav import nav_cuts
+    from . import navelevator
     world = CollisionWorld.from_vmf(vmf_text)
+    elevators, elevator_problems = navelevator.collect(vmf_text)
+    platforms, elevator_seeds = navelevator.platforms(elevators)
+    if platforms:
+        world = CollisionWorld(world.brushes + platforms)
     if PROP_COLLISION:
         props = static_prop_brushes(vmf_text)
         if props:
             world = CollisionWorld(world.brushes + props)
     gen = Generator(world)
+    gen.elevators, gen.elevator_problems = elevators, elevator_problems
     gen.survivor_positions = survivor_positions(vmf_text)
     gen.cuts = nav_cuts(regions)          # (before the seeds: none start inside a No Nav Volume)
-    for p in seed_positions(vmf_text) + gen.survivor_positions:
+    for p in seed_positions(vmf_text) + gen.survivor_positions + elevator_seeds:
         gen.add_seed(p)
     if roofs:                              # Nav on Every Rooftop (off: like the game, nav only grows from the seeds)
         from . import fastnav
@@ -261,7 +267,7 @@ def mesh_signature(mesh: NavMesh):
     return ([(a.id, a.flags, a.spawn_attributes, a.nw, a.se, a.ne_z, a.sw_z, a.connections, a.ladders)
              for a in mesh.areas],
             [(l.id, l.width, l.top, l.bottom, l.length, l.direction, l.top_forward, l.top_left, l.top_right,
-              l.top_behind, l.bottom_area) for l in mesh.ladders])
+              l.top_behind, l.bottom_area) for l in mesh.ladders], mesh.elevator_links)
 
 
 def check_native(vmf_text: str, regions=(), climbs=(), wall_climbs=False, roofs=False) -> str | None:
@@ -278,7 +284,7 @@ def check_native(vmf_text: str, regions=(), climbs=(), wall_climbs=False, roofs=
     for x, y in zip(a[0], b[0]):
         if x != y:
             return f"area {x[0]} differs: native {x}, Python {y}"
-    return "ladders differ"
+    return "ladders differ" if a[1] != b[1] else "elevator links differ"
 
 
 def _predict(vmf_text: str, regions, progress=None, climbs=(), wall_climbs=False, native_areas=None,
@@ -324,7 +330,8 @@ def python_steps(gen):
 
 
 def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
-    problems = []
+    from .navelevator import associate
+    problems = list(getattr(gen, "elevator_problems", ()))
     # where survivors can walk from the start room: worked out before the zombie-only climb links
     pre = to_navmesh(gen.areas, regions, gen.ladders)
     obj = {m.id: id(a) for a, m in zip(gen.areas, pre.areas)}
@@ -348,6 +355,8 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
                            "Each needs floor in it that survivors can reach from a spawn (or a seed)")
     final = {m.id: id(a) for a, m in zip(gen.areas, mesh.areas)}
     made, made_links = add_nav_areas(mesh, regions)
+    problems += associate(mesh, getattr(gen, "elevators", ()))
+    made_links.update(mesh.elevator_links)
     walkable = {(a, b) for a, nxt in _links(mesh).items() for b in nxt
                 if (a, b) in made_links or (a in final and b in final and (final[a], final[b]) in walkable)}
     problems += mark_survivor_starts(mesh, getattr(gen, "survivor_positions", ()), regions)
@@ -385,6 +394,9 @@ def _links(mesh: NavMesh) -> dict[int, list]:
                 if l is not None:
                     nxt += [i for i in (l.bottom_area, l.top_forward, l.top_left, l.top_right, l.top_behind) if i in by]
         out[a.id] = nxt
+    for a, b in mesh.elevator_links:
+        if a in out and b in by:
+            out[a].append(b)
     return out
 
 
