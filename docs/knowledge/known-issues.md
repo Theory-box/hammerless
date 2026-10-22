@@ -7,6 +7,20 @@ made). When one is fixed, move it to the "Fixed" table at the bottom with the co
 Sources: the October 2026 audits in `docs/dev/audits/` (audit 2: build pipeline, audit 4: nav, audit 5: silent
 traps), re-checked in the current code.
 
+## Imported objects and logic: confirmed audit findings (2026-10-21)
+
+These remain open in 0.20.11. Reproductions used isolated/background Blender sessions; the user's map was not saved by the audit.
+
+1. **Duplicating unparented imported triggers loses entity geometry.** `blender/extract.py:point_copy` relies on mesh children. A duplicated trigger Empty whose original brush was unparented exports a brushless trigger; the copied brush exports as world geometry. Do not assume duplicating either object duplicates the functional trigger.
+2. **Selection ownership lookup is expensive on large maps.** `blender/entitycontext.py:entity_object` repeatedly collects map objects and scans originals. In c1m1_hotel, 25 calls averaged about 166 ms each; panels can call it repeatedly per redraw. Cache with explicit invalidation rather than permanent Python object references.
+3. **Original-object lookup uses the active scene.** `blender/vmfimport.py:_originals` reads `bpy.context.scene` even when its objects belong to another scene. A two-scene fixture with entity index 0 in both returned no original for the non-active scene. Pass the owning scene explicitly.
+4. **Imported lights ignore the dedicated light-style UI.** `_light_values` does not apply `light_style_keyvalues`. Custom Pattern, Switchable and Starts Off settings export correctly for native lights but were absent on a reproduced imported light. Route both export paths through the same style conversion.
+5. **Not Exported/Ignore is not honored for original imported entities.** `rebuild` preserved a trigger whose role was IGNORE. Apply effective-role exclusion to imported blocks and their owned geometry.
+6. **A Volume node on an imported world brush leaves the original solid.** The compiler removes ordinary IR brushes, but imported world solids live in the rebuilt VMF blocks. A fixture exported both the new trigger and the original solid. Geometry transfer must cover both representations.
+7. **Output-to-Behaviour conversion loses finite counts above one.** An imported `OnTrigger lamp,TurnOn,,0,3` became `lamp,TurnOn,,0,-1` after conversion. `only_once` represents only one versus unlimited; raw output preservation protects untouched outputs, but conversion discards the original finite count. Preserve the count or leave such outputs unconverted with a warning.
+
+The identity lifecycle tests cover original/copy identity, deletion, save/reload and undo/redo. They do **not** establish that duplicating a complete imported trigger exports correctly (issue 1).
+
 ## Nav
 
 ### 1. "Made by the game" nav never gets the unreachable marks (audit 4 item 1, HIGH)

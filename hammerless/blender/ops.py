@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 
+from .entitycontext import entity_object, selected_entities
 import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 from mathutils import Vector
@@ -292,6 +293,23 @@ def map_text(ir, content, base, rep):
     write_textures(ir.__dict__.get("_texture_writes", []), rep)
     fill_triangles(ir)
     finish_acoustics(ir, rep)
+    sky_export = ir.__dict__.get('_sky_export')
+    if sky_export:
+        from ..core.skyexport import sky_materials, write_materials
+        sky_content, sky_dir, sky_stops = sky_export
+        try:
+            name, files = sky_materials(sky_content, sky_dir, ir.settings.name, ir.settings.skyname, sky_stops)
+            if files and not sky_dir:
+                raise ValueError('Set the L4D2 Folder before exporting sky brightness')
+            write_materials(sky_dir, files)
+            ir.settings.skyname = name
+            if base is not None:
+                world = base[1]
+                world.items = [x for x in world.items if not (isinstance(x, tuple) and x[0].lower() == 'skyname')]
+                world.kv('skyname', name)
+        except (OSError, ValueError) as ex:
+            rep.errors.append(f'Sky brightness could not be exported: {ex}')
+            return ir, None, rep
     text, rep2 = build_vmf(ir, content, base)
     rep2.errors[:0] = rep.errors
     rep2.warnings[:0] = rep.warnings
@@ -327,10 +345,9 @@ def read_map(context, root: str | None):
         return None, None, rep
     ir, _mats = extract_scene(context, rep, gamedir, content, defer_textures=True)
     ir.__dict__["_texture_writes"] = _mats.texture_writes   # (map_text writes them)
+    ir.__dict__['_sky_export'] = (content, gamedir, s.sky_view_exposure)
     if rep.errors:
         return ir, None, rep
-    from .logic import compile_logic
-    compile_logic(context, ir, rep)
     from .sound import add_acoustics
     from . import vmfimport as _vi
     if _vi.imported(context.scene) and s.sound_mode != "OFF":
@@ -354,6 +371,11 @@ def read_map(context, root: str | None):
             rep.errors.append("The imported map has no exported geometry. Check Map Collection and "
                               "collection visibility before building.")
             return ir, None, rep
+    from .logic import compile_logic
+    if base is not None:
+        vmfimport.compile_imported_logic(context, ir, base, rep)
+    else:
+        compile_logic(context, ir, rep)
     return ir, (ir, content if s.check_game_content else None, base, rep), rep
 
 
@@ -720,13 +742,13 @@ def real_model_mesh(model: str, scale: float):
 
 
 def style_entity_object(obj) -> None:
-    """Real models draw solid and textured; placeholder boxes draw as wireframes."""
+    """Real models draw textured; wire placeholders respect scene occlusion."""
     if obj.data is not None and obj.data.get("hl_model"):
         obj.display_type = "TEXTURED"
         obj.show_in_front = False
     else:
         obj.display_type = "WIRE"
-        obj.show_in_front = True
+        obj.show_in_front = False
 
 
 def model_bounds_from_game(model: str):
@@ -911,14 +933,14 @@ class HL_OT_set_entity_class(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.object is not None and bool(context.object.hammerless.classname)
+        return context.object is not None and bool(entity_object(context).hammerless.classname)
 
     def invoke(self, context, event):
         context.window_manager.invoke_search_popup(self)
         return {"RUNNING_MODAL"}
 
     def execute(self, context):
-        obj = context.object
+        obj = entity_object(context)
         if obj.hammerless.classname != self.classname:
             obj.hammerless.classname = self.classname
         if obj.type == "MESH" and obj.hammerless.role in ("ENTITY", "AUTO"):
@@ -945,6 +967,12 @@ class HL_OT_set_brush_entity(bpy.types.Operator):
     def execute(self, context):
         changed = 0
         for o in context.selected_objects:
+            owner = entity_object(context, o)
+            if owner != o:
+                if owner.hammerless.classname != self.classname:
+                    owner.hammerless.classname = self.classname
+                changed += 1
+                continue
             hs = o.hammerless
             # point entities (their previews are meshes too) and preset pieces stay what they are
             if o.type != "MESH" or hs.role == "ENTITY" or hs.preset_part or (
@@ -1118,12 +1146,10 @@ class HL_OT_validate(bpy.types.Operator):
         from .extract import CHECK_ONLY
         CHECK_ONLY["on"] = True
         try:
-            ir, _ = extract_scene(context, rep, os.path.join(root, "left4dead2") if root else None)
+            ir, _, rep = read_map(context, root)
         finally:
             CHECK_ONLY["on"] = False
-        from .logic import compile_logic
-        compile_logic(context, ir, rep)
-        rep2 = validate(ir, game_content(root) if s.check_game_content else None)
+        rep2 = validate(ir, game_content(root) if s.check_game_content else None) if ir is not None else Report()
         rep.errors += rep2.errors; rep.warnings += rep2.warnings; rep.info += rep2.info
         rep.problems = rep2.problems
         from .problems import store
@@ -2293,7 +2319,7 @@ class HL_OT_kv_add(bpy.types.Operator):
         return context.object is not None
 
     def execute(self, context):
-        context.object.hammerless.keyvalues.add()
+        entity_object(context).hammerless.keyvalues.add()
         return {"FINISHED"}
 
 
@@ -2307,7 +2333,7 @@ class HL_OT_kv_remove(bpy.types.Operator):
         return context.object is not None
 
     def execute(self, context):
-        hs = context.object.hammerless
+        hs = entity_object(context).hammerless
         if 0 <= hs.keyvalues_index < len(hs.keyvalues):
             hs.keyvalues.remove(hs.keyvalues_index)
         return {"FINISHED"}
@@ -2324,7 +2350,7 @@ class HL_OT_output_add(bpy.types.Operator):
         return context.object is not None
 
     def execute(self, context):
-        hs = context.object.hammerless
+        hs = entity_object(context).hammerless
         hs.outputs.add()
         hs.outputs_index = len(hs.outputs) - 1
         return {"FINISHED"}
@@ -2340,7 +2366,7 @@ class HL_OT_output_remove(bpy.types.Operator):
         return context.object is not None
 
     def execute(self, context):
-        hs = context.object.hammerless
+        hs = entity_object(context).hammerless
         if 0 <= hs.outputs_index < len(hs.outputs):
             hs.outputs.remove(hs.outputs_index)
         return {"FINISHED"}
@@ -2355,16 +2381,33 @@ class HL_OT_kv_set(bpy.types.Operator):
     value: StringProperty()
 
     def execute(self, context):
-        obj = context.object
+        obj = entity_object(context)
         if obj is None:
             return {"CANCELLED"}
         cls = obj.hammerless.classname
-        for o in {obj, *[o for o in context.selected_objects if o.hammerless.classname == cls]}:
+        for o in {obj, *[o for o in selected_entities(context) if o.hammerless.classname == cls]}:
             kv = next((k for k in o.hammerless.keyvalues if k.key == self.key), None)
             if kv is None:
                 kv = o.hammerless.keyvalues.add()
                 kv.key = self.key
             kv.value = self.value
+        return {"FINISHED"}
+
+
+class HL_OT_toggle_vis_preview(bpy.types.Operator):
+    bl_idname = "hammerless.toggle_vis_preview"
+    bl_label = "Toggle Visibility Preview"
+    bl_description = "Hide visibility visualization or restore its last mode (Portals by default)"
+    bl_options = {"UNDO", "INTERNAL"}
+
+    def execute(self, context):
+        s = context.scene.hammerless
+        if s.vis_view != "OFF":
+            s["vis_previous_view"] = s.vis_view
+            s.vis_view = "OFF"
+        else:
+            previous = s.get("vis_previous_view", "PORTALS")
+            s.vis_view = previous if previous in {"PORTALS", "LOAD", "COST"} else "PORTALS"
         return {"FINISHED"}
 
 
@@ -2376,16 +2419,28 @@ class HL_OT_control_enable(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO", "INTERNAL"}
     name: StringProperty()
     enabled: BoolProperty()
+    all_volumes: BoolProperty(default=False)
+
+    @classmethod
+    def description(cls, context, properties):
+        target = "all Control Volumes in this map" if properties.all_volumes else "this Control Volume"
+        return ("Enable " if properties.enabled else "Disable ") + target + "; disabled volumes do not affect baking"
 
     def execute(self, context):
-        obj = bpy.data.objects.get(self.name)
-        if obj is None:
+        if self.all_volumes:
+            from .ui import control_volume_objects
+            objects = control_volume_objects(context)
+        else:
+            obj = bpy.data.objects.get(self.name)
+            objects = [obj] if obj is not None else []
+        if not objects:
             return {"CANCELLED"}
-        kv = next((k for k in obj.hammerless.keyvalues if k.key == "enabled"), None)
-        if kv is None:
-            kv = obj.hammerless.keyvalues.add()
-            kv.key = "enabled"
-        kv.value = "1" if self.enabled else "0"
+        for obj in objects:
+            kv = next((k for k in obj.hammerless.keyvalues if k.key == "enabled"), None)
+            if kv is None:
+                kv = obj.hammerless.keyvalues.add()
+                kv.key = "enabled"
+            kv.value = "1" if self.enabled else "0"
         return {"FINISHED"}
 
 
@@ -2399,7 +2454,7 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
         return context.object is not None
 
     def execute(self, context):
-        hs = context.object.hammerless
+        hs = entity_object(context).hammerless
         hs.keyvalues.clear()
         for k, v in default_keyvalues(hs.classname).items():
             kv = hs.keyvalues.add()
@@ -2410,7 +2465,7 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
 CLASSES = (HL_OT_pick_sky, HL_OT_pick_model, HL_OT_pick_material, HL_OT_refresh_previews, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_entity_class, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
            HL_OT_export_vmf, HL_OT_build, HL_OT_cancel_build, HL_OT_start_fresh, HL_OT_launch, HL_OT_load_leak,
            HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues, HL_OT_kv_set,
-           HL_OT_control_enable)
+           HL_OT_control_enable, HL_OT_toggle_vis_preview)
 
 
 def register():

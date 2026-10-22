@@ -158,7 +158,10 @@ class VMFWriter:
             s.kv("vaxis", f"[{fmt_vec(v)} 0] {fmt(face.texture_scale)}")
         s.kv("rotation", 0)
         s.kv("lightmapscale", face.lightmap_scale)
-        s.kv("smoothing_groups", 0)
+        # vbsp reads this with signed atoi: unsigned 2147483648 saturates to 2147483647
+        # on Windows, turning a hard edge into membership of every smoothing group.
+        smoothing = face.smoothing_groups & 0xffffffff
+        s.kv("smoothing_groups", smoothing if smoothing < 0x80000000 else smoothing - 0x100000000)
         if dispinfo is not None:
             s.add(dispinfo)
         return s

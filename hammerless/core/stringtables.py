@@ -60,6 +60,10 @@ def usable(dictionary: bytes | None) -> bool:
 
 
 def put_dictionary(bsp_path: str, dictionary: bytes) -> None:
+    put_files(bsp_path, {DICT_NAME: dictionary})
+
+
+def put_files(bsp_path: str, files: dict[str, bytes]) -> None:
     """Write the dictionary into the map's pakfile (replacing one there). The pakfile is rewritten in place
     when it's the file's last lump (as our compilers write it), else appended at the end: the other lumps stay
     where they are."""
@@ -71,9 +75,10 @@ def put_dictionary(bsp_path: str, dictionary: bytes) -> None:
         if length > 0:
             with zipfile.ZipFile(io.BytesIO(bytes(data[off:off + length]))) as old:
                 for info in old.infolist():
-                    if info.filename != DICT_NAME:
+                    if info.filename not in files:
                         out.writestr(info, old.read(info.filename))
-        out.writestr(DICT_NAME, dictionary)
+        for name, contents in files.items():
+            out.writestr(name, contents)
     pak = buf.getvalue()
     last = length > 0 and off + length >= len(data.rstrip(b"\0")) and all(
         struct.unpack_from("<iiii", data, 8 + 16 * i)[1] + struct.unpack_from("<iiii", data, 8 + 16 * i)[2] <= off

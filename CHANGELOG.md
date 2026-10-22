@@ -1,7 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.20.11 (test release, 2026-10-21)
 
+- Imported output conversion creates separate Behaviour graphs on the source objects. Selecting an original imported brush exposes its owning entity's settings and Behaviours without requiring Blender parenting. Imported entities participate in logic compilation, so graphs reuse the existing Director and entity blocks.
+- Original imported object references survive renaming, deletion and undo/redo without promoting duplicates to originals. Initialize these references after Blender's restricted addon-registration phase, restoring sidebar panels on normal startup.
+- Export evaluated Blender Smooth by Angle results as brush smoothing groups, including explicitly hard faces and the signed hard-edge flag required by the map compiler.
+- Add Bake and visibility controls to bake subpanel headers, plus sky visibility and control-volume controls. Map headers expose text-only Build & Play, Build and Play buttons. Entity wire previews no longer default to In Front.
+- The experimental Player Flashlight Fill example was withdrawn after the local player's light remained unreliable in game; it is not included.
+- Known limitations: imported trigger duplication, explicit Ignore handling, imported-light style controls, conversion of imported world brushes into volumes, cross-scene ownership lookup, selection lookup performance, and finite output counts remain under investigation. See docs/knowledge/known-issues.md.
+
+- Skybox/HDRI ambient lighting no longer inherits the hidden flat-colour swatch. A black swatch can no longer cancel Sky Light Brightness when the sky supplies the colour.
+- Sky Brightness now controls the visible sky in both Blender and exported maps. Nonzero exposure generates map-local sky materials with the original HDR textures and tint, packs them into the BSP, and changes the sky name to avoid stale material caching. Zero restores the original sky; sun and ambient bake intensity remain independent.
+- Invalid or unsampled lightmap texels no longer inject bright red error colours into bounce lighting, props and character ambient lighting. Geometry warnings remain. Radial sampling also rejects non-finite coordinates and exclusive upper bounds before indexing. Existing bakes are invalidated for relighting.
 - Non-rendering fog, trigger and logical-volume faces no longer receive lightmap samples or radiosity patches in Hammerless CPU/GPU lighting. Light-blocking geometry still casts shadows. Baked previews and Cycles receiver lists also exclude these faces in older BSPs. Existing Hammerless bakes are invalidated for relighting.
 
 ## 0.20.10 (test release, 2026-10-21)

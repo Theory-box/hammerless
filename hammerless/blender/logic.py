@@ -564,6 +564,12 @@ def _object_class(obj) -> str:
 
 
 def _object_update(self, context):
+    from .entitycontext import entity_object
+    if self.target is not None:
+        owner = entity_object(context, self.target)
+        if owner != self.target:
+            self.target = owner
+            return
     cls = _object_class(self.target)
     self.classname = cls
     _rebuild_entity_sockets(self, cls)
@@ -2894,87 +2900,83 @@ def brain_trees(obj) -> list:
 
 class HL_OT_logic_from_outputs(bpy.types.Operator):
     bl_idname = "hammerless.logic_from_outputs"
-    bl_label = "Graph from Outputs"
-    bl_description = ("Move the outputs set on objects (the Outputs lists) into a logic graph as nodes and "
-                      "wires, so all your map logic is in one place")
+    bl_label = "Behaviours from Outputs"
+    bl_description = ("Move entity outputs into separate Behaviour graphs on their source objects; "
+                      "unresolved connections stay in Outputs")
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        tree = next(iter(logic_trees(context.scene)), None) or new_tree(context)
+        from .behaviours import new_behaviour_tree, show_tree
+        from .mapcollection import map_objects
+        inside = map_objects(context.scene)
+        objects = [o for o in context.scene.objects if o.name in inside]
         by_name = {}
-        for o in context.scene.objects:
-            for kv in o.hammerless.keyvalues:
+        for obj in objects:
+            for kv in obj.hammerless.keyvalues:
                 if kv.key == "targetname" and kv.value:
-                    by_name[kv.value] = o
-        nodes = {n.target.name: n for n in tree.nodes if isinstance(n, HL_NodeObject) and n.target}
-        director = next((n for n in tree.nodes if isinstance(n, HL_NodeDirector)), None)
-
-        def node_for(obj):
-            if obj.name not in nodes:
-                n = tree.nodes.new("HL_NodeObject")
-                n.target = obj
-                n.location = (0.0, -220.0 * (len(nodes) % 6))
-                nodes[obj.name] = n
-            return nodes[obj.name]
-        def has_socket(obj, ident, outputs):
-            ins, outs = _entity_sockets(obj.hammerless.classname, True) if obj.hammerless.classname else ([], [])
-            return any(io.name == ident for io in (outs if outputs else ins))
-        moved = kept = 0
-        params: dict = {}          # (node, input) -> the parameter its socket holds
-        for o in list(context.scene.objects):
-            if not o.hammerless.outputs:
+                    by_name[kv.value] = obj
+        moved = kept = graphs = 0
+        first = preferred = None
+        for obj in objects:
+            if not obj.hammerless.outputs:
                 continue
-            keep = []
-            for i, out in enumerate(o.hammerless.outputs):
-                if not has_socket(o, out.output, True):
-                    keep.append(i)
+            tree = src = None
+            remove = []
+            for index, out in enumerate(obj.hammerless.outputs):
+                target = by_name.get(out.target)
+                ins, _ = _entity_sockets(_object_class(target), True) if target else ([], [])
+                _, outs = _entity_sockets(_object_class(obj), True)
+                if (target is None or not any(s.name == out.output for s in outs)
+                        or not any(s.name == out.input for s in ins)):
+                    kept += 1
                     continue
-                if out.target == "director":
-                    if director is None:
-                        director = tree.nodes.new("HL_NodeDirector")
-                        director.location = (500.0, 200.0)
-                    dst = director
-                elif out.target in by_name and has_socket(by_name[out.target], out.input, False):
-                    dst = node_for(by_name[out.target])
-                else:
-                    keep.append(i)
-                    continue
-                src = node_for(o)
-                if dst is not director:
-                    dst.location.x = max(dst.location.x, src.location.x + 350)
-                a = next((s for s in src.outputs if s.identifier == out.output), None)
-                b = next((s for s in dst.inputs if s.identifier == out.input), None)
-                # one input socket holds one parameter: a second output with a different one stays put
-                if not (a and b) or params.get((dst.name, out.input), out.parameter) != out.parameter:
-                    keep.append(i)
-                    continue
-                params[(dst.name, out.input)] = out.parameter
-                # the output's delay and "only once" become Delay / Once nodes on the wire
-                chain = a
-                x = src.location.x + 175
+                if tree is None:
+                    tree = new_behaviour_tree(f"{obj.name} - Outputs")
+                    tree.nodes.clear()
+                    obj.hammerless.behaviours.add().graph = tree
+                    obj.hammerless.behaviours_index = len(obj.hammerless.behaviours) - 1
+                    src = tree.nodes.new("HL_NodeObject")
+                    src.target = obj
+                    src.show_all = True
+                    src.use_self = True
+                    src.location = (0, 0)
+                    first = first or tree
+                    if obj == context.object:
+                        preferred = tree
+                    graphs += 1
+                row = len(remove)
+                # One destination per output preserves different parameters on the same input.
+                dst = tree.nodes.new("HL_NodeObject")
+                dst.target = target
+                dst.show_all = True
+                dst.location = (650, -row * 230)
+                dst.label = f"{out.target}: {out.input}"
+                next(s for s in dst.inputs if s.identifier == out.input).value = out.parameter
+                chain = next(s for s in src.outputs if s.identifier == out.output)
                 if out.only_once:
                     once = tree.nodes.new("HL_NodeOnce")
-                    once.location = (x, src.location.y - 120)
+                    once.location = (230, -row * 230)
                     tree.links.new(chain, once.inputs["In"])
                     chain = once.outputs["Out"]
                 if out.delay > 0:
                     delay = tree.nodes.new("HL_NodeDelay")
                     delay.seconds = out.delay
-                    delay.location = (x + 90, src.location.y - 160)
+                    delay.location = (430, -row * 230)
                     tree.links.new(chain, delay.inputs["In"])
                     chain = delay.outputs["Out"]
-                tree.links.new(chain, b)
-                if out.parameter:
-                    b.value = out.parameter
+                tree.links.new(chain, next(s for s in dst.inputs if s.identifier == out.input))
+                remove.append(index)
                 moved += 1
-            kept += len(keep)
-            for i in reversed(range(len(o.hammerless.outputs))):
-                if i not in keep:
-                    o.hammerless.outputs.remove(i)
-        _show_tree(context, tree)
-        self.report({"INFO"}, f"Moved {moved} output(s) into '{tree.name}'"
-                    + (f"; {kept} stayed on their objects (no matching node socket, or a second "
-                       f"parameter on the same input)" if kept else ""))
+            if tree is not None:
+                for node in tree.nodes:
+                    for socket in (*node.inputs, *node.outputs):
+                        socket.hide = not socket.is_linked
+            for index in reversed(remove):
+                obj.hammerless.outputs.remove(index)
+        if preferred or first:
+            show_tree(context, preferred or first)
+        self.report({"INFO"}, f"Moved {moved} outputs into {graphs} object Behaviours; "
+                    f"{kept} unresolved outputs stayed on their objects")
         return {"FINISHED"}
 
 

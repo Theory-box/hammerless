@@ -19,6 +19,7 @@ from ..core.vmf import Block
 
 SOURCE_KEY = "hl_vmf_source"        # scene: the text block holding the imported file
 KIND, ID, INDEX, NAME = "hl_vmf_kind", "hl_vmf_id", "hl_vmf_index", "hl_vmf_name"
+REGISTRY = "hl_vmf_original_objects"
 PROP_CLASSES = ("prop_static", "prop_dynamic", "prop_dynamic_override", "prop_physics", "prop_physics_override",
                 "prop_physics_multiplayer", "prop_door_rotating", "prop_detail", "prop_ragdoll")
 
@@ -461,6 +462,7 @@ def import_text(context, text: str, path: str) -> tuple[int, int]:
         for solid in e.blocks("solid"):
             b = _brush_object(solid, f"{obj.name} brush {vi._id(solid)}", ents, mats, upm)
             if b is not None:
+                b["hl_vmf_owner_index"] = k
                 b.parent = obj
                 b.matrix_parent_inverse = obj.matrix_world.inverted()
                 n_brushes += 1
@@ -471,6 +473,7 @@ def import_text(context, text: str, path: str) -> tuple[int, int]:
                         ("sound_mode", "OFF")):       # (and its own soundscapes)
         if hasattr(s, attr):
             setattr(s, attr, value)
+    seed_original_objects(context.scene, list(top.all_objects))
     return n_brushes, len(doc.entities)
 
 
@@ -490,6 +493,11 @@ def _faces(obj, upm: float, materials, depsgraph=None) -> list[tuple]:
 
 def _mesh_faces(obj, mesh, upm: float, materials) -> list[tuple]:
     from .extract import PAINTED, texture_size
+    from .brushshading import groups
+    # Legacy imports display flat in Blender without retaining their Source smoothing in the
+    # mesh. Preserve that original shading until the user supplies smooth faces or a modifier.
+    override_shading = any(p.use_smooth for p in mesh.polygons) or any(m.show_viewport for m in obj.modifiers)
+    shading = groups(mesh) if override_shading else [None] * len(mesh.polygons)
     m = obj.matrix_world
     attr = mesh.attributes.get("hl_side")
     ids = [0] * len(mesh.polygons)
@@ -513,11 +521,11 @@ def _mesh_faces(obj, mesh, upm: float, materials) -> list[tuple]:
             tex = axes_from_uv(pts, [tuple(uv.data[li].uv) for li in poly.loop_indices], w, h)
         if mirrored:                  # (a mirrored object's faces wind the other way in the world: its planes
             pts = pts[::-1]           # would face inward)
-        out.append((sid or None, pts, path, tex))
+        out.append((sid or None, pts, path, tex, shading[poly.index]))
     return out
 
 
-def _originals(objs, kind: str, key: str = ID) -> dict:
+def _legacy_originals(objs, kind: str, key: str = ID) -> dict:
     """id -> the object that is the original: the one still named as imported, else (renamed) the only one. A copy
     keeps the tags but not the name: it's a new object, built like any other (written_back)."""
     out = {}
@@ -528,10 +536,44 @@ def _originals(objs, kind: str, key: str = ID) -> dict:
     return out
 
 
+def seed_original_objects(scene, objs):
+    """One-time import/legacy initialization; Blender owns reference persistence and undo."""
+    refs = {}
+    for kind, key in (("world", ID), ("solid", ID), ("disp", ID), ("entity", INDEX)):
+        for ident, obj in _legacy_originals(objs, kind, key).items():
+            refs[f"{kind}:{ident}"] = obj
+    scene[REGISTRY] = refs
+
+
+def _originals(objs, kind: str, key: str = ID) -> dict:
+    refs = bpy.context.scene.get(REGISTRY)
+    if refs is None:
+        return _legacy_originals(objs, kind, key)
+    out = {}
+    for obj in objs:
+        ident = obj.get(key)
+        if obj.get(KIND) == kind and ident is not None and refs.get(f"{kind}:{ident}") == obj:
+            out[ident] = obj
+    return out
+
+
+@bpy.app.handlers.persistent
+def _initialize_original_objects(_unused=None):
+    # Addon enabling runs under Blender's RestrictBlend: scene data is unavailable
+    # until registration finishes. A timer retries then; load_post also uses this.
+    if not hasattr(bpy.data, "scenes"):
+        return 0.1
+    from .mapcollection import map_objects
+    for scene in bpy.data.scenes:
+        if imported(scene) and REGISTRY not in scene:
+            inside = map_objects(scene)
+            seed_original_objects(scene, [o for o in scene.objects if o.name in inside])
+
+
 def written_back(objs) -> set:
     """The names of the imported map's objects that rebuild writes back (the rest, copies of them included, are
     built as new objects)."""
-    out = {o.name for o in objs if o.get(KIND) == "world"}
+    out = {o.name for o in _originals(objs, "world").values()}
     for kind in ("solid", "disp"):
         out |= {o.name for o in _originals(objs, kind).values()}
     out |= {o.name for o in _originals(objs, "entity", INDEX).values()}
@@ -668,6 +710,44 @@ def rebuild(context, writer, materials, report) -> tuple[vi.Document, Block, lis
     return doc, world, out_ents
 
 
+def compile_imported_logic(context, ir, base, report):
+    """Let graphs use imported entities, then write their changes back into the VMF blocks once."""
+    from .logic import compile_logic
+    from .mapcollection import map_objects
+    inside = map_objects(context.scene)
+    originals = _originals([o for o in context.scene.objects if o.name in inside], "entity", INDEX)
+    blocks = base[2]
+    proxies = []
+    for index, block in enumerate(blocks):
+        if block is None:
+            continue
+        entity = vi.semantic_entities([block])[0]
+        obj = originals.get(index)
+        if obj is not None:
+            entity.source = obj.name
+        proxies.append((index, entity, len(entity.outputs)))
+    ir.entities.extend(entity for _, entity, _ in proxies)
+    try:
+        compile_logic(context, ir, report)
+        for index, entity, output_count in proxies:
+            block = blocks[index]
+            # Keep original origins, angles, unknown keys and raw outputs verbatim.
+            values = {
+                item[0]: item[1] for item in block.items if isinstance(item, tuple) and item[0].lower() != "id"}
+            values.update(entity.keyvalues)
+            values["classname"] = entity.classname
+            added = entity.outputs[output_count:]
+            outputs = None
+            if added:
+                outputs = [item for c in block.blocks("connections") for item in c.items if isinstance(item, tuple)]
+                outputs.extend((o.output, o.vmf_value()) for o in added)
+            blocks[index] = vi.set_entity_values(block, values, outputs)
+    finally:
+        proxy_ids = {id(entity) for _, entity, _ in proxies}
+        ir.entities[:] = [e for e in ir.entities if id(e) not in proxy_ids]
+    ir.imported_entities = vi.semantic_entities(blocks)
+
+
 def _outputs(obj, e: Block):
     """The entity's outputs as (output, value): None when they're as imported (the original text stays)."""
     raw = [it for c in e.blocks("connections") for it in c.items if isinstance(it, tuple)]
@@ -734,9 +814,18 @@ def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
     bpy.types.TOPBAR_MT_file_import.append(menu_func)
+    bpy.app.handlers.load_post.append(_initialize_original_objects)
+    if hasattr(bpy.data, "scenes"):
+        _initialize_original_objects()
+    else:
+        bpy.app.timers.register(_initialize_original_objects, first_interval=0.0, persistent=True)
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_initialize_original_objects):
+        bpy.app.timers.unregister(_initialize_original_objects)
+    if _initialize_original_objects in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_initialize_original_objects)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

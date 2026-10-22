@@ -6,6 +6,7 @@ import bpy
 from ..core.control import _on
 from ..core.entities import CATALOG, CATEGORIES, PRESETS
 from .extract import effective_role
+from .entitycontext import entity_object
 
 
 class HL_UL_keyvalues(bpy.types.UIList):
@@ -132,7 +133,13 @@ class HL_PT_build(_Panel, bpy.types.Panel):
 
     def draw_header_preset(self, context):
         from .lightview import bake_status
-        from .ops import BUILD_PROGRESS
+        from .ops import BUILD_PROGRESS, _BUILDING
+        row = self.layout.row(align=True)
+        actions = row.row(align=True)
+        actions.enabled = not _BUILDING
+        actions.operator("hammerless.build", text="Build & Play").play = True
+        actions.operator("hammerless.build", text="Build").play = False
+        row.operator("hammerless.launch", text="Play")
         if bake_status(context)[0] == "BUSY":
             vis = BUILD_PROGRESS["vis"]
             _status(self.layout, "Vis " + vis[4:] if vis else "Building...")
@@ -328,9 +335,13 @@ class HL_PT_object(_Panel, bpy.types.Panel):
 
     def draw(self, context):
         from .presets import draw_part, draw_root
-        obj = context.object
+        obj = entity_object(context)
         hs = obj.hammerless
         layout = self.layout
+        if obj != context.object:
+            row = layout.row(align=True)
+            row.label(text=f"Entity: {obj.name}", icon="LINKED")
+            row.operator("hammerless.select_object", text="", icon="RESTRICT_SELECT_OFF").name = obj.name
         if hs.preset:
             draw_root(layout, obj)
             return
@@ -341,7 +352,7 @@ class HL_PT_object(_Panel, bpy.types.Panel):
         if eff in ("ENTITY", "BRUSH_ENTITY"):
             row = col.row(align=True)
             row.prop(hs, "classname", text="Class")
-            row.operator("hammerless.set_entity_class" if eff == "ENTITY" else "hammerless.set_brush_entity",
+            row.operator("hammerless.set_entity_class" if eff == "ENTITY" and obj == context.object else "hammerless.set_brush_entity",
                          text="", icon="VIEWZOOM")
             d = CATALOG.get(hs.classname)
             if d:
@@ -663,10 +674,10 @@ class HL_PT_obj_keyvalues(_Panel, bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return _obj_role(context) in ("ENTITY", "BRUSH_ENTITY")
+        return entity_object(context) is not None and effective_role(entity_object(context)) in ("ENTITY", "BRUSH_ENTITY")
 
     def draw(self, context):
-        hs = context.object.hammerless
+        hs = entity_object(context).hammerless
         row = self.layout.row()
         row.template_list("HL_UL_keyvalues", "", hs, "keyvalues", hs, "keyvalues_index", rows=4)
         side = row.column(align=True)
@@ -682,15 +693,15 @@ class HL_PT_obj_outputs(_Panel, bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return _obj_role(context) in ("ENTITY", "BRUSH_ENTITY")
+        return entity_object(context) is not None and effective_role(entity_object(context)) in ("ENTITY", "BRUSH_ENTITY")
 
     def draw_header_preset(self, context):
-        n = len(context.object.hammerless.outputs)
+        n = len(entity_object(context).hammerless.outputs)
         if n:
             _status(self.layout, str(n))
 
     def draw(self, context):
-        hs = context.object.hammerless
+        hs = entity_object(context).hammerless
         layout = self.layout
         row = layout.row()
         row.template_list("HL_UL_outputs", "", hs, "outputs", hs, "outputs_index", rows=2)
@@ -714,6 +725,45 @@ def _eye(layout, data, prop):
     layout.prop(data, prop, text="", icon="HIDE_OFF" if getattr(data, prop) else "HIDE_ON", emboss=False)
 
 
+def _bake_header_slots(layout):
+    """Matching columns even when a header has no sky toggle or a shorter status."""
+    row = layout.row(align=True)
+    slots = []
+    for width in (3.0, 1.2, 1.2, 5.5):
+        slot = row.row(align=True)
+        slot.ui_units_x = width
+        slots.append(slot)
+    return slots
+
+
+def _header_bake(layout, context, kind):
+    s = context.scene.hammerless
+    if kind in {"LIGHT", "VIS"}:
+        if _cancel_button(layout, 1.0):
+            return
+        row = layout.row(align=True)
+        if kind == "LIGHT":
+            row.enabled = s.light_quality != "OFF" and (s.light_tool == "HAMMERLESS" or s.bake_area == "MAP")
+            op = row.operator("hammerless.build", text="Bake")
+            op.play, op.bake = False, True
+            op.view, op.selected = s.bake_area == "VIEW", s.bake_area == "SELECTED"
+        else:
+            row.enabled = s.vis_mode != "SKIP"
+            row.operator("hammerless.build", text="Bake").vis_only = True
+    elif kind == "NAV":
+        from .navview import _state
+        if _state["busy"]:
+            layout.operator("hammerless.nav_cancel", text="Cancel")
+            return
+        from ..core import compile as cc
+        from .ops import game_root
+        root = game_root(context)
+        operator = "hammerless.nav_analyze" if root and not cc.Tools(root).missing() else "hammerless.nav_predict"
+        layout.operator(operator, text="Bake")
+    else:
+        layout.operator("hammerless.sound_trace", text="Bake")
+
+
 # ---------------------------------------------------------------- Bake (Lighting, Visibility, Nav Mesh, Sound and
 # the Control Volumes that steer them, as its subpanels)
 
@@ -735,7 +785,12 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
-        _status(self.layout, _label(context.scene.hammerless, "light_quality"))
+        s = context.scene.hammerless
+        bake, eye, sky, status = _bake_header_slots(self.layout)
+        _header_bake(bake, context, "LIGHT")
+        _eye(eye, s, "show_lightmap")
+        sky.prop(s, "show_sky", text="", icon="WORLD", emboss=False)
+        _status(status, _label(s, "light_quality"))
 
     def draw(self, context):
         s = context.scene.hammerless
@@ -816,8 +871,7 @@ class HL_PT_environment(_Nested, _Sub, bpy.types.Panel):
         if s.sky_choice == "CUSTOM":
             col.prop(s, "skyname", text="Name")
         col.prop(s, "show_sky", text="Show in Viewport")
-        if s.show_sky:
-            col.prop(s, "sky_view_exposure", text="Viewport Brightness")
+        col.prop(s, "sky_view_exposure", text="Sky Brightness")
         from .skyview import error
         if s.show_sky and error():
             _hint(self.layout, f"Sky: {error()}", icon="ERROR")
@@ -957,7 +1011,12 @@ class HL_PT_visibility(_Panel, bpy.types.Panel):
         from .visview import header_status
         s = context.scene.hammerless
         view = header_status(context)
-        _status(self.layout, _label(s, "vis_mode") + (f" · {view}" if view else ""))
+        bake, eye, sky, status = _bake_header_slots(self.layout)
+        _header_bake(bake, context, "VIS")
+        eye.operator("hammerless.toggle_vis_preview", text="", emboss=False,
+                             icon="HIDE_OFF" if s.vis_view != "OFF" else "HIDE_ON")
+        sky.label(text="")
+        _status(status, _label(s, "vis_mode") + (f" · {view}" if view else ""))
 
     def draw(self, context):
         from .visview import draw_panel
@@ -991,7 +1050,11 @@ class HL_PT_navmesh(_Panel, bpy.types.Panel):
 
     def draw_header_preset(self, context):
         short, _long = _nav_status(context)
-        _status(self.layout, short, alert=short in ("Out of date", "L4D2 not found"))
+        bake, eye, sky, status = _bake_header_slots(self.layout)
+        _header_bake(bake, context, "NAV")
+        _eye(eye, context.scene.hammerless, "show_nav")
+        sky.label(text="")
+        _status(status, short, alert=short in ("Out of date", "L4D2 not found"))
 
     def draw(self, context):
         s = context.scene.hammerless
@@ -1035,7 +1098,11 @@ class HL_PT_sound(_Panel, bpy.types.Panel):
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header_preset(self, context):
-        _status(self.layout, _label(context.scene.hammerless, "sound_mode"))
+        bake, eye, sky, status = _bake_header_slots(self.layout)
+        _header_bake(bake, context, "SOUND")
+        _eye(eye, context.scene.hammerless, "show_sound")
+        sky.label(text="")
+        _status(status, _label(context.scene.hammerless, "sound_mode"))
 
     def draw(self, context):
         from .sound import draw_panel
@@ -1066,7 +1133,14 @@ class HL_PT_control_volumes(_Panel, bpy.types.Panel):
         vols = control_volume_objects(context)
         if vols:
             on = sum(_on({k.key: k.value for k in o.hammerless.keyvalues}.get("enabled", "1")) for o in vols)
-            _status(self.layout, f"{on} of {len(vols)} on")
+            bake, eye, sky, status = _bake_header_slots(self.layout)
+            bake.label(text="")
+            sky.label(text="")
+            op = eye.operator("hammerless.control_enable", text="", emboss=False,
+                                      icon="CHECKBOX_HLT" if on == len(vols) else
+                                           "CHECKBOX_DEHLT" if not on else "REMOVE")
+            op.all_volumes, op.enabled = True, on != len(vols)
+            _status(status, f"{on} of {len(vols)} on")
 
     def draw(self, context):
         layout = self.layout

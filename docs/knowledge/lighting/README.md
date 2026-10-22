@@ -90,3 +90,14 @@ All on "a large user map" unless noted; RTX 4090 for GPU figures; 16 threads.
 | vrad run-to-run noise | 0.34% of luxels (median 0.6%, 38 luxels > 5%); deterministic with bounce + `-noextra` | 2026-10-08 |
 
 Last checked: 2026-10-13 against branch light-layers, commit 10ea8d0 (0.17.0).
+
+
+## 0.20.11 lighting and shading corrections (2026-10-21)
+
+- Visual Sky Brightness is exposure in stops. Nonzero values produce map-local sky VMTs, scaling explicit colour overrides including HDR shader blocks, and pack those materials into the BSP. Original textures are reused; a content-derived sky name avoids stale material caching. Zero uses the original sky. See `core/skyexport.py`.
+- Visual exposure is separate from baked sky intensity. SKYBOX/HDRI ambient colour uses a neutral multiplier; the hidden FLAT swatch no longer makes those modes black. FLAT mode still uses its chosen colour.
+- Invalid radial light samples return black instead of a red error marker, and bounds/non-finite checks precede indexing. This removes red contamination of bounce, props and character ambient lighting. The native hlvrad binary is included; old bake caches are invalidated.
+- Non-rendering trigger/fog/logical-volume faces are excluded from light reception and bounce patches, not merely hidden in previews. Light-blocking geometry retains shadow occlusion. Existing BSP previews and Cycles receivers also filter non-rendering surfaces.
+- Brush shading exports evaluated Smooth by Angle results. Explicitly flat faces use the hard-edge bit; VMF writes it as signed `-2147483648` for the compiler's integer parser. No claim of cross-object smoothing isolation is made.
+
+User playtesting confirmed the red-lighting and bevel-shading corrections. Targeted checks cover sky export/packing, shading flags, receiver exclusion, and radial-sampling boundaries; this is not a complete in-game validation of every map.

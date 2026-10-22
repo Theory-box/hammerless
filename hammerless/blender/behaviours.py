@@ -7,6 +7,7 @@ import bpy
 from bpy.props import IntProperty
 
 from .logic import TREE
+from .entitycontext import entity_object, selected_entities
 
 
 def new_behaviour_tree(name: str = "Behaviour"):
@@ -36,7 +37,7 @@ def show_tree(context, tree) -> bool:
 
 
 def _slot(context, index=None):
-    obj = context.object
+    obj = entity_object(context)
     if obj is None:
         return None, None
     hs = obj.hammerless
@@ -52,10 +53,10 @@ class HL_OT_behaviour_new(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        objs = [o for o in context.selected_objects] or ([context.object] if context.object else [])
+        objs = selected_entities(context) or ([entity_object(context)] if context.object else [])
         if not objs:
             return {"CANCELLED"}
-        tree = new_behaviour_tree(f"{(context.object or objs[0]).name} Behaviour")
+        tree = new_behaviour_tree(f"{(entity_object(context) or objs[0]).name} Behaviour")
         for o in objs:
             o.hammerless.behaviours.add().graph = tree
             o.hammerless.behaviours_index = len(o.hammerless.behaviours) - 1
@@ -70,7 +71,7 @@ class HL_OT_behaviour_add(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        obj = context.object
+        obj = entity_object(context)
         if obj is None:
             return {"CANCELLED"}
         obj.hammerless.behaviours.add()
@@ -90,7 +91,7 @@ class HL_OT_behaviour_copy(bpy.types.Operator):
         if slot is None or slot.graph is None:
             return {"CANCELLED"}
         n = 0
-        for o in context.selected_objects:
+        for o in selected_entities(context):
             if o is obj or o.hammerless.preset or any(s.graph == slot.graph for s in o.hammerless.behaviours):
                 continue
             o.hammerless.behaviours.add().graph = slot.graph
@@ -223,22 +224,22 @@ class HL_PT_obj_behaviours(bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        obj = context.object
+        obj = entity_object(context)
         return obj is not None and not obj.hammerless.preset
 
     def draw_header_preset(self, context):
-        n = len(context.object.hammerless.behaviours)
+        n = len(entity_object(context).hammerless.behaviours)
         if n:
             self.layout.label(text=str(n))
 
     def draw(self, context):
         layout = self.layout
         from .logic import brain_trees
-        for t in brain_trees(context.object):       # (a brain: the world graphs living on it)
+        for t in brain_trees(entity_object(context)):       # (a brain: the world graphs living on it)
             row = layout.row(align=True)
             row.label(text=f"Brain of '{t.name}'", icon="NODETREE")
             row.operator("hammerless.logic_open_graph", text="", icon="WINDOW").graph = t.name
-        hs = context.object.hammerless
+        hs = entity_object(context).hammerless
         row = layout.row()
         row.template_list("HL_UL_behaviours", "", hs, "behaviours", hs, "behaviours_index", rows=2)
         side = row.column(align=True)

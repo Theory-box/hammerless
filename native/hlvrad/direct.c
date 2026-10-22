@@ -1720,11 +1720,15 @@ static radial_t *BuildDispPatchRadial(int facenum, int bump) {
 static int SampleRadial(radial_t *rad, const vec3_t pnt, vec3_t *light, int bumpCount) {
     float coord[2];
     WorldToLuxelSpace(&rad->l, pnt, coord);
-    int u = (int)(coord[0] + 0.5f), v = (int)(coord[1] + 0.5f), i = u + v * rad->w;
-    if (u < 0 || u > rad->w || v < 0 || v > rad->h) {
-        for (int b = 0; b < bumpCount; b++) light[b][0] = 2550, light[b][1] = light[b][2] = 0;
+    /* Invalid luxels must not become emissive diagnostic colours: GI, prop
+     * lighting and leaf ambient all sample this lightmap later. Check before
+     * the float-to-int conversion, including the exclusive upper bounds. */
+    if (!isfinite(coord[0]) || !isfinite(coord[1]) || coord[0] + 0.5f <= -1.0f ||
+        coord[1] + 0.5f <= -1.0f || coord[0] + 0.5f >= rad->w || coord[1] + 0.5f >= rad->h) {
+        for (int b = 0; b < bumpCount; b++) VectorClear(light[b]);
         return 0;
     }
+    int u = (int)(coord[0] + 0.5f), v = (int)(coord[1] + 0.5f), i = u + v * rad->w;
     int ok = 1;
     for (int b = 0; b < bumpCount; b++) {
         VectorClear(light[b]);
@@ -1809,7 +1813,9 @@ void FinalLightFace(int facenum) {
                 for (int b = 0; b < bumpCount; b++) VectorAdd(lb[b], v[b], lb[b]);
             }
             if (fl->numsamples == 0) {
-                for (int b = 0; b < bumpCount; b++) lb[b][0] = 255, lb[b][1] = lb[b][2] = 0;
+                /* The missing-sample warning is diagnostic; the lightmap must
+                 * contain no invented light for downstream lighting passes. */
+                for (int b = 0; b < bumpCount; b++) VectorClear(lb[b]);
                 ok = 0;
             }
             if (luxskip && luxskip[j]) {

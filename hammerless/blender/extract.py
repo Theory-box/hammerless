@@ -379,17 +379,27 @@ def image_to_rgba8(img) -> np.ndarray:
 
 # ---------------------------------------------------------------- geometry
 
-def _evaluated_mesh(obj, depsgraph, scale: float, matrix=None, mesh=None):
+def _evaluated_mesh(obj, depsgraph, scale: float, matrix=None, mesh=None, shading=False):
     """World-space bmesh (modifiers applied) scaled to Hammer units. matrix: where this copy of
     the object is (an instance), else the object's own place. mesh: already evaluated geometry to
     use instead of the object's (a Geometry Nodes instance)."""
     bm = bmesh.new()
+    from .brushshading import groups
     if mesh is not None:
         bm.from_mesh(mesh)
+        flags = groups(mesh) if shading else None
     else:
         eval_obj = obj.evaluated_get(depsgraph)
-        bm.from_mesh(eval_obj.to_mesh())
-        eval_obj.to_mesh_clear()
+        evaluated_mesh = eval_obj.to_mesh()
+        try:
+            bm.from_mesh(evaluated_mesh)
+            flags = groups(evaluated_mesh) if shading else None
+        finally:
+            eval_obj.to_mesh_clear()
+    if flags is not None:
+        layer = bm.faces.layers.int.new("hl_export_smoothing")
+        for face, flag in zip(bm.faces, flags):
+            face[layer] = flag if flag < 0x80000000 else flag - 0x100000000
     bm.transform(Matrix.Scale(scale, 4) @ (matrix if matrix is not None else obj.matrix_world))
     return bm
 
@@ -418,7 +428,7 @@ def _loose_parts(bm) -> list[list]:
 
 def mesh_to_brushes(obj, depsgraph, scale: float, materials: MaterialResolver, matrix=None,
                     label: str | None = None, mesh=None) -> list[Brush]:
-    bm = _evaluated_mesh(obj, depsgraph, scale, matrix, mesh)
+    bm = _evaluated_mesh(obj, depsgraph, scale, matrix, mesh, shading=True)
     slots = list(mesh.materials) if mesh is not None else [s.material for s in obj.material_slots]
     mirrored = (matrix if matrix is not None else obj.matrix_world).determinant() < 0  # flips face winding
     label = label or obj.name
@@ -446,7 +456,8 @@ def mesh_to_brushes(obj, depsgraph, scale: float, materials: MaterialResolver, m
                         tex = axes_from_uv(verts, [tuple(lp[uv].uv) for lp in f.loops], w, h)
                     if mirrored:
                         verts.reverse()
-                    polys.append(Polygon(verts, path, tscale, lmscale, tex))
+                    flag = f[bm.faces.layers.int["hl_export_smoothing"]] & 0xffffffff
+                    polys.append(Polygon(verts, path, tscale, lmscale, tex, flag))
             brushes.append(Brush(polys, name))
     finally:
         bm.free()
@@ -1334,7 +1345,10 @@ def scene_settings_to_ir(s) -> MapSettings:
         light_mixing=s.light_mixing and s.light_tool == "HAMMERLESS" and not s.light_exact,
         sun_color=_rgb(s.sun_color), sun_brightness=s.sun_brightness,
         sun_pitch=s.sun_pitch, sun_yaw=s.sun_yaw,
-        ambient_color=_rgb(s.ambient_color), ambient_brightness=s.ambient_brightness,
+        # Skybox/HDRI supplies the colour; its normalized panorama is scaled by
+        # this intensity. A hidden flat-colour swatch must not extinguish it.
+        ambient_color=_rgb(s.ambient_color) if s.sky_light == "FLAT" else (255, 255, 255),
+        ambient_brightness=s.ambient_brightness,
         lightmap_scale=s.lightmap_scale, wall_climbs=s.wall_climbs,
         fog_enabled=s.fog_enabled, fog_color=_rgb(s.fog_color), fog_start=fog_start,
         fog_end=fog_end, fog_max_density=s.fog_max_density,

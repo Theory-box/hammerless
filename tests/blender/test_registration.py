@@ -6,7 +6,7 @@ from bpy_restrict_state import RestrictBlend
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import hammerless
-from hammerless.blender import problems, ui
+from hammerless.blender import problems, ui, vmfimport
 
 for cycle in range(2):
     # Match addon_utils.enable, unlike normal scripts that can already access scene data.
@@ -15,12 +15,15 @@ for cycle in range(2):
     panels = [c for c in ui.CLASSES if issubclass(c, bpy.types.Panel)]
     assert panels and all(c.is_registered for c in panels)
     assert bpy.app.timers.is_registered(problems._registration_ready)
+    assert bpy.app.timers.is_registered(vmfimport._initialize_original_objects)
+    assert vmfimport._initialize_original_objects() is None
     s = bpy.context.scene.hammerless
     s["ingame_flow"] = "In game: Director flow works (100 units)"
     problems._registration_ready()
     assert s.get("ingame_flow", "").startswith("Previous game test is stale")
     hammerless.unregister()
     assert not bpy.app.timers.is_registered(problems._registration_ready)
+    assert not bpy.app.timers.is_registered(vmfimport._initialize_original_objects)
     assert problems._file_loaded not in bpy.app.handlers.load_post
     assert not any(c.is_registered for c in panels)
 print("PASS restricted registration, all panels, deferred stale check, unregister and re-enable")

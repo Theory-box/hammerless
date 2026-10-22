@@ -27,6 +27,7 @@ class LightReceiverTests(unittest.TestCase):
 
     def test_old_bakes_are_relit_without_geometry_rebuild(self):
         opts=CompileOptions()
-        old=repr(opts).replace(', light_receiver_revision=1','')
-        self.assertFalse(_serves(old,opts))
-        self.assertEqual(_opts_rest(old),_opts_rest(repr(opts)))
+        for field in ('', ', light_receiver_revision=1'):
+            old=repr(opts).replace(', light_receiver_revision=2',field)
+            self.assertFalse(_serves(old,opts))
+            self.assertEqual(_opts_rest(old),_opts_rest(repr(opts)))

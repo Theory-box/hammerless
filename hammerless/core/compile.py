@@ -49,7 +49,7 @@ class CompileOptions:
     map_tool: str = "HAMMERLESS"  # HAMMERLESS: hlvbsp.exe (same map as vbsp) / VALVE: L4D2's vbsp.exe
     light_tool: str = "HAMMERLESS"  # VALVE: vrad's lightmaps / HAMMERLESS: hlvrad.exe (vrad's lighting, faster) /
                                 # CYCLES: Blender bakes them after vrad (bake_handler)
-    light_receiver_revision: int = 1  # Invalidate old bakes that lightmapped logical volumes.
+    light_receiver_revision: int = 2  # Relight old volume bakes and emissive red error markers.
     light_exact: bool = False   # hlvrad on the CPU, byte for byte vrad's (else -gpu: much faster, looks the same)
     cycles_samples: int = 1024
     cycles_stitch: bool = True     # make neighbouring faces' lightmaps agree along shared edges
@@ -1179,6 +1179,8 @@ class CompileJob:
                 from .buildplan import strip_stale
                 strip_stale(self.base + ".bsp")
             self._check_stop()
+            from .skyexport import pack_sky
+            pack_sky(self.base + '.bsp', self.tools.gamedir, self.name)
             if self.copy_to_game:
                 os.makedirs(self.tools.maps_dir, exist_ok=True)
                 self._copy_bsp(os.path.join(self.tools.maps_dir, self.name + ".bsp"))

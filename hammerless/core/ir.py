@@ -21,6 +21,7 @@ class Polygon:
     lightmap_scale: int = 16
     # painted faces (texalign): ((u, ushift, uscale), (v, vshift, vscale)); None: world-aligned at texture_scale
     tex_axes: tuple | None = None
+    smoothing_groups: int = 0  # Source bitmask; bit 31 forces hard edges (0 retains compiler defaults).
 
 
 @dataclass

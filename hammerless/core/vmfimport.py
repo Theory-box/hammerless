@@ -277,13 +277,14 @@ def entity_solids(e: Block) -> list[Block]:
 # ---------------------------------------------------------------- writing back
 
 def side_for_face(face_verts: list[Vec3], material: str, original: Block | None, new_id: int,
-                  default_side, tex=None) -> Block:
+                  default_side, tex=None, smoothing=None) -> Block:
     """The side a face is written as: the original (exactly) while the face is on its plane with the same
     material; else the original with a new plane (and material); a face with no original: default_side().
     tex: a painted face's texture axes ((u, ushift, uscale), (v, vshift, vscale)): written on its side."""
     if original is not None:
         same_material = (original.get("material", "") or "").lower() == (material or "").lower()
-        if same_material and face_on_side(face_verts, original) and (tex is None or _same_tex(original, tex)):
+        same_smoothing = smoothing is None or int(original.get("smoothing_groups", "0")) == _smoothing_value(smoothing)
+        if same_material and face_on_side(face_verts, original) and (tex is None or _same_tex(original, tex)) and same_smoothing:
             return original
         side = Block("side", list(original.items))
         side.items = [it for it in side.items if not (isinstance(it, Block) and it.name.lower() == "dispinfo")]
@@ -293,12 +294,21 @@ def side_for_face(face_verts: list[Vec3], material: str, original: Block | None,
             _set(side, "material", material.upper())
         if tex is not None:
             _set_tex(side, tex)
+        if smoothing is not None:
+            _set(side, "smoothing_groups", str(_smoothing_value(smoothing)))
         return side
     side = default_side()
     _set(side, "id", str(new_id))
     if tex is not None:
         _set_tex(side, tex)
+    if smoothing is not None:
+        _set(side, "smoothing_groups", str(_smoothing_value(smoothing)))
     return side
+
+
+def _smoothing_value(value: int) -> int:
+    value &= 0xffffffff
+    return value if value < 0x80000000 else value - 0x100000000
 
 
 def _set_tex(side: Block, tex) -> None:
@@ -372,22 +382,22 @@ def solid_block(original: Block | None, faces: list[tuple[int | None, list[Vec3]
     """A brush as written: the original block when every face is still on its side (same sides, same
     materials); else rebuilt face by face. faces: (side id or None, polygon, material)."""
     sides = {_id(s): s for s in original.blocks("side")} if original is not None else {}
+    faces = [(*f, *([None] * (5 - len(f)))) for f in faces]
     if original is not None:
-        faces = [f if len(f) == 4 else (*f, None) for f in faces]
         kept = [sides.get(f[0]) for f in faces]
         if (len(faces) == len(_area_sides(original)) and all(kept)
-                and all(side_for_face(v, m, s, 0, default_side, t) is s for (sid, v, m, t), s in zip(faces, kept))):
+                and all(side_for_face(v, m, s, 0, default_side, t, sg) is s
+                        for (sid, v, m, t, sg), s in zip(faces, kept))):
             return original
-    faces = [f if len(f) == 4 else (*f, None) for f in faces]
     out = Block("solid")
     out.kv("id", _id(original) if original is not None else next_id())
     used = set()
-    for sid, verts, material, tex in faces:
+    for sid, verts, material, tex, smoothing in faces:
         orig = sides.get(sid) if sid not in used else None
         used.add(sid)
         out.add(side_for_face(verts, material, orig, next_id(),
                               lambda v=verts, m=material, t=tex: default_side(v, m, t) if t is not None
-                              else default_side(v, m), tex))
+                              else default_side(v, m), tex, smoothing))
     for b in (original.blocks("editor") if original is not None else []):
         out.add(b)
     return out

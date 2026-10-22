@@ -194,3 +194,20 @@ Planned (not done at this page's date): prefabs in a Blender asset library (comp
 - Commit b69fe96 says 2,511 properties; the catalogue holds 2,631 after 21d7c4e. The commit message is the older number.
 
 Last checked: 2026-10-17 against branch brush-tools, commit 55c63a0 (the Behaviours section with slice 2 and brains, the Swelling Pod row, the variables note; the rest 2026-10-14 against 04d5abc).
+
+
+## Imported entity ownership and per-object graphs (0.20.11)
+
+`Behaviours from Outputs` attaches a graph to each source entity. Its source Entity Events node uses Self; destination nodes refer to their target objects. Unresolved outputs remain in Outputs. This replaces conversion into one large map-wide graph. Finite output counts above one are not safely converted yet; see the known-issues page.
+
+Imported brush meshes store `hl_vmf_owner_index`; the scene's `hl_vmf_original_objects` registry stores Blender object references. Selecting original geometry resolves its owning entity for settings and Behaviours without requiring parenting. Duplicates are not promoted when originals disappear. New imports seed this data automatically. Existing manually unparented scenes may need a one-time ownership update; no general map-repair operator was added.
+
+Export rebuilds imported blocks before graph compilation. `compile_imported_logic` temporarily supplies semantic entity proxies, writes graph changes back into original blocks, then removes the proxies to avoid duplicate entities. This enables existing triggers/relays and the imported Director to participate in graphs. Unknown raw fields and untouched outputs remain preserved. Imported versus native export still has the documented audit limitations.
+
+Blender addon registration uses `_RestrictData`; scene registry initialization must be deferred by a timer, with a load_post handler for loaded maps. Calling it directly during restricted registration prevented later sidebar panels from registering. `test_registration.py` exercises restricted registration and re-enable.
+
+### Withdrawn experiment: Player Flashlight Fill
+
+A player-centered `light_dynamic` example, gated by `m_fEffects & 4`, worked for teammates in user testing but not the local player. Replacing parenting with periodic SetOrigin did not resolve it. It was removed rather than shipped as working. No root cause was confirmed; do not record first-person parenting or light-layer limits as established causes.
+
+Research: [Silvers' Dynamic Light source](https://github.com/9-BAKA/sourcemod/blob/master/l4d_dynamic_light.sp) uses the same flashlight bit, positions light near a beam trace hit and optionally filters transmission with SourceMod hooks. [Sw1ft's Dynamic Light](https://steamcommunity.com/sharedfiles/filedetails/?id=2261165699) covers projectiles, burning infected and muzzle flashes; it does not establish a fix for our player-centered case. Neither provided a clear quick repair. Existing copies in blend files are not automatically removed by removing the example from the addon.

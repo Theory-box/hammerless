@@ -969,7 +969,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                            description="Draw the sky behind the scene in the 3D viewport (any shading mode; "
                                        "nothing is added to the scene)")
     sky_view_exposure: FloatProperty(name="Brightness", default=0.0, soft_min=-4.0, soft_max=4.0, step=10,
-                                     update=_sky_view, description="The viewport sky's brightness, in stops")
+                                     min=-32.0, max=32.0, update=_sky_view,
+                                     description="Visual sky brightness in Blender and the built game map, in stops. "
+                                                 "-1 halves it; -2 quarters it. Does not change sun or ambient lighting")
     auto_sun: BoolProperty(name="Add Sun if Missing", default=True,
                            description="Add a sun from these settings when the scene has no Blender sun lamp")
     sun_color: FloatVectorProperty(name="Sun Color", subtype="COLOR_GAMMA", size=3, min=0, max=1,
