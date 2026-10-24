@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.16 (test release, 2026-10-24)
+
+- Single-part presets now use their actual object instead of an empty wrapper. Organize gameplay objects into Survival, Spawn Areas, Navigation, Triggers and Assemblies collections. Provide an explicit conversion for older single-part presets.
+- Add a master visibility eye to Bake, preserving each overlay's individual settings. Draw climb-side arrows on selected survivor and zombie ladders using their actual ladder faces.
+- Attach 29 older object examples as Behaviours. Use Self for the owner, exposed Object references for assembly partners, and This Object variable scope for independent runtime state. Sleepers, husks and reactive lights no longer depend on shared target names. Duplicate all assembly parts together to remap partner targets. Existing saved examples are not automatically rewritten.
+- Open existing object-owned purchase, barrier and pod examples directly in their Behaviours without creating an extra scene graph.
+- Reject Auto Climb Links when the climber cannot rise and cross onto the landing, including walls continuing above the destination and low ceilings. Rebuild navigation to replace old links.
+- Validation: focused unit and Blender checks for valid/blocked climbs, example construction and flattening, independent targets and variables, duplicate/delete/undo/redo, save/reload, and modular purchase compilation. Earlier direct-preset and visualization checks also passed. Character asset importing and gameplay were not retested for this release.
+
 ## 0.20.15 (test release, 2026-10-24)
 
 - Capture Use input every server tick and buffer short presses for purchase stations and paid barriers. Consume one interaction per press/hold, prioritize actual entity surface hits, and clear stale prompts when focus is lost.
