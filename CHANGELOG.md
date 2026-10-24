@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.13 (test release, 2026-10-23)
+
+- Rebuild Personal Kill Points and all purchase examples as editable node groups. Rewards, balance checks, deductions, refunds and messages are visible as ordinary nodes.
+- Add reusable Human Identity, Look / Use Target, Inventory Item, Has Inventory Item, Give Inventory Item and Reset Key Variable nodes, plus Per Key variable storage, whole-number arithmetic and case-insensitive text comparisons.
+- Expand legacy economy nodes on file open while preserving reward values, existing exposed-setting IDs and independent object overrides. Linked library graphs remain unchanged; files on disk are unchanged until saved.
+- Preserve model previews, export orientation, delivery confirmation and refund behavior. Deferred inventory outputs retain the initiating player's context; messages guard against disconnected players.
+- Validation: 328 unit tests (one skipped), 83 Blender regression checks, focused migration/preview/undo tests, and in-game scoring, round reset, inventory delivery and refund checks.
+
 ## 0.20.12 (test release, 2026-10-23)
 
 - Add stock Survival mode, a native start button and arena regions, mode-aware validation, and navigation spawn-candidate visualization. Campaign remains the default.
