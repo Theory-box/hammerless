@@ -4,8 +4,9 @@ import bpy
 
 def upgrade_displays():
     """Replace only untouched shipped rule groups; preserve object settings and edited graphs."""
-    from .logic_examples import _groups, _group_state, _group_signature
-    from .logic_examples_economy import BALANCE, AWARD, points_group, purchase_group, barrier_rules, scoreboard_group, hint_group
+    from .logic_examples import _groups, _group_state, _group_signature, _socket
+    from .logic import _rebuild
+    from .logic_examples_economy import BALANCE, AWARD, points_group, purchase_group, barrier_rules, scoreboard_group, hint_group, POINTS_EXTRA_DEFAULTS
     specs={'Points: Balance':BALANCE,'Points: Award':AWARD,'Points: Display':scoreboard_group(),
            'Messages: Purchase Hint':hint_group(),'Messages: Purchase Prompt':hint_group(prompt=True),
            'Personal Points':points_group(),
@@ -24,13 +25,24 @@ def upgrade_displays():
     if problems:
         raise RuntimeError('; '.join(problems))
     for tree,name in candidates:
+        users = [(node, {s.identifier for s in node.inputs})
+                 for parent in bpy.data.node_groups if parent.bl_idname == 'HL_LogicTree' and not parent.library
+                 for node in parent.nodes if node.bl_idname == 'HL_NodeGroup' and node.group == tree]
         tree.user_remap(groups[name])
+        # ID remapping does not invoke the group property's socket-update callback.
+        # Rebuild by stable socket identifiers, preserving existing values and wires.
+        for node, previous in users:
+            _rebuild(node)
+            if name == 'Personal Points':
+                for key, value in POINTS_EXTRA_DEFAULTS.items():
+                    if key not in previous:
+                        _socket(node,key,False).value = value
     return len(candidates)
 
 
 def expand(tree):
     from .logic_examples import _groups, _fill, _socket
-    from .logic_examples_economy import BALANCE, AWARD, points_group, purchase_group, station, scoreboard_group, hint_group
+    from .logic_examples_economy import BALANCE, AWARD, points_group, purchase_group, station, scoreboard_group, hint_group, POINTS_EXTRA_DEFAULTS
     legacy = [n for n in tree.nodes if n.bl_idname in ('HL_NodePersonalPoints', 'HL_NodeWallWeapon')]
     if not legacy or tree.library:
         return 0
@@ -51,6 +63,8 @@ def expand(tree):
                 node.group = groups['Personal Points']
                 for key in ('starting','common','special','tank','witch','feedback'):
                     _socket(node,key,False).value = getattr(old,key)
+                for key,value in POINTS_EXTRA_DEFAULTS.items():
+                    _socket(node,key,False).value = value
                 node.parent, node.location, node.mute = old.parent, old.location, old.mute
                 node.label = old.label
             else:

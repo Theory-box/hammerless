@@ -2,6 +2,8 @@
 from .logic_examples import N, ev, fn
 from ..core.wall_weapon import ITEMS
 
+POINTS_EXTRA_DEFAULTS = dict(assist=25, headshot=2)
+
 
 def variable(nid, name, col, row, *, write=False, scope='MAP', kind='num', **kw):
     return N(nid, 'HL_NodeSetVariable' if write else 'HL_NodeGetVariable', col, row,
@@ -119,6 +121,23 @@ def points_group():
         nodes += [ev(nid, event, 0, row), N(nid+'_award', 'HL_NodeGroup', 2, row, group='Points: Award')]
         links += [(nid+'.happened', nid+'_award.run'), (nid+'.'+player, nid+'_award.player'),
                   ('in.'+reward, nid+'_award.amount'), ('in.feedback', nid+'_award.feedback')]
+    # Only infected_death carries the common kill reward through this multiplier.
+    links.remove(('in.common', 'common_award.amount'))
+    nodes += [N('headshot_min','HL_NodeMath',1,4,op='MAXIMUM',sockets={'b':1}),
+              N('headshot_scale','HL_NodeMath',2,4,op='MULTIPLY'),
+              N('headshot_reward','HL_NodePickValue',3,3,value_kind='num'),
+              ev('assist','award_earned',0,20),
+              N('protect','HL_NodeCompare',1,21,op='EQUAL',sockets={'b':67}),
+              N('assist_if','HL_NodeIf',1,20),
+              N('assist_award','HL_NodeGroup',2,20,group='Points: Award')]
+    links += [('in.headshot','headshot_min.a'), ('headshot_min.value','headshot_scale.b'),
+              ('in.common','headshot_scale.a'), ('common.headshot','headshot_reward.condition'),
+              ('headshot_scale.value','headshot_reward.a'), ('in.common','headshot_reward.b'),
+              ('headshot_reward.value','common_award.amount'),
+              ('assist.happened','assist_if.in'), ('assist.award','protect.a'),
+              ('protect.result','assist_if.condition'), ('assist_if.true','assist_award.run'),
+              ('assist.userid','assist_award.player'), ('in.assist','assist_award.amount'),
+              ('in.feedback','assist_award.feedback')]
     nodes += [ev('death', 'player_death', 0, 9), fn('type', 'player:GetZombieType', 0, 11),
               fn('survivor', 'player:IsSurvivor', 0, 12), N('team', 'HL_NodeIf', 1, 9),
               N('tank', 'HL_NodeCompare', 1, 11, op='EQUAL', sockets={'b': 8}),
@@ -155,12 +174,14 @@ def points_group():
     return dict(about='Personal points built from game events, variables, arithmetic and messages. Tab into Award, Balance and Display to edit them. One controller per map.',
                 inputs=[(key, title, 'bool' if key=='feedback' else 'num') for key,title in
                         [('starting','Starting Points'),('common','Common Kill'),('special','Special Kill'),
-                         ('tank','Tank Kill'),('witch','Witch Kill'),('feedback','Show Earned Points')]],
+                         ('tank','Tank Kill'),('witch','Witch Kill'),('assist','Survivor Assist'),
+                         ('headshot','Common Headshot Multiplier'),('feedback','Show Earned Points')]],
                 outputs=[], nodes=nodes, links=links,
                 steps=[('Reset at round start', [n['id'] for n in nodes[:5]]),
-                       ('Common rewards', ['common','common_award']), ('Witch rewards', ['witch','witch_award']),
+                       ('Common rewards', ['common','common_award','headshot_min','headshot_scale','headshot_reward']), ('Witch rewards', ['witch','witch_award']),
+                       ('Protect a survivor (award 67)', ['assist','protect','assist_if','assist_award']),
                        ('Special and Tank rewards', [n['id'] for n in nodes if 9 <= n['pos'][1] <= 12]),
-                       ('Private !points command', [n['id'] for n in nodes if n['pos'][1] >= 16])])
+                       ('Private !points command', [n['id'] for n in nodes if 16 <= n['pos'][1] < 20])])
 
 
 def purchase_group():
@@ -287,7 +308,7 @@ def examples():
         about='Personal points for each human survivor. Rewards, balance storage, round reset and !points chat are editable node groups. Tab into Personal Points, Award or Balance to see every rule. Add one controller per map. Steam identities retain their balance through reconnects in the same round; bots do not earn points.',
         groups={'Points: Balance':BALANCE,'Points: Award':AWARD,'Points: Display':scoreboard_group(),'Personal Points':points_group()},
         nodes=[N('points','HL_NodeGroup',0,0,group='Personal Points',
-                 sockets=dict(starting=0,common=10,special=50,tank=500,witch=250,feedback=True))], links=[])]
+                 sockets=dict(starting=0,common=10,special=50,tank=500,witch=250,feedback=True,**POINTS_EXTRA_DEFAULTS))], links=[])]
     for title, item, price, name, key, height in [
             ('Wall Weapon - Uzi','smg',500,'Wall Weapon: Uzi','wall_gun',1.4),
             ('Wall Weapon - M16','rifle',1000,'Wall Weapon: M16','wall_gun',1.4),
