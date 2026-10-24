@@ -5,7 +5,7 @@
 No Hammer, no VMF editing, no console commands.
 
 > [!WARNING]
-> **Work in progress (v0.17, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene, and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
+> **Work in progress (v0.20.12, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene, and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
 
 ## Our own toolchain: rebuilt, measured, faster
 
@@ -122,3 +122,7 @@ The full walkthrough is in **[Getting Started](docs/GETTING_STARTED.md)**.
 [GPL-3.0-or-later](LICENSE), like Blender itself.
 
 Hammerless is a fan-made tool, not affiliated with or endorsed by Valve. Left 4 Dead 2, Source and their content are Valve's; Hammerless doesn't include any game files and reads them from your own installation. The nav mesh generator and nav analysis follow the algorithms in Valve's published Source SDK 2013 nav code, reimplemented and checked against the game's output. The map, vis, light and model compilers are likewise reimplemented (the map compiler after Quake 2's GPL tools) and checked against Valve's tools' output.
+
+### Survival and purchase examples
+
+Choose **Map > Game Mode > Survival** for native holdout play. See [Survival setup](docs/survival.md), [Personal Kill Points](docs/personal-points.md), [item purchases](docs/wall-weapons.md), and [per-object Behaviour settings](docs/behaviour-settings.md).

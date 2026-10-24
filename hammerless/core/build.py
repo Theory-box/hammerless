@@ -10,6 +10,7 @@ from .displacement import build_patches
 from .entities import default_keyvalues
 from .entities import MOVE_DIR_ANGLES, MOVE_DIR_AXIS, PSEUDO_ENTITIES, WEATHER, WIND_COMMON, WINDS, ZOMBIES_ONLY
 from .gamefiles import collect_crescendos, director_input_script, script_path
+from .gamemodes import policy
 from .ir import Brush, Entity, MapIR, Output, Vec3
 from .nav import collect_climbs, collect_regions
 from .vmf import Block, VMFWriter
@@ -125,6 +126,8 @@ class Report:
 def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
     """content: optional vpk.GameContent to check materials/models exist."""
     r = Report()
+    if ir.settings.game_mode == "SURVIVAL" and ir.scripted_mode:
+        r.errors.append("Stock Survival cannot run custom HUD or mutation override nodes. Disable those graphs or choose Campaign; personal points and wall purchases do not require mutation mode.")
     from .mapcheck import Problem
     brush_problems = []          # with the brush's centre, so the problem list can go to it
     for b in ir.brushes + [b for e in ir.entities for b in e.brushes]:
@@ -157,12 +160,18 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
         r.info.append("No info_player_start. Adding one next to the first survivor spawn.")
     if classes.count("info_director") > 1:
         r.errors.append("More than one info_director.")
+    if ir.settings.game_mode == "SURVIVAL":
+        if not any(o.input.lower() == "panicevent" for e in ir.entities for o in e.outputs):
+            r.warnings.append("Survival has no native start output. Add a Survival Start Button from Add > Events, or wire PanicEvent to the Director.")
+        regions, _ = collect_regions(ir)
+        if not any(v.bits & 320 == 320 for v in regions):
+            r.warnings.append("Survival needs arena nav marked BATTLEFIELD and FINALE. Add a Survival Arena region and resize it over the playable floors, then rebuild nav.")
     directors = [e for e in ir.entities if e.classname == "info_director"]
     if directors and all(e.keyvalues.get("targetname", "director") != "director" for e in directors) and any(
             o.target.lower() == "director" for e in ir.entities for o in e.outputs):
         r.warnings.append("The Director entity was renamed, but hordes and crescendos send their outputs to "
                           "'director': name it 'director' again")
-    if SURVIVOR_SPAWNS & set(classes) and "info_changelevel" not in classes:
+    if policy(ir.settings.game_mode).campaign_route and SURVIVOR_SPAWNS & set(classes) and "info_changelevel" not in classes:
         if "trigger_finale" not in classes:
             r.warnings.append("No End Safe Room: missing Change Level Volume (info_changelevel). A CHECKPOINT "
                               "Nav Attribute Region only marks nav; it does not provide a campaign endpoint. "
@@ -175,7 +184,7 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
             r.warnings.append(f"The End Safe Room's Next Map '{nxt}' isn't installed: closing the door won't "
                               "load anything (and the Director may find no path). Check the name, or build "
                               "that map first")
-    if "prop_door_rotating_checkpoint" not in classes:
+    if policy(ir.settings.game_mode).campaign_route and "prop_door_rotating_checkpoint" not in classes:
         r.info.append("No safe room doors. Fine for testing, but a campaign map needs them.")
     names = [e.keyvalues.get("targetname") for e in ir.entities if e.classname == "info_landmark"]
     fixable = end_landmark_renames(ir)
@@ -200,7 +209,7 @@ def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
             r.warnings.append(f"Change Level Volume '{cl.source}' refers to missing Landmark '{cl.keyvalues['landmark']}'. "
                               "Add an info_landmark with that targetname inside the map collection, or correct the "
                               "volume's Landmark setting, then Build & Play.")
-        if bad_next_map(cl, ir.settings.name):
+        if policy(ir.settings.game_mode).campaign_route and bad_next_map(cl, ir.settings.name):
             r.warnings.append(f"End safe room's Next Map is {'empty' if not cl.keyvalues.get('map') else 'this map itself'}. "
                               "The game then can't work out the path from start to end, so no wandering "
                               f"zombies spawn. Using '{FALLBACK_NEXT_MAP}'; set Next Map on "
@@ -632,7 +641,7 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
             # and the light reaches everything it can see at full strength, however far away
             e.keyvalues = {**e.keyvalues, "_constant_attn": "0", "_linear_attn": "0", "_quadratic_attn": "1"}
     for e in entities:
-        if e.classname == "info_changelevel" and bad_next_map(e, s.name):
+        if policy(s.game_mode).campaign_route and e.classname == "info_changelevel" and bad_next_map(e, s.name):
             e.keyvalues = {**e.keyvalues, "map": FALLBACK_NEXT_MAP}
     entities = [zombie_ladder_entity(e, report) if e.classname == "func_ladder" else e for e in entities]
     entities = [mover_entity(e, report) if e.classname == "func_movelinear" else e for e in entities]
@@ -667,7 +676,7 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
             "targetname": "hammerless_debug", "vscripts": script_path(f"debug_{s.name}"),
             "thinkfunction": "HL_Think"}))
         report.info.append("Debug log on: Director events and stats go to the console (HAMMERLESS_DEBUG).")
-    if s.autotest:
+    if s.autotest and s.game_mode == "CAMPAIGN":
         from .autotest import plan_route
         route, _ = plan_route(ir)   # also names unnamed buttons so the script can press them
         entities.append(Entity("logic_script", HELPER_SPOT, (0, 0, 0), {
@@ -675,7 +684,7 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
             "thinkfunction": "HLT_Think"}))
         report.info.append(f"Bot Walkthrough Test on: {len(route)} waypoint(s). Watch for HAMMERLESS_AUTOTEST "
                            "in the console.")
-    if s.director_enabled:
+    if s.director_enabled and policy(s.game_mode).director_overrides:
         from .gamefiles import DIRECTOR_ENTITY
         entities.append(Entity("logic_script", HELPER_SPOT, (0, 0, 0), {
             "targetname": DIRECTOR_ENTITY, "vscripts": director_input_script(s.name, "director")}))

@@ -1340,7 +1340,7 @@ def scene_settings_to_ir(s) -> MapSettings:
     every_min, every_max = _ordered(s.dir_mob_interval_min, s.dir_mob_interval_max)
     fog_start, fog_end = _ordered(s.fog_start, s.fog_end)
     return MapSettings(
-        name=s.map_name, skyname=s.skyname, auto_seal=s.auto_seal, auto_detail=s.auto_detail,
+        name=s.map_name, game_mode=s.game_mode, skyname=s.skyname, auto_seal=s.auto_seal, auto_detail=s.auto_detail,
         auto_light_environment=s.auto_sun,
         light_mixing=s.light_mixing and s.light_tool == "HAMMERLESS" and not s.light_exact,
         sun_color=_rgb(s.sun_color), sun_brightness=s.sun_brightness,

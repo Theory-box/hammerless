@@ -170,6 +170,9 @@ class HL_PT_build(_Panel, bpy.types.Panel):
         org.alert = not organized          # (not organized yet: the whole scene is the map)
         org.operator("hammerless.organize_scene", text="", icon="OUTLINER_COLLECTION")
         col.prop(s, "compile_preset", text="Quality")
+        col.prop(s, "game_mode")
+        if s.game_mode == "SURVIVAL":
+            col.label(text="Stock Survival: use a Survival Start Button")
         layout.separator()
         if not _cancel_button(layout):
             big = layout.row()
@@ -1178,16 +1181,21 @@ class HL_PT_director(_Panel, bpy.types.Panel):
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw_header(self, context):
-        self.layout.prop(context.scene.hammerless, "director_enabled", text="")
+        if context.scene.hammerless.game_mode == "CAMPAIGN":
+            self.layout.prop(context.scene.hammerless, "director_enabled", text="")
 
     def draw_header_preset(self, context):
-        if not context.scene.hammerless.director_enabled:
+        if context.scene.hammerless.game_mode == "SURVIVAL" or not context.scene.hammerless.director_enabled:
             _status(self.layout, "game default")
 
     def draw(self, context):
         s = context.scene.hammerless
         layout = self.layout
         col = _settings(layout)
+        if s.game_mode == "SURVIVAL":
+            layout.label(text="Stock Survival controls attack timing and population.", icon="INFO")
+            layout.label(text="Start the round with a Survival Start Button.")
+            return
         col.enabled = s.director_enabled
         col.prop(s, "dir_common_limit")
         col.separator()
@@ -1347,7 +1355,11 @@ class HL_PT_debug(_Sub, bpy.types.Panel):
         sub.enabled = s.debug_log
         sub.prop(s, "debug_interval")
         col.separator()
-        col.prop(s, "autotest")
+        sub = col.column()
+        sub.enabled = s.game_mode == "CAMPAIGN"
+        sub.prop(s, "autotest")
+        if s.game_mode != "CAMPAIGN":
+            col.label(text="Automated route walkthrough is Campaign-only.")
 
 
 class HL_PT_collection(bpy.types.Panel):
@@ -1404,7 +1416,7 @@ class HL_MT_add(bpy.types.Menu):
         for key in ("START_SAFE_ROOM", "END_SAFE_ROOM"):
             layout.operator("hammerless.add_preset", text=PRESETS[key].label, icon="HOME").preset = key
         layout.separator()
-        for key, icon in (("HORDE_TRIGGER", "GHOST_ENABLED"), ("HORDE_BUTTON", "GHOST_ENABLED"),
+        for key, icon in (("SURVIVAL_START", "PLAY"), ("HORDE_TRIGGER", "GHOST_ENABLED"), ("HORDE_BUTTON", "GHOST_ENABLED"),
                           ("TANK_AMBUSH", "GHOST_ENABLED"), ("CRESCENDO_BUTTON", "GHOST_ENABLED"),
                           ("ZOMBIE_SPAWN_AREA", "MOD_MASK"), ("LADDER", "SORT_DESC"),
                           ("ZOMBIE_LADDER", "SORT_DESC"), ("ZOMBIE_CLIMB", "TRIA_UP"),

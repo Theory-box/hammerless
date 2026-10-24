@@ -2301,6 +2301,10 @@ class TestVisCompiler(unittest.TestCase):
         job = self._job(cc.CompileOptions(vis_tool="HAMMERLESS"))
         old = cc.HLVVIS
         try:
+            # vvis runs after vbsp: the post-build sky packer expects its BSP,
+            # even when both visibility executables are test stand-ins.
+            with open(job.base + ".bsp", "wb") as f:
+                f.write(b"VBSP" + bytes(1100))
             cc.HLVVIS = sys.executable                    # a stand-in "ours" that fails
             job.steps = [("vvis", [sys.executable, "-c", "import sys; sys.exit(3)"])]
             job._valve_vvis = [sys.executable, "-c", "print('VALVE VVIS RAN')"]

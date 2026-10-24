@@ -118,6 +118,18 @@ function HLR_FlowReport() {
     local areas = {};
     NavMesh.GetAllAreas(areas);
     if (areas.len() == 0) { printl("HAMMERLESS_FLOW nonav"); return; }
+    if (Director.GetGameModeBase() == "survival") {
+        local starts = [], arena = [];
+        foreach (id, a in areas) {
+            local f = a.GetSpawnAttributes();
+            if (f & 128) starts.append(a);
+            if ((f & 320) == 320) arena.append(a);
+        }
+        if (starts.len() == 0) { printl("HAMMERLESS_FLOW nostart"); return; }
+        if (arena.len() == 0) { printl("HAMMERLESS_FLOW noarena"); return; }
+        printl(HLR_HasRoute(starts, arena) ? "HAMMERLESS_FLOW arenaok" : "HAMMERLESS_FLOW arenabroken");
+        return;
+    }
     local max = GetMaxFlowDistance();
     if (max > 0) { printl("HAMMERLESS_FLOW ok " + max); return; }
     if (Entities.FindByClassname(null, "info_changelevel") == null &&
@@ -297,6 +309,10 @@ def mode_files(ir: MapIR) -> dict[str, str]:
     tells Build & Play which mode to start the map in."""
     from .director_options import GAME_MODE, HOOKS_BY_NAME
     name = ir.settings.name
+    from .gamemodes import policy
+    mode = policy(ir.settings.game_mode)
+    if not mode.campaign_route:
+        return {f"maps/{name}.hlmode": mode.launch + "\n"}
     if not ir.scripted_mode:
         return {f"maps/{name}.hlmode": "coop\n"}
     files = {f"maps/{name}.hlmode": GAME_MODE + "\n"}
@@ -389,9 +405,9 @@ def game_files(ir: MapIR) -> dict[str, str]:
     files[f"{SCRIPT_DIR}/ready.nut"] = READY_SCRIPT
     if s.debug_log:
         files[f"{SCRIPT_DIR}/debug_{s.name}.nut"] = DEBUG_SCRIPT.replace("%INTERVAL%", f"{s.debug_interval:.1f}")
-    if s.director_enabled:
+    if s.director_enabled and s.game_mode != "SURVIVAL":
         files[f"scripts/vscripts/{director_input_script(s.name, 'director')}.nut"] = director_script(ir)
-    if s.autotest:
+    if s.autotest and s.game_mode == "CAMPAIGN":
         from .autotest import autotest_script, plan_route, start_door
         route, _ = plan_route(ir)
         files[f"{SCRIPT_DIR}/autotest_{s.name}.nut"] = autotest_script(route, s.name, start_door(ir))

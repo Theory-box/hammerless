@@ -794,12 +794,13 @@ def test_graph_from_outputs_keeps_delay_and_once():
     before, _log = export()
     assert before
     bpy.ops.hammerless.logic_from_outputs()
-    tree = next(t for t in bpy.data.node_groups if t.bl_idname == "HL_LogicTree")
-    assert tree.use_fake_user and tree.scene_name == bpy.context.scene.name
-    kinds = sorted(n.bl_idname for n in tree.nodes)
-    if relay.hammerless.outputs:                               # no game definitions here: kept, not lost
+    if relay.hammerless.outputs:                               # unresolved target: kept, not lost
         assert len(relay.hammerless.outputs) == 1
+        assert not relay.hammerless.behaviours
         return
+    tree = relay.hammerless.behaviours[0].graph
+    assert tree.use_fake_user and tree.is_behaviour
+    kinds = sorted(n.bl_idname for n in tree.nodes)
     assert "HL_NodeDelay" in kinds and "HL_NodeOnce" in kinds, kinds
     delay = next(n for n in tree.nodes if n.bl_idname == "HL_NodeDelay")
     assert abs(delay.seconds - 3.0) < 1e-6

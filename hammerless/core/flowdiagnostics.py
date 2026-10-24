@@ -1,8 +1,14 @@
 """Actionable messages for measured game flow, without guessing an obstruction location."""
 
 
-def message(report):
+def message(report, game_mode="CAMPAIGN"):
     state = report["state"]
+    if state == "arenaok":
+        return "INFO", "In game: Survival start connects to battlefield/finale nav. Spawn availability still depends on visibility, distance and active game rules."
+    if state in ("noarena", "arenabroken"):
+        return "ERROR", ("Survival needs connected BATTLEFIELD and FINALE nav. Resize the Survival Arena region over the playable floors, check its connections to Player Start, and rebuild nav.")
+    if game_mode == "SURVIVAL" and state in ("noexit", "noend", "broken"):
+        return "INFO", "This is a campaign flow result. Build & Play in Survival for an arena connectivity check; Survival does not need an end safe room."
     if state == "ok":
         return "INFO", f"In game: Director flow works ({report['length']:.0f} units). This confirms the route, not the number of infected."
     messages = {

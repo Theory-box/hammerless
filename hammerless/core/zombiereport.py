@@ -55,9 +55,15 @@ class ZombieReport:
 
 
 def analyse(mesh, horde_min: float = 90.0, horde_max: float = 180.0, hordes_off: bool = False,
-            wanderers_off: bool = False) -> ZombieReport:
+            wanderers_off: bool = False, game_mode: str = "CAMPAIGN") -> ZombieReport:
     r = ZombieReport()
     if not mesh.areas:
+        return r
+    if game_mode == "SURVIVAL":
+        arena = [a for a in mesh.areas if a.spawn_attributes & 320 == 320]
+        if not arena:
+            r.rows.append(("WARNING", "No BATTLEFIELD + FINALE arena nav. Resize a Survival Arena region over the floors and rebuild nav.", None))
+        r.rows.append(("INFO", "Survival uses the game's timed attacks, not campaign wanderer density. Use the spawn-candidate view from the 3D cursor to inspect approaches; press the Survival Start Button in game.", None))
         return r
     by = mesh.by_id()
     centre = {a.id: a.centre for a in mesh.areas}

@@ -1,0 +1,13 @@
+# Survival authoring and campaign-assumption audit
+
+Map > Game Mode now selects Campaign or stock Survival. Build & Play writes the launch mode with the map. Custom HUD/mutation overrides are currently Campaign-only and produce an explicit error in Survival; personal points and wall purchases use ordinary entity scripts and remain supported.
+
+For Survival, add **Survival Start Button** from Events and **Survival Arena** from Volumes. Resize the arena region over playable floors and infected approaches (BATTLEFIELD + FINALE). Keep a Player Start on connected floor nav. Add/position Zombie Spawn Areas as appropriate, then rebuild nav with analysis. Press the button in game to start the native Survival round. No custom wave controller is generated.
+
+The spawn view shows potential areas relative to Player Start or the 3D cursor. It checks directed connectivity toward survivors, NO_MOBS, estimated distance, and analyzed visibility. It is not a wave simulation or a guarantee of spawning: runtime rules, doors/blockers and other survivors can alter the result. The 550-unit warning is an estimate, not a measured Survival-specific exclusion radius. Campaign wanderer counts and route-progress previews are not reused in Survival.
+
+Audit covered launch/export, scene settings, map validation, ready-script diagnostics, nav reports, spawn preview, Director overrides, campaign transitions and automated bot walkthrough. Safe-room requirements and next-map fallback are Campaign-only. Stock Survival suppresses campaign Director overrides and the campaign route walkthrough. Runtime readiness checks the actual base game mode and reports arena connectivity separately from campaign flow. Actual authored transition entities still receive structural validation.
+
+Future mode work: Versus, Scavenge, Realism and custom mutations need their own policies and setup, not aliases for Survival. Imported maps do not infer the desired launch mode; choose it in Map. Campaign-specific logic nodes/examples (route progress, safe-room events, campaign walk-through) remain campaign-specific; this change does not promise equivalent events in every mode.
+
+Validation: five Survival unit cases pass, plus Blender registration/mode switching/preset creation and directed spawn-connectivity checks. The saved café map reopens and extracts with no errors and exports the Survival mode/start output. Full unit run: 318 tests, two failures and one skip. Failures are TestVisCompiler.test_falls_back_to_valve (mock fallback produces no BSP for verification) and TestChildKill.test_tied_child_dies_with_parent (expected free process not observed alive). No in-game Survival wave test was performed in this change.

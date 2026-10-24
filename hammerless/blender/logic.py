@@ -72,7 +72,7 @@ class HL_ObjectSocket(bpy.types.NodeSocket):
     value: PointerProperty(type=bpy.types.Object, name="Object")
 
     def draw(self, context, layout, node, text):
-        if self.is_output or self.is_linked:
+        if self.is_output or self.is_linked or self.hide_value:
             layout.label(text=text)
         else:
             layout.prop(self, "value", text="")
@@ -92,7 +92,7 @@ class HL_FloatSocket(bpy.types.NodeSocket):
     value: FloatProperty(name="Value", default=0.0)
 
     def draw(self, context, layout, node, text):
-        if self.is_output or self.is_linked:
+        if self.is_output or self.is_linked or self.hide_value:
             layout.label(text=text)
         else:
             layout.prop(self, "value", text=text)
@@ -113,7 +113,7 @@ class HL_IntSocket(bpy.types.NodeSocket):
     value: IntProperty(name="Value", default=0)
 
     def draw(self, context, layout, node, text):
-        if self.is_output or self.is_linked:
+        if self.is_output or self.is_linked or self.hide_value:
             layout.label(text=text)
         else:
             layout.prop(self, "value", text=text)
@@ -133,7 +133,7 @@ class HL_BoolSocket(bpy.types.NodeSocket):
     value: BoolProperty(name="Value", default=False)
 
     def draw(self, context, layout, node, text):
-        if self.is_output or self.is_linked:
+        if self.is_output or self.is_linked or self.hide_value:
             layout.label(text=text)
         else:
             layout.prop(self, "value", text=text)
@@ -1056,6 +1056,53 @@ class HL_NodeDirectorSettings(_Node, bpy.types.Node):
 
 # ---------------------------------------------------------------- Values
 
+from . import exposed
+_EXPOSED_SLOT = [None]
+
+
+class HL_NodeExposedSetting(_Node, bpy.types.Node):
+    """A graph-defined control shown on each object's Behaviour panel; wires carry that object's value"""
+    bl_idname, bl_label, bl_icon = "HL_NodeExposedSetting", "Exposed Setting", "PREFERENCES"
+    kind, category = "EXPOSED_VALUE", "Values"
+    setting_id: StringProperty(options={'HIDDEN'})
+    ui_name: StringProperty(name="Label", default="Setting", update=exposed.schema_changed)
+    value_type: EnumProperty(name="Type", default="FLOAT", update=exposed.type_changed, items=[
+        ("FLOAT","Number",""), ("INT","Integer",""), ("BOOL","Checkbox",""), ("TEXT","Text",""),
+        ("ENUM","Dropdown",""), ("VECTOR","Vector",""), ("COLOR","Color","")])
+    choices: StringProperty(name="Choices", default="one=One; two=Two",
+                            description="Stable ID=Label pairs separated by semicolons. Keep IDs when renaming or reordering choices",
+                            update=exposed.schema_changed)
+    default_number: FloatProperty(name="Default", update=exposed.schema_changed)
+    default_integer: IntProperty(name="Default", update=exposed.schema_changed)
+    default_boolean: BoolProperty(name="Default", update=exposed.schema_changed)
+    default_text: StringProperty(name="Default / Choice ID", default="one", update=exposed.schema_changed)
+    default_vector: FloatVectorProperty(name="Default", size=3, update=exposed.schema_changed)
+    default_color: FloatVectorProperty(name="Default", size=3, subtype='COLOR', default=(1,1,1), min=0,max=1,update=exposed.schema_changed)
+
+    def init(self,context):
+        self.setting_id=exposed.uuid.uuid4().hex
+        super().init(context)
+        exposed.sync_all()
+
+    def copy(self,node):
+        # A new node in one graph is a new setting; a copied graph retains its interface IDs.
+        self.setting_id=exposed.uuid.uuid4().hex if self.id_data==node.id_data else node.setting_id
+        exposed.sync_all()
+
+    def make_sockets(self):
+        kind={'FLOAT':'num','INT':'num','BOOL':'bool','TEXT':'text','ENUM':'text','VECTOR':'vec','COLOR':'vec'}[self.value_type]
+        _data_socket(self.outputs,kind,'value','Value')
+
+    def draw_buttons(self,context,layout):
+        layout.prop(self,'ui_name');layout.prop(self,'value_type')
+        if self.value_type=='ENUM':layout.prop(self,'choices')
+        layout.prop(self,'default_'+('text' if self.value_type=='ENUM' else exposed.FIELDS[self.value_type]))
+
+    def to_lnode(self,context):
+        kind={'FLOAT':'num','INT':'num','BOOL':'bool','TEXT':'text','ENUM':'text','VECTOR':'vec','COLOR':'vec'}[self.value_type]
+        return LNode(self.name,'EXPOSED_VALUE',{'type':kind,'value':exposed.resolve(self,_EXPOSED_SLOT[0])})
+
+
 class HL_NodeValue(_Node, bpy.types.Node):
     """A number to share between nodes"""
     bl_idname, bl_label, bl_icon = "HL_NodeValue", "Value", "DRIVER_TRANSFORM"
@@ -1251,7 +1298,7 @@ class HL_TextSocket(bpy.types.NodeSocket):
     value: StringProperty(name="Value", default="")
 
     def draw(self, context, layout, node, text):
-        if self.is_output or self.is_linked:
+        if self.is_output or self.is_linked or self.hide_value:
             layout.label(text=text)
         else:
             layout.prop(self, "value", text=text)
@@ -1271,7 +1318,7 @@ class HL_VectorSocket(bpy.types.NodeSocket):
     value: FloatVectorProperty(name="Value", size=3, default=(0.0, 0.0, 0.0))
 
     def draw(self, context, layout, node, text):
-        if self.is_output or self.is_linked:
+        if self.is_output or self.is_linked or self.hide_value:
             layout.label(text=text)
         else:
             col = layout.column(align=True)
@@ -1293,7 +1340,7 @@ class HL_ThingSocket(bpy.types.NodeSocket):
     value: PointerProperty(type=bpy.types.Object, name="Object")
 
     def draw(self, context, layout, node, text):
-        if self.is_output or self.is_linked:
+        if self.is_output or self.is_linked or self.hide_value:
             layout.label(text=text)
         else:
             layout.prop(self, "value", text=text)
@@ -1612,6 +1659,122 @@ class HL_NodeForEach(_Block, bpy.types.Node):
 SCOPE_ITEMS = [("MAP", "Map", "One value for the whole map"), ("PLAYER", "Per Player", "A value for each player (or each entity wired into Player: a prop, an infected)"),
                ("GROUP", "This Group Copy", "Inside a node group: a value for each Group node using it (outside a "
                                             "group: the same as Map)")]
+
+
+from ..core.wall_weapon import ITEMS as PURCHASE_ITEMS
+_PURCHASE_CHOICES = [("AUTO", "Auto from Display Model", "Infer the purchase from the display's world model", 0),
+                     ("CUSTOM", "Custom Item", "GiveItem ID and inventory confirmation for custom items", 1)] + [
+    (key, value["title"], key, value["enum_id"]) for key, value in sorted(PURCHASE_ITEMS.items())]
+
+
+class HL_NodeWallWeapon(_Block, bpy.types.Node):
+    """Sell a carried weapon or item for personal points using any display prop"""
+    bl_idname, bl_label, bl_icon = "HL_NodeWallWeapon", "Purchase", "PROPERTIES"
+    item: EnumProperty(name="Item to Give", items=_PURCHASE_CHOICES, default="AUTO", update=exposed.preview_node_changed)
+    custom_item: StringProperty(name="Item ID", description="GiveItem name, e.g. rifle_ak47; inventory items only")
+    inventory_class: StringProperty(name="Inventory Class", description="Optional confirmation classname; normally weapon_ plus Item ID")
+    inventory_model: StringProperty(name="Inventory Model", description="Optional model to distinguish custom melee weapons in the same inventory class")
+    title: StringProperty(name="Display Name", description="Optional name shown in the purchase prompt")
+    kind = "WALL_WEAPON"
+    preview_label = "Match Model to Item"
+
+    def update_owner_preview(self,owner,slot,setting_id=None):
+        # Never follow a reference and rewrite another object's display.
+        display=next((s for s in self.inputs if s.identifier=='object'),None)
+        if display is None:return
+        if display.is_linked:
+            sources=_sources(display)
+            if len(sources)!=1 or sources[0][0].bl_idname!='HL_NodeSelf':return
+        elif display.value!=owner:return
+        if owner.type!='MESH' or owner.mode!='OBJECT':return
+        item=self.item
+        sock=next((s for s in self.inputs if s.identifier=='item'),None)
+        if sock is not None and sock.is_linked:
+            sources=_sources(sock)
+            if len(sources)!=1 or sources[0][0].bl_idname!='HL_NodeExposedSetting':return
+            if setting_id is not None and sources[0][0].setting_id!=setting_id:return
+            item=exposed.resolve(sources[0][0],slot)
+        elif setting_id is not None:return
+        if item in ('AUTO','CUSTOM'):return
+        data=PURCHASE_ITEMS.get(item)
+        if data is None:return
+        model=data['model']
+        kv=next((k for k in owner.hammerless.keyvalues if k.key=='model'),None)
+        if kv is not None and kv.value.replace('\\','/').lower()==model:return
+        from .ops import preview_mesh,style_entity_object
+        scene=next((s for s in owner.users_scene if s==bpy.context.scene),None)
+        if scene is None:return
+        mesh=preview_mesh('prop_dynamic_override',scene.hammerless.units_per_meter,model)
+        # Assign a mesh pointer only to this object, never edit the shared mesh in place.
+        owner.data=mesh
+        if kv is None:kv=owner.hammerless.keyvalues.add();kv.key='model'
+        kv.value=model
+        style_entity_object(owner)
+
+    price: IntProperty(name="Price", default=500, min=0, max=1000000)
+    reach: IntProperty(name="Use Range", default=96, min=32, max=256,
+                       description="Maximum distance in game units")
+
+    def make_sockets(self):
+        self.inputs.new("HL_ObjectSocket", "Display Object", identifier="object")
+        self.data_in('text','item','Item').hide_value=True
+        self.data_in('num','price','Price').hide_value=True
+        self.data_in('text','title','Display Name').hide_value=True
+        self.data_in('num','range','Use Range').hide_value=True
+
+    def draw_buttons(self, context, layout):
+        row=layout.row()
+        sock=next((s for s in self.inputs if s.identifier=='item'),None)
+        row.enabled=sock is None or not sock.is_linked
+        row.prop(self,"item")
+        if self.item == "CUSTOM":
+            layout.prop(self, "custom_item")
+            layout.prop(self, "inventory_class")
+            layout.prop(self, "inventory_model")
+        for prop,ident in (("title","title"),("price","price"),("reach","range")):
+            row=layout.row()
+            sock=next((s for s in self.inputs if s.identifier==ident),None)
+            row.enabled=sock is None or not sock.is_linked
+            row.prop(self,prop)
+        layout.label(text="Requires Personal Points")
+
+    def settings(self):
+        return {"price": self.price, "range": self.reach, "item": self.item, "custom_item": self.custom_item,
+                "inventory_class": self.inventory_class, "inventory_model": self.inventory_model, "title": self.title}
+
+    def to_lnode(self, context):
+        n = self.with_object(context, super().to_lnode(context))
+        from .preview import purchase_display_transform
+        transform = purchase_display_transform(self.object_from("object"), context)
+        if transform is not None:
+            n.settings["display_transform"] = transform
+        return n
+
+
+class HL_NodePersonalPoints(_Block, bpy.types.Node):
+    """Personal kill points for human survivors; one controller per map. Type !points in chat"""
+    bl_idname, bl_label, bl_icon = "HL_NodePersonalPoints", "Personal Points", "PROPERTIES"
+    kind = "PERSONAL_POINTS"
+    starting: IntProperty(name="Starting Points", default=0, min=0, max=1000000)
+    common: IntProperty(name="Common Kill", default=10, min=0, max=1000000)
+    special: IntProperty(name="Special Kill", default=50, min=0, max=1000000)
+    tank: IntProperty(name="Tank Kill", default=500, min=0, max=1000000)
+    witch: IntProperty(name="Witch Kill", default=250, min=0, max=1000000)
+    feedback: BoolProperty(name="Show Earned Points", default=True,
+                           description="Show a private centre-screen message to the killer")
+
+    def make_sockets(self):
+        pass
+
+    def draw_buttons(self, context, layout):
+        for key in ("starting", "common", "special", "tank", "witch", "feedback"):
+            layout.prop(self, key)
+        layout.label(text="Chat: !points")
+        layout.label(text="Resets each round")
+
+    def settings(self):
+        return {key: getattr(self, key) for key in
+                ("starting", "common", "special", "tank", "witch", "feedback")}
 
 
 class HL_NodeSetVariable(_Block, bpy.types.Node):
@@ -2130,7 +2293,7 @@ COMBAT_CLASSES = (HL_NodeTrace, HL_NodeDamage, HL_NodePush, HL_NodeAimAt, HL_Nod
                   HL_NodeParticle, HL_NodeSeenBy, HL_NodeFindNearby, HL_NodePlayerView)
 
 
-BLOCK_CLASSES = (HL_NodeForEach, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeMakeTable, HL_NodeGetField,
+BLOCK_CLASSES = (HL_NodeForEach, HL_NodeWallWeapon, HL_NodePersonalPoints, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeMakeTable, HL_NodeGetField,
                  HL_NodeFormatText, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, HL_NodeCheck,
                  HL_NodePickValue, HL_NodeTextCheck, HL_NodeSplitText, HL_NodeFireInput, HL_NodeScriptCode, HL_NodeScriptValue) + COMBAT_CLASSES
 
@@ -2526,7 +2689,7 @@ DIRECTOR_CLASSES = (HL_NodeDirectorOption, HL_NodeDirectorMood, HL_NodeHudText, 
 CATEGORIES = [
     ("Events", [HL_NodeMapStart, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton, HL_NodeTimer]),
     ("Values", [HL_NodeProgress, HL_NodeRandomValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath,
-                HL_NodeInfectedCount, HL_NodeValue]),
+                HL_NodeInfectedCount, HL_NodeValue, HL_NodeExposedSetting]),
     ("Scene", [HL_NodeObjectInfo, HL_NodeSelf, HL_NodeObject, HL_NodeCollision]),
     ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
               HL_NodeCounter, HL_NodeRandom]),
@@ -2546,17 +2709,17 @@ MENU_LAYOUT = [
                 (SUB, "HL_MT_logic_game_events", "All Game Events", "LIGHT")]),
     ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
               HL_NodeCounter, HL_NodeRandom, None, HL_NodeForEach]),
-    ("Values", [HL_NodeValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath, HL_NodeRandomValue, HL_NodeProgress,
+    ("Values", [HL_NodeExposedSetting, HL_NodeValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath, HL_NodeRandomValue, HL_NodeProgress,
                 HL_NodeInfectedCount, None, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeFormatText, HL_NodeTextCheck, HL_NodeSplitText,
                 HL_NodeCheck, HL_NodePickValue, None, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, None,
                 HL_NodeMakeTable, HL_NodeGetField]),
     ("Scene", [HL_NodeObjectInfo, HL_NodeSelf, HL_NodeObject, HL_NodeCollision, None, HL_NodeGetProperty]),
-    ("Actions", [HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
+    ("Actions", [HL_NodeWallWeapon, HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
                  HL_NodeTeleport, HL_NodeFireInput, HL_NodeSetProperty, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
     ("Combat & Physics", [HL_NodeTrace, HL_NodeSeenBy, HL_NodeFindNearby, HL_NodePlayerView, None, HL_NodeDamage,
                           HL_NodePush, HL_NodeAimAt, None, HL_NodeExplosion, HL_NodeBeam, HL_NodeParticle]),
     ("Director", [HL_NodeDirector, HL_NodeDirectorSettings, HL_NodeDirectorOption, HL_NodeDirectorMood]),
-    ("HUD & Messages", [HL_NodeMessage, HL_NodeObjective, None, HL_NodeHudText, HL_NodeHudHide]),
+    ("HUD & Messages", [HL_NodeMessage, HL_NodeObjective, None, HL_NodeHudText, HL_NodeHudHide, HL_NodePersonalPoints]),
     ("Overrides", [HL_NodeOverride, HL_NodeOverrideAnswer]),
     ("Script", [HL_NodeScriptCode, HL_NodeScriptValue]),
 ]
@@ -2723,7 +2886,7 @@ def refresh_entity_node(node) -> None:
 
 
 # nodes that act on the whole map: in a Behaviour they'd run once per object using it (a warning says so)
-MAP_WIDE_KINDS = ("DIRECTOR_OPTION", "DIRECTOR_SETTINGS", "HUD_TEXT", "HUD_HIDE", "CRESCENDO", "OBJECTIVE")
+MAP_WIDE_KINDS = ("DIRECTOR_OPTION", "DIRECTOR_SETTINGS", "HUD_TEXT", "HUD_HIDE", "CRESCENDO", "OBJECTIVE", "PERSONAL_POINTS")
 
 
 def compile_logic(context, ir, report) -> None:
@@ -2753,7 +2916,7 @@ def compile_logic(context, ir, report) -> None:
         elif b.name not in in_map or collection_role(b) == "IGNORE":
             report.info.append(f"Logic graph '{tree.name}': its brain '{b.name}' isn't in the map, so it's off")
             continue
-        jobs.append((tree, b, False))
+        jobs.append((tree, b, None))
     # Behaviours: each object's graphs, built once for that object (Self = it), always under their own names
     from .extract import effective_role
     from .mapcollection import map_objects
@@ -2763,9 +2926,10 @@ def compile_logic(context, ir, report) -> None:
             continue                                # (not part of the map: nor is its logic)
         for slot in obj.hammerless.behaviours:
             if slot.graph is not None:
-                jobs.append((slot.graph, obj, True))
+                jobs.append((slot.graph, obj, slot))
     done_shared = set()
-    for tree, owner, behaviour in jobs:
+    for tree, owner, slot in jobs:
+        behaviour = slot is not None
         if behaviour and tree.get("hl_light_preset"):
             from .lightpresets import shared_name
             if shared_name(owner):
@@ -2773,9 +2937,14 @@ def compile_logic(context, ir, report) -> None:
                     continue
                 done_shared.add(tree.name)
         _SELF_OWNER[0], _SELF_ISOLATE[0] = owner, behaviour
+        _EXPOSED_SLOT[0] = slot
         try:   # (Group nodes inlined; a world graph keeps the names it always had)
             flat = flatten(context, tree, report, prefix=f"{owner.name}/" if behaviour else "")
+        except ValueError as error:
+            report.errors.append(f"Behaviour settings in '{tree.name}': {error}")
+            continue
         finally:
+            _EXPOSED_SLOT[0] = None
             _SELF_OWNER[0], _SELF_ISOLATE[0] = None, False
         nodes = flat.nodes
         if behaviour:

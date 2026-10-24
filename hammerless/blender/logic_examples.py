@@ -733,12 +733,30 @@ def main_tree(context):
     return (mine or trees or [None])[0] or new_tree(context)
 
 
+class ExampleRegistrationError(RuntimeError):
+    """The on-disk examples require node types absent from this Blender session."""
+
+
+def check_example_registration(index):
+    ex = all_examples()[index]
+    specs = list(ex.get("nodes", []))
+    for group in ex.get("groups", {}).values():
+        specs.extend(group.get("nodes", []))
+    missing = sorted({spec["type"] for spec in specs
+                      if bpy.types.Node.bl_rna_get_subclass_py(spec["type"]) is None})
+    if missing:
+        raise ExampleRegistrationError(
+            "This example needs addon node types that are not loaded. Save your work, fully close and restart "
+            "Blender, then add the example again. Nothing was added. Missing: " + ", ".join(missing))
+
+
 def build_example(context, index: int, problems: list | None = None, into=None):
     """Make example number index (0-based): its nodes, notes and objects. Returns the tree. into: the graph to add it
     to (inside a frame named after it, right of what's there); None: a graph of its own (the in-game regression
     builds every example that way). Sockets that aren't there (an entity's events need the game's definitions) go
     into problems."""
     problems = problems if problems is not None else []
+    check_example_registration(index)
     ex = all_examples()[index]
     number = index + 1
     title = f"Example {number:02d}: {ex['title']}"
@@ -803,6 +821,11 @@ class HL_OT_logic_example(bpy.types.Operator):
 
     def execute(self, context):
         if not 0 <= self.index < len(all_examples()):
+            return {"CANCELLED"}
+        try:
+            check_example_registration(self.index)
+        except ExampleRegistrationError as error:
+            self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
         problems = []
         tree = build_example(context, self.index, problems, into=main_tree(context))

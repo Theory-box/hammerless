@@ -98,10 +98,12 @@ def store_flow(report: dict) -> None:
     for n in reversed(range(len(s.problems))):
         if s.problems[n].kind == "flow":
             s.problems.remove(n)
-    severity, text = message(report)
+    severity, text = message(report, s.game_mode)
+    headline = text.split(". ")[0]
     s["ingame_flow"] = (f"In game: Director flow works ({report['length']:.0f} units)"
-                         if report["state"] == "ok" else "In game: " + text.split(". ")[0])
-    if report["state"] != "ok":
+                         if report["state"] == "ok" else
+                         headline if headline.startswith("In game:") else "In game: " + headline)
+    if report["state"] not in ("ok", "arenaok"):
         item = s.problems.add()
         item.name, item.severity, item.ingame, item.kind = text, severity, True, "flow"
         # A nearest reached area is not the obstruction. Never send users to an arbitrary dead end.
@@ -128,10 +130,9 @@ def store_nav(context, mesh, rep, predicted: bool = False) -> None:
     by = mesh.by_id()
     rows = []
     if not rep.start:
-        rows.append(("ERROR", "The nav has no start safe room (no area is marked as the start): add a Start "
-                     "Safe Room, or check its box covers the room's floor", None))
+        rows.append(("ERROR", "The nav has no PLAYER_START area. Place a Player Start over connected floor nav, or mark its floor with a PLAYER_START Nav Attribute Region, then rebuild nav", None))
     if rep.end and not rep.end_reached and rep.break_area is not None:
-        rows.append(("ERROR", PREDICTED_BROKEN if predicted else INGAME_BROKEN, None))
+        rows.append(("ERROR", "The start cannot reach the Survival arena. Check floor nav and connections" if s.game_mode == "SURVIVAL" else (PREDICTED_BROKEN if predicted else INGAME_BROKEN), None))
     goal = None
     if rep.end:
         goal = tuple(sum(by[e].centre[i] for e in rep.end) / len(rep.end) for i in range(3))
@@ -148,9 +149,9 @@ def store_nav(context, mesh, rep, predicted: bool = False) -> None:
                      "(player clip, a sloped or skybox top) or connect it", centre))
     # why there may be few zombies (core/zombiereport.py: the Director's measured rules)
     from ..core.zombiereport import analyse as zombie_report
-    custom = s.director_enabled
+    custom = s.director_enabled and s.game_mode == "CAMPAIGN"
     zr = zombie_report(mesh, s.dir_mob_interval_min if custom else 90, s.dir_mob_interval_max if custom else 180,
-                       hordes_off=custom and s.dir_no_mobs, wanderers_off=custom and s.dir_no_wanderers)
+                       hordes_off=custom and s.dir_no_mobs, wanderers_off=custom and s.dir_no_wanderers, game_mode=s.game_mode)
     for severity, msg, loc in zr.rows:
         rows.append(("WARNING" if severity == "WARNING" else "INFO", "Zombies: " + msg, loc))
     for spot, dz in rep.dead_ledges[:12]:

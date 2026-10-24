@@ -197,6 +197,9 @@ def launch(context, root, nav_written: bool = False, analyzed: bool = False) -> 
     already analyzed: then the game just loads the map)."""
     s = context.scene.hammerless
     tools = cc.Tools(root)
+    deployed_mode = cc.map_mode(tools, s.map_name)
+    if (deployed_mode == "survival") != (s.game_mode == "SURVIVAL"):
+        raise RuntimeError("Game Mode differs from the last build. Use Build & Play to export and launch the selected mode.")
     cc.verify_deployed_bsp(os.path.join(work_dir(context), s.map_name + ".bsp"),
                            os.path.join(tools.maps_dir, s.map_name + ".bsp"))
     generate = False if nav_written else needs_nav(context, root, by_game=True)
@@ -305,8 +308,9 @@ def map_text(ir, content, base, rep):
             ir.settings.skyname = name
             if base is not None:
                 world = base[1]
-                world.items = [x for x in world.items if not (isinstance(x, tuple) and x[0].lower() == 'skyname')]
-                world.kv('skyname', name)
+                if world.get('skyname') != name:
+                    world.items = [x for x in world.items if not (isinstance(x, tuple) and x[0].lower() == 'skyname')]
+                    world.kv('skyname', name)
         except (OSError, ValueError) as ex:
             rep.errors.append(f'Sky brightness could not be exported: {ex}')
             return ir, None, rep

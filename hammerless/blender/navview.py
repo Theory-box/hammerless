@@ -170,7 +170,21 @@ def spawn_reasons(mesh, viewer=None) -> dict:
     import heapq
     import math
     by = mesh.by_id()
-    sources = survivor_areas(mesh, viewer)
+    survival = bpy.context.scene.hammerless.game_mode == "SURVIVAL"
+    sources = ([viewer] if viewer is not None else [a for a in mesh.areas if a.spawn_attributes & PLAYER_START]) if survival else survivor_areas(mesh, viewer)
+    # Follow directed links backwards: an infected must be able to reach the survivors,
+    # including one-way drops. Use the same ladder/elevator links as connectivity analysis.
+    incoming = {i: set() for i in by}
+    rep = _state["report"] if mesh is _state["mesh"] else analyse(mesh)
+    for link in rep.links:
+        incoming[link.b].add(link.a)
+    reaches = {a.id for a in sources}
+    pending = list(reaches)
+    while pending:
+        for i in incoming[pending.pop()]:
+            if i not in reaches:
+                reaches.add(i)
+                pending.append(i)
     dist = {a.id: 0.0 for a in sources}
     heap = [(0.0, a.id) for a in sources]
     while heap:
@@ -178,7 +192,8 @@ def spawn_reasons(mesh, viewer=None) -> dict:
         if d > dist[i] or d > SPAWN_SAFETY_RANGE:
             continue
         a = by[i]
-        for side in a.connections:
+        sides = [incoming[i]] if survival else a.connections
+        for side in sides:
             for j in side:
                 b = by.get(j)
                 if b is not None:
@@ -192,11 +207,11 @@ def spawn_reasons(mesh, viewer=None) -> dict:
         seen.update(k for k, v in lists.get(s.id, {}).items() if v)
     out = {}
     for a in mesh.areas:
-        if a.spawn_attributes & EMPTY:
+        if (survival and (a.spawn_attributes & NO_MOBS or a.id not in reaches)) or (not survival and a.spawn_attributes & EMPTY):
             out[a.id] = "no_spawn"
         elif dist.get(a.id, 1e18) < SPAWN_SAFETY_RANGE:
             out[a.id] = "too_close"
-        elif a.id in seen:
+        elif a.id in seen and not (survival and a.spawn_attributes & (OBSCURED | 512)):
             out[a.id] = "in_view"
         else:
             out[a.id] = "can_spawn"
@@ -215,12 +230,12 @@ def _area_color(a, rep, mode, viewer=None, reasons=None):
         return {1: COLORS["seen_partly"], 2: COLORS["seen_complete"], 3: COLORS["seen_both"]}.get(v, COLORS["unseen"])
     if mode == "WHY" and viewer is not None and a.id == viewer.id:
         return COLORS["viewer"]
+    if mode == "WHY":
+        return COLORS[reasons.get(a.id, "no_spawn")] if reasons else COLORS["plain"]
     if a.spawn_attributes & PLAYER_START:
         return COLORS["start"]
     if a.spawn_attributes & CHECKPOINT:
         return COLORS["end"]
-    if mode == "WHY":
-        return COLORS[reasons.get(a.id, "can_spawn")] if reasons else COLORS["plain"]
     if mode == "REACH":
         return COLORS["reach"] if a.id in rep.reachable else COLORS["unreach"]
     if mode == "AHEAD":
@@ -342,19 +357,21 @@ def _draw():
     s = bpy.context.scene.hammerless
     if not s.show_nav or _state["mesh"] is None or _state["owner"] != _owner():
         return                  # (a nav of another scene, map or file isn't drawn)
-    use_cursor = s.nav_color_mode == "VIS" or (s.nav_color_mode == "WHY" and s.spawn_from == "CURSOR")
+    survival = s.game_mode == "SURVIVAL"
+    mode = "WHY" if survival and (s.show_zombie_spawns or s.nav_color_mode == "AHEAD") else s.nav_color_mode
+    use_cursor = mode == "VIS" or (mode == "WHY" and s.spawn_from == "CURSOR")
     viewer = cursor_area(s.units_per_meter) if use_cursor else None
-    key = (s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer.id if viewer else None,
+    key = (s.game_mode, s.units_per_meter, mode, s.show_nav_links, s.show_hiding_spots, viewer.id if viewer else None,
            s.spawn_from, s.show_zombie_spawns, s.zombie_seed, round(s.zombie_progress, 3),
            s.dir_common_limit if s.director_enabled else 30)
     if _state["batches"] is None or _state["key"] != key:
         plan = None
-        if s.show_zombie_spawns:
+        if s.show_zombie_spawns and not survival:
             from ..core.spawnsim import simulate
             plan = simulate(_state["mesh"], s.zombie_seed, s.zombie_progress,
                             common_limit=s.dir_common_limit if s.director_enabled else 30)
         _state["zombies"] = plan
-        _state["batches"] = _build(s.units_per_meter, s.nav_color_mode, s.show_nav_links, s.show_hiding_spots, viewer,
+        _state["batches"] = _build(s.units_per_meter, mode, s.show_nav_links, s.show_hiding_spots, viewer,
                                    plan)
         _state["key"] = key
     gpu.state.blend_set("ALPHA")
@@ -492,11 +509,11 @@ class HL_OT_nav_predict(bpy.types.Operator):
             self.report({"WARNING"}, problem)
         rep = _state["report"]
         if not rep.end:
-            self.report({"INFO"}, f"Built {rep.total} nav areas (no end safe room to check the path)")
+            self.report({"INFO"}, f"Built {rep.total} nav areas (no endpoint-marked nav to check)")
         elif rep.end_reached:
             self.report({"INFO"}, f"Built {rep.total} nav areas: the path from start to end works")
         else:
-            self.report({"WARNING"}, "Navmesh: survivors can't reach the end safe room (see the marker)")
+            self.report({"WARNING"}, "Navmesh: survivors cannot reach the marked destination areas")
         return {"FINISHED"}
 
 
@@ -936,7 +953,11 @@ def draw_panel(layout, context):
         return
     box = layout.box()
     col = box.column(align=True)
-    if not rep.end:
+    if s.game_mode == "SURVIVAL":
+        arena = [a for a in _state["mesh"].areas if a.spawn_attributes & 320 == 320]
+        connected = sum(a.id in rep.reachable for a in arena)
+        col.label(text=f"Survival arena: {connected}/{len(arena)} areas reachable from start", icon="INFO")
+    elif not rep.end:
         col.label(text="No end-room-marked nav areas", icon="INFO")
     elif rep.end_reached:
         far = max((rep.distance[e] for e in rep.end if e in rep.distance), default=0)
@@ -958,15 +979,20 @@ def draw_panel(layout, context):
     col.label(text=f"{drops} drops, {jumps} jumps / climbs, {len(_state['mesh'].ladders)} ladders", icon="BLANK1")
     col = layout.column(align=True)
     col.prop(s, "nav_color_mode", text="")
-    if s.nav_color_mode == "WHY":
+    if s.nav_color_mode == "WHY" or s.game_mode == "SURVIVAL":
         col.prop(s, "spawn_from")
     row = col.row(align=True)
     row.prop(s, "show_nav_links", toggle=True)
     row.prop(s, "show_hiding_spots", toggle=True)
     row.prop(s, "nav_xray", toggle=True)
     zbox = layout.box()
-    zbox.prop(s, "show_zombie_spawns", icon="GHOST_ENABLED")
-    if s.show_zombie_spawns:
+    zbox.prop(s, "show_zombie_spawns", text="Spawn candidates" if s.game_mode == "SURVIVAL" else "Zombie spawns", icon="GHOST_ENABLED")
+    if s.game_mode == "SURVIVAL":
+        zbox.label(text="Candidates on the nav, not predicted wave counts.")
+        zbox.label(text="Green: potential. Red: NO_MOBS or no route to survivors.")
+        zbox.label(text="Orange: within 550 units (distance estimate). Yellow: visible.")
+        zbox.label(text="Game rules and all survivors can change actual spawning.")
+    if s.show_zombie_spawns and s.game_mode != "SURVIVAL":
         row = zbox.row(align=True)
         row.prop(s, "zombie_seed")
         row.operator("hammerless.zombie_reroll", text="Reroll", icon="FILE_REFRESH")
@@ -994,7 +1020,15 @@ def draw_panel(layout, context):
         lines.append("(Build Nav Mesh with the analysis to also show what's in view)")
     elif s.nav_color_mode == "VIS" and cursor_area(s.units_per_meter) is None:
         lines.insert(0, "Put the 3D cursor on the nav (Shift + right-click) to see what's visible from there")
-    lines.append("Blue: start room. Purple: end room")
+    if s.game_mode == "SURVIVAL":
+        if s.show_zombie_spawns or s.nav_color_mode in ("WHY", "AHEAD"):
+            lines = ["Spawn candidates are estimated from the start or the 3D cursor."]
+            if not visibility_lists():
+                lines.append("Build Nav Mesh with analysis to account for visibility.")
+        else:
+            lines.append("Blue: player start. Purple: checkpoint.")
+    else:
+        lines.append("Blue: start room. Purple: end room")
     legend = layout.column(align=True)
     legend.scale_y = 0.8
     for i, line in enumerate(lines):

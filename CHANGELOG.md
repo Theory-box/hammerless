@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.12 (test release, 2026-10-23)
+
+- Add stock Survival mode, a native start button and arena regions, mode-aware validation, and navigation spawn-candidate visualization. Campaign remains the default.
+- Add Personal Kill Points and wall purchase examples, including a generic station with 48 weapon/item choices, private price prompts, balance checks and failed-delivery refunds.
+- Behaviours can expose numbers, text, checkboxes, colors, vectors and custom dropdowns in Selected Object. Overrides belong to each object; duplicated stations can share a graph while retaining independent settings.
+- Purchase displays update their Blender model when the item changes. Export compensates for the model's rigid idle-pose transform, keeping the in-game display aligned with Blender, including tilted placements. Custom displays can opt out.
+- Audit fixes: copy behaviour settings atomically and preserve the preview preference; ignore muted setting groups in the panel; retire stale in-game error results after scene edits; preserve unchanged imported sky key ordering.
+- Detect missing example node registrations before modifying the scene, with an actionable restart message.
+- Existing imported-map limitations remain documented in docs/knowledge/known-issues.md.
+
 ## 0.20.11 (test release, 2026-10-21)
 
 - Imported output conversion creates separate Behaviour graphs on the source objects. Selecting an original imported brush exposes its owning entity's settings and Behaviours without requiring Blender parenting. Imported entities participate in logic compilation, so graphs reuse the existing Director and entity blocks.

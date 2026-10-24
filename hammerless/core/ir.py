@@ -85,6 +85,7 @@ class Entity:
 @dataclass
 class MapSettings:
     name: str = "untitled"
+    game_mode: str = "CAMPAIGN"       # CAMPAIGN / SURVIVAL (Valve's stock rules)
     skyname: str = "sky_day01_09_hdr"
     detail_material: str = "detail/detailsprites_overgrown"
     detail_vbsp: str = "detail.vbsp"

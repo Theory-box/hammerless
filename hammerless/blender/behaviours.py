@@ -45,6 +45,35 @@ def _slot(context, index=None):
     return obj, (hs.behaviours[i] if 0 <= i < len(hs.behaviours) else None)
 
 
+class HL_OT_behaviour_refresh_settings(bpy.types.Operator):
+    bl_idname = 'hammerless.behaviour_refresh_settings'
+    bl_label = 'Refresh Behaviour Settings'
+    bl_options = {'REGISTER','UNDO'}
+    def execute(self,context):
+        from .exposed import sync_all
+        sync_all()
+        return {'FINISHED'}
+
+
+class HL_OT_behaviour_reset_setting(bpy.types.Operator):
+    bl_idname = 'hammerless.behaviour_reset_setting'
+    bl_label = 'Reset to Graph Default'
+    bl_options = {'REGISTER','UNDO'}
+    index: IntProperty(default=-1)
+    key: bpy.props.StringProperty()
+    def execute(self,context):
+        from .exposed import sync_slot
+        _,slot=_slot(context,self.index)
+        if slot is None:return {'CANCELLED'}
+        value=slot.values.get(self.key)
+        if value is None:return {'CANCELLED'}
+        value.overridden=False
+        sync_slot(slot)
+        from .exposed import update_preview
+        update_preview(slot,self.key)
+        return {'FINISHED'}
+
+
 class HL_OT_behaviour_new(bpy.types.Operator):
     bl_idname = "hammerless.behaviour_new"
     bl_label = "New Behaviour"
@@ -94,7 +123,10 @@ class HL_OT_behaviour_copy(bpy.types.Operator):
         for o in selected_entities(context):
             if o is obj or o.hammerless.preset or any(s.graph == slot.graph for s in o.hammerless.behaviours):
                 continue
-            o.hammerless.behaviours.add().graph = slot.graph
+            target=o.hammerless.behaviours.add()
+            target.graph=slot.graph
+            from .exposed import copy_values
+            copy_values(slot,target)
             n += 1
         self.report({"INFO"}, f"'{slot.graph.name}' on {n} more object{'s' if n != 1 else ''}")
         return {"FINISHED"}
@@ -250,6 +282,9 @@ class HL_PT_obj_behaviours(bpy.types.Panel):
         side.separator()
         side.operator("hammerless.behaviour_move", text="", icon="TRIA_UP").step = -1
         side.operator("hammerless.behaviour_move", text="", icon="TRIA_DOWN").step = 1
+        from .exposed import draw as draw_settings
+        for index,slot in enumerate(hs.behaviours):
+            draw_settings(layout,slot,index)
         if not hs.behaviours:
             col = layout.column(align=True)
             col.scale_y = 0.8
@@ -257,16 +292,20 @@ class HL_PT_obj_behaviours(bpy.types.Panel):
             col.label(text="its Self node is this object", icon="BLANK1")
 
 
-CLASSES = (HL_OT_behaviour_new, HL_OT_behaviour_add, HL_OT_behaviour_copy, HL_OT_behaviour_remove, HL_OT_behaviour_move,
+CLASSES = (HL_OT_behaviour_refresh_settings, HL_OT_behaviour_reset_setting, HL_OT_behaviour_new, HL_OT_behaviour_add, HL_OT_behaviour_copy, HL_OT_behaviour_remove, HL_OT_behaviour_move,
            HL_OT_behaviour_open, HL_OT_behaviour_unique, HL_OT_logic_open_graph, HL_OT_logic_give_brain,
            HL_UL_behaviours, HL_PT_obj_behaviours)
 
 
 def register():
+    from .exposed import on_load
+    bpy.app.handlers.load_post.append(on_load)
     for c in CLASSES:
         bpy.utils.register_class(c)
 
 
 def unregister():
+    from .exposed import on_load
+    if on_load in bpy.app.handlers.load_post:bpy.app.handlers.load_post.remove(on_load)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

@@ -6,6 +6,16 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
 from ..core.entities import default_keyvalues
 from ..core.spawnlist import CATEGORIES as SPAWN_CATEGORIES
 
+def _game_mode_changed(self, context):
+    from . import problems, navview
+    if context is not None and context.scene is not None:
+        problems.stale_flow(context, "Game mode changed; rebuild and launch the selected mode")
+        self.problems_checked = False
+        # Previous validation rows describe a different ruleset.
+        self.problems.clear()
+        navview._state["batches"] = None
+
+
 OBJECT_ROLES = [
     ("AUTO", "Auto", "Lights become lights, meshes follow their collection (default: brush), "
                      "empties are ignored unless they have an entity class"),
@@ -338,9 +348,16 @@ def _is_behaviour(_self, tree) -> bool:
     return tree.bl_idname == "HL_LogicTree" and getattr(tree, "is_behaviour", False)
 
 
+from .exposed import HL_ExposedValue, graph_changed, preview_toggle
+
+
 class HL_BehaviourSlot(bpy.types.PropertyGroup):
     """One Behaviour an object carries: a logic graph it runs as Self (several objects can share one, as materials)"""
-    graph: PointerProperty(type=bpy.types.NodeTree, name="Behaviour", poll=_is_behaviour,
+    preview_enabled: BoolProperty(name="Update Display from Settings", default=True, update=preview_toggle,
+                                  description="Let this behaviour update this object's preview model; disable to keep a custom display")
+    preview_error: StringProperty(options={'SKIP_SAVE'})
+    values: CollectionProperty(type=HL_ExposedValue)
+    graph: PointerProperty(type=bpy.types.NodeTree, name="Behaviour", poll=_is_behaviour, update=graph_changed,
                            description="The logic graph this object runs (Self in it is this object). Objects "
                                        "sharing one all run it; Make Unique gives this object its own copy")
 
@@ -823,6 +840,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     map_name: StringProperty(name="Map Name", default="my_map", update=lambda self, c: _on_map_name(self),
                              description="File name of the map: lowercase letters, digits and _ (spaces "
                                          "become _)")
+    game_mode: EnumProperty(name="Game Mode", default="CAMPAIGN", update=_game_mode_changed, items=[
+        ("CAMPAIGN", "Campaign", "Normal co-op; automatically uses Hammerless mode when custom HUD or overrides require it"),
+        ("SURVIVAL", "Survival", "Valve's normal holdout mode. Start with a Survival Start Button; needs connected battlefield/finale navigation")])
     compile_preset: EnumProperty(name="Quality", items=COMPILE_PRESETS, default="NORMAL",
                                  update=_q("on_build_quality"),
                                  description="Sets Lighting's and Visibility's quality together (each can still be "
@@ -1131,7 +1151,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     last_log: StringProperty()
 
 
-CLASSES = (HL_Problem, HL_SpawnListItem, HL_KeyValue, HL_Output, HL_BehaviourSlot, HL_ObjectSettings, HL_CollectionSettings, HL_MaterialSettings, HL_SceneSettings)
+CLASSES = (HL_Problem, HL_SpawnListItem, HL_KeyValue, HL_Output, HL_ExposedValue, HL_BehaviourSlot, HL_ObjectSettings, HL_CollectionSettings, HL_MaterialSettings, HL_SceneSettings)
 
 
 def register():

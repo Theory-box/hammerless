@@ -524,6 +524,24 @@ def horde_button() -> Preset:
                   "or the lift buttons in the campaigns.", [PresetPart("button", entity=ent)])
 
 
+def survival_start() -> Preset:
+    btn = g.box_brush((-4, -16, 40), (4, 16, 72), "dev/dev_hazzardstripe01a", "survival_start")
+    ent = Entity("func_button", None, (0, 0, 0), {"spawnflags": "1025", "wait": "-1"}, [btn],
+                 outputs=[Output("OnPressed", "director", "PanicEvent", times=1)])
+    return Preset("SURVIVAL_START", "Survival Start Button",
+                  "Starts Valve's normal Survival timer and infected attack. Set Map > Game Mode to Survival. "
+                  "Needs a connected nav mesh with a start area, battlefield/finale areas and hidden spawn space. "
+                  "No custom wave script.", [PresetPart("button", entity=ent)])
+
+
+def survival_arena() -> Preset:
+    vol = g.box_brush((-512, -512, -16), (512, 512, 128), "tools/toolstrigger", "survival_arena")
+    ent = Entity(NAV_REGION, None, (0, 0, 0), {"attributes": "BATTLEFIELD FINALE"}, [vol])
+    return Preset("SURVIVAL_ARENA", "Survival Arena",
+                  "Resize over all Survival playable floors and infected approaches. Marks nav BATTLEFIELD and FINALE; rebuild nav after moving it. Add separate regions for other floors.",
+                  [PresetPart("nav_region", entity=ent)])
+
+
 def tank_ambush() -> Preset:
     spawner = Entity("commentary_zombie_spawner", (0, 0, 0), (0, 0, 0), {"targetname": "tank_ambush_spawner"})
     vol = g.box_brush((-640, -128, 0), (-384, 128, 128), "tools/toolstrigger", "tank_ambush_trigger")
@@ -627,7 +645,7 @@ def car_alarm(name: str = "car_alarm") -> Preset:
 
 
 PRESET_BUILDERS = {"START_SAFE_ROOM": start_safe_room, "END_SAFE_ROOM": end_safe_room,
-                   "HORDE_TRIGGER": horde_trigger, "HORDE_BUTTON": horde_button,
+                   "SURVIVAL_START": survival_start, "SURVIVAL_ARENA": survival_arena, "HORDE_TRIGGER": horde_trigger, "HORDE_BUTTON": horde_button,
                    "TANK_AMBUSH": tank_ambush, "CRESCENDO_BUTTON": crescendo_button,
                    "ZOMBIE_SPAWN_AREA": zombie_spawn_area, "LADDER": ladder,
                    "ZOMBIE_LADDER": zombie_ladder, "ZOMBIE_CLIMB": zombie_climb, "GATE_BUTTON": gate_button,

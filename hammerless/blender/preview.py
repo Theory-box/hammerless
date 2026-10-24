@@ -173,6 +173,71 @@ def _model_material(material_path: str, content, game_dir):
     return mat
 
 
+def purchase_display_transform(obj, context):
+    """Keep a bind-pose preview in place when its prop plays a rigid idle pose.
+
+    Weapon world models often turn all bones by 90 degrees in their static
+    idle. Derive the inverse from the asset, including translation; a world-yaw
+    subtraction would be wrong for tilted displays. Animated/deforming poses
+    and placeholders cannot be corrected this way.
+    """
+    from mathutils import Matrix, Quaternion, Vector
+    import struct
+    from ..core.gamemodel import load_game_model
+    from .ops import game_content, game_root
+    from .extract import source_angles
+
+    if obj is None or obj.type != 'MESH':
+        return None
+    kv = {k.key.lower(): k.value for k in obj.hammerless.keyvalues}
+    path = kv.get('model', '').replace('\\', '/').lower()
+    if not path or obj.data.get('hl_model', '').replace('\\', '/').lower() != path:
+        return None
+    content = game_content(game_root(context))
+    if content is None:
+        return None
+    model = load_game_model(content, path)
+    if model is None or not model.bones or not model.sequences:
+        return None
+    name = kv.get('defaultanim', '')
+    seq = next((s for s in model.sequences if s.name.lower() == name.lower()), None) if name else model.sequences[0]
+    if seq is None or not 1 <= seq.frames <= 300 or seq.anim_index < 0 or model._anims[seq.anim_index]['flags'] & 4:
+        return None
+
+    def matrix(pose):
+        p, q = pose
+        return Matrix.LocRotScale(Vector(p), Quaternion((q[3], q[0], q[1], q[2])), Vector((1, 1, 1)))
+
+    try:
+        # Only bones that move vertices matter. Some assets have an unused root
+        # that stays still while all visible geometry rotates together.
+        vvd = content.read(path[:-4] + '.vvd')
+        if vvd is None or vvd[:4] != b'IDSV':
+            return None
+        count = struct.unpack_from('<i', vvd, 16)[0]
+        offset = struct.unpack_from('<i', vvd, 56)[0]
+        raw = np.frombuffer(vvd, dtype=np.uint8, count=count * 48, offset=offset).reshape(-1, 48)
+        weights = raw[:, :12].copy().view('<f4').reshape(-1, 3)
+        indices = sorted(set(raw[:, 12:15][weights > 1e-6].tolist()))
+        if not indices:
+            return None
+        bind = model.bone_world()
+        idle = model.bone_world(model.frame(seq, 0))
+        delta = matrix(idle[indices[0]]) @ matrix(bind[indices[0]]).inverted()
+        inverse_bind = {i: matrix(bind[i]).inverted() for i in indices}
+        for frame in range(seq.frames):
+            pose = idle if frame == 0 else model.bone_world(model.frame(seq, frame))
+            for i in indices:
+                other = matrix(pose[i]) @ inverse_bind[i]
+                if max(abs(delta[r][c] - other[r][c]) for r in range(4) for c in range(4)) > 0.002:
+                    return None
+    except (ValueError, IndexError, RuntimeError, struct.error):
+        return None
+    delta.translation /= context.scene.hammerless.units_per_meter
+    world = obj.matrix_world @ delta.inverted()
+    return (tuple(v * context.scene.hammerless.units_per_meter for v in world.translation), source_angles(world))
+
+
 def model_mesh(model_path: str, content, game_dir, units_per_meter: float):
     """Blender mesh of a game model (LOD 0, textured), cached per model. None if unreadable."""
     from ..core.mdl import find_material, load_model

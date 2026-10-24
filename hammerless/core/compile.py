@@ -1865,7 +1865,7 @@ def _watch_ready(log: str, start: int, launch_id: int, timeout: float = 660.0):
                 LOAD_STATUS["seconds"] = time.time() - t0
             elif low.startswith(FLOW):
                 report = parse_flow(line)
-                if report and report["state"] in ("ok", "broken", "nonav", "noexit", "nostart", "noend"):
+                if report and report["state"] in ("ok", "broken", "nonav", "noexit", "nostart", "noend", "arenaok", "noarena", "arenabroken"):
                     LOAD_STATUS["flow"] = report
                     LOAD_STATUS["flow_seq"] += 1
 

@@ -622,6 +622,8 @@ class _Compiler:
             hook = HOOKS_BY_NAME.get(s.get("hook", ""))
             kind = dict(hook[2]).get(sock) if hook else None
             return vs.field_expr(sock, kind) if kind else "null"
+        if k == "EXPOSED_VALUE":
+            return vs.literal(s["type"], s["value"])
         if k == "VALUE":
             return self.expr_in(n, "value") if sock == "value" else "0.0"
         if k == "PROGRESS":
@@ -698,6 +700,74 @@ class _Compiler:
             self.takes.setdefault((nid, sock), []).append(_Take(target, inp, param))
 
         k = n.kind
+        if k == "WALL_WEAPON":
+            from . import wall_weapon
+            s = dict(s)
+            for field in ('item','price','title','range'):
+                source = self.data_links.get((n.id,field))
+                if source is None:continue
+                value_node = self.nodes.get(source[0])
+                if value_node is None or value_node.kind != 'EXPOSED_VALUE':
+                    self.problems.append(f"Purchase '{nid}': {field} needs an Exposed Setting (fixed per object at export)")
+                    return
+                value = value_node.settings['value']
+                valid = (isinstance(value,(float,int)) and not isinstance(value,bool)) if field in ('price','range') else isinstance(value,str)
+                if not valid:
+                    self.problems.append(f"Purchase '{nid}': wrong setting type for {field}")
+                    return
+                s[field] = value
+            e = self.entity_of(n.obj)
+            model = (e.keyvalues.get("model", "").replace("\\", "/").lower() if e else "")
+            if e is None or e.brushes or not model:
+                self.problems.append(f"Purchase '{nid}': select a point prop with a display model")
+                return
+            try:
+                weapon, item = wall_weapon.resolve(s, model)
+            except ValueError as error:
+                self.problems.append(f"Purchase '{nid}': {error}")
+                return
+            names = self.ir.__dict__.setdefault("_wall_weapon_names", set())
+            name = self.name_of(e, n.obj)
+            if name in names:
+                self.problems.append(f"Wall Weapon '{nid}': '{name}' already has a purchase behaviour")
+                return
+            names.add(name)
+            e.classname = "prop_dynamic_override"
+            # Blender's real preview is the bind pose; compensate only when the
+            # adapter verified a rigid default pose in this exact display model.
+            if s.get("display_transform") is not None:
+                e.origin, e.angles = s["display_transform"]
+            e.keyvalues.update({"solid": "0", "disableshadows": "1"})
+            self.helper("HL_WallWeapons", wall_weapon.RUNTIME)
+            title = item["title"]
+            precache = '{ classname = ' + vs.literal(vs.TEXT, item["classname"])
+            if item["classname"] == "weapon_melee":
+                precache += ', melee_script_name = ' + vs.literal(vs.TEXT, weapon)
+            precache += ' }'
+            self.functions.append('try { PrecacheEntityFromTable(' + precache + '); } '
+                                  'catch (error) { printl("HAMMERLESS_PURCHASE precache: " + error); }\n')
+            price = max(0, min(1000000, int(s.get("price", 500))))
+            reach = max(32, min(256, int(s.get("range", 96))))
+            self.functions.append("::HL_WallStations.append({ name = " + vs.literal(vs.TEXT, name)
+                                  + ', weapon = ' + vs.literal(vs.TEXT, weapon)
+                                  + ', title = ' + vs.literal(vs.TEXT, title)
+                                  + f', price = {price}, range = {reach}'
+                                  + ', classname = ' + vs.literal(vs.TEXT, item["classname"])
+                                  + ', matchmodel = ' + vs.literal(vs.TEXT, item["match_model"]) + ' });\n')
+            if len(names) == 1:
+                self.ir.logic_script_events.setdefault("round_start", []).append(
+                    "    ::HL_WallUsers = {}; ::HL_WallNext = 0.0;")
+            return
+        if k == "PERSONAL_POINTS":
+            from . import personal_points
+            if self.ir.__dict__.get("_personal_points_controller"):
+                self.problems.append("Personal Points: use only one controller per map (including behaviours and group copies)")
+                return
+            self.ir._personal_points_controller = True
+            self.helper("HL_PersonalPoints", personal_points.script(s))
+            for event, code in personal_points.EVENTS.items():
+                self.ir.logic_script_events.setdefault(event, []).append(code)
+            return
         if k == "SCRIPT_CALL":
             f = vs.function(s.get("fn", ""))
             if f is None:
@@ -852,7 +922,7 @@ class _Compiler:
             e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "1"})
             self.progress.append((e.keyvalues["targetname"], min(lo, hi), max(lo, hi)))
             fire("reached", e, "OnTrigger")
-        elif k in ("VALUE", "PROGRESS", "RANDOM_VALUE", "MATH", "COMPARE", "BOOL_MATH", "INFECTED_COUNT"):
+        elif k in ("EXPOSED_VALUE", "VALUE", "PROGRESS", "RANDOM_VALUE", "MATH", "COMPARE", "BOOL_MATH", "INFECTED_COUNT"):
             pass                            # value nodes turn into expressions where they're used
         elif k == "WHEN":
             cond = self.expr_in(n, "condition", False)
@@ -1569,12 +1639,16 @@ class _Compiler:
         if not (ir.logic_functions or ir.logic_events or ir.logic_progress or ir.logic_counts or ir.logic_whens
                 or ir.logic_script_events or ir.logic_hooks):
             return
-        thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens or ir.logic_diropts)
+        wall_weapons = bool(ir.__dict__.get("_wall_weapon_names"))
+        thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens or ir.logic_diropts or wall_weapons)
         parts = [f"// Hammerless logic graphs for {ir.settings.name}\n",
                  "::HL_Ctx <- {};   // the event being handled, its fields\n::HL_R <- {};     // what action nodes returned\n"
                  "::HL_L <- {};     // For Each: the current item\n::HL_I <- {};     // and its number\n"
                  "::HL_Scope <- this;   // this script's scope: Override questions are answered in it\n"
                  f'::HL_Map <- "{ir.settings.name}";   // and only on this map (globals outlive the map)\n']
+        if wall_weapons:
+            enabled = "true" if ir.__dict__.get("_personal_points_controller") else "false"
+            parts.append(f"::HL_WallPointsEnabled <- {enabled};\n")
         if ir.logic_counts:
             parts.append("HL_Count <- { tank = 0, witch = 0, smoker = 0, boomer = 0, hunter = 0, spitter = 0, "
                          "jockey = 0, charger = 0 };\n"
@@ -1687,6 +1761,7 @@ class _Compiler:
                          "    }\n}\n")
         if thinks:
             parts.append("function HL_Think() {\n"
+                         + ("    HL_WallThink();\n" if wall_weapons else "")
                          + ("    HL_Progress_Think();\n" if ir.logic_progress else "")
                          + ("    HL_When_Think();\n" if ir.logic_whens else "")
                          + ("    HL_Retry();\n" if ir.logic_retry else "")
