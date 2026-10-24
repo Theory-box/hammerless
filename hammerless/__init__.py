@@ -53,9 +53,13 @@ def register():
     brushtools.register()
     drawbrush.register()
     particlebrowser.register()   # (after the main panels: its panel sits below them)
+    from .blender import ladderview
+    ladderview.register()
 
 
 def unregister():
+    from .blender import ladderview
+    ladderview.unregister()
     from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing, gameskeleton, placedchar, particlebrowser, collisiontool, animpreview, behaviours, brushtools, drawbrush
     particlebrowser.unregister()
     drawbrush.unregister()
