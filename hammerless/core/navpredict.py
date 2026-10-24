@@ -337,7 +337,7 @@ def _insert_manual_areas(gen, regions):
         return
     mesh = to_navmesh(gen.areas, regions, gen.ladders)
     original = {m.id: a for m, a in zip(mesh.areas, gen.areas)}
-    made, _ = add_nav_areas(mesh, regions)
+    made, _ = add_nav_areas(mesh, regions, gen.world)
     # add_nav_areas may reuse a removed area's numeric ID. Never reuse that
     # generator object for a newly authored area.
     by = {m.id: (Area(m.id, m.nw, m.se, m.ne_z, m.sw_z, [])
@@ -442,14 +442,57 @@ NAV_AREA_GAP = 40.0          # nav whose edge is this close beside a Nav Area's 
 NAV_AREA_DROP_GAP = 64.0     # nav this close beside it and lower or higher (a drop) is linked one way
 
 
-def add_nav_areas(mesh: NavMesh, regions) -> tuple[list[int], set]:
+def _manual_connection_clear(world, source, target, direction):
+    """Sweep a crouching body off the source edge and down onto the target.
+
+    Use edge portals, not the centre-to-centre line used by the overlay.
+    A floor between the endpoints must stop the descent, not be skipped.
+    """
+    from .navgen import HALF_HUMAN_WIDTH, HUMAN_CROUCH_HEIGHT, STEP_HEIGHT, SLOPE_LIMIT
+    axis = 1 if direction in (0, 2) else 0
+    along = 1 - axis
+    sign = -1 if direction in (0, 3) else 1
+    lo = max(source.nw[along], target.nw[along])
+    hi = min(source.se[along], target.se[along])
+    mins = (-HALF_HUMAN_WIDTH, -HALF_HUMAN_WIDTH, 0.0)
+    maxs = (HALF_HUMAN_WIDTH, HALF_HUMAN_WIDTH, HUMAN_CROUCH_HEIGHT)
+
+    def clear(a, b):
+        trace = world.trace_hull(a, b, mins, maxs)
+        return not trace.startsolid and trace.fraction >= 1.0
+
+    for fraction in (0.5, 0.25, 0.75):
+        s, t = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+        s[along] = t[along] = lo + (hi - lo) * fraction
+        inset_s = min(HALF_HUMAN_WIDTH + 1, (source.se[axis] - source.nw[axis]) / 2)
+        inset_t = min(HALF_HUMAN_WIDTH + 1, (target.se[axis] - target.nw[axis]) / 2)
+        s[axis] = (source.se[axis] if sign > 0 else source.nw[axis]) - sign * inset_s
+        t[axis] = (target.nw[axis] if sign > 0 else target.se[axis]) + sign * inset_t
+        s[2] = source.z_at(*s[:2]) + 1.0
+        t[2] = target.z_at(*t[:2]) + 1.0
+        height = max(s[2], t[2])
+        raised = (s[0], s[1], height)
+        across = (t[0], t[1], height)
+        if not (clear(s, raised) and clear(raised, across) and clear(across, t)):
+            continue
+        # A manually drawn area is not proof of a floor at its claimed height.
+        ground = world.trace_hull(t, (t[0], t[1], t[2] - STEP_HEIGHT), mins, maxs)
+        if not ground.startsolid and ground.fraction < 1.0 and ground.normal[2] >= SLOPE_LIMIT:
+            return True
+    return False
+
+
+def add_nav_areas(mesh: NavMesh, regions, world=None) -> tuple[list[int], set]:
     """The Nav Area volumes (Add > Volumes > Nav Area) as one nav area each: its outline from above at its bottom
     height. The areas under it (within NAV_AREA_HEIGHT of its height) go; it's linked both ways to the areas level
     with it beside its edges (steps up to STEP_HEIGHT) and one way to the ones a drop away (up to DEATH_DROP: the
-    infected take no fall damage), like the generator links its own. Returns (the new area ids, the links made)."""
+    infected take no fall damage), like the generator links its own. With a collision world, every new
+    connection requires a clear body-sized route and landing. Omitting world is for topology-only callers;
+    the build pipeline always supplies it. Returns (the new area ids, the links made)."""
     from .nav import NAV_AREA_BIT, NOT_ATTRIBUTE_BITS
     from .navgen import DEATH_DROP, STEP_HEIGHT
     made, links = [], set()
+    next_id = max((a.id for a in mesh.areas), default=0) + 1
     for r in regions:
         if not r.bits & NAV_AREA_BIT:
             continue
@@ -463,6 +506,8 @@ def add_nav_areas(mesh: NavMesh, regions) -> tuple[list[int], set]:
             return ox1 > ox0 and oy1 > oy0 and abs(a.z_at((ox0 + ox1) / 2, (oy0 + oy1) / 2) - z) <= NAV_AREA_HEIGHT
         gone = {a.id for a in mesh.areas if under(a)}
         if gone:
+            links = {(a, b) for a, b in links if a not in gone and b not in gone}
+            made = [i for i in made if i not in gone]
             mesh.areas = [a for a in mesh.areas if a.id not in gone]
             for a in mesh.areas:
                 a.connections = [[i for i in d if i not in gone] for d in a.connections]
@@ -470,7 +515,8 @@ def add_nav_areas(mesh: NavMesh, regions) -> tuple[list[int], set]:
                 for f in ("top_forward", "top_left", "top_right", "top_behind", "bottom_area"):
                     if getattr(lad, f) in gone:
                         setattr(lad, f, 0)
-        new = NavArea(max((a.id for a in mesh.areas), default=0) + 1, 0, (x0, y0, z), (x1, y1, z), z, z)
+        new = NavArea(next_id, 0, (x0, y0, z), (x1, y1, z), z, z)
+        next_id += 1
         c = new.centre
         for q in regions:
             if not q.bits & NOT_ATTRIBUTE_BITS and q.contains(c):
@@ -495,10 +541,10 @@ def add_nav_areas(mesh: NavMesh, regions) -> tuple[list[int], set]:
                 if gap > (NAV_AREA_GAP if level else NAV_AREA_DROP_GAP) or abs(dz) > DEATH_DROP:
                     continue
                 back = (d + 2) % 4
-                if dz <= STEP_HEIGHT:                   # (level, or a drop down from the Nav Area)
+                if dz <= STEP_HEIGHT and (world is None or _manual_connection_clear(world, new, b, d)):
                     new.connections[d].append(b.id)
                     links.add((new.id, b.id))
-                if dz >= -STEP_HEIGHT:                  # (level, or a drop down onto it)
+                if dz >= -STEP_HEIGHT and (world is None or _manual_connection_clear(world, b, new, back)):
                     b.connections[back].append(new.id)
                     links.add((b.id, new.id))
                 break
@@ -524,7 +570,7 @@ def link_islands(mesh: NavMesh, world, out: set) -> int:
     the game's own nav_generate leaves them as islands too) down to nav that does lead to the survivors, where a
     crouching player-sized box can move off the edge and fall clear (DEATH_DROP at most: the infected take no fall
     damage). One way, like a drop. Returns how many links it added."""
-    from .navgen import DEATH_DROP, HALF_HUMAN_WIDTH, HUMAN_CROUCH_HEIGHT, STEP_HEIGHT
+    from .navgen import DEATH_DROP, HALF_HUMAN_WIDTH, HUMAN_CROUCH_HEIGHT, STEP_HEIGHT, SLOPE_LIMIT
     mins, maxs = (-HALF_HUMAN_WIDTH, -HALF_HUMAN_WIDTH, 0.0), (HALF_HUMAN_WIDTH, HALF_HUMAN_WIDTH, HUMAN_CROUCH_HEIGHT)
     targets = [a for a in mesh.areas if a.id in out]
 
@@ -549,13 +595,16 @@ def link_islands(mesh: NavMesh, world, out: set) -> int:
                 za = a.z_at(px, py)
                 inward = min(8.0, (x1 - x0) / 2 if dx else (y1 - y0) / 2)
                 start = (px - dx * inward, py - dy * inward, za + STEP_HEIGHT)
+                lift = world.trace_hull((start[0], start[1], za + 1.0), start, mins, maxs)
+                if lift.startsolid or lift.fraction < 1.0:
+                    continue
                 for reach in ISLAND_REACH:
                     end = (px + dx * reach, py + dy * reach, za + STEP_HEIGHT)
                     tr = world.trace_hull(start, end, mins, maxs)
                     if tr.startsolid or tr.fraction < 1.0:
                         break                              # (a wall, a rail: no way off here)
                     down = world.trace_hull(end, (end[0], end[1], za - DEATH_DROP), mins, maxs)
-                    if down.startsolid or down.fraction >= 1.0:
+                    if down.startsolid or down.fraction >= 1.0 or down.normal[2] < SLOPE_LIMIT:
                         continue
                     b = landing_area(down.endpos[0], down.endpos[1], down.endpos[2])
                     if b is not None:
