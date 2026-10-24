@@ -329,9 +329,38 @@ def python_steps(gen):
              ("Connecting ladders", gen.connect_ladders))
 
 
+def _insert_manual_areas(gen, regions):
+    """Apply manual replacements before climb searches, keeping generator references valid."""
+    from .nav import NAV_AREA_BIT
+    from .navareas import Area
+    if not any(r.bits & NAV_AREA_BIT for r in regions):
+        return
+    mesh = to_navmesh(gen.areas, regions, gen.ladders)
+    original = {m.id: a for m, a in zip(mesh.areas, gen.areas)}
+    made, _ = add_nav_areas(mesh, regions)
+    # add_nav_areas may reuse a removed area's numeric ID. Never reuse that
+    # generator object for a newly authored area.
+    by = {m.id: (Area(m.id, m.nw, m.se, m.ne_z, m.sw_z, [])
+                 if m.id in made else original[m.id]) for m in mesh.areas}
+    for a in by.values():
+        a.connect = [[], [], [], []]
+        a.incoming = [[], [], [], []]
+    for m in mesh.areas:
+        for d, targets in enumerate(m.connections):
+            for target in targets:
+                if target in by:
+                    by[m.id].connect_to(by[target], d)
+    for ladder, saved in zip(gen.ladders, mesh.ladders):
+        for field in ("top_forward", "top_left", "top_right", "top_behind", "bottom_area"):
+            setattr(ladder, field, by.get(getattr(saved, field)))
+    gen.areas = [by[m.id] for m in mesh.areas]
+    gen._index_areas()
+
+
 def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
     from .navelevator import associate
     problems = list(getattr(gen, "elevator_problems", ()))
+    _insert_manual_areas(gen, regions)
     # where survivors can walk from the start room: worked out before the zombie-only climb links
     pre = to_navmesh(gen.areas, regions, gen.ladders)
     obj = {m.id: id(a) for a, m in zip(gen.areas, pre.areas)}
@@ -354,11 +383,9 @@ def _finish(gen, regions, progress, climbs, wall_climbs) -> NavMesh:
         problems.insert(0, "No nav mesh: nothing walkable is inside the Control Volumes set to Only inside (nav). "
                            "Each needs floor in it that survivors can reach from a spawn (or a seed)")
     final = {m.id: id(a) for a, m in zip(gen.areas, mesh.areas)}
-    made, made_links = add_nav_areas(mesh, regions)
     problems += associate(mesh, getattr(gen, "elevators", ()))
-    made_links.update(mesh.elevator_links)
     walkable = {(a, b) for a, nxt in _links(mesh).items() for b in nxt
-                if (a, b) in made_links or (a in final and b in final and (final[a], final[b]) in walkable)}
+                if (a, b) in mesh.elevator_links or (a in final and b in final and (final[a], final[b]) in walkable)}
     problems += mark_survivor_starts(mesh, getattr(gen, "survivor_positions", ()), regions)
     blocked = spawn_block_problems(mesh, regions)        # (the user's own no-spawn boxes)
     start = [a.id for a in mesh.areas if a.spawn_attributes & PLAYER_START]
