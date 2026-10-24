@@ -126,8 +126,8 @@ class Report:
 def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
     """content: optional vpk.GameContent to check materials/models exist."""
     r = Report()
-    if ir.settings.game_mode == "SURVIVAL" and ir.scripted_mode:
-        r.errors.append("Stock Survival cannot run custom HUD or mutation override nodes. Disable those graphs or choose Campaign; personal points and wall purchases do not require mutation mode.")
+    if ir.settings.game_mode == "SURVIVAL" and ir.logic_hooks:
+        r.errors.append("Survival does not yet support mutation override nodes. HUD Text is supported through Hammerless's Survival mode.")
     from .mapcheck import Problem
     brush_problems = []          # with the brush's centre, so the problem list can go to it
     for b in ir.brushes + [b for e in ir.entities for b in e.brushes]:

@@ -311,11 +311,12 @@ def mode_files(ir: MapIR) -> dict[str, str]:
     name = ir.settings.name
     from .gamemodes import policy
     mode = policy(ir.settings.game_mode)
-    if not mode.campaign_route:
+    if not mode.campaign_route and not ir.scripted_mode:
         return {f"maps/{name}.hlmode": mode.launch + "\n"}
     if not ir.scripted_mode:
         return {f"maps/{name}.hlmode": "coop\n"}
-    files = {f"maps/{name}.hlmode": GAME_MODE + "\n"}
+    launch_mode = GAME_MODE if mode.campaign_route else "hammerless_survival"
+    files = {f"maps/{name}.hlmode": launch_mode + "\n"}
     mode, options = [], []
     for hook in sorted(ir.logic_hooks):
         _n, where, args, answer, _about = HOOKS_BY_NAME[hook]
@@ -336,7 +337,7 @@ def mode_files(ir: MapIR) -> dict[str, str]:
     text += "".join(m + "\n" for m in mode)
     if options:
         text += "MapOptions <- {\n" + "".join("    " + o + "\n" for o in options) + "}\n"
-    files[f"scripts/vscripts/{name}_{GAME_MODE}.nut"] = text
+    files[f"scripts/vscripts/{name}_{launch_mode}.nut"] = text
     return files
 
 
@@ -360,7 +361,11 @@ def mode_addon_files() -> dict[str, bytes]:
             '\t"addonauthor"\t"Hammerless"\n'
             '\t"addonDescription"\t"Co-op in scripted mode, for maps made with Hammerless that use overrides or a HUD."\n'
             '\t"addonContent_Script"\t"1"\n}\n')
+    survival_mode = mode.replace(f'"{GAME_MODE}"', '"hammerless_survival"', 1).replace('"coop"', '"survival"').replace('Co-op', 'Survival')
+    survival_script = '// Survival with scripted HUD enabled; native Survival rules are inherited.\nMutationOptions <- {}\n'
     return {f"modes/{GAME_MODE}.txt": mode.encode(), f"scripts/vscripts/{GAME_MODE}.nut": script.encode(),
+            'modes/hammerless_survival.txt': survival_mode.encode(),
+            'scripts/vscripts/hammerless_survival.nut': survival_script.encode(),
             "addoninfo.txt": info.encode()}
 
 

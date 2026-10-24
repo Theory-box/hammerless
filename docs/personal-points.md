@@ -13,7 +13,7 @@ kills without a human survivor attacker and bot kills award nothing.
 
 The killer receives a private centre-screen total. Disable **Show Earned Points**
 to suppress these messages. Typing **!points** in chat always replies privately
-with the current balance. This is event-driven feedback, not a persistent HUD.
+with the current balance. The **Points: Display** subgroup also shows a persistent shared panel: each connected human's points above their name. It uses the existing Timer, For Each, Human Identity, variables, Format Text and HUD Text nodes, refreshing twice a second. Bots are omitted. The panel occupies HUD slot Middle Box (9).
 
 Balances reset on round start and map load. Authenticated humans retain their
 balance across death, AFK and reconnects within that round using their network
@@ -30,6 +30,8 @@ Opening older files expands the former Personal Points node into this group,
 preserving its reward values. Purchase nodes are expanded too; existing exposed
 settings and object overrides retain their IDs. The file on disk is unchanged
 until you save. Linked library graphs are left unchanged.
+
+Untouched shipped points and purchase rule groups also receive the display update when reopened. Custom-edited rule groups are preserved. Save and rebuild after reopening; no reimport is needed. The HUD uses Hammerless's scripted Campaign/Survival wrapper; Survival retains its native rules. Restart the game once if Build reports that its mode addon changed.
 
 Reusable building blocks include **Human Identity**, **Per Key** variable storage
 and **Reset Key Variable**. These can also hold per-human statistics, unlocks or

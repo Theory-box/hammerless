@@ -26,4 +26,15 @@ assert r[4]=='no_spawn',r
 s.game_mode='CAMPAIGN'
 assert scene_settings_to_ir(s).game_mode=='CAMPAIGN'
 print('PASS registration, mode switching, native presets, directed spawn connectivity and NO_MOBS')
+from unittest.mock import patch
+from hammerless.blender import ops
+s.game_mode='SURVIVAL'
+with patch.object(ops.cc,'map_mode',return_value='hammerless_survival'), \
+     patch.object(ops.cc,'verify_deployed_bsp'), \
+     patch.object(ops.cc,'launch_game') as launch_game, \
+     patch.object(ops,'needs_nav',return_value=False), \
+     patch.object(ops.cc,'nav_analyzed',return_value=True):
+    ops.launch(bpy.context,'C:/test-game')
+    launch_game.assert_called_once()
+print('PASS Play accepts the scripted Survival wrapper')
 hammerless.unregister()

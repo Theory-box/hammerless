@@ -198,7 +198,7 @@ def launch(context, root, nav_written: bool = False, analyzed: bool = False) -> 
     s = context.scene.hammerless
     tools = cc.Tools(root)
     deployed_mode = cc.map_mode(tools, s.map_name)
-    if (deployed_mode == "survival") != (s.game_mode == "SURVIVAL"):
+    if (deployed_mode in ("survival", "hammerless_survival")) != (s.game_mode == "SURVIVAL"):
         raise RuntimeError("Game Mode differs from the last build. Use Build & Play to export and launch the selected mode.")
     cc.verify_deployed_bsp(os.path.join(work_dir(context), s.map_name + ".bsp"),
                            os.path.join(tools.maps_dir, s.map_name + ".bsp"))

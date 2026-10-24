@@ -1,6 +1,6 @@
 # Survival authoring and campaign-assumption audit
 
-Map > Game Mode now selects Campaign or stock Survival. Build & Play writes the launch mode with the map. Custom HUD/mutation overrides are currently Campaign-only and produce an explicit error in Survival; personal points and wall purchases use ordinary entity scripts and remain supported.
+Map > Game Mode selects Campaign or Survival. Build & Play writes the launch mode with the map. Maps using HUD Text launch through **Survival (Hammerless)**, a scripted wrapper inheriting native Survival rules. Maps without HUD nodes continue to use stock Survival. Mutation override nodes remain unsupported in Survival and produce an explicit error. Restart the game once after the mode addon changes.
 
 For Survival, add **Survival Start Button** from Events and **Survival Arena** from Volumes. Resize the arena region over playable floors and infected approaches (BATTLEFIELD + FINALE). Keep a Player Start on connected floor nav. Add/position Zombie Spawn Areas as appropriate, then rebuild nav with analysis. Press the button in game to start the native Survival round. No custom wave controller is generated.
 

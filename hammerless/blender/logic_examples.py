@@ -626,11 +626,12 @@ def _group_state(tree) -> str:
     return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:16]
 
 
-def _groups(ex, objects, problems) -> dict:
+def _groups(ex, objects, problems, *, cleanup=True) -> dict:
     """The example's node groups (in order: a group may use the ones before it). One already in the file from the same
     example (unchanged) is used again rather than copied."""
     from .logicgroups import new_group_tree, new_item, remove_unused_groups, sync
-    remove_unused_groups(examples_only=True)       # (stale copies of examples' groups nothing uses any more)
+    if cleanup:
+        remove_unused_groups(examples_only=True)       # (stale copies of examples' groups nothing uses any more)
     made = {}
     for name, spec in (ex.get("groups") or {}).items():
         sig = _group_signature(name, spec)

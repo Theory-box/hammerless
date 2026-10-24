@@ -49,6 +49,43 @@ AWARD = dict(
            ('earned_read.result', 'message.a'), ('balance.value', 'message.b')])
 
 
+def hint_group():
+    fields = dict(hint_caption='',hint_timeout=2,hint_static=1,hint_icon_onscreen='use_binding',
+                  hint_binding='+use',hint_forcecaption=1,hint_range=0,hint_auto_start=0,
+                  hint_color='255 255 255',hint_instance_type=2,hint_name='hammerless_purchase')
+    return dict(about='Large private instructor message, built from the existing table, entity spawn and input nodes. Only the supplied player receives it; the temporary entity expires.',
+        inputs=[('run','Show','event'),('player','Player','thing'),('text','Text','text')],outputs=[],
+        nodes=[N('valid','HL_NodeCheck',-1,2),N('if','HL_NodeIf',-1,0),
+               N('table','HL_NodeMakeTable',0,2,fields=', '.join(k+(': text' if isinstance(v,str) else ': int') for k,v in fields.items()),
+                 sockets={'f_'+k:v for k,v in fields.items()}),
+               fn('spawn','SpawnEntityFromTable',1,0,{'p0':'env_instructor_hint'}),
+               N('show','HL_NodeFireInput',2,0,sockets={'input':'ShowHint','value':'!activator'}),
+               N('expire','HL_NodeFireInput',3,0,sockets={'input':'Kill','delay':2.2})],
+        links=[('in.run','if.in'),('in.player','valid.a'),('valid.result','if.condition'),('if.true','spawn.run'),
+               ('in.text','table.f_hint_caption'),('table.table','spawn.p1'),
+               ('spawn.then','show.run'),('spawn.result','show.entity'),('in.player','show.activator'),
+               ('show.then','expire.run'),('spawn.result','expire.entity')])
+
+
+def scoreboard_group():
+    return dict(about='Shared human-player balances. Every half second rebuild the text from connected survivors, then show the existing HUD Text slot. Points appear above each player name.',
+        inputs=[],outputs=[],
+        nodes=[N('timer','HL_NodeTimer',0,0,seconds=0.5),
+               variable('clear','score_text',1,0,write=True,scope='GROUP',kind='text',sockets={'value':''}),
+               N('players','HL_NodeForEach',2,0,what='SURVIVORS'),
+               N('human','HL_NodeHumanIdentity',2,3),N('empty','HL_NodeTextCheck',3,3,op='EQUAL',sockets={'b':''}),
+               N('valid','HL_NodeIf',3,0),N('balance','HL_NodeGroup',4,3,group='Points: Balance'),
+               N('row','HL_NodeFormatText',5,3,template='{a} points\n{b}\n\n'),
+               variable('append','score_text',5,0,write=True,scope='GROUP',kind='text',op='ADD'),
+               variable('text','score_text',6,3,scope='GROUP',kind='text'),
+               N('hud','HL_NodeHudText',6,0,slot='9',align='LEFT',no_background=True,
+                 place=True,x=0.025,y=0.27,w=0.3,h=0.42)],
+        links=[('timer.tick','clear.run'),('clear.then','players.run'),('players.item','human.player'),
+               ('human.key','empty.a'),('empty.result','valid.condition'),('players.each','valid.in'),
+               ('valid.false','append.run'),('human.key','balance.key'),('balance.value','row.a'),
+               ('players.item','row.b'),('row.result','append.value'),('players.done','hud.run'),('text.result','hud.text')])
+
+
 def points_group():
     nodes = [ev('round', 'round_start', 0, 0), N('map', 'HL_NodeMapStart', 0, 1),
              N('reset', 'HL_NodeResetKeyVariable', 1, 0, var_name='points', exclusive=True),
@@ -96,7 +133,8 @@ def points_group():
               ('chat_human.false', 'chat_print.run'), ('chat.userid', 'chat_print.p0'),
               ('chat_identity.key', 'chat_balance.key'), ('chat_balance.value', 'chat_text.a'),
               ('chat_text.result', 'chat_print.p2')]
-    return dict(about='Personal points built from game events, variables, arithmetic and messages. Tab into Award and Balance to edit them. One controller per map.',
+    nodes.append(N('scoreboard','HL_NodeGroup',7,16,group='Points: Display'))
+    return dict(about='Personal points built from game events, variables, arithmetic and messages. Tab into Award, Balance and Display to edit them. One controller per map.',
                 inputs=[(key, title, 'bool' if key=='feedback' else 'num') for key,title in
                         [('starting','Starting Points'),('common','Common Kill'),('special','Special Kill'),
                          ('tank','Tank Kill'),('witch','Witch Kill'),('feedback','Show Earned Points')]],
@@ -132,8 +170,8 @@ def purchase_group():
             ('bought','give.success','Bought {a} | Points: {c}', 6, 7),
             ('failed','refund.then','Could not give item; points refunded', 7, 9)]:
         nodes += [N(nid+'_text','HL_NodeFormatText',col,row+1,template=template),
-                  fn(nid,'ClientPrint',col,row,{'p1':4})]
-        links += [('target.player',nid+'.p0'), (nid+'_text.result',nid+'.p2'),
+                  N(nid,'HL_NodeGroup',col,row,group='Messages: Purchase Hint')]
+        links += [('target.player',nid+'.player'), (nid+'_text.result',nid+'.text'),
                   ('in.title',nid+'_text.a'), ('in.price',nid+'_text.b'), ('balance.value',nid+'_text.c')]
         if nid in ('bought','failed'):
             nodes += [N(nid+'_valid','HL_NodeCheck',col,row+2), N(nid+'_if','HL_NodeIf',col-1,row)]
@@ -198,8 +236,8 @@ def barrier_rules():
             ('poor','funds.false','Not enough points: {b} required | You have {c}',5),
             ('paid','pay.then','Removed {a} | Points: {c}',7)]:
         nodes += [N(nid+'_text','HL_NodeFormatText',col,9,template=template),
-                  fn(nid,'ClientPrint',col,8,{'p1':4})]
-        links += [(event,nid+'.run'),('target.player',nid+'.p0'),(nid+'_text.result',nid+'.p2'),
+                  N(nid,'HL_NodeGroup',col,8,group='Messages: Purchase Hint')]
+        links += [(event,nid+'.run'),('target.player',nid+'.player'),(nid+'_text.result',nid+'.text'),
                   ('in.title',nid+'_text.a'),('in.price',nid+'_text.b'),('balance.value',nid+'_text.c')]
     return dict(about='One human pays, then Cleared removes the shared obstacle. The per-instance lock is set before debit and removal so simultaneous uses cannot charge twice.',
                 inputs=[('entity','Barrier','thing'),('title','Display Name','text'),('price','Price','num'),('range','Use Range','num')],
@@ -225,7 +263,7 @@ def barrier_behaviour():
 def examples():
     result = [dict(title='Personal Kill Points', level='Game Modes',
         about='Personal points for each human survivor. Rewards, balance storage, round reset and !points chat are editable node groups. Tab into Personal Points, Award or Balance to see every rule. Add one controller per map. Steam identities retain their balance through reconnects in the same round; bots do not earn points.',
-        groups={'Points: Balance':BALANCE,'Points: Award':AWARD,'Personal Points':points_group()},
+        groups={'Points: Balance':BALANCE,'Points: Award':AWARD,'Points: Display':scoreboard_group(),'Personal Points':points_group()},
         nodes=[N('points','HL_NodeGroup',0,0,group='Personal Points',
                  sockets=dict(starting=0,common=10,special=50,tank=500,witch=250,feedback=True))], links=[])]
     for title, item, price, name, key, height in [
@@ -238,12 +276,12 @@ def examples():
             objects={key:('ENTITY:prop_dynamic_override',(0,0,height),
                           {'model':ITEMS[item]['model'],'solid':'0','disableshadows':'1'})},
             behaviours={key:name},
-            groups={'Points: Balance':BALANCE,'Purchase: Rules':purchase_group(),
+            groups={'Points: Balance':BALANCE,'Messages: Purchase Hint':hint_group(),'Purchase: Rules':purchase_group(),
                     name:station(item if key=='purchase_display' else 'AUTO',price)},
             nodes=[],links=[]))
     result.append(dict(title='Purchase - Remove Barrier',level='Game Modes',
         about='A brush barrier removed for everyone when one human pays. Requires Personal Kill Points once per map. Resize in Edit Mode; edit Price, Display Name and Use Range in Behaviours. Duplicate in Object Mode for independent barriers. Bake navigation through the doorway; the barrier blocks it until purchased.',
         objects={'barrier':('GATE',(0,0,1.5))},behaviours={'barrier':'Paid Barrier'},
-        groups={'Points: Balance':BALANCE,'Barrier: Payment':barrier_rules(),'Paid Barrier':barrier_behaviour()},
+        groups={'Points: Balance':BALANCE,'Messages: Purchase Hint':hint_group(),'Barrier: Payment':barrier_rules(),'Paid Barrier':barrier_behaviour()},
         nodes=[],links=[]))
     return result

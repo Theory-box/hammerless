@@ -18,7 +18,7 @@ For advanced graphs, **Custom Item** on **Inventory Item** accepts a supported G
 
 **Inventory Item**, **Has Inventory Item**, **Give Inventory Item**, and **Look / Use Target** are reusable outside purchases. Look / Use Target selects the nearest reachable target and supplies Focused/Used events and the human player. Give Inventory Item reports Delivered or Failed after checking inventory; it knows nothing about points. The example graph handles deductions and refunds. Deferred outputs retain the initiating player's context, including on disconnect.
 
-Prompts currently use the game's centre-screen **ClientPrint** text, whose font size is fixed. To choose a different presentation, replace the message nodes inside the group with HUD/message nodes.
+Purchase prompts use the larger private instructor-hint display, including the player's actual Use key. **Messages: Purchase Hint** is an editable group of existing Make Table, Spawn Entity From Table, and Fire Input nodes. Temporary hints expire and are removed; looking away stops refreshing the prompt. No new special-purpose node is required. Instructor hints must be enabled in the player's game settings.
 
 The Blender adapter compensates for rigid idle-pose transforms in real model previews. This keeps the exported display aligned with Blender without altering object transforms or shared mesh data. Placeholder previews and deforming animations are not corrected.
 

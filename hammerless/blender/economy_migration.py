@@ -2,14 +2,40 @@
 import bpy
 
 
+def upgrade_displays():
+    """Replace only untouched shipped rule groups; preserve object settings and edited graphs."""
+    from .logic_examples import _groups, _group_state, _group_signature
+    from .logic_examples_economy import BALANCE, AWARD, points_group, purchase_group, barrier_rules, scoreboard_group, hint_group
+    specs={'Points: Balance':BALANCE,'Points: Award':AWARD,'Points: Display':scoreboard_group(),
+           'Messages: Purchase Hint':hint_group(),'Personal Points':points_group(),
+           'Purchase: Rules':purchase_group(),'Barrier: Payment':barrier_rules()}
+    candidates=[]
+    for tree in bpy.data.node_groups:
+        name=tree.get('hl_example_name','')
+        if (tree.users > 0 and not tree.library and name in ('Personal Points','Purchase: Rules','Barrier: Payment')
+                and tree.get('hl_example_group') != _group_signature(name,specs[name])
+                and tree.get('hl_example_state') == _group_state(tree)):
+            candidates.append((tree,name))
+    if not candidates:
+        return 0
+    problems=[]
+    groups=_groups({'groups':specs},{},problems,cleanup=False)
+    if problems:
+        raise RuntimeError('; '.join(problems))
+    for tree,name in candidates:
+        tree.user_remap(groups[name])
+    return len(candidates)
+
+
 def expand(tree):
     from .logic_examples import _groups, _fill, _socket
-    from .logic_examples_economy import BALANCE, AWARD, points_group, purchase_group, station
+    from .logic_examples_economy import BALANCE, AWARD, points_group, purchase_group, station, scoreboard_group, hint_group
     legacy = [n for n in tree.nodes if n.bl_idname in ('HL_NodePersonalPoints', 'HL_NodeWallWeapon')]
     if not legacy or tree.library:
         return 0
     problems = []
     groups = _groups({'groups': {'Points: Balance': BALANCE, 'Points: Award': AWARD,
+                                'Points: Display': scoreboard_group(), 'Messages: Purchase Hint': hint_group(),
                                 'Personal Points': points_group(), 'Purchase: Rules': purchase_group()}}, {}, problems)
     if problems:
         raise RuntimeError('; '.join(problems))
@@ -69,6 +95,10 @@ def expand(tree):
 
 @bpy.app.handlers.persistent
 def on_load(*_):
+    try:
+        upgrade_displays()
+    except Exception as ex:
+        print('Hammerless: could not update unchanged economy display groups:',ex)
     for tree in list(bpy.data.node_groups):
         try:
             if tree.bl_idname == 'HL_LogicTree':

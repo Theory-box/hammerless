@@ -41,4 +41,16 @@ class SurvivalTests(unittest.TestCase):
         self.assertNotIn('Add a Change Level',message({'state':'noexit'},'SURVIVAL')[1])
     def test_custom_mutation_not_silently_dropped(self):
         ir=self.scene();ir.scripted_mode=True
-        self.assertTrue(any('Stock Survival' in e for e in validate(ir).errors))
+        ir.logic_hooks={'CanPickupObject':[]}
+        self.assertTrue(any('Survival does not yet support mutation override' in e for e in validate(ir).errors))
+
+    def test_shared_hud_uses_survival_wrapper(self):
+        ir=self.scene();ir.scripted_mode=True
+        self.assertFalse(validate(ir).errors)
+        files=game_files(ir)
+        self.assertEqual(files['maps/'+ir.settings.name+'.hlmode'],'hammerless_survival\n')
+        self.assertIn('scripts/vscripts/'+ir.settings.name+'_hammerless_survival.nut',files)
+        from hammerless.core.gamefiles import mode_addon_files
+        addon=mode_addon_files()
+        self.assertIn(b'"survival"',addon['modes/hammerless_survival.txt'])
+        self.assertIn(b'"coop"',addon['modes/hammerless.txt'])
