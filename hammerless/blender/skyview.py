@@ -81,7 +81,7 @@ def error() -> str | None:
 def _draw():
     context = bpy.context
     s = getattr(context.scene, "hammerless", None)
-    if s is None or not s.show_sky:
+    if s is None or not s.show_bake_visualizations or not s.show_sky:
         return
     sky = s.skyname.strip().lower()
     if not sky:

@@ -760,7 +760,19 @@ class HL_SpawnListItem(bpy.types.PropertyGroup):
     """One row of the Add panel list (name = spawn item id). Filled from core/spawnlist.py."""
 
 
+def _viz_display(self, context):
+    # Redraw only: never change the individual visualization choices or caches.
+    if context is not None and context.window_manager is not None:
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+
+
 class HL_SceneSettings(bpy.types.PropertyGroup):
+    show_bake_visualizations: BoolProperty(
+        name='Show Bake Visualizations', default=True, update=_viz_display,
+        description='Hide or restore enabled lighting, sky, visibility, navigation and sound previews without changing their individual settings')
     # --- Add panel
     spawn_category: EnumProperty(
         name="Category", default="EVENTS", update=_on_spawn_category,

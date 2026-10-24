@@ -209,7 +209,7 @@ def _draw():
     if _state["data"] is None:
         return
     s = bpy.context.scene.hammerless
-    if not s.show_lightmap:
+    if not s.show_bake_visualizations or not s.show_lightmap:
         return
     try:
         if os.path.normcase(bsp_path(bpy.context)) != os.path.normcase(_state["path"] or ""):

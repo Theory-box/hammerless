@@ -236,7 +236,7 @@ def _build(scale):
 
 def _draw():
     s = bpy.context.scene.hammerless
-    if not s.show_sound or not _state["spots"]:
+    if not s.show_bake_visualizations or not s.show_sound or not _state["spots"]:
         return
     if _state["batches"] is None or _state["scale"] != s.units_per_meter:
         _build(s.units_per_meter)

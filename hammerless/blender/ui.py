@@ -815,6 +815,9 @@ class HL_PT_bake(_Panel, bpy.types.Panel):
     bl_order = 4
     bl_options = {"DEFAULT_CLOSED"}
 
+    def draw_header_preset(self, context):
+        _eye(self.layout, context.scene.hammerless, 'show_bake_visualizations')
+
     def draw(self, context):
         pass
 

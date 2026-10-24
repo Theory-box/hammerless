@@ -137,7 +137,7 @@ def _build(scale: float) -> None:
 def _draw():
     context = bpy.context
     s = context.scene.hammerless
-    if s.vis_view == "OFF":
+    if not s.show_bake_visualizations or s.vis_view == "OFF":
         return
     now = time.time()
     if _state["mode"] != s.vis_view:

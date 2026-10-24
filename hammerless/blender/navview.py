@@ -355,7 +355,7 @@ def _build(scale: float, mode: str, links: bool, spots: bool = False, viewer=Non
 
 def _draw():
     s = bpy.context.scene.hammerless
-    if not s.show_nav or _state["mesh"] is None or _state["owner"] != _owner():
+    if not s.show_bake_visualizations or not s.show_nav or _state["mesh"] is None or _state["owner"] != _owner():
         return                  # (a nav of another scene, map or file isn't drawn)
     survival = s.game_mode == "SURVIVAL"
     mode = "WHY" if survival and (s.show_zombie_spawns or s.nav_color_mode == "AHEAD") else s.nav_color_mode
