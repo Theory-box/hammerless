@@ -5,7 +5,7 @@
 No Hammer, no VMF editing, no console commands.
 
 > [!WARNING]
-> **Work in progress (v0.20.13, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene, and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
+> **Work in progress (v0.20.14, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene, and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
 
 ## Our own toolchain: rebuilt, measured, faster
 
