@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.15 (test release, 2026-10-24)
+
+- Capture Use input every server tick and buffer short presses for purchase stations and paid barriers. Consume one interaction per press/hold, prioritize actual entity surface hits, and clear stale prompts when focus is lost.
+- Add a reusable Lost Focus output to Look / Use Target and build prompt cleanup from ordinary editable nodes.
+- Add Survivor Assist rewards (default 25 points for the game's protection award) and a common-infected headshot multiplier (default 2) to Personal Points. Existing reward values and connections are preserved when untouched example groups upgrade.
+- Add Map > Game Mode Settings with searchable categories, opt-in overrides and independent Campaign/Survival values. Export supported map-level settings through MapOptions; unchecked values retain game defaults. Native Survival wave timing and escalation remain server-controlled and are not exposed as map settings.
+- Packaging validation: Python syntax, version consistency and ZIP integrity checks. No automated regression suite or in-game tests were run for these changes; gameplay verification remains pending.
+
+## 0.20.14 (test release, 2026-10-24)
+
+- Add the editable paid-barrier example and navigation blocking while the barrier is present.
+- Use larger private instructor hints for purchases and barriers, and a shared persistent points HUD.
+- Support the HUD through Hammerless's Survival wrapper and update untouched shipped economy groups when older files reopen.
+
 ## 0.20.13 (test release, 2026-10-23)
 
 - Rebuild Personal Kill Points and all purchase examples as editable node groups. Rewards, balance checks, deductions, refunds and messages are visible as ordinary nodes.
