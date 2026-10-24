@@ -41,8 +41,25 @@ report=Report();ir,_=extract_scene(bpy.context,report,defer_textures=True);compi
 assert not report.errors,report.errors
 assert not report.warnings,report.warnings
 script='\n'.join(ir.extra_scripts.values())
-assert 'weapon = "rifle_ak47", title = "Shop", price = 333' in script,script[-2000:]
-assert 'weapon = "first_aid_kit", title = "Other shop", price = 777' in script
+# Purchases now compile ordinary groups rather than a bespoke station table.
+# Check the values bound for each compiled owner, then both interaction entries.
+from hammerless.blender import logic
+from hammerless.blender.logicgroups import flatten
+for owner, entry, expected in ((obj,slot,(333,'rifle_ak47','Shop')),
+                               (copy,other,(777,'first_aid_kit','Other shop'))):
+    logic._SELF_OWNER[0] = owner
+    logic._SELF_ISOLATE[0] = True
+    logic._EXPOSED_SLOT[0] = entry
+    try:
+        flat = flatten(bpy.context, entry.graph, Report(), owner.name + '/')
+        values = {n.id.rsplit('/',1)[-1]:n.settings['value'] for n in flat.nodes if n.kind=='EXPOSED_VALUE'}
+        assert (values['price_setting'],values['item_setting'],values['title_setting']) == expected
+    finally:
+        logic._SELF_OWNER[0] = None
+        logic._SELF_ISOLATE[0] = False
+        logic._EXPOSED_SLOT[0] = None
+assert script.count('HL_Interactions.append(')==2
+assert 'rifle_ak47' in script and 'first_aid_kit' in script
 # Graph copies keep their interface IDs; the object can retain its overrides.
 graph_copy=graph.copy();other.graph=graph_copy
 assert exposed.resolve(graph_copy.nodes['price_setting'],other)==777

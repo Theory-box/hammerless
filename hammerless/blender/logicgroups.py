@@ -237,6 +237,10 @@ def flatten(context, tree, report, prefix: str = "", stack: tuple = (), checked:
             elif ln.kind in ("SET_VAR", "GET_VAR") and ln.settings.get("scope") == "PLAYER" and self_isolated():
                 # (in a Behaviour: each object's own, else 30 pods would share one value per player)
                 ln.settings = dict(ln.settings, name=self_owner().name + "/" + (ln.settings.get("name") or "value"))
+            elif ln.kind in ("SET_VAR", "GET_VAR") and ln.settings.get("scope") == "OBJECT":
+                if self_owner() is None:
+                    raise ValueError(f"'{n.name}': This Object variables need an object owner")
+                ln.settings = dict(ln.settings, name=self_owner().name + "/" + (ln.settings.get("name") or "value"), scope="MAP", keep=False)
             flat.nodes.append(ln)
     for ln in flat.nodes:
         by_id[ln.id] = ln

@@ -7,7 +7,7 @@ import uuid
 import bpy
 from bpy.props import BoolProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty, StringProperty, EnumProperty
 
-FIELDS = {'FLOAT':'number', 'INT':'integer', 'BOOL':'boolean', 'TEXT':'text', 'ENUM':'choice', 'VECTOR':'vector', 'COLOR':'color'}
+FIELDS = {'FLOAT':'number', 'INT':'integer', 'BOOL':'boolean', 'TEXT':'text', 'ENUM':'choice', 'VECTOR':'vector', 'COLOR':'color', 'OBJECT':'object'}
 _syncing = False
 _enum_cache = {}
 
@@ -86,6 +86,7 @@ def _changed(self,context):
 
 
 class HL_ExposedValue(bpy.types.PropertyGroup):
+    object: PointerProperty(type=bpy.types.Object, update=_changed)
     schema: PointerProperty(type=bpy.types.NodeTree)
     value_type: StringProperty()
     overridden: BoolProperty(default=False)

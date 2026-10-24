@@ -224,6 +224,8 @@ class _Node:
             found = _sources(sock)
             if found and found[0][0].bl_idname == "HL_NodeSelf":
                 return self_owner()              # (the object the Behaviour is being built for)
+            if found and found[0][0].bl_idname == "HL_NodeExposedSetting" and found[0][0].value_type == 'OBJECT':
+                return exposed.resolve(found[0][0], _EXPOSED_SLOT[0])
             return getattr(found[0][0], "target", None) if found else None
         return sock.value
 
@@ -276,6 +278,8 @@ def _rebuild_entity_sockets(node, classname: str):
     values = {s.identifier: s.value for s in node.inputs if getattr(s, "value", "")}
     node.inputs.clear()
     node.outputs.clear()
+    if node.bl_idname == 'HL_NodeObject':
+        node.obj_in('object', 'Object')
     for io in ins:
         s = node.ev_in(io.name, fgd.pretty(io.name), io.takes_value, io.description)
         s.value = values.get(io.name, "")
@@ -632,7 +636,8 @@ class HL_NodeObject(_Node, bpy.types.Node):
                 layout.operator("hammerless.logic_refresh_node", icon="FILE_REFRESH").node = self.name
 
     def settings(self):
-        return {"outputs": [s.identifier for s in self.outputs], "inputs": [s.identifier for s in self.inputs]}
+        return {"outputs": [s.identifier for s in self.outputs],
+                "inputs": [s.identifier for s in self.inputs if s.bl_idname == 'HL_EventSocket']}
 
     def to_lnode(self, context):
         n = super().to_lnode(context)
@@ -640,7 +645,9 @@ class HL_NodeObject(_Node, bpy.types.Node):
             owner = self_owner()
             n.obj = owner.name if owner is not None else ""
         else:
-            n.obj = self.target.name if self.target else ""
+            sock = self.inputs.get('Object')
+            obj = self.object_from('object') if sock is not None and sock.is_linked else self.target
+            n.obj = obj.name if obj else ""
         return n
 
 
@@ -1071,7 +1078,8 @@ class HL_NodeExposedSetting(_Node, bpy.types.Node):
     ui_name: StringProperty(name="Label", default="Setting", update=exposed.schema_changed)
     value_type: EnumProperty(name="Type", default="FLOAT", update=exposed.type_changed, items=[
         ("FLOAT","Number",""), ("INT","Integer",""), ("BOOL","Checkbox",""), ("TEXT","Text",""),
-        ("ENUM","Dropdown",""), ("VECTOR","Vector",""), ("COLOR","Color","")])
+        ("ENUM","Dropdown",""), ("VECTOR","Vector",""), ("COLOR","Color",""), ("OBJECT","Object","")])
+    default_object: PointerProperty(type=bpy.types.Object, name="Default", update=exposed.schema_changed)
     choices: StringProperty(name="Choices", default="one=One; two=Two",
                             description="Stable ID=Label pairs separated by semicolons. Keep IDs when renaming or reordering choices",
                             update=exposed.schema_changed)
@@ -1093,6 +1101,10 @@ class HL_NodeExposedSetting(_Node, bpy.types.Node):
         exposed.sync_all()
 
     def make_sockets(self):
+        if self.value_type == 'OBJECT':
+            self.outputs.new('HL_ObjectSocket', 'Object', identifier='object')
+            _data_socket(self.outputs, 'thing', 'value', 'Entity')
+            return
         kind={'FLOAT':'num','INT':'num','BOOL':'bool','TEXT':'text','ENUM':'text','VECTOR':'vec','COLOR':'vec'}[self.value_type]
         _data_socket(self.outputs,kind,'value','Value')
 
@@ -1102,6 +1114,9 @@ class HL_NodeExposedSetting(_Node, bpy.types.Node):
         layout.prop(self,'default_'+('text' if self.value_type=='ENUM' else exposed.FIELDS[self.value_type]))
 
     def to_lnode(self,context):
+        if self.value_type == 'OBJECT':
+            obj = exposed.resolve(self, _EXPOSED_SLOT[0])
+            return LNode(self.name, 'SELF', {}, obj=obj.name if obj else '')
         kind={'FLOAT':'num','INT':'num','BOOL':'bool','TEXT':'text','ENUM':'text','VECTOR':'vec','COLOR':'vec'}[self.value_type]
         return LNode(self.name,'EXPOSED_VALUE',{'type':kind,'value':exposed.resolve(self,_EXPOSED_SLOT[0])})
 
@@ -1664,7 +1679,8 @@ class HL_NodeForEach(_Block, bpy.types.Node):
 
 SCOPE_ITEMS = [("MAP", "Map", "One value for the whole map"), ("PLAYER", "Per Player", "A value for each player (or each entity wired into Player: a prop, an infected)"),
                ("GROUP", "This Group Copy", "Inside a node group: a value for each Group node using it (outside a "
-                                            "group: the same as Map)"), ("KEY", "Per Key", "Separate values by a text key, such as Human Identity")]
+                                            "group: the same as Map)"), ("KEY", "Per Key", "Separate values by a text key, such as Human Identity"),
+               ("OBJECT", "This Object", "A value belonging to the object running this behaviour, shared with its nested groups")]
 
 
 from ..core.wall_weapon import ITEMS as PURCHASE_ITEMS
@@ -2984,6 +3000,8 @@ def _check_nodes(context, tree, report) -> None:
             continue
         objs = [getattr(node, "target", None)] + [getattr(s, "value", None) for s in node.inputs
                                                     if s.bl_idname == "HL_ObjectSocket"]
+        if node.bl_idname == 'HL_NodeExposedSetting' and node.value_type == 'OBJECT':
+            objs.append(exposed.resolve(node, _EXPOSED_SLOT[0]))
         for obj in objs:
             if isinstance(obj, bpy.types.Object) and obj.name not in scene_objects:
                 report.warnings.append(f"{tree.name}: node '{node_title(node)}' points at '{obj.name}', "
@@ -2993,7 +3011,7 @@ def _check_nodes(context, tree, report) -> None:
         if target is not None and cls and target.hammerless.classname and target.hammerless.classname != cls:
             report.warnings.append(f"{tree.name}: node '{node_title(node)}' shows the events of a {cls}, "
                                    f"but '{target.name}' is now a {target.hammerless.classname}: pick it again")
-        if node.bl_idname in ("HL_NodeDirector", "HL_NodeObject") and not node.inputs and not node.outputs:
+        if node.bl_idname in ("HL_NodeDirector", "HL_NodeObject") and not node.outputs and not any(s.bl_idname == 'HL_EventSocket' for s in node.inputs):
             refresh_entity_node(node)
 
 
@@ -3001,7 +3019,7 @@ def refresh_entity_node(node) -> None:
     """Fill an event node's sockets from the game's definitions (when they were missing before)."""
     if node.bl_idname == "HL_NodeDirector":
         _rebuild_entity_sockets(node, "info_director")
-    elif getattr(node, "target", None) is not None and getattr(node, "classname", ""):
+    elif getattr(node, "classname", ""):
         _rebuild_entity_sockets(node, node.classname)
 
 

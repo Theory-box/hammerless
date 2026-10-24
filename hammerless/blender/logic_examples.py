@@ -453,7 +453,9 @@ EXAMPLES = [
 def all_examples():
     from .logic_examples_2 import EXAMPLES_2
     from .logic_examples_3 import EXAMPLES_3
-    return EXAMPLES + EXAMPLES_2 + EXAMPLES_3
+    from .example_ownership import DESCRIPTIONS
+    return [dict(ex, about=DESCRIPTIONS.get(ex['title'], ex['about']))
+            for ex in EXAMPLES + EXAMPLES_2 + EXAMPLES_3]
 
 
 def _first_of(n):   # where each set starts in all_examples()
@@ -762,6 +764,20 @@ def build_example(context, index: int, problems: list | None = None, into=None):
     number = index + 1
     title = f"Example {number:02d}: {ex['title']}"
     objects = _objects(context, number, ex)
+    from . import example_ownership
+    if example_ownership.applicable(ex):
+        return example_ownership.build(context, ex, objects, problems, number)
+    if ex.get('behaviours') and not ex['nodes']:
+        groups = _groups(ex, objects, problems)
+        for key, gname in ex['behaviours'].items():
+            obj = objects[key]
+            obj.hammerless.behaviours.add().graph = groups[gname]
+            obj.hammerless.behaviours_index = len(obj.hammerless.behaviours) - 1
+        bpy.ops.object.select_all(action='DESELECT')
+        obj = objects[next(iter(ex['behaviours']))]
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        return obj.hammerless.behaviours[-1].graph
     if into is None:
         tree = new_tree(context)
         tree.name = title
@@ -829,13 +845,17 @@ class HL_OT_logic_example(bpy.types.Operator):
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
         problems = []
-        tree = build_example(context, self.index, problems, into=main_tree(context))
+        from .example_ownership import applicable
+        ex = all_examples()[self.index]
+        owned = applicable(ex) or (ex.get('behaviours') and not ex['nodes'])
+        tree = build_example(context, self.index, problems, into=None if owned else main_tree(context))
         _show_tree(context, tree)
         title = f"Example {self.index + 1:02d}: {all_examples()[self.index]['title']}"
         if problems:
             self.report({"WARNING"}, f"Added '{title}' to '{tree.name}', but: " + "; ".join(problems))
         else:
-            self.report({"INFO"}, f"Added '{title}' to '{tree.name}' (in a frame named after it)")
+            self.report({"INFO"}, f"Added '{title}' as an object Behaviour" if tree.is_behaviour else
+                        f"Added '{title}' to '{tree.name}' (in a frame named after it)")
         return {"FINISHED"}
 
 
