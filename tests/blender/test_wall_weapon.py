@@ -20,9 +20,10 @@ for index, example in enumerate(examples):
     assert obj.hammerless.classname == "prop_dynamic_override"
     assert len(obj.hammerless.behaviours) == 1
     graph = obj.hammerless.behaviours[0].graph
-    assert graph.is_behaviour and len(graph.links) == 1
-    assert graph.nodes["buy"].price > 0
-    assert graph.nodes["buy"].bl_idname == "HL_NodeWallWeapon"
+    assert graph.is_behaviour and len(graph.links) > 1
+    assert graph.nodes["price_setting"].default_integer > 0
+    assert graph.nodes["buy"].bl_idname == "HL_NodeGroup"
+    assert graph.nodes["buy"].group.name.startswith('Purchase: Rules')
     assert graph.nodes["self"].bl_idname == "HL_NodeSelf"
     count += 1
 assert count == 3

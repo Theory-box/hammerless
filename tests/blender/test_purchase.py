@@ -13,7 +13,7 @@ build_example(bpy.context,index,problems)
 assert not problems,problems
 obj=next(o for o in bpy.context.scene.objects if o.name.endswith('purchase_display'))
 graph=obj.hammerless.behaviours[0].graph
-node=graph.nodes['buy']
+node=graph.nodes['item']
 assert node.item=='first_aid_kit'
 slot=obj.hammerless.behaviours[0]
 slot.values[graph.nodes['item_setting'].setting_id].choice='rifle_ak47'
@@ -22,7 +22,7 @@ ir,_=extract_scene(bpy.context,Report(),defer_textures=True)
 from hammerless.blender.logic import compile_logic
 report=Report();compile_logic(bpy.context,ir,report)
 assert not report.errors,report.errors
-assert any('weapon = "rifle_ak47"' in v for v in ir.extra_scripts.values())
+assert any('id = "rifle_ak47"' in v for v in ir.extra_scripts.values())
 assert any('PrecacheEntityFromTable' in v for v in ir.extra_scripts.values())
 graph_name=graph.name
 with tempfile.TemporaryDirectory() as tmp:

@@ -10,9 +10,15 @@ A purchase reserves points, gives the item, and confirms it in inventory. Failed
 
 Duplicate the display to create another station. The generic example shares its graph but stores settings independently on each object. Deleting the object removes that station. Stations do not create points controllers; purchases are unavailable without one.
 
-The older **Wall Weapon - Uzi / M16 / Pump Shotgun** examples remain available. They store price and range directly on the Purchase node, so shared copies of those older graphs share settings. Add Exposed Setting nodes or use the generic example for per-object controls. Existing saved graphs are not silently rewritten.
+The **Wall Weapon - Uzi / M16 / Pump Shotgun** examples use the same editable groups and per-object settings. Open the behaviour and press **Tab** on **Purchase: Rules** to see the prompt, inventory check, balance check, deduction, delivery and refund nodes. There is no special-purpose Purchase node in new examples.
 
-For advanced graphs, **Custom Item** on the Purchase node accepts a supported GiveItem ID. Inventory Class defaults to weapon_ plus that ID. Override it and optionally Inventory Model for custom melee or other shared-class items. Health/ammo commands and arbitrary map entities are not inventory purchases. Availability depends on installed game content and rules.
+Opening an older file expands its former Purchase nodes into ordinary nodes and groups. Existing exposed-setting IDs and object overrides are preserved; values formerly stored directly on a shared node remain shared graph values. The file on disk is unchanged until saved. Linked library graphs retain their legacy nodes.
+
+For advanced graphs, **Custom Item** on **Inventory Item** accepts a supported GiveItem ID. Disconnect the exposed Item input to use the node's own choice. Inventory Class defaults to weapon_ plus that ID. Override it and optionally Inventory Model for custom melee or other shared-class items. Health/ammo commands and arbitrary map entities are not inventory purchases. Availability depends on installed game content and rules.
+
+**Inventory Item**, **Has Inventory Item**, **Give Inventory Item**, and **Look / Use Target** are reusable outside purchases. Look / Use Target selects the nearest reachable target and supplies Focused/Used events and the human player. Give Inventory Item reports Delivered or Failed after checking inventory; it knows nothing about points. The example graph handles deductions and refunds. Deferred outputs retain the initiating player's context, including on disconnect.
+
+Prompts currently use the game's centre-screen **ClientPrint** text, whose font size is fixed. To choose a different presentation, replace the message nodes inside the group with HUD/message nodes.
 
 The Blender adapter compensates for rigid idle-pose transforms in real model previews. This keeps the exported display aligned with Blender without altering object transforms or shared mesh data. Placeholder previews and deforming animations are not corrected.
 

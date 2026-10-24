@@ -107,10 +107,10 @@ def _base(source: str) -> str:
     return re.sub(r" \(part \d+\)$", "", source)
 
 
-BLOCK_ACTIONS = ("FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
+BLOCK_ACTIONS = ("RESET_KEY_VAR", "GIVE_INVENTORY", "FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
                  "CAMERA", "FIRE_INPUT", "SET_PROP", "TRACE", "DAMAGE", "PUSH", "AIM", "EXPLOSION", "BEAM", "PARTICLE")
 CLIENT_COMMAND = "hl_clientcommand"     # the map's point_clientcommand: a console command run on one player
-BLOCK_VALUES = ("SELF", "GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
+BLOCK_VALUES = ("HUMAN_ID", "INVENTORY_ITEM", "HAS_INVENTORY", "SELF", "GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
                 "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE", "GET_PROP", "SEEN", "FIND_NEAR", "VIEW")
 TRACE_MASKS = {"SHOTS": 1174421507, "SIGHT": 24705, "WORLD": 16395}   # MASK_SHOT, MASK_VISIBLE, MASK_SOLID_BRUSHONLY
 ACTION_RESULTS = ("FOR_EACH", "SCRIPT_CODE", "TRACE", "BEAM", "PARTICLE")   # actions whose outputs hold what they did
@@ -597,6 +597,8 @@ class _Compiler:
                 return (f"(function(hl_t) {{ return (typeof hl_t == \"instance\" && hl_t.IsValid()) ? "
                         f"{vs.call_expr(f, 'hl_t', args)} : null; }})({target})")
             return f'(("{slug}" in ::HL_R) ? ::HL_R["{slug}"] : null)'
+        if k == "INTERACTION":
+            return {"player": 'HL_Ctx.player', "key": 'HL_Ctx.key'}.get(sock, "null")
         if k == "SCRIPT_EVENT":
             e = vs.event(s.get("event", ""))
             fld = next((x for x in (e or {}).get("fields", []) if x["name"] == sock), None)
@@ -644,6 +646,8 @@ class _Compiler:
             return f"{fn}()"
         if k == "MATH":
             a, b = self.expr_in(n, "a", 0.0), self.expr_in(n, "b", 0.0)
+            if s.get("integer"):
+                a, b = f"({a}).tointeger()", f"({b}).tointeger()"
             op = s.get("op", "ADD")
             return {"ADD": f"({a} + {b})", "SUBTRACT": f"({a} - {b})", "MULTIPLY": f"({a} * {b})",
                     "DIVIDE": f"(({b}) != 0 ? ({a}) / ({b}) : 0.0)", "MINIMUM": f"(({a}) < ({b}) ? ({a}) : ({b}))",
@@ -700,6 +704,28 @@ class _Compiler:
             self.takes.setdefault((nid, sock), []).append(_Take(target, inp, param))
 
         k = n.kind
+        if k == "INTERACTION":
+            source = self.data_links.get((nid, "entity"))
+            target_node = self.nodes.get(source[0]) if source else None
+            fixed_object = (target_node.obj if target_node and target_node.kind in ("SELF", "INVENTORY_ITEM")
+                            else n.consts.get("entity") if not source else None)
+            targets = self.ir.__dict__.setdefault("_interaction_targets", set())
+            if fixed_object:
+                if fixed_object in targets:
+                    self.problems.append(f"Look / Use Target '{nid}': '{fixed_object}' already has an interaction")
+                    return
+                targets.add(fixed_object)
+            self.interaction_helpers()
+            fn = self.fn_name(f"HL_Interact_{slug}")
+            self.script_fns[nid] = (fn, "if (HL_Ctx.used) {\n@@used@@\n} else {\n@@focused@@\n}")
+            self.script_sources |= {(nid, "used"), (nid, "focused")}
+            entity = self.typed_in(n, "entity", vs.THING)
+            reach = self.typed_in(n, "range", vs.NUM)
+            # Registration is emitted after the callback functions have been declared.
+            self.ir.__dict__.setdefault("_interaction_registrations", []).append(
+                f"HL_Interactions.append({{ entity = function() {{ return {entity}; }}, "
+                f"range = function() {{ return {reach}; }}, event = {fn} }});\n")
+            return
         if k == "WALL_WEAPON":
             from . import wall_weapon
             s = dict(s)
@@ -1244,11 +1270,68 @@ class _Compiler:
             self.ir._logic_helpers.add(name)
             self.functions.insert(0, code)
 
+    def interaction_helpers(self):
+        from . import interaction
+        self.helper("HL_KeyVars", interaction.STORAGE)
+        self.helper("HL_View", HELPERS["HL_View"])
+        self.helper("HL_Interaction", interaction.RUNTIME)
+        if not self.ir.__dict__.get("_interactions"):
+            self.ir._interactions = True
+            self.ir.logic_script_events.setdefault("round_start", []).append(
+                "    HL_InteractionUsers = {}; HL_Deliveries = {}; HL_InteractionNext = 0.0;")
+
+    def inventory_literal(self, n):
+        from . import wall_weapon
+        settings = dict(n.settings)
+        source = self.data_links.get((n.id, "item"))
+        if source:
+            value = self.nodes.get(source[0])
+            if value is None or value.kind != "EXPOSED_VALUE" or not isinstance(value.settings.get("value"), str):
+                self.problems.append(f"Inventory Item '{n.id}': Item needs a text Exposed Setting")
+                return "null"
+            settings["item"] = value.settings["value"]
+        e = self.entity_of(n.obj) if n.obj else None
+        model = e.keyvalues.get("model", "").replace("\\", "/").lower() if e else ""
+        try:
+            key, data = wall_weapon.resolve(settings, model)
+        except ValueError as error:
+            self.problems.append(f"Inventory Item '{n.id}': {error}")
+            return "null"
+        if e is not None and settings.get("display_transform") is not None:
+            e.origin, e.angles = settings["display_transform"]
+        precache = '{ classname = ' + vs.literal(vs.TEXT, data['classname'])
+        if data['classname'] == 'weapon_melee':
+            precache += ', melee_script_name = ' + vs.literal(vs.TEXT, key)
+        self.helper('HL_PrecacheItem_' + key,
+                    'try { PrecacheEntityFromTable(' + precache + ' }); } catch (error) { '
+                    'printl("HAMMERLESS_INVENTORY precache: " + error); }')
+        return '{ ' + ', '.join(name + ' = ' + vs.literal(vs.TEXT, value) for name, value in
+            [('id', key), ('title', data['title']), ('classname', data['classname']),
+             ('matchmodel', data['match_model']), ('model', data.get('model', model))]) + ' }'
+
     def block_action(self, n: LNode, slug: str, take) -> None:
         """Building blocks that do something (For Each, Set Variable, Script)."""
         s, k, nid = n.settings, n.kind, n.id
         fn = self.fn_name(f"HL_S_{slug}")
-        if k == "FOR_EACH":
+        if k == "RESET_KEY_VAR":
+            from . import interaction
+            self.helper("HL_KeyVars", interaction.STORAGE)
+            name = vs.literal(vs.TEXT, s.get("name", "value"))
+            if s.get("exclusive"):
+                controllers = self.ir.__dict__.setdefault("_key_controllers", set())
+                if name in controllers:
+                    self.problems.append(f"Variable {name}: more than one Single Controller; keep one controller per map")
+                    return
+                controllers.add(name)
+            self.script_action(nid, fn, f"HL_KeyVars[{name}] <- {{}};\n@@then@@", ["then"], take)
+        elif k == "GIVE_INVENTORY":
+            self.interaction_helpers()
+            player = self.typed_in(n, "player", vs.THING)
+            item = self.typed_in(n, "item", vs.ANY)
+            self.script_action(nid, fn,
+                f"HL_GiveInventory({player}, {item}, function() {{\n@@success@@\n}}, function() {{\n@@failure@@\n}});",
+                ["success", "failure"], take)
+        elif k == "FOR_EACH":
             self.helper("HL_Players", HELPERS["HL_Players"])
             self.helper("HL_Find", HELPERS["HL_Find"])
             what = s.get("what", "SURVIVORS")
@@ -1266,6 +1349,14 @@ class _Compiler:
             self.helper("HL_Vars", HELPERS["HL_Vars"])
             name = vs.literal(vs.TEXT, s.get("name") or "value")
             value = self.typed_in(n, "value", s.get("kind", vs.ANY))
+            if s.get("scope") == "KEY":
+                from . import interaction
+                self.helper("HL_KeyVars", interaction.STORAGE)
+                key = self.typed_in(n, "key", vs.TEXT)
+                if s.get("op") == "ADD":
+                    value = f"(HL_KeyGet({key}, {name}, 0) + ({value}))"
+                self.script_action(nid, fn, f"HL_KeySet({key}, {name}, {value});\n@@then@@", ["then"], take)
+                return
             if s.get("op") == "ADD":          # (text: adds on to the end)
                 zero = '""' if s.get("kind") == vs.TEXT else "0.0"
                 old = (f"HL_PVarGet({self.typed_in(n, 'player', vs.THING)}, {name}, {zero})" if s.get("scope") == "PLAYER"
@@ -1469,11 +1560,29 @@ class _Compiler:
             if sock == "count":
                 return f"{found}.len().tofloat()"
             return found
+        if k == "HUMAN_ID":
+            from . import interaction
+            self.helper("HL_KeyVars", interaction.STORAGE)
+            return f"HL_HumanKey({self.typed_in(n, 'player', vs.THING)})"
+        if k == "INVENTORY_ITEM":
+            if sock == "entity":
+                entity = self.entity_of(n.obj) if n.obj else None
+                return f'Entities.FindByName(null, "{self.name_of(entity, n.obj)}")' if entity else "null"
+            item = self.inventory_literal(n)
+            return item if sock == "value" else f"({item}).{sock}" if item != "null" else '""'
+        if k == "HAS_INVENTORY":
+            self.interaction_helpers()
+            return f"HL_HasInventory({self.typed_in(n, 'player', vs.THING)}, {self.typed_in(n, 'item', vs.ANY)})"
         if k == "GET_VAR":
             self.helper("HL_Vars", HELPERS["HL_Vars"])
             kind = s.get("kind", vs.NUM)
             default = {vs.NUM: "0.0", vs.BOOL: "false", vs.TEXT: '""'}.get(kind, "null")
             name = vs.literal(vs.TEXT, s.get("name") or "value")
+            if s.get("scope") == "KEY":
+                from . import interaction
+                self.helper("HL_KeyVars", interaction.STORAGE)
+                fallback = self.typed_in(n, "default", kind)
+                return f"HL_KeyGet({self.typed_in(n, 'key', vs.TEXT)}, {name}, {fallback})"
             if s.get("scope") == "PLAYER":
                 return f"HL_PVarGet({self.typed_in(n, 'player', vs.THING)}, {name}, {default})"
             return f"HL_VarGet({name}, {default})"
@@ -1542,8 +1651,9 @@ class _Compiler:
             test = {"CONTAINS": "t.find(f) != null", "STARTS": "t.find(f) == 0",
                     "ENDS": "t.len() >= f.len() && t.slice(t.len() - f.len()) == f",
                     "EQUAL": "t == f"}.get(s.get("op", "CONTAINS"), "t.find(f) != null")
-            return (f"(function(t, f) {{ if (t == null || f == null) return false; t = t.tostring(); f = f.tostring(); "
-                    f"if (f.len() == 0) return false; "
+            return (f"(function(t, f) {{ if (t == null || f == null) return false; t = t.tostring(); f = f.tostring(); " +
+                    ("t = t.tolower(); f = f.tolower(); " if s.get("ignore_case") else "") +
+                    ("" if s.get("op") == "EQUAL" else "if (f.len() == 0) return false; ") +
                     f"return {test}; }})({a}, {b})")
         if k == "SPLIT_TEXT":
             t, sep = self.typed_in(n, "text", vs.TEXT), self.typed_in(n, "separator", vs.TEXT)
@@ -1640,7 +1750,7 @@ class _Compiler:
                 or ir.logic_script_events or ir.logic_hooks):
             return
         wall_weapons = bool(ir.__dict__.get("_wall_weapon_names"))
-        thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens or ir.logic_diropts or wall_weapons)
+        thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens or ir.logic_diropts or wall_weapons or ir.__dict__.get("_interactions"))
         parts = [f"// Hammerless logic graphs for {ir.settings.name}\n",
                  "::HL_Ctx <- {};   // the event being handled, its fields\n::HL_R <- {};     // what action nodes returned\n"
                  "::HL_L <- {};     // For Each: the current item\n::HL_I <- {};     // and its number\n"
@@ -1728,6 +1838,7 @@ class _Compiler:
                          "function HL_PathLast() { local a = HL_PathSurvivors(), m = 2.0; foreach (v in a) if (v < m) m = v; "
                          "return a.len() ? m : 0.0; }\n")
         parts += [f + "\n" for f in ir.logic_functions]
+        parts += ir.__dict__.get("_interaction_registrations", [])
         for hook, rows in ir.logic_hooks.items():
             parts.append(hook_function(hook, rows))
         if ir.logic_whens:
@@ -1762,6 +1873,7 @@ class _Compiler:
         if thinks:
             parts.append("function HL_Think() {\n"
                          + ("    HL_WallThink();\n" if wall_weapons else "")
+                         + ("    HL_InteractionThink();\n" if ir.__dict__.get("_interactions") else "")
                          + ("    HL_Progress_Think();\n" if ir.logic_progress else "")
                          + ("    HL_When_Think();\n" if ir.logic_whens else "")
                          + ("    HL_Retry();\n" if ir.logic_retry else "")

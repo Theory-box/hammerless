@@ -1156,6 +1156,8 @@ class HL_NodeMath(_Node, bpy.types.Node):
     bl_idname, bl_label, bl_icon = "HL_NodeMath", "Math", "LINENUMBERS_ON"
     kind, category = "MATH", "Values"
     op: EnumProperty(name="Operation", items=MATH_OPS, default="MULTIPLY")
+    integer: BoolProperty(name="Whole Numbers", default=False,
+                          description="Convert operands to integers before arithmetic; useful for exact scores and counters")
 
     def make_sockets(self):
         self.num_in("a", "A", 0.0)
@@ -1164,9 +1166,10 @@ class HL_NodeMath(_Node, bpy.types.Node):
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "op", text="")
+        layout.prop(self, "integer")
 
     def settings(self):
-        return {"op": self.op}
+        return {"op": self.op, "integer": self.integer}
 
 
 COMPARE_OPS = [("GREATER_EQUAL", "A ≥ B", ""), ("GREATER", "A > B", ""), ("LESS", "A < B", ""),
@@ -1658,7 +1661,7 @@ class HL_NodeForEach(_Block, bpy.types.Node):
 
 SCOPE_ITEMS = [("MAP", "Map", "One value for the whole map"), ("PLAYER", "Per Player", "A value for each player (or each entity wired into Player: a prop, an infected)"),
                ("GROUP", "This Group Copy", "Inside a node group: a value for each Group node using it (outside a "
-                                            "group: the same as Map)")]
+                                            "group: the same as Map)"), ("KEY", "Per Key", "Separate values by a text key, such as Human Identity")]
 
 
 from ..core.wall_weapon import ITEMS as PURCHASE_ITEMS
@@ -1751,6 +1754,111 @@ class HL_NodeWallWeapon(_Block, bpy.types.Node):
         return n
 
 
+class HL_NodeInventoryItem(_Block, bpy.types.Node):
+    """Reusable carried-item definition for inventory checks, grants and display models"""
+    bl_idname, bl_label, bl_icon = "HL_NodeInventoryItem", "Inventory Item", "PROPERTIES"
+    kind = "INVENTORY_ITEM"
+    item: EnumProperty(name="Item", items=_PURCHASE_CHOICES, default="AUTO", update=exposed.preview_node_changed)
+    custom_item: StringProperty(name="Item ID")
+    inventory_class: StringProperty(name="Inventory Class")
+    inventory_model: StringProperty(name="Inventory Model")
+    preview_label = "Match Model to Item"
+    update_owner_preview = HL_NodeWallWeapon.update_owner_preview
+    def to_lnode(self, context):
+        n = self.with_object(context, super().to_lnode(context))
+        from .preview import purchase_display_transform
+        transform = purchase_display_transform(self.object_from("object"), context)
+        if transform is not None:
+            n.settings["display_transform"] = transform
+        return n
+
+    def make_sockets(self):
+        self.inputs.new("HL_ObjectSocket", "Display Object", identifier="object")
+        self.data_in("text", "item", "Item").hide_value = True
+        self.data_out("any", "value", "Item")
+        self.data_out("text", "title", "Name")
+        self.data_out("text", "model", "Model")
+        self.data_out("thing", "entity", "Display Entity")
+
+    def settings(self):
+        return {"item": self.item, "custom_item": self.custom_item,
+                "inventory_class": self.inventory_class, "inventory_model": self.inventory_model}
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "item")
+        if self.item == "CUSTOM":
+            for key in ("custom_item", "inventory_class", "inventory_model"):
+                layout.prop(self, key)
+
+
+class HL_NodeHumanIdentity(_Block, bpy.types.Node):
+    """Stable human survivor identity; empty for bots and non-survivors"""
+    bl_idname, bl_label, bl_icon = "HL_NodeHumanIdentity", "Human Identity", "USER"
+    kind = "HUMAN_ID"
+
+    def make_sockets(self):
+        self.data_in("thing", "player", "Player")
+        self.data_out("text", "key", "Key")
+
+
+class HL_NodeInteraction(_Block, bpy.types.Node):
+    """Look at the nearest reachable target; emits Focused periodically or Used on a new Use press"""
+    bl_idname, bl_label, bl_icon = "HL_NodeInteraction", "Look / Use Target", "RESTRICT_SELECT_OFF"
+    kind = "INTERACTION"
+
+    def make_sockets(self):
+        self.data_in("thing", "entity", "Target")
+        self.data_in("num", "range", "Range").value = 96
+        self.ev_out("focused", "Focused")
+        self.ev_out("used", "Used")
+        self.data_out("thing", "player", "Player")
+        self.data_out("text", "key", "Human Key")
+
+
+class HL_NodeHasInventory(_Block, bpy.types.Node):
+    """Check a player's carried inventory against an Inventory Item definition"""
+    bl_idname, bl_label, bl_icon = "HL_NodeHasInventory", "Has Inventory Item", "QUESTION"
+    kind = "HAS_INVENTORY"
+
+    def make_sockets(self):
+        self.data_in("thing", "player", "Player")
+        self.data_in("any", "item", "Item")
+        self.data_out("bool", "result", "Has Item")
+
+
+class HL_NodeGiveInventory(_Block, bpy.types.Node):
+    """Give a carried item; confirm inventory within 0.5 seconds, or fire Failed (including disconnect)"""
+    bl_idname, bl_label, bl_icon = "HL_NodeGiveInventory", "Give Inventory Item", "ADD"
+    kind = "GIVE_INVENTORY"
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("thing", "player", "Player")
+        self.data_in("any", "item", "Item")
+        self.ev_out("success", "Delivered")
+        self.ev_out("failure", "Failed")
+
+
+class HL_NodeResetKeyVariable(_Block, bpy.types.Node):
+    """Clear one named variable for every key; other named variables are untouched"""
+    bl_idname, bl_label, bl_icon = "HL_NodeResetKeyVariable", "Reset Key Variable", "LOOP_BACK"
+    kind = "RESET_KEY_VAR"
+    var_name: StringProperty(name="Name", default="score")
+    exclusive: BoolProperty(name="Single Controller", default=False,
+                            description="Report an export error if another exclusive reset controls this variable")
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.ev_out("then", "Then")
+
+    def settings(self):
+        return {"name": self.var_name, "exclusive": self.exclusive}
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "var_name", text="")
+        layout.prop(self, "exclusive")
+
+
 class HL_NodePersonalPoints(_Block, bpy.types.Node):
     """Personal kill points for human survivors; one controller per map. Type !points in chat"""
     bl_idname, bl_label, bl_icon = "HL_NodePersonalPoints", "Personal Points", "PROPERTIES"
@@ -1791,6 +1899,8 @@ class HL_NodeSetVariable(_Block, bpy.types.Node):
 
     def make_sockets(self):
         self.ev_in("run", "Run")
+        if self.scope == "KEY":
+            self.data_in("text", "key", "Key")
         if self.scope == "PLAYER":
             self.data_in("thing", "player", "Player")
         self.data_in(self.value_kind, "value", "Value")
@@ -1818,8 +1928,12 @@ class HL_NodeGetVariable(_Block, bpy.types.Node):
     value_kind: EnumProperty(name="Value", items=VALUE_KIND_ITEMS, default="num", update=_ensure)
 
     def make_sockets(self):
+        if self.scope == "KEY":
+            self.data_in("text", "key", "Key")
         if self.scope == "PLAYER":
             self.data_in("thing", "player", "Player")
+        if self.scope == "KEY":
+            self.data_in(self.value_kind, "default", "Initial Value")
         self.data_out(self.value_kind, "result", "Value")
 
     def draw_buttons(self, context, layout):
@@ -1953,6 +2067,7 @@ class HL_NodeTextCheck(_Block, bpy.types.Node):
     is false)"""
     bl_idname, bl_label, bl_icon = "HL_NodeTextCheck", "Text Check", "SORTALPHA"
     kind = "TEXT_CHECK"
+    ignore_case: BoolProperty(name="Ignore Case", default=False)
     op: EnumProperty(name="Check", default="CONTAINS", items=[
         ("CONTAINS", "Contains", "B is somewhere in A"), ("STARTS", "Starts With", "A starts with B"),
         ("ENDS", "Ends With", "A ends with B"), ("EQUAL", "Equals", "A and B are the same text")])
@@ -1964,9 +2079,10 @@ class HL_NodeTextCheck(_Block, bpy.types.Node):
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "op", text="")
+        layout.prop(self, "ignore_case")
 
     def settings(self):
-        return {"op": self.op}
+        return {"op": self.op, "ignore_case": self.ignore_case}
 
 
 class HL_NodeSplitText(_Block, bpy.types.Node):
@@ -2293,7 +2409,7 @@ COMBAT_CLASSES = (HL_NodeTrace, HL_NodeDamage, HL_NodePush, HL_NodeAimAt, HL_Nod
                   HL_NodeParticle, HL_NodeSeenBy, HL_NodeFindNearby, HL_NodePlayerView)
 
 
-BLOCK_CLASSES = (HL_NodeForEach, HL_NodeWallWeapon, HL_NodePersonalPoints, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeMakeTable, HL_NodeGetField,
+BLOCK_CLASSES = (HL_NodeInventoryItem, HL_NodeHumanIdentity, HL_NodeInteraction, HL_NodeHasInventory, HL_NodeGiveInventory, HL_NodeResetKeyVariable, HL_NodeForEach, HL_NodeWallWeapon, HL_NodePersonalPoints, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeMakeTable, HL_NodeGetField,
                  HL_NodeFormatText, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, HL_NodeCheck,
                  HL_NodePickValue, HL_NodeTextCheck, HL_NodeSplitText, HL_NodeFireInput, HL_NodeScriptCode, HL_NodeScriptValue) + COMBAT_CLASSES
 
@@ -2705,21 +2821,21 @@ NODE_CLASSES = tuple(c for _t, cs in CATEGORIES for c in cs) + (HL_NodePathProgr
 # (all its events under Events, all its functions under Actions); Blender's Add search finds them too.
 SUB = "SUB"          # ("SUB", menu idname, label, icon) entries open a submenu
 MENU_LAYOUT = [
-    ("Events", [HL_NodeMapStart, HL_NodeVolume, HL_NodeButton, HL_NodeTimer, HL_NodeGameEvent, None,
+    ("Events", [HL_NodeInteraction, HL_NodeMapStart, HL_NodeVolume, HL_NodeButton, HL_NodeTimer, HL_NodeGameEvent, None,
                 (SUB, "HL_MT_logic_game_events", "All Game Events", "LIGHT")]),
     ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
               HL_NodeCounter, HL_NodeRandom, None, HL_NodeForEach]),
-    ("Values", [HL_NodeExposedSetting, HL_NodeValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath, HL_NodeRandomValue, HL_NodeProgress,
+    ("Values", [HL_NodeHumanIdentity, HL_NodeInventoryItem, HL_NodeHasInventory, HL_NodeResetKeyVariable, HL_NodeExposedSetting, HL_NodeValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath, HL_NodeRandomValue, HL_NodeProgress,
                 HL_NodeInfectedCount, None, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeFormatText, HL_NodeTextCheck, HL_NodeSplitText,
                 HL_NodeCheck, HL_NodePickValue, None, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, None,
                 HL_NodeMakeTable, HL_NodeGetField]),
     ("Scene", [HL_NodeObjectInfo, HL_NodeSelf, HL_NodeObject, HL_NodeCollision, None, HL_NodeGetProperty]),
-    ("Actions", [HL_NodeWallWeapon, HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
+    ("Actions", [HL_NodeGiveInventory, HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
                  HL_NodeTeleport, HL_NodeFireInput, HL_NodeSetProperty, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
     ("Combat & Physics", [HL_NodeTrace, HL_NodeSeenBy, HL_NodeFindNearby, HL_NodePlayerView, None, HL_NodeDamage,
                           HL_NodePush, HL_NodeAimAt, None, HL_NodeExplosion, HL_NodeBeam, HL_NodeParticle]),
     ("Director", [HL_NodeDirector, HL_NodeDirectorSettings, HL_NodeDirectorOption, HL_NodeDirectorMood]),
-    ("HUD & Messages", [HL_NodeMessage, HL_NodeObjective, None, HL_NodeHudText, HL_NodeHudHide, HL_NodePersonalPoints]),
+    ("HUD & Messages", [HL_NodeMessage, HL_NodeObjective, None, HL_NodeHudText, HL_NodeHudHide]),
     ("Overrides", [HL_NodeOverride, HL_NodeOverrideAnswer]),
     ("Script", [HL_NodeScriptCode, HL_NodeScriptValue]),
 ]
@@ -3201,9 +3317,14 @@ def register():
     bpy.types.NODE_MT_add.append(_add_menu)
     bpy.app.handlers.load_post.append(_on_load)
     bpy.app.handlers.load_post.append(_migrate_on_load)
+    from . import economy_migration
+    bpy.app.handlers.load_post.append(economy_migration.on_load)
 
 
 def unregister():
+    from . import economy_migration
+    if economy_migration.on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(economy_migration.on_load)
     if _on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_on_load)
     if _migrate_on_load in bpy.app.handlers.load_post:
