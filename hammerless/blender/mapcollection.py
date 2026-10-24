@@ -106,10 +106,46 @@ def _category_parts(category):
     return category.split("/", 1) if category.startswith(WORLD + "/") else category.split("/")
 
 
+def organize_preset_objects(context):
+    """Explicit conversion also sorts hidden presets, preserving their visibility.
+
+    Ordinary Organize deliberately leaves hidden objects alone. This targeted
+    operation is for the objects the user has asked to convert and reorganize.
+    """
+    coll = map_collection(context.scene)
+    if coll is None:
+        organize(context)
+        coll = map_collection(context.scene)
+    objects = [o for o in coll.all_objects if o.hammerless.preset and o.parent is None
+               and not o.library and not o.override_library]
+    for obj in objects:
+        category = _category(obj)
+        if not category:
+            continue
+        invisible = not obj.visible_get()
+        target = coll
+        for part in _category_parts(category):
+            target = _child(target, part)
+        for item in [obj] + list(obj.children_recursive):
+            if item.library or item.override_library:
+                continue
+            _freeze_settings(item)
+            if target not in item.users_collection:
+                target.objects.link(item)
+            for old in list(item.users_collection):
+                if old is not target and not old.library:
+                    old.objects.unlink(item)
+        if invisible:
+            obj.hide_set(True)
+    _drop_empty(context.scene, coll)
+
+
 def _brush_entity_category(cls):
     if cls == "func_detail":
         return DETAIL
-    if cls.startswith("trigger_") or cls in {"fog_volume", "func_nav_blocker", "func_viscluster",
+    if cls.startswith("trigger_"):
+        return 'Gameplay/Triggers'
+    if cls in {"fog_volume", "func_nav_blocker", "func_viscluster",
                                             "func_areaportal", "func_areaportalwindow", "func_occluder"}:
         return VOLUMES
     return BRUSH_ENTITIES
@@ -160,8 +196,16 @@ def _category(obj, imported=None) -> str | None:
         return _world_category(obj)
     if kind == "entity" and any(c.get(KIND) in ("solid", "disp") for c in obj.children):
         return _brush_entity_category(hs.classname or "")
-    if hs.preset:
-        return PREFABS
+    if hs.preset in ('SURVIVAL_START', 'SURVIVAL_ARENA'):
+        return 'Gameplay/Survival'
+    if hs.preset == 'ZOMBIE_SPAWN_AREA':
+        return 'Gameplay/Spawn Areas'
+    if hs.preset in ('ZOMBIE_LADDER', 'ZOMBIE_CLIMB', 'LADDER'):
+        return 'Gameplay/Navigation'
+    if hs.preset and hs.role == 'IGNORE':
+        return 'Gameplay/Assemblies'
+    if (hs.classname or '').startswith('trigger_'):
+        return 'Gameplay/Triggers'
     if obj.instance_type == "COLLECTION" and obj.instance_collection is not None:
         return INSTANCES
     role = effective_role(obj)

@@ -1090,7 +1090,7 @@ class HL_OT_add_preset(bpy.types.Operator):
         from .presets import make_root, parent_to
         coll = context.collection
         base = context.scene.cursor.location.copy()
-        root = make_root(context, self.preset, base, coll)
+        root = make_root(context, self.preset, base, coll) if len(preset.parts) > 1 else None
         parts = []
         for part in preset.parts:
             if part.brush is not None:
@@ -1126,8 +1126,13 @@ class HL_OT_add_preset(bpy.types.Operator):
             obj.hammerless.preset_part = part.name
             parts.append(obj)
         context.view_layer.update()
-        for obj in parts:
-            parent_to(obj, root)
+        if root is None:
+            root = parts[0]
+            root.name = preset.label
+            root.hammerless.preset = self.preset
+        else:
+            for obj in parts:
+                parent_to(obj, root)
         for o in context.selected_objects:
             o.select_set(False)
         root.select_set(True)

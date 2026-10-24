@@ -386,7 +386,8 @@ class HL_PT_object(_Panel, bpy.types.Panel):
             row.operator("hammerless.select_object", text="", icon="RESTRICT_SELECT_OFF").name = obj.name
         if hs.preset:
             draw_root(layout, obj)
-            return
+            if hs.role == 'IGNORE':
+                return
         draw_part(layout, obj)
         col = _settings(layout)
         eff = effective_role(obj)
@@ -558,7 +559,7 @@ def _detail_note(context, obj) -> str:
 
 def _obj_role(context) -> str:
     obj = context.object
-    if obj is None or obj.hammerless.preset:
+    if obj is None or (obj.hammerless.preset and obj.hammerless.role == 'IGNORE'):
         return ""
     return effective_role(obj)
 
@@ -1358,6 +1359,8 @@ class HL_PT_scene(_Sub, bpy.types.Panel):
         col.separator()
         col.prop(s, "check_game_content")
         col.prop(s, "model_previews")
+        col.separator()
+        col.operator('hammerless.convert_preset_objects', text='Convert Presets to Objects')
 
 
 class HL_PT_game(_Sub, bpy.types.Panel):

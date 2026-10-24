@@ -121,7 +121,7 @@ class HL_OT_behaviour_copy(bpy.types.Operator):
             return {"CANCELLED"}
         n = 0
         for o in selected_entities(context):
-            if o is obj or o.hammerless.preset or any(s.graph == slot.graph for s in o.hammerless.behaviours):
+            if o is obj or (o.hammerless.preset and o.hammerless.role == 'IGNORE') or any(s.graph == slot.graph for s in o.hammerless.behaviours):
                 continue
             target=o.hammerless.behaviours.add()
             target.graph=slot.graph
@@ -257,7 +257,7 @@ class HL_PT_obj_behaviours(bpy.types.Panel):
     @classmethod
     def poll(cls, context):
         obj = entity_object(context)
-        return obj is not None and not obj.hammerless.preset
+        return obj is not None and not (obj.hammerless.preset and obj.hammerless.role == 'IGNORE')
 
     def draw_header_preset(self, context):
         n = len(entity_object(context).hammerless.behaviours)

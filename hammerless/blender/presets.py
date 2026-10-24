@@ -1,9 +1,8 @@
-"""Preset groups: one parent Empty per preset, with its parts parented to it.
+"""Single-part presets are their actual object; multi-part assemblies share a transform root.
 
-The Empty carries the preset key (object.hammerless.preset) and is what the user
-selects to move the whole thing or edit its settings. Each part carries its part
-name (object.hammerless.preset_part). Preset settings (core PRESET_FIELDS) are
-stored on the parts; editing the first target copies the value to the others.
+The preset owner carries object.hammerless.preset. Each part (including a
+single-part owner itself) carries preset_part. Multi-part settings synchronize
+across their field targets; actual entities always own their export settings.
 """
 import re
 
@@ -16,7 +15,7 @@ _syncing = False
 
 
 def preset_root(obj):
-    """The preset Empty this object belongs to (itself if it is one), or None."""
+    """The preset owner this object belongs to (possibly itself), or None."""
     while obj is not None:
         if obj.hammerless.preset:
             return obj
@@ -25,6 +24,8 @@ def preset_root(obj):
 
 
 def part_object(root, part: str):
+    if root.hammerless.preset_part == part:
+        return root
     for child in root.children_recursive:
         if child.hammerless.preset_part == part:
             return child
@@ -55,7 +56,7 @@ def _sync(data, prop: str):
     obj = data.id_data
     if not isinstance(obj, bpy.types.Object) or not obj.hammerless.preset_part:
         return
-    root = preset_root(obj.parent)
+    root = preset_root(obj)
     if root is None:
         return
     for field in PRESET_FIELDS.get(root.hammerless.preset, []):
@@ -119,6 +120,88 @@ def ungrouped_preset(obj):
     return None
 
 
+def convert_single_presets(context):
+    """Explicit, undoable migration of known wrappers. Never infer ownership by name.
+
+    Keep the actual object's data, export settings and identity. ID remapping
+    redirects references to the obsolete wrapper before it is removed.
+    Animated/constrained/customized wrappers require individual review.
+    """
+    from .mapcollection import map_objects
+    from .exposed import copy_values
+    inside = map_objects(context.scene)
+    converted, skipped = [], []
+    for root in list(context.scene.objects):
+        key = root.hammerless.preset
+        if (root.name not in inside or root.type != 'EMPTY' or root.hammerless.role != 'IGNORE'
+                or key not in PRESETS or len(PRESETS[key].parts) != 1):
+            continue
+        children = list(root.children)
+        part = children[0] if len(children) == 1 else None
+        unsafe = (part is None or root.library or root.override_library or root.animation_data
+                  or root.constraints or len(root.users_scene) != 1
+                  or set(root.keys()) - {'hammerless', '_RNA_UI'})
+        if not unsafe:
+            unsafe = (part.hammerless.preset_part != PRESETS[key].parts[0].name
+                      or part.hammerless.preset or part.library or part.override_library
+                      or part.animation_data or part.constraints or len(part.users_scene) != 1
+                      or set(root.hammerless.keys()) - {'role', 'preset', 'behaviours', 'behaviour_index'})
+        if unsafe:
+            skipped.append(root.name)
+            continue
+        # Stage behaviour copying before deleting or remapping anything.
+        count = len(part.hammerless.behaviours)
+        try:
+            for slot in root.hammerless.behaviours:
+                target = part.hammerless.behaviours.add()
+                target.graph = slot.graph
+                copy_values(slot, target)
+        except Exception:
+            while len(part.hammerless.behaviours) > count:
+                part.hammerless.behaviours.remove(len(part.hammerless.behaviours)-1)
+            raise
+        name = root.name
+        active = context.view_layer.objects.active == root
+        selected = root.select_get() or part.select_get()
+        hidden = root.hide_get() or part.hide_get()
+        world = part.matrix_world.copy()
+        part.parent = root.parent
+        if root.parent:
+            part.matrix_parent_inverse = root.parent.matrix_world.inverted_safe()
+        part.matrix_world = world
+        part.hide_viewport = part.hide_viewport or root.hide_viewport
+        part.hide_render = part.hide_render or root.hide_render
+        for coll in root.users_collection:
+            if part.name not in coll.objects:
+                coll.objects.link(part)
+        part.hammerless.preset = key
+        root.user_remap(part)
+        bpy.data.objects.remove(root, do_unlink=True)
+        part.name = name
+        part.hide_set(hidden)
+        part.select_set(selected)
+        if active:
+            context.view_layer.objects.active = part
+        converted.append(name)
+    return converted, skipped
+
+
+class HL_OT_convert_preset_objects(bpy.types.Operator):
+    bl_idname = 'hammerless.convert_preset_objects'
+    bl_label = 'Convert Presets to Objects'
+    bl_description = 'Remove redundant single-part preset parents, preserving the actual objects and redirecting references'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        converted, skipped = convert_single_presets(context)
+        from .mapcollection import organize, organize_preset_objects
+        organize(context)
+        organize_preset_objects(context)
+        self.report({'WARNING'} if skipped else {'INFO'},
+                    f'Converted {len(converted)} presets; {len(skipped)} customized wrappers left unchanged')
+        return {'FINISHED'}
+
+
 class HL_OT_group_preset(bpy.types.Operator):
     bl_idname = "hammerless.group_preset"
     bl_label = "Group into Preset"
@@ -138,6 +221,11 @@ class HL_OT_group_preset(bpy.types.Operator):
         if not parts:
             self.report({"WARNING"}, "This preset's parts are already grouped under another object")
             return {"CANCELLED"}
+        if len(PRESETS[key].parts) == 1 and len(parts) == 1:
+            parts[0].hammerless.preset = key
+            parts[0].hammerless.preset_part = PRESETS[key].parts[0].name
+            self.report({'INFO'}, 'Preset settings are stored directly on the object')
+            return {'FINISHED'}
         corners = [o.matrix_world @ Vector(c) for o in parts for c in o.bound_box]
         base = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
         root = make_root(context, key, base, coll)
@@ -190,6 +278,8 @@ def draw_root(layout, root):
             box.prop(spot[0], spot[1], text=field.label)
         else:
             box.label(text=f"{field.label}: (part missing)", icon="ERROR")
+    if root.hammerless.role != 'IGNORE':
+        return
     op = box.operator("hammerless.select_object", text="Select All Parts", icon="RESTRICT_SELECT_OFF")
     op.name, op.children = root.name, True
     col = layout.column(align=True)
@@ -211,4 +301,4 @@ def draw_part(layout, obj):
         layout.operator("hammerless.group_preset", icon="HOME")
 
 
-CLASSES = (HL_OT_group_preset, HL_OT_select_object)
+CLASSES = (HL_OT_convert_preset_objects, HL_OT_group_preset, HL_OT_select_object)
