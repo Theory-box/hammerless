@@ -1336,6 +1336,7 @@ def _ordered(a, b):
 
 
 def scene_settings_to_ir(s) -> MapSettings:
+    from .props import mode_settings_values
     mob_min, mob_max = _ordered(s.dir_mob_min, s.dir_mob_max)
     every_min, every_max = _ordered(s.dir_mob_interval_min, s.dir_mob_interval_max)
     fog_start, fog_end = _ordered(s.fog_start, s.fog_end)
@@ -1352,6 +1353,7 @@ def scene_settings_to_ir(s) -> MapSettings:
         lightmap_scale=s.lightmap_scale, wall_climbs=s.wall_climbs,
         fog_enabled=s.fog_enabled, fog_color=_rgb(s.fog_color), fog_start=fog_start,
         fog_end=fog_end, fog_max_density=s.fog_max_density,
+        mode_options=mode_settings_values(s),
         director_enabled=s.director_enabled, dir_common_limit=s.dir_common_limit,
         dir_mob_min=mob_min, dir_mob_max=mob_max,
         dir_mob_interval_min=every_min, dir_mob_interval_max=every_max,
@@ -1370,6 +1372,8 @@ def extract_scene(context, report, game_dir: str | None = None, content=None,
     scale = s.units_per_meter
     depsgraph = context.evaluated_depsgraph_get()
     ir = MapIR(settings=scene_settings_to_ir(s))
+    if ir.settings.mode_options:
+        ir.scripted_mode = True
     materials = MaterialResolver(s, game_dir, report)
 
     hidden = []

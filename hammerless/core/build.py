@@ -126,6 +126,11 @@ class Report:
 def validate(ir: MapIR, content=None, physical: bool = True) -> Report:
     """content: optional vpk.GameContent to check materials/models exist."""
     r = Report()
+    from .mode_settings import option_lines
+    try:
+        option_lines(ir.settings.game_mode, ir.settings.mode_options)
+    except (TypeError, ValueError) as ex:
+        r.errors.append(f'Game Mode Settings: {ex}')
     if ir.settings.game_mode == "SURVIVAL" and ir.logic_hooks:
         r.errors.append("Survival does not yet support mutation override nodes. HUD Text is supported through Hammerless's Survival mode.")
     from .mapcheck import Problem

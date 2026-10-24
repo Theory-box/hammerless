@@ -189,6 +189,45 @@ class HL_PT_build(_Panel, bpy.types.Panel):
             row.operator("hammerless.load_leak", text="Map leaks: show where", icon="ERROR")
 
 
+class HL_PT_mode_settings(_Sub, bpy.types.Panel):
+    bl_label = "Game Mode Settings"
+    bl_parent_id = "HL_PT_build"
+
+    def draw_header_preset(self, context):
+        _status(self.layout, context.scene.hammerless.game_mode.title())
+
+    def draw(self, context):
+        from ..core.mode_settings import options, title
+        s = context.scene.hammerless
+        values = getattr(s, 'mode_' + s.game_mode.lower())
+        layout = self.layout
+        layout.label(text="Check a setting to override the game rules.")
+        layout.label(text="Unchecked settings use game defaults.")
+        if s.game_mode == 'SURVIVAL':
+            layout.label(text="Native Survival controls wave timing.", icon='INFO')
+        elif s.director_enabled:
+            layout.label(text="These overrides take priority over AI Director.", icon='INFO')
+        layout.prop(values, 'search', text='', icon='VIEWZOOM')
+        layout.prop(values, 'category')
+        query = values.search.strip().lower()
+        available = [o for o in options(s.game_mode)
+                     if (values.category == 'ALL' or values.category == o[3])
+                     and (not query or query in (o[0] + ' ' + title(o[0]) + ' ' + o[4]).lower())]
+        for group in dict.fromkeys(o[3] for o in available):
+            box = layout.box()
+            box.label(text=group)
+            for key, kind, _default, category, _about in available:
+                if category != group:
+                    continue
+                row = box.row(align=True)
+                row.prop(values, 'use_' + key, text='')
+                value = row.row(align=True)
+                value.enabled = getattr(values, 'use_' + key)
+                value.prop(values, key, text=title(key))
+        if not available:
+            layout.label(text="No matching settings for this mode.")
+
+
 class HL_PT_problems(_Panel, bpy.types.Panel):
     bl_label = "Problems"
     bl_parent_id = "HL_PT_build"
@@ -1439,7 +1478,7 @@ def _add_menu(self, context):
 
 
 CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_MT_weather,
-           HL_PT_build, HL_PT_problems,
+           HL_PT_build, HL_PT_mode_settings, HL_PT_problems,
            HL_PT_object, HL_PT_obj_model, HL_PT_obj_brushes, HL_PT_obj_brushes_tuning, HL_PT_obj_light, HL_PT_obj_material, HL_PT_obj_terrain, HL_PT_obj_keyvalues, HL_PT_obj_outputs,
            HL_PT_bake, HL_PT_lighting, HL_PT_view_light, HL_PT_environment, HL_PT_sun, HL_PT_fog, HL_PT_light_quality,
            HL_PT_light_advanced,

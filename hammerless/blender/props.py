@@ -6,6 +6,33 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
 from ..core.entities import default_keyvalues
 from ..core.spawnlist import CATEGORIES as SPAWN_CATEGORIES
 
+from ..core.mode_settings import options as mode_options, title as mode_option_title
+
+
+class HL_ModeSettings(bpy.types.PropertyGroup):
+    """Opt-in map options, independently saved for each supported base mode."""
+    search: StringProperty(name="Search", options={'SKIP_SAVE'})
+    category: EnumProperty(name="Category", items=[('ALL', 'All Settings', '')] + [
+        (g, g, '') for g in sorted({o[3] for o in mode_options('CAMPAIGN')})])
+
+
+for _key, _kind, _default, _group, _description in mode_options('CAMPAIGN'):
+    HL_ModeSettings.__annotations__['use_' + _key] = BoolProperty(
+        name='Override ' + mode_option_title(_key), default=False,
+        description='Enable this map override; unchecked uses the game rules')
+    _args = dict(name=mode_option_title(_key), description=_description + ' (' + _key + ')')
+    _factory = {'bool': BoolProperty, 'int': IntProperty, 'num': FloatProperty,
+                'vec': FloatVectorProperty}[_kind]
+    _args['default'] = (0.0, 0.0, 0.0) if _kind == 'vec' else _default
+    HL_ModeSettings.__annotations__[_key] = _factory(**_args)
+
+
+def mode_settings_values(settings):
+    values = getattr(settings, 'mode_' + settings.game_mode.lower())
+    return {key: tuple(getattr(values, key)) if kind == 'vec' else getattr(values, key)
+            for key, kind, _default, _group, _about in mode_options(settings.game_mode)
+            if getattr(values, 'use_' + key)}
+
 def _game_mode_changed(self, context):
     from . import problems, navview
     if context is not None and context.scene is not None:
@@ -1151,7 +1178,10 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     last_log: StringProperty()
 
 
-CLASSES = (HL_Problem, HL_SpawnListItem, HL_KeyValue, HL_Output, HL_ExposedValue, HL_BehaviourSlot, HL_ObjectSettings, HL_CollectionSettings, HL_MaterialSettings, HL_SceneSettings)
+HL_SceneSettings.__annotations__['mode_campaign'] = PointerProperty(type=HL_ModeSettings)
+HL_SceneSettings.__annotations__['mode_survival'] = PointerProperty(type=HL_ModeSettings)
+
+CLASSES = (HL_ModeSettings, HL_Problem, HL_SpawnListItem, HL_KeyValue, HL_Output, HL_ExposedValue, HL_BehaviourSlot, HL_ObjectSettings, HL_CollectionSettings, HL_MaterialSettings, HL_SceneSettings)
 
 
 def register():

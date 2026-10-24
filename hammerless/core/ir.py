@@ -116,6 +116,7 @@ class MapSettings:
 
     # map-wide Director options (written to a Director script)
     director_enabled: bool = False
+    mode_options: dict = field(default_factory=dict)  # selected mode's explicit MapOptions overrides
     dir_common_limit: int = 30
     dir_mob_min: int = 10
     dir_mob_max: int = 30

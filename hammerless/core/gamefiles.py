@@ -308,12 +308,14 @@ def mode_files(ir: MapIR) -> dict[str, str]:
     which scripted mode loads as it starts and where the game looks for the hooks. maps/<map>.hlmode
     tells Build & Play which mode to start the map in."""
     from .director_options import GAME_MODE, HOOKS_BY_NAME
+    from .mode_settings import option_lines
+    setting_lines = option_lines(ir.settings.game_mode, ir.settings.mode_options)
     name = ir.settings.name
     from .gamemodes import policy
     mode = policy(ir.settings.game_mode)
-    if not mode.campaign_route and not ir.scripted_mode:
+    if not mode.campaign_route and not ir.scripted_mode and not setting_lines:
         return {f"maps/{name}.hlmode": mode.launch + "\n"}
-    if not ir.scripted_mode:
+    if not ir.scripted_mode and not setting_lines:
         return {f"maps/{name}.hlmode": "coop\n"}
     launch_mode = GAME_MODE if mode.campaign_route else "hammerless_survival"
     files = {f"maps/{name}.hlmode": launch_mode + "\n"}
@@ -332,11 +334,13 @@ def mode_files(ir: MapIR) -> dict[str, str]:
     text = f"// Hammerless: {name}'s rules for its scripted mode (the logic graph's Override nodes)\n"
     # the game asks some questions (weapon spawns, starting items) while it creates the map's entities,
     # before any entity's script runs (measured): load the map's logic now, into its own table
-    text += ("::HL_EarlyScope <- {};\n"
-             f'IncludeScript("hammerless/logic_{name}", ::HL_EarlyScope);\n')
+    if f'scripts/vscripts/hammerless/logic_{name}.nut' in ir.extra_scripts:
+        text += ("::HL_EarlyScope <- {};\n"
+                 f'IncludeScript("hammerless/logic_{name}", ::HL_EarlyScope);\n')
     text += "".join(m + "\n" for m in mode)
-    if options:
-        text += "MapOptions <- {\n" + "".join("    " + o + "\n" for o in options) + "}\n"
+    if options or setting_lines:
+        text += "MapOptions <- {\n" + "".join("    " + o + "\n" for o in options)
+        text += "".join(line + "\n" for line in setting_lines) + "}\n"
     files[f"scripts/vscripts/{name}_{launch_mode}.nut"] = text
     return files
 
