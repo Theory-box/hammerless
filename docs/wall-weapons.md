@@ -20,6 +20,8 @@ For advanced graphs, **Custom Item** on **Inventory Item** accepts a supported G
 
 Purchase prompts use the larger private instructor-hint display, including the player's actual Use key. **Messages: Purchase Hint** is an editable group of existing Make Table, Spawn Entity From Table, and Fire Input nodes. Temporary hints expire and are removed; looking away stops refreshing the prompt. No new special-purpose node is required. Instructor hints must be enabled in the player's game settings.
 
+**Messages: Purchase Prompt** stores and clears the current prompt per player using ordinary variable and entity-input nodes. The Look / Use Target node's **Lost Focus** output clears it when aiming away, leaving reach, becoming unable to interact, or attempting Use. Feedback uses its own hint so it remains visible after purchase. Buttons are sampled every server tick; short taps are buffered for 0.2 seconds, and an unconsumed held press can activate once a target qualifies. One attempt per hold prevents repeat charges. Solid targets use surface hits; non-solid weapon display props retain a forgiving centre aim cone.
+
 The Blender adapter compensates for rigid idle-pose transforms in real model previews. This keeps the exported display aligned with Blender without altering object transforms or shared mesh data. Placeholder previews and deforming animations are not corrected.
 
 Validation covers all 48 catalog exports and pose alignment, independent duplicate settings, undo/redo, save/reload, preview updates, and stock Survival integration. The user has confirmed gameplay in their map; exhaustive multiplayer delivery and every catalog item's gameplay behavior have not been tested.

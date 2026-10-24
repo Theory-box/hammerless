@@ -717,8 +717,8 @@ class _Compiler:
                 targets.add(fixed_object)
             self.interaction_helpers()
             fn = self.fn_name(f"HL_Interact_{slug}")
-            self.script_fns[nid] = (fn, "if (HL_Ctx.used) {\n@@used@@\n} else {\n@@focused@@\n}")
-            self.script_sources |= {(nid, "used"), (nid, "focused")}
+            self.script_fns[nid] = (fn, 'if (("lost" in HL_Ctx) && HL_Ctx.lost) {\n@@lost@@\n} else if (HL_Ctx.used) {\n@@used@@\n} else {\n@@focused@@\n}')
+            self.script_sources |= {(nid, "used"), (nid, "focused"), (nid, "lost")}
             entity = self.typed_in(n, "entity", vs.THING)
             reach = self.typed_in(n, "range", vs.NUM)
             # Registration is emitted after the callback functions have been declared.
@@ -1881,14 +1881,20 @@ class _Compiler:
                          "        if (r.at <= 1.0 && flow >= r.at) { r.at = 2.0; EntFire(r.relay, \"Trigger\"); }\n"
                          "    }\n}\n")
         if thinks:
+            interaction_tick = bool(ir.__dict__.get("_interactions"))
+            if interaction_tick:
+                parts.append("HL_OtherThinkNext <- 0.0;\n")
             parts.append("function HL_Think() {\n"
+                         + ("    HL_InteractionThink();\n"
+                            "    if (Time() < HL_OtherThinkNext) return 0.01;\n"
+                            "    HL_OtherThinkNext = Time() + 0.1;\n" if interaction_tick else "")
                          + ("    HL_WallThink();\n" if wall_weapons else "")
-                         + ("    HL_InteractionThink();\n" if ir.__dict__.get("_interactions") else "")
                          + ("    HL_Progress_Think();\n" if ir.logic_progress else "")
                          + ("    HL_When_Think();\n" if ir.logic_whens else "")
                          + ("    HL_Retry();\n" if ir.logic_retry else "")
                          + ("    if (Time() >= HL_OptsNext) { HL_OptsNext = Time() + 0.5; ::HL_ApplyOpts(); }\n"
-                            if ir.logic_diropts else "") + "}\n")
+                            if ir.logic_diropts else "")
+                         + ("    return 0.01;\n" if interaction_tick else "") + "}\n")
             if ir.logic_diropts:
                 parts.insert(-1, "HL_OptsNext <- 0.0;\n")
         events = {ev: list(t) for ev, t in ir.logic_events.items()}

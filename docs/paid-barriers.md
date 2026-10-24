@@ -7,7 +7,9 @@ Add **Personal Kill Points** once per map, then add the **Purchase - Remove Barr
 - Duplicate in Object Mode for another independently purchasable barrier. Each copy has its own settings and purchase state.
 - Bake navigation through the doorway. A navigation blocker keeps bots and infected from routing through the closed barrier; purchasing removes both the brush and blocker.
 
-Look toward the barrier's centre and press Use. The price and your balance appear in a large private instructor hint. One human pays, and the opening becomes available to everyone. Insufficient funds do nothing. The barrier returns on a new round/map load.
+Aim at a visible surface of the barrier within Use Range and press Use. Distance is measured to the surface, not the brush centre. The price and your balance appear in a large private instructor hint. One human pays, and the opening becomes available to everyone. Insufficient funds do nothing. The barrier returns on a new round/map load.
+
+An unconsumed held Use press can activate when your aim enters range, but only one attempt is made per hold. Release before trying another purchase. Prompts clear on loss of focus; success/failure messages keep their normal timeout.
 
 Tab into **Barrier: Payment** to edit the ordinary interaction, variable, comparison, subtraction, and message nodes. Its **Cleared** event feeds the existing **Show / Hide Object** node's Remove input. A per-instance boolean is set before payment, preventing repeated uses from charging twice while engine removal is queued.
 

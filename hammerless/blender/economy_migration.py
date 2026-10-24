@@ -7,7 +7,8 @@ def upgrade_displays():
     from .logic_examples import _groups, _group_state, _group_signature
     from .logic_examples_economy import BALANCE, AWARD, points_group, purchase_group, barrier_rules, scoreboard_group, hint_group
     specs={'Points: Balance':BALANCE,'Points: Award':AWARD,'Points: Display':scoreboard_group(),
-           'Messages: Purchase Hint':hint_group(),'Personal Points':points_group(),
+           'Messages: Purchase Hint':hint_group(),'Messages: Purchase Prompt':hint_group(prompt=True),
+           'Personal Points':points_group(),
            'Purchase: Rules':purchase_group(),'Barrier: Payment':barrier_rules()}
     candidates=[]
     for tree in bpy.data.node_groups:
@@ -36,6 +37,7 @@ def expand(tree):
     problems = []
     groups = _groups({'groups': {'Points: Balance': BALANCE, 'Points: Award': AWARD,
                                 'Points: Display': scoreboard_group(), 'Messages: Purchase Hint': hint_group(),
+                                'Messages: Purchase Prompt':hint_group(prompt=True),
                                 'Personal Points': points_group(), 'Purchase: Rules': purchase_group()}}, {}, problems)
     if problems:
         raise RuntimeError('; '.join(problems))

@@ -49,11 +49,13 @@ AWARD = dict(
            ('earned_read.result', 'message.a'), ('balance.value', 'message.b')])
 
 
-def hint_group():
+def hint_group(prompt=False):
     fields = dict(hint_caption='',hint_timeout=2,hint_static=1,hint_icon_onscreen='use_binding',
                   hint_binding='+use',hint_forcecaption=1,hint_range=0,hint_auto_start=0,
                   hint_color='255 255 255',hint_instance_type=2,hint_name='hammerless_purchase')
-    return dict(about='Large private instructor message, built from the existing table, entity spawn and input nodes. Only the supplied player receives it; the temporary entity expires.',
+    if prompt:
+        fields['hint_name']='hammerless_purchase_prompt'
+    spec = dict(about='Large private instructor message, built from the existing table, entity spawn and input nodes. Only the supplied player receives it; the temporary entity expires.',
         inputs=[('run','Show','event'),('player','Player','thing'),('text','Text','text')],outputs=[],
         nodes=[N('valid','HL_NodeCheck',-1,2),N('if','HL_NodeIf',-1,0),
                N('table','HL_NodeMakeTable',0,2,fields=', '.join(k+(': text' if isinstance(v,str) else ': int') for k,v in fields.items()),
@@ -65,6 +67,22 @@ def hint_group():
                ('in.text','table.f_hint_caption'),('table.table','spawn.p1'),
                ('spawn.then','show.run'),('spawn.result','show.entity'),('in.player','show.activator'),
                ('show.then','expire.run'),('spawn.result','expire.entity')])
+    if prompt:
+        spec['inputs'].append(('hide','Hide','event'))
+        spec['nodes'] += [variable('previous','purchase_prompt',0,5,scope='PLAYER',kind='thing'),
+                          variable('remember','purchase_prompt',2,3,scope='PLAYER',kind='thing',write=True)]
+        spec['links'].remove(('if.true','spawn.run'))
+        spec['links'].remove(('spawn.then','show.run'))
+        spec['links'] += [('in.player','previous.player'),('in.player','remember.player'),
+                          ('spawn.result','remember.value'),('spawn.then','remember.run'),('remember.then','show.run')]
+        for prefix,event,row in [('replace','if.true',6),('hide','in.hide',8)]:
+            spec['nodes'] += [N(prefix+'_end','HL_NodeFireInput',1,row,sockets={'input':'EndHint'}),
+                              N(prefix+'_kill','HL_NodeFireInput',2,row,sockets={'input':'Kill'})]
+            spec['links'] += [(event,prefix+'_end.run'),('previous.result',prefix+'_end.entity'),
+                              (prefix+'_end.then',prefix+'_kill.run'),('previous.result',prefix+'_kill.entity')]
+        spec['links'].append(('replace_kill.then','spawn.run'))
+        spec['about'] += ' Stores the current prompt per player. Hide ends only that prompt; feedback messages are separate.'
+    return spec
 
 
 def scoreboard_group():
@@ -170,7 +188,7 @@ def purchase_group():
             ('bought','give.success','Bought {a} | Points: {c}', 6, 7),
             ('failed','refund.then','Could not give item; points refunded', 7, 9)]:
         nodes += [N(nid+'_text','HL_NodeFormatText',col,row+1,template=template),
-                  N(nid,'HL_NodeGroup',col,row,group='Messages: Purchase Hint')]
+                  N(nid,'HL_NodeGroup',col,row,group='Messages: Purchase Prompt' if nid=='prompt' else 'Messages: Purchase Hint')]
         links += [('target.player',nid+'.player'), (nid+'_text.result',nid+'.text'),
                   ('in.title',nid+'_text.a'), ('in.price',nid+'_text.b'), ('balance.value',nid+'_text.c')]
         if nid in ('bought','failed'):
@@ -179,6 +197,8 @@ def purchase_group():
                       (nid+'_valid.result',nid+'_if.condition'), (nid+'_if.true',nid+'.run')]
         else:
             links.append((event,nid+'.run'))
+    links.insert(0,('target.used','prompt.hide'))
+    links.append(('target.lost','prompt.hide'))
     return dict(about='All purchase rules are here: prompt, controller check, inventory check, funds check, reserve, deliver, refund. Look / Use Target and Give Inventory Item are reusable independently of points.',
                 inputs=[('entity','Display','thing'),('item','Item','any'),('title','Display Name','text'),
                         ('price','Price','num'),('range','Use Range','num')], outputs=[],nodes=nodes,links=links,
@@ -236,9 +256,11 @@ def barrier_rules():
             ('poor','funds.false','Not enough points: {b} required | You have {c}',5),
             ('paid','pay.then','Removed {a} | Points: {c}',7)]:
         nodes += [N(nid+'_text','HL_NodeFormatText',col,9,template=template),
-                  N(nid,'HL_NodeGroup',col,8,group='Messages: Purchase Hint')]
+                  N(nid,'HL_NodeGroup',col,8,group='Messages: Purchase Prompt' if nid=='prompt' else 'Messages: Purchase Hint')]
         links += [(event,nid+'.run'),('target.player',nid+'.player'),(nid+'_text.result',nid+'.text'),
                   ('in.title',nid+'_text.a'),('in.price',nid+'_text.b'),('balance.value',nid+'_text.c')]
+    links.insert(0,('target.used','prompt.hide'))
+    links.append(('target.lost','prompt.hide'))
     return dict(about='One human pays, then Cleared removes the shared obstacle. The per-instance lock is set before debit and removal so simultaneous uses cannot charge twice.',
                 inputs=[('entity','Barrier','thing'),('title','Display Name','text'),('price','Price','num'),('range','Use Range','num')],
                 outputs=[('cleared','Cleared','event')],nodes=nodes,links=links,
@@ -276,12 +298,14 @@ def examples():
             objects={key:('ENTITY:prop_dynamic_override',(0,0,height),
                           {'model':ITEMS[item]['model'],'solid':'0','disableshadows':'1'})},
             behaviours={key:name},
-            groups={'Points: Balance':BALANCE,'Messages: Purchase Hint':hint_group(),'Purchase: Rules':purchase_group(),
+            groups={'Points: Balance':BALANCE,'Messages: Purchase Hint':hint_group(),
+                    'Messages: Purchase Prompt':hint_group(prompt=True),'Purchase: Rules':purchase_group(),
                     name:station(item if key=='purchase_display' else 'AUTO',price)},
             nodes=[],links=[]))
     result.append(dict(title='Purchase - Remove Barrier',level='Game Modes',
         about='A brush barrier removed for everyone when one human pays. Requires Personal Kill Points once per map. Resize in Edit Mode; edit Price, Display Name and Use Range in Behaviours. Duplicate in Object Mode for independent barriers. Bake navigation through the doorway; the barrier blocks it until purchased.',
         objects={'barrier':('GATE',(0,0,1.5))},behaviours={'barrier':'Paid Barrier'},
-        groups={'Points: Balance':BALANCE,'Messages: Purchase Hint':hint_group(),'Barrier: Payment':barrier_rules(),'Paid Barrier':barrier_behaviour()},
+        groups={'Points: Balance':BALANCE,'Messages: Purchase Hint':hint_group(),
+                'Messages: Purchase Prompt':hint_group(prompt=True),'Barrier: Payment':barrier_rules(),'Paid Barrier':barrier_behaviour()},
         nodes=[],links=[]))
     return result

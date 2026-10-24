@@ -1814,6 +1814,7 @@ class HL_NodeInteraction(_Block, bpy.types.Node):
         self.data_in("num", "range", "Range").value = 96
         self.ev_out("focused", "Focused")
         self.ev_out("used", "Used")
+        self.ev_out("lost", "Lost Focus")
         self.data_out("thing", "player", "Player")
         self.data_out("text", "key", "Human Key")
 
