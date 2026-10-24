@@ -943,6 +943,16 @@ class _Compiler:
             take("show", name, "Enable")
             take("hide", name, "Disable")
             take("remove", name, "Kill")
+            if s.get("block_nav", False):
+                blocker = self.nav_blocker(e, n.obj)
+                bname = blocker.keyvalues["targetname"]
+                if not s.get("start_hidden"):
+                    self.add("logic_auto", f"{name}_nav_start", {"spawnflags": "1"}).outputs.append(
+                        Output("OnMapSpawn", bname, "BlockNav", "", 0.0, 1))
+                also("show", bname, "BlockNav")
+                also("hide", bname, "UnblockNav")
+                also("remove", bname, "UnblockNav")
+                also("remove", bname, "Kill")
         elif k == "PATH_PROGRESS":
             lo, hi = float(s.get("from", 0.5)), float(s.get("to", 0.5))
             e = self.add("logic_relay", f"hl_{slug}", {"spawnflags": "1"})

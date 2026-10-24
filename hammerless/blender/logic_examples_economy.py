@@ -171,6 +171,57 @@ def station(item='first_aid_kit', price=250):
                ('range_setting.value','near.a'),('near.value','range.a'),('range.value','buy.range')])
 
 
+def barrier_rules():
+    nodes = [N('target','HL_NodeInteraction',0,0),
+             variable('opened','opened',0,3,scope='GROUP',kind='bool'),
+             N('focus','HL_NodeIf',1,0), N('use','HL_NodeIf',1,2),
+             N('valid','HL_NodeCheck',2,4), N('exists','HL_NodeIf',2,2),
+             variable('enabled','points_enabled',2,5,kind='bool'), N('available','HL_NodeIf',3,2),
+             N('balance','HL_NodeGroup',3,5,group='Points: Balance'),
+             N('enough','HL_NodeCompare',4,5,op='GREATER_EQUAL'), N('funds','HL_NodeIf',4,2),
+             variable('lock','opened',5,2,write=True,scope='GROUP',kind='bool',sockets={'value':True}),
+             N('subtract','HL_NodeMath',5,5,integer=True,op='SUBTRACT'),
+             variable('pay','points',6,2,write=True,scope='KEY')]
+    links = [('in.entity','target.entity'),('in.range','target.range'),
+             ('target.focused','focus.in'),('opened.result','focus.condition'),
+             ('target.used','use.in'),('opened.result','use.condition'),
+             ('use.false','exists.in'),('in.entity','valid.a'),('valid.result','exists.condition'),
+             ('exists.true','available.in'),('enabled.result','available.condition'),
+             ('available.true','funds.in'),('target.key','balance.key'),
+             ('balance.value','enough.a'),('in.price','enough.b'),('enough.result','funds.condition'),
+             ('funds.true','lock.run'),('lock.then','pay.run'),
+             ('balance.value','subtract.a'),('in.price','subtract.b'),
+             ('subtract.value','pay.value'),('target.key','pay.key'),('pay.then','out.cleared')]
+    for nid,event,template,col in [
+            ('prompt','focus.false','{a} - {b} points | You: {c} | Press USE to remove',1),
+            ('unavailable','available.false','Add Personal Kill Points to enable purchases',3),
+            ('poor','funds.false','Not enough points: {b} required | You have {c}',5),
+            ('paid','pay.then','Removed {a} | Points: {c}',7)]:
+        nodes += [N(nid+'_text','HL_NodeFormatText',col,9,template=template),
+                  fn(nid,'ClientPrint',col,8,{'p1':4})]
+        links += [(event,nid+'.run'),('target.player',nid+'.p0'),(nid+'_text.result',nid+'.p2'),
+                  ('in.title',nid+'_text.a'),('in.price',nid+'_text.b'),('balance.value',nid+'_text.c')]
+    return dict(about='One human pays, then Cleared removes the shared obstacle. The per-instance lock is set before debit and removal so simultaneous uses cannot charge twice.',
+                inputs=[('entity','Barrier','thing'),('title','Display Name','text'),('price','Price','num'),('range','Use Range','num')],
+                outputs=[('cleared','Cleared','event')],nodes=nodes,links=links,
+                steps=[('Check, lock and pay once',[n['id'] for n in nodes[:14]]),
+                       ('Private prompts and feedback',[n['id'] for n in nodes[14:]])])
+
+
+def barrier_behaviour():
+    nodes = [N('self','HL_NodeSelf',0,0),N('buy','HL_NodeGroup',3,0,group='Barrier: Payment'),
+             N('remove','HL_NodeShowHide',4,0,block_nav=True),
+             N('title_setting','HL_NodeExposedSetting',0,2,ui_name='Display Name',value_type='TEXT',default_text='Barrier')]
+    links = [('self.entity','buy.entity'),('self.object','remove.object'),('buy.cleared','remove.remove'),
+             ('title_setting.value','buy.title')]
+    for key,title,default,lo,hi,row in [('price','Price',1000,0,1000000,3),('range','Use Range',128,32,256,5)]:
+        nodes += [N(key+'_setting','HL_NodeExposedSetting',0,row,ui_name=title,value_type='INT',default_integer=default),
+                  N(key+'_min','HL_NodeMath',1,row,integer=True,op='MAXIMUM',sockets={'b':lo}),
+                  N(key+'_max','HL_NodeMath',2,row,integer=True,op='MINIMUM',sockets={'b':hi})]
+        links += [(key+'_setting.value',key+'_min.a'),(key+'_min.value',key+'_max.a'),(key+'_max.value','buy.'+key)]
+    return dict(behaviour=True,about='Resize this brush to block a doorway. Each duplicate has independent settings and a separate purchase lock. Removal releases navigation for bots and infected.',nodes=nodes,links=links)
+
+
 def examples():
     result = [dict(title='Personal Kill Points', level='Game Modes',
         about='Personal points for each human survivor. Rewards, balance storage, round reset and !points chat are editable node groups. Tab into Personal Points, Award or Balance to see every rule. Add one controller per map. Steam identities retain their balance through reconnects in the same round; bots do not earn points.',
@@ -190,4 +241,9 @@ def examples():
             groups={'Points: Balance':BALANCE,'Purchase: Rules':purchase_group(),
                     name:station(item if key=='purchase_display' else 'AUTO',price)},
             nodes=[],links=[]))
+    result.append(dict(title='Purchase - Remove Barrier',level='Game Modes',
+        about='A brush barrier removed for everyone when one human pays. Requires Personal Kill Points once per map. Resize in Edit Mode; edit Price, Display Name and Use Range in Behaviours. Duplicate in Object Mode for independent barriers. Bake navigation through the doorway; the barrier blocks it until purchased.',
+        objects={'barrier':('GATE',(0,0,1.5))},behaviours={'barrier':'Paid Barrier'},
+        groups={'Points: Balance':BALANCE,'Barrier: Payment':barrier_rules(),'Paid Barrier':barrier_behaviour()},
+        nodes=[],links=[]))
     return result

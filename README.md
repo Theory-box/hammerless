@@ -125,4 +125,4 @@ Hammerless is a fan-made tool, not affiliated with or endorsed by Valve. Left 4 
 
 ### Survival and purchase examples
 
-Choose **Map > Game Mode > Survival** for native holdout play. See [Survival setup](docs/survival.md), [Personal Kill Points](docs/personal-points.md), [item purchases](docs/wall-weapons.md), and [per-object Behaviour settings](docs/behaviour-settings.md).
+Choose **Map > Game Mode > Survival** for native holdout play. See [Survival setup](docs/survival.md), [Personal Kill Points](docs/personal-points.md), [item purchases](docs/wall-weapons.md), [paid barriers](docs/paid-barriers.md), and [per-object Behaviour settings](docs/behaviour-settings.md).

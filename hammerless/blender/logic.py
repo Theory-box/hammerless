@@ -835,6 +835,8 @@ class HL_NodeShowHide(_Node, bpy.types.Node):
     bl_idname, bl_label, bl_icon = "HL_NodeShowHide", "Show / Hide Object", "HIDE_OFF"
     kind, category = "SHOW_HIDE", "Actions"
     start_hidden: BoolProperty(name="Starts Hidden")
+    block_nav: BoolProperty(name="Block Navigation While Shown", default=False,
+                            description="Block bots and zombies while visible; release navigation when hidden or removed")
 
     def make_sockets(self):
         self.obj_in("object", "Object")
@@ -844,9 +846,10 @@ class HL_NodeShowHide(_Node, bpy.types.Node):
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "start_hidden", toggle=True)
+        layout.prop(self, "block_nav")
 
     def settings(self):
-        return {"start_hidden": self.start_hidden}
+        return {"start_hidden": self.start_hidden, "block_nav": self.block_nav}
 
     def to_lnode(self, context):
         return self.with_object(context, super().to_lnode(context))
