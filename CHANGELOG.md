@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.20.17 (test release, 2026-10-24)
+
+- Add the 13 missing individual weapon pickups, including Counter-Strike weapons, M60, Grenade Launcher and Chainsaw, with matching model previews.
+- Reset the Slow Motion Headshots example on round start, round end and mission loss. Cancel pending delayed stops and gate headshots outside active rounds. Existing saved examples must be removed and re-added to receive this graph change.
+- Insert manual Nav Areas before automatic and explicit climb generation. Retain body clearance checks for automatic climbs.
+- Validate manual-area step and drop connections with crouching body hull casts and landing support checks. Reject routes through walls, intervening floors and ceilings. Check island-drop departure clearance and landing slope as well.
+- Prevent stale link IDs when overlapping manual Nav Areas replace one another. Manual areas use their bottom face as nav height; place that face on the walkable surface, not inside it.
+- Validation: 42 focused unit checks passed, including manual navigation, climb clearance, ladders, elevators, prediction and packaging. Weapon identities and previews were checked against Valve's installed FGD. Earlier Blender checks covered slow-motion lifecycle export. User verified that raising the manual area onto the sill restored its connections; no fresh automated in-game run was performed for this release.
+
+Restart Blender after installing and rebuild navigation. Explicitly placed Zombie Climb links still trust mapper placement. Survivor-only nav behaviour selection and texture-browser expansion are not included.
+
 ## 0.20.16 (test release, 2026-10-24)
 
 - Single-part presets now use their actual object instead of an empty wrapper. Organize gameplay objects into Survival, Spawn Areas, Navigation, Triggers and Assemblies collections. Provide an explicit conversion for older single-part presets.
