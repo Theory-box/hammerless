@@ -220,11 +220,24 @@ def purchase_group():
             links.append((event,nid+'.run'))
     links.insert(0,('target.used','prompt.hide'))
     links.append(('target.lost','prompt.hide'))
+    # Native look-at outlines are evaluated by each client. Do not toggle a
+    # shared permanent glow from individual players' focus/lost events.
+    nodes += [N('glow_start','HL_NodeMapStart',0,12),
+              ev('glow_round','round_start',0,13),
+              N('glow_range','HL_NodeSetProperty',1,12,key='m_Glow.m_nGlowRange'),
+              N('glow_min','HL_NodeSetProperty',2,12,key='m_Glow.m_nGlowRangeMin',sockets={'value':0}),
+              N('glow_mode','HL_NodeSetProperty',3,12,key='m_Glow.m_iGlowType',sockets={'value':2})]
+    links += [('glow_start.start','glow_range.run'),('glow_round.happened','glow_range.run'),
+              ('in.entity','glow_range.entity'),('in.range','glow_range.value'),
+              ('glow_range.then','glow_min.run'),('in.entity','glow_min.entity'),
+              ('glow_min.then','glow_mode.run'),('in.entity','glow_mode.entity')]
     return dict(about='All purchase rules are here: prompt, controller check, inventory check, funds check, reserve, deliver, refund. Look / Use Target and Give Inventory Item are reusable independently of points.',
                 inputs=[('entity','Display','thing'),('item','Item','any'),('title','Display Name','text'),
                         ('price','Price','num'),('range','Use Range','num')], outputs=[],nodes=nodes,links=links,
                 steps=[('Check, reserve, deliver or refund', [n['id'] for n in nodes[:12]]),
-                       ('Private messages', [n['id'] for n in nodes[12:]])])
+                       ('Private messages', [n['id'] for n in nodes[12:] if not n['id'].startswith('glow_')]),
+                       ('Native look-at outline (same range as purchase)',
+                        ['glow_start','glow_round','glow_range','glow_min','glow_mode'])])
 
 
 def station(item='first_aid_kit', price=250):
