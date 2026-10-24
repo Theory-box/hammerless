@@ -1135,6 +1135,19 @@ class Generator(Sampler):
                         start = (x, y, z + STEP_HEIGHT + 1.0)
                         if self.hull(start, (q[0], q[1], start[2])).fraction >= 1.0:
                             break           # nothing to climb: open space under a higher floor
+                        # A wall below the landing does not prove the landing is
+                        # reachable: it may continue to the ceiling. Check room
+                        # for the climber to rise, cross the lip and land. The
+                        # sampler's sub-unit column is too narrow for this check.
+                        foot = _add_dir((x, y, z + 1.0), OPPOSITE[d], HALF_HUMAN_WIDTH + 1.0)
+                        landing = (q[0], q[1], z + dz + 1.0)
+                        raised = (foot[0], foot[1], landing[2])
+                        mins = (-HALF_HUMAN_WIDTH, -HALF_HUMAN_WIDTH, 0.0)
+                        maxs = (HALF_HUMAN_WIDTH, HALF_HUMAN_WIDTH, HUMAN_CROUCH_HEIGHT)
+                        traces = (self.world.trace_hull(foot, raised, mins, maxs),
+                                  self.world.trace_hull(raised, landing, mins, maxs))
+                        if any(t.startsolid or t.fraction < 1.0 for t in traces):
+                            continue
                         low.connect_to(high, d)
                         added += 1
                         if not high.is_connected(low, OPPOSITE[d]):
