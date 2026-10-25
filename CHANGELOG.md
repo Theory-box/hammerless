@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add Custom to the Add panel with Swelling Pod and Emergency Knife, including search and favorites. Entries are registered by object-example metadata and place the complete editable behaviour assembly. Pods expose independent radius, timing, growth and damage settings; repeated placement and duplication preserve separate owner references. Pod armatures are selected with the mesh for complete duplication.
 - Emergency Knife shops now expose independent Smoker, Hunter, Jockey and Charger escape toggles. Purchased charges remember their shop's allowed enemies, share the two-charge cap, and consume only a compatible charge. Smoker/Hunter default on; Jockey/Charger default off. Charger support is limited to ground pummels: release also invokes the survivor's native stagger to end the pin. Carry/charge does not activate the knife.
 - Add Purchase - Emergency Knife as an object-owned example. Buy up to two escape charges with personal points, then hold Reload for one second during a Smoker or Hunter pin to stagger the attacker and consume one charge after release. Shops have independent prices and share each human's carry limit; stock resets on death and round lifecycle events.
 - Preserve material, dimensions and coordinates from multiline Bad Surface Extents compiler errors. Match reported face vertices to exported brush sources so error rows can select the Blender object and center the view/cursor at the failing surface. Missing source mappings retain location-only diagnostics; ambiguous matches are labeled as candidates.

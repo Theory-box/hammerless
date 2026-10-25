@@ -77,7 +77,7 @@ class HL_UL_spawn(bpy.types.UIList):
         row.operator("hammerless.spawn_favorite", text="", emboss=False,
                      icon="SOLO_ON" if it.id in favorites(context.scene) else "SOLO_OFF").item = it.id
         text = it.label if not s.spawn_search else f"{it.label}  ·  {CATEGORY_LABELS[it.category]}"
-        row.label(text=text, icon={"preset": "HOME", "volume": "MOD_WIREFRAME"}.get(it.kind, "OUTLINER_OB_EMPTY"))
+        row.label(text=text, icon={"preset": "HOME", "volume": "MOD_WIREFRAME"}.get(it.kind, it.icon))
 
     def draw_filter(self, context, layout):
         pass   # the panel draws its own search box and tiles
@@ -126,6 +126,34 @@ class HL_OT_spawn_item(bpy.types.Operator):
             return {"CANCELLED"}
         if it.kind == "preset":
             return bpy.ops.hammerless.add_preset(preset=it.key)
+        if it.kind == "example":
+            from .logic_examples import all_examples, build_example, ExampleRegistrationError
+            examples = all_examples()
+            index = next((n for n, ex in enumerate(examples) if ex.get('add_menu', {}).get('id') == it.key), None)
+            if index is None:
+                self.report({'ERROR'}, 'This custom item is no longer available')
+                return {'CANCELLED'}
+            problems = []
+            before = set(context.scene.objects)
+            try:
+                build_example(context, index, problems)
+            except ExampleRegistrationError as error:
+                self.report({'ERROR'}, str(error))
+                return {'CANCELLED'}
+            # Select the complete assembly, including the pod armature, so a
+            # normal Shift+D duplicates everything needed by its custom model.
+            added = set(context.scene.objects) - before
+            for obj in added:
+                obj.select_set(True)
+            owner = context.view_layer.objects.active
+            if owner in added:
+                owner.name = it.label
+                for collection in owner.users_collection:
+                    if collection.name.startswith('Example '):
+                        collection.name = it.label
+            self.report({'WARNING'} if problems else {'INFO'},
+                        '; '.join(problems) if problems else 'Added '+it.label+('. '+it.tip if it.tip else ''))
+            return {'FINISHED'}
         from .lamps import LAMP_OF, add_lamp
         if it.key in LAMP_OF:                 # (lights are Blender lights: the Light panel has their settings)
             add_lamp(context, LAMP_OF[it.key])
@@ -231,6 +259,9 @@ CLASSES = (HL_OT_spawn_refresh, HL_UL_spawn, HL_OT_spawn_favorite, HL_OT_spawn_i
 
 
 def register():
+    from .logic_examples import all_examples
+    from ..core.spawnlist import register_examples
+    register_examples(all_examples())
     for c in CLASSES:
         bpy.utils.register_class(c)
     bpy.app.handlers.load_post.append(_on_load)

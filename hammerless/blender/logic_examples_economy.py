@@ -397,6 +397,9 @@ def examples():
                 'Messages: Purchase Prompt':hint_group(prompt=True),'Barrier: Payment':barrier_rules(),'Paid Barrier':barrier_behaviour()},
         nodes=[],links=[]))
     result.append(dict(title='Purchase - Emergency Knife', level='Game Modes',
+        add_menu=dict(id='emergency_knife', label='Emergency Knife', icon='ADD',
+                      description='Buyable emergency knives with editable price and enemy escape options. Each shop has independent settings; survivors can carry two knives across all shops.',
+                      tip='Requires Personal Kill Points once per map. Hold Reload while pinned to use a knife.'),
         about='A separate emergency consumable, not a melee weapon. Buy up to two with personal points, then '
               'hold RELOAD for one second while pinned to spend one and stagger the attacker. '
               'Choose Smoker, Hunter, Jockey and Charger escapes in the object behaviour; '

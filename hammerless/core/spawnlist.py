@@ -22,6 +22,7 @@ CATEGORIES = (
     ("VOLUMES", "Volumes", "MOD_WIREFRAME"),
     ("LOGIC", "Logic", "NODETREE"),
     ("LIGHTS", "Lights", "LIGHT"),
+    ("CUSTOM", "Custom", "NODETREE"),
 )
 CATEGORY_LABELS = {k: label for k, label, _ in CATEGORIES}
 CATEGORY_ICONS = {k: icon for k, _, icon in CATEGORIES}
@@ -105,11 +106,12 @@ class SpawnItem:
     kind: str          # "preset" | "entity" | "volume"
     key: str           # preset key or classname
     tip: str = ""
+    icon: str = "OUTLINER_OB_EMPTY"
 
     @property
     def kind_label(self) -> str:
         return {"preset": "Ready-made group", "entity": "Point entity",
-                "volume": "Volume (uses a mesh)"}[self.kind]
+                "volume": "Volume (uses a mesh)", "example": "Object with editable behaviour"}[self.kind]
 
 
 def _build() -> list[SpawnItem]:
@@ -129,6 +131,29 @@ def _build() -> list[SpawnItem]:
 
 SPAWN_ITEMS: list[SpawnItem] = _build()
 BY_ID: dict[str, SpawnItem] = {i.id: i for i in SPAWN_ITEMS}
+
+
+def register_examples(examples):
+    """Publish object examples with add_menu metadata; stable IDs preserve favorites.
+
+    Metadata: id, label, description, optional tip/icon. Re-registering replaces
+    only example entries, in place so existing UI imports remain valid.
+    """
+    entries = []
+    for ex in examples:
+        menu = ex.get('add_menu')
+        if not menu:
+            continue
+        if not ex.get('objects') or not ex.get('behaviours') or ex.get('nodes'):
+            raise ValueError('Add menu examples must be owned by their objects: ' + ex['title'])
+        entries.append(SpawnItem('custom:'+menu['id'], menu['label'], 'CUSTOM',
+                                 menu['description'], 'example', menu['id'],
+                                 menu.get('tip', ''), menu.get('icon', 'NODETREE')))
+    if len({i.id for i in entries}) != len(entries):
+        raise ValueError('Duplicate custom Add menu ID')
+    SPAWN_ITEMS[:] = [i for i in SPAWN_ITEMS if i.kind != 'example'] + entries
+    BY_ID.clear()
+    BY_ID.update((i.id, i) for i in SPAWN_ITEMS)
 
 
 def filtered(category: str, search: str = "", favorites: set[str] | frozenset = frozenset()) -> list[SpawnItem]:

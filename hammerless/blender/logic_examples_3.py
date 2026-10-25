@@ -287,8 +287,8 @@ SWELLING_POD_BEHAVIOUR = dict(
           "swells while a survivor is within Radius (Swell Time (Near) to swell fully, when it bursts) and shrinks "
           "back when left alone (Shrink Time). Shot, it keeps swelling (Swell Time (Shot)) and bursts. A burst: an "
           "explosion, Damage and a green flash of spores for survivors within Burst Radius, the common infected "
-          "within it killed, and the pod gone. Its settings are on the 'Swelling Pod' node; every pod sharing this "
-          "Behaviour uses them (Make Unique gives one pod its own).",
+          "within it killed, and the pod gone. Each object's Behaviour settings independently control its "
+          "radius, timing, growth and damage.",
     nodes=[N("me", "HL_NodeSelf", 0, 2),
            N("timer", "HL_NodeTimer", 0, 0, seconds=0.2),
            N("pod", "HL_NodeGroup", 2, 0, group="Swelling Pod",
@@ -305,6 +305,18 @@ SWELLING_POD_BEHAVIOUR = dict(
            ("is_me.result", "if_hit.condition"), ("if_hit.true", "mark.run"), ("me.entity", "mark.player")],
     steps=[("Five times a second: this pod behaves (settings on the Swelling Pod node)", ["me", "timer", "pod"]),
            ("Shot: it keeps swelling, then bursts", ["ask", "is_me", "if_hit", "mark"])])
+
+# Keep the reusable graph shared, but put tuning on each owning object's slot.
+for _row, (_key, _label, _default) in enumerate([
+        ('near_on', 'React to Nearby Survivors', True), ('radius', 'Detection Radius', 150.0),
+        ('near_time', 'Swell Time (Near)', 2.5), ('shrink_time', 'Shrink Time', 2.5),
+        ('shot_time', 'Swell Time (Shot)', 2.5), ('grow', 'Growth Scale', 1.5),
+        ('burst_radius', 'Burst Radius', 220.0), ('damage', 'Burst Damage', 20.0)], 7):
+    SWELLING_POD_BEHAVIOUR['nodes'].append(N(
+        _key+'_setting', 'HL_NodeExposedSetting', 0, _row, ui_name=_label,
+        value_type='BOOL' if isinstance(_default, bool) else 'FLOAT',
+        **({'default_boolean': _default} if isinstance(_default, bool) else {'default_number': _default})))
+    SWELLING_POD_BEHAVIOUR['links'].append((_key+'_setting.value', 'pod.'+_key))
 
 REPLACE_WITH_COMMON = dict(
     about="Swaps a placed character for a real common infected where it is: same model, same body variant, facing "
@@ -1412,6 +1424,9 @@ EXAMPLES_3 = [
                  ["if_empty", "say_empty", "percent", "whole", "say_pct", "add_empty", "add_pct"]),
                 ("All done: show it", ["text", "publish"])]),
     dict(title="Swelling Pod", level="Animated Models",
+         add_menu=dict(id='swelling_pod', label='Swelling Pod', icon='OUTLINER_OB_ARMATURE',
+                       description='An animated pod that swells near survivors or when shot, then bursts. Each pod has independent state and editable behaviour settings.',
+                       tip='The pod and its armature are selected together for duplication. Shot activation needs Hammerless game mode.'),
          objects={"pod": ("POD", (0.0, 0.0, 0.0))},
          behaviours={"pod": "Swelling Pod Behaviour"},
          about="An animated model that carries its own behaviour: select the pod, Behaviours shows 'Swelling Pod "
