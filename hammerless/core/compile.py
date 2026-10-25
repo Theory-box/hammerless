@@ -458,6 +458,7 @@ class LogSummary:
     leaked: bool = False
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    problems: list = field(default_factory=list)
 
 
 ERROR_PATTERNS = [
@@ -514,9 +515,11 @@ def failure_reason(log: list[str]) -> str:
     return reason + (": " + " | ".join(reversed(tail)) if tail else "")
 
 
-def parse_log(text: str) -> LogSummary:
+def parse_log(text: str, vmf_path: str | None = None) -> LogSummary:
     s = LogSummary()
     for line in text.splitlines():
+        if 'bad surface extents' in line.lower():
+            continue  # multiline diagnostic handled below, including Valve's unprefixed error
         for pat, msg in ERROR_PATTERNS:
             if pat.search(line):
                 if "leaked" in pat.pattern:
@@ -526,6 +529,9 @@ def parse_log(text: str) -> LogSummary:
         else:
             if any(p.search(line) for p in WARNING_PATTERNS):
                 s.warnings.append(line.strip())
+    from .compilerdiagnostics import surface_errors
+    s.problems = surface_errors(text, vmf_path)
+    s.errors.extend(p.message for p in s.problems)
     s.errors = list(dict.fromkeys(s.errors))
     s.warnings = list(dict.fromkeys(s.warnings))
     return s
@@ -1406,7 +1412,7 @@ class CompileJob:
                 self.done = True
                 self.failed = item[0] != "OK"
                 self.cancelled = item[0] == "CANCELLED"
-                self.summary = parse_log("\n".join(self.log))
+                self.summary = parse_log("\n".join(self.log), self.vmf)
                 if self.failed and not self.summary.errors and not self.summary.leaked:
                     self.summary.errors = [failure_reason(self.log)]
                 self.summary.errors = name_brushes(self.summary.errors, self.vmf)

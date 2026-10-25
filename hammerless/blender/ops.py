@@ -1783,6 +1783,9 @@ class HL_OT_build(bpy.types.Operator):
                 from .problems import store
                 failed = Report()
                 failed.errors = [f"Compiler: {e}" for e in summ.errors[:20]]
+                from ..core.mapcheck import Problem
+                failed.problems = [Problem(p.severity, f"Compiler: {p.message}", p.source, p.location)
+                                   for p in summ.problems if p.message in summ.errors[:20]]
                 store(context, failed)
             self.report({"ERROR"}, msg)
             return self._finish(context, {"CANCELLED"})

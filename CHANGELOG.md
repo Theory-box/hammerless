@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Preserve material, dimensions and coordinates from multiline Bad Surface Extents compiler errors. Match reported face vertices to exported brush sources so error rows can select the Blender object and center the view/cursor at the failing surface. Missing source mappings retain location-only diagnostics; ambiguous matches are labeled as candidates.
+- Recognize Valve's unprefixed surface-extents error and prefer its located report over the earlier, less detailed Hammerless fallback error. Regression checks cover parsing, source matching and Blender object selection.
+
 ## 0.20.19 (test release, 2026-10-24)
 
 - Fix Self and explicit script object references selecting the first entity when multiple objects share a targetname. Export per-entity handle registrations for ambiguous names, preserving shared-name I/O and existing entity scripts. This fixes automatic Witch spawners all spawning at the first spawner; existing placed objects receive the fix on rebuild.
