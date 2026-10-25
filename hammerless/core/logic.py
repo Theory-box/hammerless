@@ -1367,7 +1367,11 @@ class _Compiler:
             self.knife_helpers()
             player = self.typed_in(n, "player", vs.THING)
             self.script_action(nid, fn,
-                f"if (HL_KnifeGive({player})) {{\n@@success@@\n}} else {{\n@@failure@@\n}}",
+                f"if (HL_KnifeGive({player}, " + " + ".join(
+                    f"(({self.expr_in(n, key, default)}) ? {bit} : 0)"
+                    for key, default, bit in (("smoker", True, 2), ("hunter", True, 8),
+                                              ("jockey", False, 32), ("charger", False, 64)))
+                + ")) {\n@@success@@\n} else {\n@@failure@@\n}",
                 ["success", "failure"], take)
         elif k == "RESET_KEY_VAR":
             from . import interaction

@@ -1,4 +1,4 @@
-"""Exercise the compiled shops and hold Reload against real smoker/hunter pins.
+"""Exercise configured shops, mixed stock and real pins (Charger pummel only).
 
 Uses a stock map, returns to the menu, and does not modify the user's map.
 """
@@ -40,11 +40,15 @@ with Bench() as b:
                          'return {count=HLT_KnifeCount(p),points=HLT_KeyGet(HLT_HumanKey(p),"points",0)};')
             assert result==dict(count=count,points=points),result
         print('PASS independent shop prices, shared two-knife cap, full-stock purchase does not charge',flush=True)
+        assert b.value('HLT_KnifeState(GetListenServerHost()).knives')==[10,106]
+        assert b.value('HLT_KnifeGive(GetListenServerHost(),0)') is False
         # Failed grant refunds exactly once; points remain graph-controlled.
         b.run('::HLT_OriginalGive <- HLT_KnifeGive; HLT_KnifeUsers={}; '
-              'HLT_KnifeGive=function(p) { return false; }; HLT_Interactions[0].event(); '
+              'HLT_KnifeGive=function(p,mask) { return false; }; HLT_Interactions[0].event(); '
               'HLT_KnifeGive=HLT_OriginalGive;')
         assert b.value('HLT_KeyGet(HLT_HumanKey(GetListenServerHost()),"points",0)')==750
+        assert b.value('HLT_KnifeGive(GetListenServerHost(),0)') is False
+        assert b.value('HLT_KnifeCount(GetListenServerHost())')==0
         b.run('HLT_KnifeGive(GetListenServerHost()); HLT_KnifeGive(GetListenServerHost());')
         print('PASS failed grant refunds',flush=True)
 
@@ -54,7 +58,9 @@ with Bench() as b:
                 b.run('HLT_KnifeThink();')
                 time.sleep(.055)
 
-        for index,(kind,typ) in enumerate([('smoker',1),('hunter',3)]):
+        for kind,typ in [('smoker',1),('hunter',3),('jockey',5),('charger',6)]:
+            b.run('HLT_KnifeUsers={}; HLT_KnifeGive(GetListenServerHost(),106); '
+                  'HLT_KnifeGive(GetListenServerHost(),106);')
             b.run('local p=GetListenServerHost(); p.SetOrigin(Vector(2671,4792,-976.75)); '
                   'p.SetVelocity(Vector(0,0,0));')
             b.console('-reload','nb_delete_all',f'z_spawn_old {kind}')
@@ -68,20 +74,34 @@ with Bench() as b:
                 print('PIN DEBUG', b.run('return {p=GetListenServerHost().GetOrigin(), '
                       'a=HLT_Attacker.GetOrigin(),hp=HLT_Attacker.GetHealth(),dead=HLT_Attacker.IsDead()};'),flush=True)
                 raise
+            if typ == 6:
+                b.wait_until('NetProps.GetPropEntity(GetListenServerHost(),"m_pummelAttacker")!=null',timeout=15)
             ticks(.12)
+            # Mixed stock: the first charge cannot escape this enemy. A disabled
+            # pin must not use either charge, then only the compatible one is spent.
+            wrong = 8 if typ != 3 else 2
+            b.run(f'HLT_KnifeState(GetListenServerHost()).knives=[{wrong},{wrong}];')
+            b.console('+reload',wait=.01)
+            ticks(1.3)
+            assert b.value('HLT_KnifeCount(GetListenServerHost())')==2
+            assert b.value('GetListenServerHost().GetSpecialInfectedDominatingMe()!=null')
+            b.console('-reload',wait=.01)
+            ticks(.12)
+            b.run(f'HLT_KnifeState(GetListenServerHost()).knives=[{wrong},{1<<typ}];')
             b.console('+reload',wait=.01)
             ticks(.35)
             b.console('-reload',wait=.01)
             ticks(.12)
-            assert b.value('HLT_KnifeCount(GetListenServerHost())')==2-index
+            assert b.value('HLT_KnifeCount(GetListenServerHost())')==2
             assert b.value('GetListenServerHost().GetSpecialInfectedDominatingMe()!=null')
             b.console('+reload',wait=.01)
             ticks(1.4)
             result=b.run('local p=GetListenServerHost(); return {count=HLT_KnifeCount(p),'
                          'free=p.GetSpecialInfectedDominatingMe()==null,alive=!HLT_Attacker.IsDead()};')
-            assert result==dict(count=1-index,free=True,alive=True),(kind,result)
+            assert result==dict(count=1,free=True,alive=True),(kind,result)
+            assert b.value('HLT_KnifeState(GetListenServerHost()).knives')==[wrong]
             ticks(.2)
-            assert b.value('HLT_KnifeCount(GetListenServerHost())')==1-index
+            assert b.value('HLT_KnifeCount(GetListenServerHost())')==1
             b.console('-reload',wait=.01)
             print('PASS',kind,'cancelled hold keeps knife; full hold frees player, consumes one, attacker alive',flush=True)
         b.console('nb_delete_all')

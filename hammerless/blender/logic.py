@@ -1860,13 +1860,15 @@ class HL_NodeGiveInventory(_Block, bpy.types.Node):
 
 
 class HL_NodeEmergencyKnife(_Block, bpy.types.Node):
-    """Give one emergency knife, at most two per human. Hold Reload for one second while pinned by a Smoker or Hunter to escape and stagger it. Resets on death and round end."""
+    """Give one emergency knife for the enabled enemies, at most two per human. Hold Reload for one second while pinned to escape and stagger it. Resets on death and round end."""
     bl_idname, bl_label, bl_icon = "HL_NodeEmergencyKnife", "Emergency Knife Stock", "ADD"
     kind = "EMERGENCY_KNIFE"
 
     def make_sockets(self):
         self.ev_in("run", "Give One")
         self.data_in("thing", "player", "Player")
+        for key, default in (("smoker", True), ("hunter", True), ("jockey", False), ("charger", False)):
+            self.data_in("bool", key, "Charger (Pummel Only)" if key == "charger" else key.title()).value = default
         self.data_out("num", "count", "Carried")
         self.ev_out("success", "Given")
         self.ev_out("failure", "Full / Unavailable")

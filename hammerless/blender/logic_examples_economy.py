@@ -322,6 +322,8 @@ def emergency_knife_rules():
                      'The ordinary nodes check points, reserve payment and refund failed grants. '
                      'Emergency Knife Stock handles the consumable and hold-Reload escape; it does not replace a weapon.')
     spec['inputs'] = [row for row in spec['inputs'] if row[0] != 'item']
+    enemies = ('smoker', 'hunter', 'jockey', 'charger')
+    spec['inputs'] += [(key, key.title(), 'bool') for key in enemies]
     for n in spec['nodes']:
         if n['id'] == 'has':
             n.clear()
@@ -336,6 +338,7 @@ def emergency_knife_rules():
     spec['links'] = [(a,b) for a,b in spec['links']
                      if a != 'in.item' and b not in ('has.player', 'bought_text.a')]
     spec['links'] += [('give.count', 'has.a'), ('give.count', 'bought_text.a')]
+    spec['links'] += [('in.'+key, 'give.'+key) for key in enemies]
     return spec
 
 
@@ -345,6 +348,11 @@ def emergency_knife_station():
              N('title', 'HL_NodeExposedSetting', 0, 2, ui_name='Display Name',
                value_type='TEXT', default_text='Emergency Knife')]
     links = [('self.entity', 'buy.entity'), ('title.value', 'buy.title')]
+    for row, (key, default) in enumerate((('smoker', True), ('hunter', True), ('jockey', False), ('charger', False)), 7):
+        nodes.append(N(key+'_setting', 'HL_NodeExposedSetting', 0, row,
+                       ui_name='Escape '+key.title()+(' (Pummel Only)' if key=='charger' else ''),
+                       value_type='BOOL', default_boolean=default))
+        links.append((key+'_setting.value', 'buy.'+key))
     for key, title, default, lo, hi, row in [('price', 'Price', 500, 0, 1000000, 3),
                                            ('range', 'Use Range', 96, 32, 256, 5)]:
         nodes += [N(key+'_setting', 'HL_NodeExposedSetting', 0, row, ui_name=title,
@@ -354,9 +362,11 @@ def emergency_knife_station():
         links += [(key+'_setting.value', key+'_min.a'), (key+'_min.value', key+'_max.a'),
                   (key+'_max.value', 'buy.'+key)]
     return dict(behaviour=True, about='Buy with USE. Carry two emergency knives independently of weapon slots. '
-                'Hold RELOAD for one second after a Smoker or Hunter pins you. A successful escape consumes '
+                'Choose Escape Smoker, Hunter, Jockey and Charger per shop (Smoker/Hunter default on). '
+                'Charger escape works during ground pummels only, not charging/carrying. '
+                'Hold RELOAD for one second after an enabled enemy pins you. A successful escape consumes '
                 'one knife and staggers the attacker. Releasing Reload cancels the hold. Stock resets on death '
-                'and round end. All shops share the two-knife limit; each shop has its own price and range.',
+                'and round end. Each knife retains its shop settings. All shops share the two-knife limit.',
                 nodes=nodes, links=links)
 
 
@@ -388,7 +398,9 @@ def examples():
         nodes=[],links=[]))
     result.append(dict(title='Purchase - Emergency Knife', level='Game Modes',
         about='A separate emergency consumable, not a melee weapon. Buy up to two with personal points, then '
-              'hold RELOAD for one second while pinned by a Smoker or Hunter to spend one and stagger it. '
+              'hold RELOAD for one second while pinned to spend one and stagger the attacker. '
+              'Choose Smoker, Hunter, Jockey and Charger escapes in the object behaviour; '
+              'Smoker and Hunter are enabled by default. '
               'Knives reset on death and round end. Add Personal Kill Points once per map. Price defaults '
               'to 500 and is editable in this object\'s Behaviours. Duplicated shops have independent settings '
               'but share each player\'s two-knife limit. No additional Workshop mods required.',

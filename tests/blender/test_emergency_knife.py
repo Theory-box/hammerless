@@ -18,12 +18,20 @@ obj=next(o for o in bpy.context.scene.objects if o.name.endswith('emergency_knif
 slot=obj.hammerless.behaviours[0]
 slot.preview_enabled=False
 graph=slot.graph
+graph_name=graph.name
 other=obj.copy()
 bpy.context.scene.collection.objects.link(other)
 other.hammerless.behaviours[0].values[graph.nodes['price_setting'].setting_id].integer=750
 assert slot.values[graph.nodes['price_setting'].setting_id].integer==500
+for key in ('jockey', 'charger'):
+    other.hammerless.behaviours[0].values[graph.nodes[key+'_setting'].setting_id].boolean=True
+    assert not slot.values[graph.nodes[key+'_setting'].setting_id].boolean
 
 def check():
+    graph=bpy.data.node_groups[graph_name]
+    shops=[o.hammerless.behaviours[0] for o in bpy.context.scene.objects
+           if o.hammerless.behaviours and o.hammerless.behaviours[0].graph==graph]
+    assert sorted(s.values[graph.nodes['charger_setting'].setting_id].boolean for s in shops)==[False,True]
     report=Report()
     ir,_=extract_scene(bpy.context,report,defer_textures=True)
     compile_logic(bpy.context,ir,report)

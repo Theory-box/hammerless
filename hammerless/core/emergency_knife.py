@@ -7,27 +7,35 @@ RUNTIME = r'''
     if (HL_HumanKey(p) == "") return null;
     local id = p.GetPlayerUserId().tostring();
     if (!(id in HL_KnifeUsers)) HL_KnifeUsers[id] <- {
-        count = 0, attacker = null, hold = -1.0, armed = false,
-        pending = null, until = 0.0, hint = 0.0 };
+        knives = [], attacker = null, hold = -1.0, armed = false,
+        pending = null, pendingIndex = -1, until = 0.0, hint = 0.0 };
     return HL_KnifeUsers[id];
 };
 ::HL_KnifeCount <- function(p) {
     local s = HL_KnifeState(p);
-    return s == null ? 0 : s.count;
+    return s == null ? 0 : s.knives.len();
 };
-::HL_KnifeGive <- function(p) {
+::HL_KnifeGive <- function(p, mask = 10) {
     local s = HL_KnifeState(p);
     if (s == null || p.IsDead() || p.IsDying() || p.IsIncapacitated()
         || p.IsHangingFromLedge() || p.GetSpecialInfectedDominatingMe() != null
-        || s.count >= 2) return false;
-    s.count++;
+        || s.knives.len() >= 2 || (mask & 106) == 0) return false;
+    s.knives.append(mask & 106);
     return true;
 };
 ::HL_KnifeAttacker <- function(p) {
     local a = p.GetSpecialInfectedDominatingMe();
     if (a == null || !a.IsValid() || a.IsDead()) return null;
     local kind = a.GetZombieType();
-    return kind == 1 || kind == 3 ? a : null;
+    // Carry cannot be safely interrupted with the available native actions.
+    if (kind == 6 && NetProps.GetPropEntity(p, "m_pummelAttacker") != a) return null;
+    return kind == 1 || kind == 3 || kind == 5 || kind == 6 ? a : null;
+};
+::HL_KnifeMatch <- function(s, a) {
+    if (a == null) return -1;
+    local bit = 1 << a.GetZombieType();
+    foreach (i, mask in s.knives) if ((mask & bit) != 0) return i;
+    return -1;
 };
 ::HL_KnifeThink <- function() {
     local now = Time();
@@ -40,16 +48,16 @@ RUNTIME = r'''
         local id = p.GetPlayerUserId().tostring();
         present[id] <- true;
         if (p.IsDead() || p.IsDying()) {
-            s.count = 0; s.pending = null; s.attacker = null; s.hold = -1.0;
+            s.knives.clear(); s.pending = null; s.attacker = null; s.hold = -1.0;
             s.armed = false;
             continue;
         }
         local a = HL_KnifeAttacker(p), down = (p.GetButtonMask() & 8192) != 0;
         if (s.pending != null) {
             if (p.GetSpecialInfectedDominatingMe() == null) {
-                if (s.count > 0) s.count--;
+                if (s.pendingIndex >= 0 && s.pendingIndex < s.knives.len()) s.knives.remove(s.pendingIndex);
                 s.pending = null;
-                ClientPrint(p, 4, "Emergency knife used | Remaining: " + s.count + "/2");
+                ClientPrint(p, 4, "Emergency knife used | Remaining: " + s.knives.len() + "/2");
                 s.hint = now + 2.0;
             } else if (now >= s.until) {
                 s.pending = null;
@@ -63,14 +71,17 @@ RUNTIME = r'''
             s.attacker = a; s.hold = -1.0; s.armed = !down;
         }
         if (!down) { s.hold = -1.0; s.armed = true; }
-        if (a == null || s.count <= 0 || p.IsHangingFromLedge()) {
+        local index = HL_KnifeMatch(s, a);
+        if (a == null || s.knives.len() == 0 || p.IsHangingFromLedge()) {
             s.hold = -1.0;
             continue;
         }
         if (now >= s.hint) {
-            ClientPrint(p, 4, "Emergency knives: " + s.count + "/2 | Hold RELOAD for 1 second to escape");
+            ClientPrint(p, 4, index < 0 ? "Your emergency knives do not work on this enemy" :
+                "Emergency knives: " + s.knives.len() + "/2 | Hold RELOAD for 1 second to escape");
             s.hint = now + 1.5;
         }
+        if (index < 0) { s.hold = -1.0; continue; }
         if (!down || !s.armed) continue;
         if (s.hold < 0) s.hold = now;
         if (now - s.hold < 1.0) continue;
@@ -79,7 +90,11 @@ RUNTIME = r'''
         if (HL_KnifeAttacker(p) != a) continue;
         try {
             a.Stagger(p.GetOrigin());
-            s.pending = a; s.until = now + 0.35;
+            // A Charger can stagger without releasing its pummel. Staggering
+            // the victim invokes the engine's release/animation cleanup too.
+            if (a.GetZombieType() == 6 && p.GetSpecialInfectedDominatingMe() == a)
+                p.Stagger(a.GetOrigin());
+            s.pending = a; s.pendingIndex = index; s.until = now + 0.35;
         } catch (error) {
             printl("HAMMERLESS_KNIFE " + error);
         }
