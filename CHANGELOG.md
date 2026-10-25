@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.18 (test release, 2026-10-24)
+
+- Add native look-at outlines to buyable weapon and item displays, using the same Use Range as their purchase prompts. Initialize glow at map and round start through existing event and Set Entity Property nodes; no custom node or shared focus-toggle logic is needed.
+- Untouched shipped Purchase: Rules groups update when a map reopens, preserving object settings. Customized rule groups remain unchanged.
+- Validation: Blender export, independent duplicate settings, save/reload and safe group-upgrade checks passed. The user confirmed the outline works in-game. Release Python syntax, version and ZIP integrity checks passed.
+
+Restart Blender after installing, reopen the map, and rebuild/play to include the updated purchase rules.
+
 ## 0.20.17 (test release, 2026-10-24)
 
 - Add the 13 missing individual weapon pickups, including Counter-Strike weapons, M60, Grenade Launcher and Chainsaw, with matching model previews.
