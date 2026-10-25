@@ -465,6 +465,33 @@ class _Compiler:
             e.keyvalues = {**e.keyvalues, "targetname": self.unique(f"hl_{_slug(hint)}")}
         return e.keyvalues["targetname"]
 
+    def object_handle(self, e: Entity, hint: str) -> str:
+        """Resolve an exact editor object without breaking deliberately shared I/O names."""
+        name = self.name_of(e, hint)
+        if sum((other.keyvalues.get('targetname') or '').lower() == name.lower()
+               for other in self.ir.entities) == 1:
+            return f'Entities.FindByName(null, {vs.literal(vs.TEXT, name)})'
+        # A name lookup silently selects the first duplicate. Let the entity register
+        # its own handle instead; no position guesses, renaming, or shared-name I/O changes.
+        refs = self.ir.__dict__.setdefault('_logic_object_refs', {})
+        key = id(e)
+        if key not in refs:
+            index = len(refs) + 1
+            path = f'hammerless/object_{_slug(self.ir.settings.name)}_{index}'
+            while f'scripts/vscripts/{path}.nut' in self.ir.extra_scripts:
+                index += 1
+                path = f'hammerless/object_{_slug(self.ir.settings.name)}_{index}'
+            token = vs.literal(vs.TEXT, path)
+            self.ir.extra_scripts[f'scripts/vscripts/{path}.nut'] = (
+                'if (!("HL_ObjectRefs" in getroottable())) ::HL_ObjectRefs <- {};\n'
+                f'::HL_ObjectRefs[{token}] <- self;\n')
+            scripts = e.keyvalues.get('vscripts', '').split()
+            e.keyvalues = {**e.keyvalues, 'vscripts': ' '.join([path, *scripts])}
+            refs[key] = token
+        token = refs[key]
+        return (f'(("HL_ObjectRefs" in getroottable() && {token} in ::HL_ObjectRefs) '
+                f'? ::HL_ObjectRefs[{token}] : null)')
+
     def add(self, classname: str, name: str, kv: dict, brushes=None, source: str = "", origin=None) -> Entity:
         e = Entity(classname, None if brushes else tuple(origin or (0.0, 0.0, 0.0)), (0, 0, 0),
                    {"targetname": self.unique(name), **kv}, brushes or [], source or name)
@@ -555,7 +582,7 @@ class _Compiler:
                 self.problems.append(f"Logic node '{n.id}': '{v}' isn't an entity in the map (set its Role, or "
                                      "wire in what the node should act on)")
                 return "null"
-            return f'Entities.FindByName(null, "{self.name_of(e, v)}")'
+            return self.object_handle(e, v)
         return vs.literal(kind, v)
 
     def check_cheats(self, n: LNode) -> None:
@@ -613,7 +640,7 @@ class _Compiler:
                 self.problems.append(f"Logic node '{n.id}': '{n.obj}' isn't an entity in the map (Self's Entity "
                                      "needs one: set its Role, e.g. a Custom Model or a light)")
                 return "null"
-            return f'Entities.FindByName(null, "{self.name_of(e, n.obj)}")'
+            return self.object_handle(e, n.obj)
         if k in BLOCK_VALUES or k in ACTION_RESULTS:
             return self.block_value(n, sock, slug)
         if k == "DIRECTOR_MOOD":
@@ -1577,7 +1604,7 @@ class _Compiler:
         if k == "INVENTORY_ITEM":
             if sock == "entity":
                 entity = self.entity_of(n.obj) if n.obj else None
-                return f'Entities.FindByName(null, "{self.name_of(entity, n.obj)}")' if entity else "null"
+                return self.object_handle(entity, n.obj) if entity else "null"
             item = self.inventory_literal(n)
             return item if sock == "value" else f"({item}).{sock}" if item != "null" else '""'
         if k == "HAS_INVENTORY":

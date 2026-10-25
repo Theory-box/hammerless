@@ -921,6 +921,9 @@ class HL_OT_add_entity(bpy.types.Operator):
         d = CATALOG[self.classname]
         obj = make_entity_object(context, self.classname, context.scene.cursor.location.copy(),
                                  name=d.label)
+        if self.classname == 'commentary_zombie_spawner':
+            from .spawner_behaviour import attach
+            attach(obj)
         obj.select_set(True)
         context.view_layer.objects.active = obj
         return {"FINISHED"}

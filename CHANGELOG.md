@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.19 (test release, 2026-10-24)
+
+- Fix Self and explicit script object references selecting the first entity when multiple objects share a targetname. Export per-entity handle registrations for ambiguous names, preserving shared-name I/O and existing entity scripts. This fixes automatic Witch spawners all spawning at the first spawner; existing placed objects receive the fix on rebuild.
+- Newly added Zombie Spawners carry an editable Automatic Spawn behaviour made from existing nodes. Spawn Automatically defaults to off; enable it and choose Infected Type and Delay Seconds to spawn once on map load. Normal SpawnZombie inputs remain available, and Infected Spawn Spots and existing objects are unchanged.
+- Duplicated spawners have independent settings. Blender checks cover defaults, duplicate settings, compilation and save/reload; in-game spawning has not yet been tested.
+- Validation: object identity regression checks and Blender spawner/purchase export checks passed; core suite ran 230 tests with one skipped. Release syntax, version and ZIP integrity checks passed.
+
+Restart Blender after installing and rebuild/play. Existing spawners with automatic-spawn behaviours receive the targeting fix without being recreated.
+
 ## 0.20.18 (test release, 2026-10-24)
 
 - Add native look-at outlines to buyable weapon and item displays, using the same Use Range as their purchase prompts. Initialize glow at map and round start through existing event and Set Entity Property nodes; no custom node or shared focus-toggle logic is needed.
