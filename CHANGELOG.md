@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add Purchase - Emergency Knife as an object-owned example. Buy up to two escape charges with personal points, then hold Reload for one second during a Smoker or Hunter pin to stagger the attacker and consume one charge after release. Shops have independent prices and share each human's carry limit; stock resets on death and round lifecycle events.
 - Preserve material, dimensions and coordinates from multiline Bad Surface Extents compiler errors. Match reported face vertices to exported brush sources so error rows can select the Blender object and center the view/cursor at the failing surface. Missing source mappings retain location-only diagnostics; ambiguous matches are labeled as candidates.
 - Recognize Valve's unprefixed surface-extents error and prefer its located report over the earlier, less detailed Hammerless fallback error. Regression checks cover parsing, source matching and Blender object selection.
 

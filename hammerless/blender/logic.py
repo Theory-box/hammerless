@@ -1859,6 +1859,19 @@ class HL_NodeGiveInventory(_Block, bpy.types.Node):
         self.ev_out("failure", "Failed")
 
 
+class HL_NodeEmergencyKnife(_Block, bpy.types.Node):
+    """Give one emergency knife, at most two per human. Hold Reload for one second while pinned by a Smoker or Hunter to escape and stagger it. Resets on death and round end."""
+    bl_idname, bl_label, bl_icon = "HL_NodeEmergencyKnife", "Emergency Knife Stock", "ADD"
+    kind = "EMERGENCY_KNIFE"
+
+    def make_sockets(self):
+        self.ev_in("run", "Give One")
+        self.data_in("thing", "player", "Player")
+        self.data_out("num", "count", "Carried")
+        self.ev_out("success", "Given")
+        self.ev_out("failure", "Full / Unavailable")
+
+
 class HL_NodeResetKeyVariable(_Block, bpy.types.Node):
     """Clear one named variable for every key; other named variables are untouched"""
     bl_idname, bl_label, bl_icon = "HL_NodeResetKeyVariable", "Reset Key Variable", "LOOP_BACK"
@@ -2429,7 +2442,7 @@ COMBAT_CLASSES = (HL_NodeTrace, HL_NodeDamage, HL_NodePush, HL_NodeAimAt, HL_Nod
                   HL_NodeParticle, HL_NodeSeenBy, HL_NodeFindNearby, HL_NodePlayerView)
 
 
-BLOCK_CLASSES = (HL_NodeInventoryItem, HL_NodeHumanIdentity, HL_NodeInteraction, HL_NodeHasInventory, HL_NodeGiveInventory, HL_NodeResetKeyVariable, HL_NodeForEach, HL_NodeWallWeapon, HL_NodePersonalPoints, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeMakeTable, HL_NodeGetField,
+BLOCK_CLASSES = (HL_NodeEmergencyKnife, HL_NodeInventoryItem, HL_NodeHumanIdentity, HL_NodeInteraction, HL_NodeHasInventory, HL_NodeGiveInventory, HL_NodeResetKeyVariable, HL_NodeForEach, HL_NodeWallWeapon, HL_NodePersonalPoints, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeMakeTable, HL_NodeGetField,
                  HL_NodeFormatText, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, HL_NodeCheck,
                  HL_NodePickValue, HL_NodeTextCheck, HL_NodeSplitText, HL_NodeFireInput, HL_NodeScriptCode, HL_NodeScriptValue) + COMBAT_CLASSES
 
@@ -2850,7 +2863,7 @@ MENU_LAYOUT = [
                 HL_NodeCheck, HL_NodePickValue, None, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, None,
                 HL_NodeMakeTable, HL_NodeGetField]),
     ("Scene", [HL_NodeObjectInfo, HL_NodeSelf, HL_NodeObject, HL_NodeCollision, None, HL_NodeGetProperty]),
-    ("Actions", [HL_NodeGiveInventory, HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
+    ("Actions", [HL_NodeEmergencyKnife, HL_NodeGiveInventory, HL_NodeMove, HL_NodeShowHide, HL_NodeHorde, HL_NodeCrescendo, HL_NodeSpawn, HL_NodeSound,
                  HL_NodeTeleport, HL_NodeFireInput, HL_NodeSetProperty, None, (SUB, "HL_MT_logic_game_functions", "All Game Functions", "SCRIPT")]),
     ("Combat & Physics", [HL_NodeTrace, HL_NodeSeenBy, HL_NodeFindNearby, HL_NodePlayerView, None, HL_NodeDamage,
                           HL_NodePush, HL_NodeAimAt, None, HL_NodeExplosion, HL_NodeBeam, HL_NodeParticle]),

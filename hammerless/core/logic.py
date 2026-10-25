@@ -107,13 +107,13 @@ def _base(source: str) -> str:
     return re.sub(r" \(part \d+\)$", "", source)
 
 
-BLOCK_ACTIONS = ("RESET_KEY_VAR", "GIVE_INVENTORY", "FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
+BLOCK_ACTIONS = ("EMERGENCY_KNIFE", "RESET_KEY_VAR", "GIVE_INVENTORY", "FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
                  "CAMERA", "FIRE_INPUT", "SET_PROP", "TRACE", "DAMAGE", "PUSH", "AIM", "EXPLOSION", "BEAM", "PARTICLE")
 CLIENT_COMMAND = "hl_clientcommand"     # the map's point_clientcommand: a console command run on one player
 BLOCK_VALUES = ("HUMAN_ID", "INVENTORY_ITEM", "HAS_INVENTORY", "SELF", "GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
                 "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE", "GET_PROP", "SEEN", "FIND_NEAR", "VIEW")
 TRACE_MASKS = {"SHOTS": 1174421507, "SIGHT": 24705, "WORLD": 16395}   # MASK_SHOT, MASK_VISIBLE, MASK_SOLID_BRUSHONLY
-ACTION_RESULTS = ("FOR_EACH", "SCRIPT_CODE", "TRACE", "BEAM", "PARTICLE")   # actions whose outputs hold what they did
+ACTION_RESULTS = ("EMERGENCY_KNIFE", "FOR_EACH", "SCRIPT_CODE", "TRACE", "BEAM", "PARTICLE")   # actions with data outputs
 VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
 
 
@@ -1346,11 +1346,30 @@ class _Compiler:
             [('id', key), ('title', data['title']), ('classname', data['classname']),
              ('matchmodel', data['match_model']), ('model', data.get('model', model))]) + ' }'
 
+    def knife_helpers(self):
+        from . import emergency_knife
+        self.interaction_helpers()
+        self.helper("HL_Knife", emergency_knife.RUNTIME)
+        if not self.ir.__dict__.get("_emergency_knife"):
+            self.ir._emergency_knife = True
+            for event in ("round_start", "round_end", "mission_lost"):
+                self.ir.logic_script_events.setdefault(event, []).append(
+                    "    HL_KnifeUsers = {}; HL_KnifeNext = 0.0;")
+            self.ir.logic_script_events.setdefault("player_death", []).append(
+                '    if ("userid" in params && params.userid.tostring() in HL_KnifeUsers) '
+                'delete HL_KnifeUsers[params.userid.tostring()];')
+
     def block_action(self, n: LNode, slug: str, take) -> None:
         """Building blocks that do something (For Each, Set Variable, Script)."""
         s, k, nid = n.settings, n.kind, n.id
         fn = self.fn_name(f"HL_S_{slug}")
-        if k == "RESET_KEY_VAR":
+        if k == "EMERGENCY_KNIFE":
+            self.knife_helpers()
+            player = self.typed_in(n, "player", vs.THING)
+            self.script_action(nid, fn,
+                f"if (HL_KnifeGive({player})) {{\n@@success@@\n}} else {{\n@@failure@@\n}}",
+                ["success", "failure"], take)
+        elif k == "RESET_KEY_VAR":
             from . import interaction
             self.helper("HL_KeyVars", interaction.STORAGE)
             name = vs.literal(vs.TEXT, s.get("name", "value"))
@@ -1607,6 +1626,9 @@ class _Compiler:
                 return self.object_handle(entity, n.obj) if entity else "null"
             item = self.inventory_literal(n)
             return item if sock == "value" else f"({item}).{sock}" if item != "null" else '""'
+        if k == "EMERGENCY_KNIFE":
+            self.knife_helpers()
+            return f"HL_KnifeCount({self.typed_in(n, 'player', vs.THING)})"
         if k == "HAS_INVENTORY":
             self.interaction_helpers()
             return f"HL_HasInventory({self.typed_in(n, 'player', vs.THING)}, {self.typed_in(n, 'item', vs.ANY)})"
@@ -1912,6 +1934,7 @@ class _Compiler:
             if interaction_tick:
                 parts.append("HL_OtherThinkNext <- 0.0;\n")
             parts.append("function HL_Think() {\n"
+                         + ("    HL_KnifeThink();\n" if ir.__dict__.get("_emergency_knife") else "")
                          + ("    HL_InteractionThink();\n"
                             "    if (Time() < HL_OtherThinkNext) return 0.01;\n"
                             "    HL_OtherThinkNext = Time() + 0.1;\n" if interaction_tick else "")

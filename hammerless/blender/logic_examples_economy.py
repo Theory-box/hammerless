@@ -316,6 +316,50 @@ def barrier_behaviour():
     return dict(behaviour=True,about='Resize this brush to block a doorway. Each duplicate has independent settings and a separate purchase lock. Removal releases navigation for bots and infected.',nodes=nodes,links=links)
 
 
+def emergency_knife_rules():
+    spec = purchase_group()
+    spec['about'] = ('Buy one emergency knife, at most two per human across all shops. '
+                     'The ordinary nodes check points, reserve payment and refund failed grants. '
+                     'Emergency Knife Stock handles the consumable and hold-Reload escape; it does not replace a weapon.')
+    spec['inputs'] = [row for row in spec['inputs'] if row[0] != 'item']
+    for n in spec['nodes']:
+        if n['id'] == 'has':
+            n.clear()
+            n.update(N('has', 'HL_NodeCompare', 2, 4, op='GREATER_EQUAL', sockets={'b': 2}))
+        elif n['id'] == 'give':
+            n.clear()
+            n.update(N('give', 'HL_NodeEmergencyKnife', 5, 0))
+        elif n['id'] == 'already_text':
+            n['props']['template'] = 'Already carrying 2/2 emergency knives'
+        elif n['id'] == 'bought_text':
+            n['props']['template'] = 'Emergency knives: {a}/2 | Hold RELOAD while pinned | Points: {c}'
+    spec['links'] = [(a,b) for a,b in spec['links']
+                     if a != 'in.item' and b not in ('has.player', 'bought_text.a')]
+    spec['links'] += [('give.count', 'has.a'), ('give.count', 'bought_text.a')]
+    return spec
+
+
+def emergency_knife_station():
+    nodes = [N('self', 'HL_NodeSelf', 0, 0),
+             N('buy', 'HL_NodeGroup', 3, 0, group='Emergency Knife: Purchase'),
+             N('title', 'HL_NodeExposedSetting', 0, 2, ui_name='Display Name',
+               value_type='TEXT', default_text='Emergency Knife')]
+    links = [('self.entity', 'buy.entity'), ('title.value', 'buy.title')]
+    for key, title, default, lo, hi, row in [('price', 'Price', 500, 0, 1000000, 3),
+                                           ('range', 'Use Range', 96, 32, 256, 5)]:
+        nodes += [N(key+'_setting', 'HL_NodeExposedSetting', 0, row, ui_name=title,
+                    value_type='INT', default_integer=default),
+                  N(key+'_min', 'HL_NodeMath', 1, row, integer=True, op='MAXIMUM', sockets={'b': lo}),
+                  N(key+'_max', 'HL_NodeMath', 2, row, integer=True, op='MINIMUM', sockets={'b': hi})]
+        links += [(key+'_setting.value', key+'_min.a'), (key+'_min.value', key+'_max.a'),
+                  (key+'_max.value', 'buy.'+key)]
+    return dict(behaviour=True, about='Buy with USE. Carry two emergency knives independently of weapon slots. '
+                'Hold RELOAD for one second after a Smoker or Hunter pins you. A successful escape consumes '
+                'one knife and staggers the attacker. Releasing Reload cancels the hold. Stock resets on death '
+                'and round end. All shops share the two-knife limit; each shop has its own price and range.',
+                nodes=nodes, links=links)
+
+
 def examples():
     result = [dict(title='Personal Kill Points', level='Game Modes',
         about='Personal points for each human survivor. Rewards, balance storage, round reset and !points chat are editable node groups. Tab into Personal Points, Award or Balance to see every rule. Add one controller per map. Steam identities retain their balance through reconnects in the same round; bots do not earn points.',
@@ -342,4 +386,17 @@ def examples():
         groups={'Points: Balance':BALANCE,'Messages: Purchase Hint':hint_group(),
                 'Messages: Purchase Prompt':hint_group(prompt=True),'Barrier: Payment':barrier_rules(),'Paid Barrier':barrier_behaviour()},
         nodes=[],links=[]))
+    result.append(dict(title='Purchase - Emergency Knife', level='Game Modes',
+        about='A separate emergency consumable, not a melee weapon. Buy up to two with personal points, then '
+              'hold RELOAD for one second while pinned by a Smoker or Hunter to spend one and stagger it. '
+              'Knives reset on death and round end. Add Personal Kill Points once per map. Price defaults '
+              'to 500 and is editable in this object\'s Behaviours. Duplicated shops have independent settings '
+              'but share each player\'s two-knife limit. No additional Workshop mods required.',
+        objects={'emergency_knife': ('ENTITY:prop_dynamic_override', (0,0,1.2),
+                  {'model': ITEMS['knife']['model'], 'solid': '0', 'disableshadows': '1'})},
+        behaviours={'emergency_knife': 'Emergency Knife Shop'},
+        groups={'Points: Balance': BALANCE, 'Messages: Purchase Hint': hint_group(),
+                'Messages: Purchase Prompt': hint_group(prompt=True),
+                'Emergency Knife: Purchase': emergency_knife_rules(),
+                'Emergency Knife Shop': emergency_knife_station()}, nodes=[], links=[]))
     return result
