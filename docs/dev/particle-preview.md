@@ -16,14 +16,25 @@ bounded to 16 systems and 256 live particles per system.
 - Random lifetime, radius, colour, alpha, rotation and animation sequence.
 - Animated atlas frames, camera-facing cards, horizontal yaw flips, tint and
   alpha/additive blending.
+- Velocity-aligned animated sprite trails, length limits and fade-in, yaw
+  orientation and secondary opacity. Multiple supported renderers on a system
+  each produce their own geometry.
 - Gravity, drag and random forces consumed by Movement Basic.
 - Random initial velocity and coherent velocity noise driven by birth time and
   position. Noise honours per-axis bounds, absolute/inverted-absolute masks,
   coordinate offsets and scales; control-point transforms remain unsupported.
 - Roll spin with a linear slowdown to minimum speed, measured in seconds.
+- Random rotation speed and basic rotation integration. Random property
+  exponents, sphere directional bias/local velocity and radius bias/easing.
+- Shared field access for initial/runtime scalar remapping, initial scalar-to-
+  vector remapping, and noise-to-scalar remapping. Range gates, emitter windows,
+  reversed/equal ranges and initial-value multipliers are handled. Unsupported
+  attribute IDs remain reported, including secondary sequence attributes.
+- Lifetime From Sequence uses the selected atlas sequence's frame count and
+  authored FPS. Missing timing/sequence data produces a runtime warning.
 - Radius/colour changes, random alpha fades, lifespan decay and combined
   alpha fade/decay. Random fade-out duration is measured backward from death.
-- Scalar oscillation of radius, roll and alpha; vector oscillation of position
+- Scalar oscillation of radius, roll, yaw and both alpha fields; vector oscillation of position
   and RGB. Per-particle frequency/rate and start/end windows are stable across
   frame partitions and particle removal. Lifespan-relative timing is supported.
 
@@ -43,11 +54,22 @@ approximate; fields for unsupported CP transforms stay in the coverage report.
 Oscillation integrates a sine rate analytically. Radius/colour receive cumulative
 offsets because they reset to initial values each tick; position/rotation receive
 only that step's change. This is a preview approximation, especially when other
-operators also affect the same field. Lifetime, yaw and secondary alpha targets
-remain unsupported and are reported by value, not merely by parameter name.
+operators also affect the same field. Lifetime oscillation remains unsupported
+and is reported by value, not merely by parameter name.
 Attribute IDs were checked against Valve's public
 [particle attribute declarations](https://github.com/ValveSoftware/source-sdk-2013/blob/master/src/public/particles/particles.h);
 the SDK implementation is not included or linked.
+
+Trail length is approximated as speed times the particle's trail-duration field,
+clamped by renderer length settings. If the particle has initial velocity but
+no movement operator, that velocity can still stretch its trail. This is not a
+history ribbon and does not implement rope subdivision. Sample comparisons with
+the game are still required for exact shape, defaults and material blending.
+
+Remap outputs for angular attributes are interpreted as degrees and stored in
+radians; multiplier mode is dimensionless. RGB outputs can exceed one for
+authored bright effects. The field abstraction also manages creation time and
+initial-value snapshots so changing one particle does not corrupt another.
 
 ## Coverage and validation
 
@@ -60,20 +82,33 @@ and missing materials. Every effect remains labelled approximate, even if it
 has no recorded gaps. Zero smoke-test failures does not mean zero visual errors.
 
 Unit tests: `python -m unittest tests.unit.test_particlepreview
-tests.unit.test_particlesheet tests.unit.test_particlenoise tests.unit.test_particleoscillation`
+tests.unit.test_particlesheet tests.unit.test_particlenoise tests.unit.test_particleoscillation
+tests.unit.test_particlefields tests.unit.test_particlegeometry`
 (one line). Blender lifecycle test:
 `blender --background --factory-startup --python tests/blender/test_particle_preview.py`.
 GPU test requires a separate window:
 `blender --factory-startup --python tests/blender/test_particle_gpu.py`.
-It uses synthetic textures and asserts upload, UV orientation and tint; no game
+It uses synthetic textures and asserts upload, UV orientation, tint and actual
+production trail geometry on the GPU; no game
 installation is needed. GPU readback uses `Buffer.to_list()` because direct
 NumPy buffer conversion produced corrupt images in Blender 4.4 on the test host.
+Vertex attribute arrays are explicitly contiguous float32; float64 arrays also
+produced missing geometry through Blender's buffer upload path.
+
+For automated visual samples, run a separate Blender with `--factory-startup
+--python tools/render_particle_samples.py -- --game GAME_ROOT --output DIRECTORY
+--effects gas_smoke small_sparks --times 0.05 0.1 0.25 2` (one line). It saves
+PNGs and a report with particle counts, visible-pixel counts and coverage gaps.
+Frames are independently fitted to their bounds for inspection, not a
+scale-consistent animation. Empty frames are expected before emission or after
+short bursts die. These local diagnostics read installed game assets; they are
+not bundled with the addon. The tool never opens or saves the user's blend file.
 
 ## Next gaps
 
-Scalar/vector remapping, remaining oscillation targets, operator strength/time
+Remaining attribute targets, operator strength/time
 envelopes, live control points and parent inheritance, secondary sequences,
-trail/rope renderers, collision, and non-sprite material shaders remain missing.
+rope renderers, collision, and non-sprite material shaders remain missing.
 Unsupported fields stay visible in reports. Missing atlas sequences are skipped
 and reported rather than displaying the entire sheet as one particle.
 

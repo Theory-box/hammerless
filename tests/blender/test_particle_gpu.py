@@ -46,7 +46,20 @@ def run():
                               dtype=np.float32).reshape(32,32,4)
             np.testing.assert_allclose(result[16,4], (0.5,0,0,1), atol=0.005)
             np.testing.assert_allclose(result[16,27], (0,0.5,0,1), atol=0.005)
-        print('PASS particle GPU upload, shader, UV orientation and tint', flush=True)
+            from hammerless.core.particlegeometry import build_geometry
+            from hammerless.core.particlepreview import Definition, Simulation, CATEGORIES
+            sim=Simulation(Definition('gpu','synthetic',{}, {c:[] for c in CATEGORIES}))
+            sim.spawn(1);sim.position[:]=[.75,0,0];sim.previous_position[:]=[-.25,0,0]
+            sim.radius[:]=.1;sim.trail[:]=1/60
+            geometry,gaps=build_geometry(sim,{'functionName':'render_sprite_trail','constrain radius to length':False},
+                {},np.eye(4),[1,0,0],[0,1,0],[0,0,10])
+            assert not gaps and len(geometry['pos'])==6
+            fb.clear(color=(0,0,0,0))
+            batch_for_shader(sh,'TRIS',geometry).draw(sh)
+            result=np.array(fb.read_color(0,0,32,32,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(32,32,4)
+            assert result[16,20,3]>.9, 'trail missing from expected screen region'
+            assert result[2,2,3]<.01, 'trail escaped its bounds'
+        print('PASS particle GPU upload, shader, UV orientation, tint and production trail geometry', flush=True)
     except Exception:
         traceback.print_exc()
         # Blender can otherwise exit successfully after a Python error.

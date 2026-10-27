@@ -40,8 +40,8 @@ class ParticlePreviewTests(unittest.TestCase):
         report=audit({'test':d})['test']
         self.assertIn('operators: unknown_rule',report['missing_rules'])
         self.assertIn('emit_continuously: unknown_parameter',report['unmapped_parameters'])
-        d.attrs['rotation_speed']=2
-        self.assertIn('system: rotation_speed',audit({'test':d})['test']['recursive_gaps'])
+        d.attrs['unknown_system_setting']=2
+        self.assertIn('system: unknown_system_setting',audit({'test':d})['test']['recursive_gaps'])
 
     def test_child_cycles_and_missing_children(self):
         d=definition();d.children=[('test',0),('missing',0)]

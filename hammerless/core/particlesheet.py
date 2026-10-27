@@ -65,13 +65,24 @@ def read_sequences(vtf):
     return {}
 
 
-def load_atlas(content,material):
+def material_texture(content,material):
     from .gamematerials import read_vmt,read_texture_bytes,texture_path
-    from .vtf_read import read_vtf
     params=read_vmt(content,material.removesuffix('.vmt'))
     name=params.get('$basetexture')
-    if not name:return None
+    if not name:return None,params
     data=read_texture_bytes(content,texture_path(name))
+    return data,params
+
+
+def load_sequences(content,material):
+    """Read sheet timing without decoding/uploading texture pixels."""
+    data,_=material_texture(content,material)
+    return read_sequences(data) if data is not None else {}
+
+
+def load_atlas(content,material):
+    from .vtf_read import read_vtf
+    data,params=material_texture(content,material)
     if data is None:return None
     _,_,image=read_vtf(data,max_size=1024)
     sequences=read_sequences(data)

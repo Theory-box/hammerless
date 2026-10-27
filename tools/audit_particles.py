@@ -26,18 +26,27 @@ def main():
     library,errors=load_library(content)
     report=audit(library)
     failures=[]
+    runtime_warnings={};sheets={}
     for name,definition in library.items():
         try:
-            sim=Simulation(definition,limit=64)
+            sequences={}
+            if any(p.get('functionName','').casefold()=='lifetime from sequence' for p in definition.rules['initializers']):
+                from hammerless.core.particlesheet import load_sequences
+                material=definition.attrs.get('material','')
+                if material not in sheets:sheets[material]=load_sequences(content,material) if material else {}
+                sequences=sheets[material]
+            sim=Simulation(definition,limit=64,sequences=sequences)
             sim.advance(args.seconds)
             assert all(np.isfinite(getattr(sim,k)).all() for k in ('position','velocity','color','radius','life','age','rotation'))
             assert all(len(getattr(sim,k))==len(sim.age) for k in ('position','velocity','color','radius','life','ids','flip','sequence'))
             assert len(sim.age)<=64
+            if sim.warnings:runtime_warnings[name]=sorted(sim.warnings)
         except Exception as exc:
             failures.append({'effect':name,'error':str(exc)})
     priority=Counter(gap for effect in report.values() for gap in effect['missing_rules'])
     parameter_priority=Counter(gap for effect in report.values() for gap in effect['unmapped_parameters'])
     result={'systems':len(library),'simulation_seconds':args.seconds,'parse_errors':errors,'smoke_failures':failures,
+            'runtime_warnings':runtime_warnings,
             'missing_rule_priority':dict(priority.most_common()),
             'unmapped_parameter_priority':dict(parameter_priority.most_common()),
             'limitations':['Independent approximate maths; not visually validated against Source',

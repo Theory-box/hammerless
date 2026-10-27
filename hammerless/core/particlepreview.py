@@ -8,12 +8,13 @@ import math
 import struct
 import numpy as np
 from .particles import read_dmx
+from . import particlefields as fields
 from .particleoscillation import offsets as oscillation_offsets, PARAMETERS as OSCILLATION_PARAMETERS
 
 CATEGORIES = ('emitters', 'initializers', 'operators', 'forces', 'constraints', 'renderers')
 RULES = {}
-SYSTEM_PARAMETERS = {'max_particles','radius','color','rotation','sequence_number','material'}
-OSCILLATION_FIELDS = {'oscillate scalar': (7, {3,4,7}), 'oscillate vector': (0, {0,6})}
+SYSTEM_PARAMETERS = {'max_particles','radius','color','rotation','rotation_speed','sequence_number','material'}
+OSCILLATION_FIELDS = {'oscillate scalar': (7, {3,4,7,12,16}), 'oscillate vector': (0, {0,6})}
 
 
 def rule(category, name, *parameters):
@@ -76,6 +77,7 @@ def audit(definitions):
                     missing.append(category + ': ' + name)
                 else:
                     parameters.extend(name + ': ' + p for p in spec if p != 'functionName' and p not in entry[1])
+                    parameters.extend(name+': '+gap for gap in fields.field_gaps(name.casefold(),spec))
                     if name.casefold() in OSCILLATION_FIELDS:
                         default, supported = OSCILLATION_FIELDS[name.casefold()]
                         value = int(spec.get('oscillation field',default))
@@ -103,22 +105,32 @@ def audit(definitions):
 
 class Simulation:
     """Fixed-step, bounded, seeded array simulation of one definition in Source units."""
-    def __init__(self, definition, seed=0, limit=2048):
+    def __init__(self, definition, seed=0, limit=2048, sequences=None):
         self.definition = definition
         self.rng = np.random.default_rng(seed)
         self.force_rng = np.random.default_rng(np.random.SeedSequence([seed, 1]))
         self.limit = max(0, min(limit, int(definition.attrs.get('max_particles', limit))))
         self.time = 0.0
+        self.evaluation_time = 0.0
+        self.sequences = sequences or {}
+        self.warnings = set()
+        self.initial_fields = {}
         self.accumulator = 0.0
         self.emission = {}
         self.seed = seed
         self.next_id = 0
         self.ids = np.zeros(0,dtype=np.uint64)
         self.rotation = np.zeros(0)
+        self.rotation_speed = np.zeros(0)
+        self.yaw = np.zeros(0)
+        self.trail = np.zeros(0)
+        self.alpha2 = np.zeros(0)
+        self.birth = np.zeros(0)
         self.sequence = np.zeros(0,dtype=np.int32)
         self.flip = np.zeros(0,dtype=bool)
         self.operator_index = 0
         self.position = np.zeros((0, 3))
+        self.previous_position = np.zeros((0, 3))
         self.velocity = np.zeros((0, 3))
         self.color = np.zeros((0, 4))
         self.initial_color = np.zeros((0, 4))
@@ -139,6 +151,10 @@ class Simulation:
         self.sequence = np.concatenate((self.sequence,np.full(count,int(self.definition.attrs.get('sequence_number',0)),dtype=np.int32)))
         attrs = self.definition.attrs
         for name, values in [('position', np.zeros((count, 3))), ('velocity', np.zeros((count, 3))),
+                             ('previous_position', np.zeros((count,3))),
+                             ('rotation_speed', np.full(count,math.radians(float(attrs.get('rotation_speed',0))))),
+                             ('yaw', np.zeros(count)), ('trail', np.full(count,.1)),
+                             ('alpha2',np.ones(count)), ('birth',np.full(count,self.time)),
                              ('color', np.tile(np.array(attrs.get('color', (255,255,255,255)))/255, (count,1))),
                              ('radius', np.full(count, float(attrs.get('radius', 5)))),
                              ('age', np.zeros(count)), ('life', np.ones(count))]:
@@ -149,6 +165,10 @@ class Simulation:
                 entry[0](self, spec, slice(start, None))
         self.initial_color = np.concatenate((self.initial_color, self.color[start:].copy()))
         self.initial_radius = np.concatenate((self.initial_radius, self.radius[start:].copy()))
+        self.previous_position[start:]=self.position[start:]
+        for field in fields.SCALAR_WRITE | fields.VECTOR_FIELDS:
+            values=fields.read(self,field,slice(start,None)).copy()
+            self.initial_fields[field]=np.concatenate((self.initial_fields.get(field,values[:0]),values))
 
     def advance(self, seconds):
         if not math.isfinite(seconds) or seconds < 0:
@@ -157,13 +177,17 @@ class Simulation:
         dt = 1 / 60
         while self.accumulator + 1e-10 >= dt:
             self.accumulator -= dt
+            self.evaluation_time=self.time
             for i, spec in enumerate(self.definition.rules['emitters']):
                 entry = RULES.get(('emitters', spec.get('functionName', '').casefold()))
                 if entry:
                     entry[0](self, spec, (i, dt))
             self.age += dt
+            self.evaluation_time=self.time+dt
+            self.previous_position=self.position.copy()
             self.color = self.initial_color.copy()
             self.radius = self.initial_radius.copy()
+            self.alpha2 = self.initial_fields.get(16,self.alpha2).copy()
             for self.operator_index, spec in enumerate(self.definition.rules['operators']):
                 entry = RULES.get(('operators', spec.get('functionName', '').casefold()))
                 if entry:
@@ -171,8 +195,10 @@ class Simulation:
             self.time += dt
 
     def retain(self, mask):
-        for name in ('position','velocity','color','initial_color','radius','initial_radius','age','life','ids','rotation','sequence','flip'):
+        for name in ('position','previous_position','velocity','color','initial_color','radius','initial_radius','age','life','ids','rotation','sequence','flip',
+                     'rotation_speed','yaw','trail','alpha2','birth'):
             setattr(self, name, getattr(self, name)[mask])
+        for field in self.initial_fields:self.initial_fields[field]=self.initial_fields[field][mask]
 
     def stable_random(self, stream=0):
         """Stable per-particle/operator samples, unaffected by particle death or frame rate."""
@@ -201,16 +227,17 @@ def burst(s, p, tick):
         s.spawn(p.get('num_to_emit', 100)); s.emission[i] = True
 
 
-def random_scalar(target, lo, hi, default, scale=1):
+def random_scalar(target, lo, hi, default, exponent, scale=1):
     def apply(s, p, sl):
         a, b = float(p.get(lo, default)), float(p.get(hi, default))
-        getattr(s, target)[sl] = s.rng.uniform(min(a,b), max(a,b), len(s.age[sl]))*scale
+        t=s.rng.random(len(s.age[sl]))**max(.001,float(p.get(exponent,1)))
+        getattr(s, target)[sl] = (a+(b-a)*t)*scale
     return apply
 
 
-for name, target, lo, hi, default in [('Lifetime Random','life','lifetime_min','lifetime_max',1),
-                                    ('Radius Random','radius','radius_min','radius_max',5)]:
-    rule('initializers', name, lo, hi)(random_scalar(target,lo,hi,default))
+for name, target, lo, hi, default, exponent in [('Lifetime Random','life','lifetime_min','lifetime_max',1,'lifetime_random_exponent'),
+                                    ('Radius Random','radius','radius_min','radius_max',5,'radius_random_exponent')]:
+    rule('initializers', name, lo, hi, exponent)(random_scalar(target,lo,hi,default,exponent))
 
 
 @rule('initializers', 'Color Random', 'color1', 'color2')
@@ -220,21 +247,31 @@ def color(s, p, sl):
     s.color[sl,:3] = a+(b-a)*s.rng.random((len(s.age[sl]),1))
 
 
-@rule('initializers', 'Alpha Random', 'alpha_min', 'alpha_max')
+@rule('initializers', 'Alpha Random', 'alpha_min', 'alpha_max','alpha_random_exponent')
 def alpha(s,p,sl):
     a,b=float(p.get('alpha_min',255)),float(p.get('alpha_max',255))
-    s.color[sl,3]=s.rng.uniform(min(a,b),max(a,b),len(s.age[sl]))/255
+    t=s.rng.random(len(s.age[sl]))**max(.001,float(p.get('alpha_random_exponent',1)))
+    s.color[sl,3]=np.clip((a+(b-a)*t)/255,0,1)
 
 
-@rule('initializers', 'Position Within Sphere Random', 'distance_min', 'distance_max', 'speed_min', 'speed_max')
+@rule('initializers', 'Position Within Sphere Random', 'distance_min', 'distance_max', 'speed_min', 'speed_max',
+      'distance_bias','distance_bias_absolute_value','speed_random_exponent',
+      'speed_in_local_coordinate_system_min','speed_in_local_coordinate_system_max')
 def sphere(s,p,sl):
     count=len(s.age[sl]);direction=s.rng.normal(size=(count,3))
+    direction/=np.maximum(np.linalg.norm(direction,axis=1,keepdims=True),1e-12)
+    direction=np.where(np.asarray(p.get('distance_bias_absolute_value',(0,0,0)))!=0,np.abs(direction),direction)
+    direction*=np.asarray(p.get('distance_bias',(1,1,1)))
     direction/=np.maximum(np.linalg.norm(direction,axis=1,keepdims=True),1e-12)
     lo,hi=sorted((max(0,float(p.get('distance_min',0))),max(0,float(p.get('distance_max',0)))))
     radius=np.cbrt(s.rng.uniform(lo**3,hi**3,count))
     s.position[sl]+=direction*radius[:,None]
     lo,hi=sorted((float(p.get('speed_min',0)),float(p.get('speed_max',0))))
-    s.velocity[sl]+=direction*s.rng.uniform(lo,hi,count)[:,None]
+    speed=lo+(hi-lo)*s.rng.random(count)**max(.001,float(p.get('speed_random_exponent',1)))
+    s.velocity[sl]+=direction*speed[:,None]
+    a=np.asarray(p.get('speed_in_local_coordinate_system_min',(0,0,0)))
+    b=np.asarray(p.get('speed_in_local_coordinate_system_max',(0,0,0)))
+    s.velocity[sl]+=s.rng.uniform(np.minimum(a,b),np.maximum(a,b),(count,3))
 
 
 @rule('initializers', 'Position Within Box Random', 'min', 'max')
@@ -265,10 +302,13 @@ def decay(s,p,dt):
     s.retain(s.age < s.life)
 
 
-@rule('operators', 'Radius Scale', 'start_time', 'end_time', 'radius_start_scale', 'radius_end_scale')
+@rule('operators', 'Radius Scale', 'start_time', 'end_time', 'radius_start_scale', 'radius_end_scale','scale_bias','ease_in_and_out')
 def radius_scale(s,p,dt):
     start=float(p.get('start_time',0));end=float(p.get('end_time',1))
     t=np.clip((s.age/np.maximum(s.life,1e-9)-start)/max(end-start,1e-9),0,1)
+    bias=np.clip(float(p.get('scale_bias',.5)),1e-6,1-1e-6)
+    t=t/((1/bias-2)*(1-t)+1)
+    if p.get('ease_in_and_out',False):t=smooth(t)
     s.radius*=float(p.get('radius_start_scale',1))*(1-t)+float(p.get('radius_end_scale',1))*t
 
 
@@ -283,10 +323,11 @@ def sequence(s,p,sl):
     s.sequence[sl]=s.rng.integers(lo,hi+1,len(s.age[sl]))
 
 
-@rule('initializers','Rotation Random','rotation_initial','rotation_offset_min','rotation_offset_max')
+@rule('initializers','Rotation Random','rotation_initial','rotation_offset_min','rotation_offset_max','rotation_random_exponent')
 def rotation(s,p,sl):
     lo,hi=sorted((float(p.get('rotation_offset_min',0)),float(p.get('rotation_offset_max',360))))
-    s.rotation[sl]=np.deg2rad(float(p.get('rotation_initial',0))+s.rng.uniform(lo,hi,len(s.age[sl])))
+    t=s.rng.random(len(s.age[sl]))**max(.001,float(p.get('rotation_random_exponent',1)))
+    s.rotation[sl]=np.deg2rad(float(p.get('rotation_initial',0))+lo+(hi-lo)*t)
 
 
 def smooth(values):
@@ -421,6 +462,8 @@ def oscillate_scalar(s,p,dt):
     if field==3:s.radius=np.maximum(0,s.radius+total[:,0])
     elif field==4:s.rotation+=delta[:,0]
     elif field==7:s.color[:,3]=np.clip(s.color[:,3]+total[:,0],0,1)
+    elif field==12:s.yaw+=delta[:,0]
+    elif field==16:s.alpha2=np.clip(s.alpha2+total[:,0],0,1)
 
 
 @rule('operators','Oscillate Vector',*OSCILLATION_PARAMETERS)
@@ -431,3 +474,73 @@ def oscillate_vector(s,p,dt):
     total,delta=oscillation_offsets(s,p,dt,3)
     if field==0:s.position+=delta
     elif field==6:s.color[:,:3]=np.clip(s.color[:,:3]+total,0,1)
+
+
+@rule('initializers','Remap Initial Scalar',*fields.REMAP_PARAMETERS)
+def remap_initial(s,p,sl):fields.remap(s,p,sl,initializing=True)
+
+
+@rule('operators','Remap Scalar',*fields.REMAP_PARAMETERS)
+def remap_scalar(s,p,dt):fields.remap(s,p)
+
+
+@rule('initializers','Remap Scalar to Vector',*fields.REMAP_PARAMETERS)
+def remap_vector(s,p,sl):fields.remap(s,p,sl,vector=True,initializing=True)
+
+
+@rule('initializers','Remap Noise to Scalar','output field','output minimum','output maximum',
+      'time noise coordinate scale','spatial noise coordinate scale','time coordinate offset',
+      'spatial coordinate offset','absolute value','invert absolute value')
+def remap_noise(s,p,sl):
+    from .particlenoise import noise4
+    target=int(p.get('output field',3))
+    if target not in fields.SCALAR_WRITE:return
+    coords=np.zeros((len(s.age[sl]),4))
+    coords[:,:3]=(s.position[sl]+np.asarray(p.get('spatial coordinate offset',(0,0,0))))*float(p.get('spatial noise coordinate scale',.01))
+    coords[:,3]=(s.time+float(p.get('time coordinate offset',0)))*float(p.get('time noise coordinate scale',1))
+    value=noise4(coords,s.seed,channels=1)[:,0]
+    if p.get('absolute value',False):
+        value=np.abs(value*2-1)
+        if p.get('invert absolute value',False):value=1-value
+    lo=float(p.get('output minimum',0));hi=float(p.get('output maximum',1))
+    value=lo+(hi-lo)*value
+    if target in fields.ANGLE_FIELDS:value=np.deg2rad(value)
+    fields.write(s,target,value,sl)
+
+
+@rule('initializers','Trail Length Random','length_min','length_max','length_random_exponent')
+def trail_length(s,p,sl):
+    lo=float(p.get('length_min',.1));hi=float(p.get('length_max',.1))
+    exponent=max(.001,float(p.get('length_random_exponent',1)))
+    s.trail[sl]=np.maximum(0,lo+(hi-lo)*s.rng.random(len(s.age[sl]))**exponent)
+
+
+@rule('initializers','Lifetime From Sequence','Frames Per Second')
+def sequence_lifetime(s,p,sl):
+    fps=float(p.get('Frames Per Second',30))
+    if not math.isfinite(fps) or fps<=0:
+        s.warnings.add('Lifetime From Sequence: positive FPS required');return
+    values=s.life[sl].copy()
+    for ident in np.unique(s.sequence[sl]):
+        sequence=s.sequences.get(int(ident))
+        if sequence is None:
+            s.warnings.add(f'Lifetime From Sequence: missing sheet sequence {ident}');continue
+        values[s.sequence[sl]==ident]=len(sequence.durations)/fps
+    s.life[sl]=values
+
+
+@rule('initializers','Rotation Speed Random','rotation_speed_constant','rotation_speed_random_min',
+      'rotation_speed_random_max','rotation_speed_random_exponent','randomly_flip_direction')
+def rotation_speed(s,p,sl):
+    lo=float(p.get('rotation_speed_random_min',0));hi=float(p.get('rotation_speed_random_max',0))
+    value=float(p.get('rotation_speed_constant',0))+lo+(hi-lo)*s.rng.random(len(s.age[sl]))**max(.001,float(p.get('rotation_speed_random_exponent',1)))
+    if p.get('randomly_flip_direction',False):value*=s.rng.choice((-1,1),len(value))
+    s.rotation_speed[sl]=np.deg2rad(value)
+
+
+@rule('operators','Rotation Basic')
+def rotation_basic(s,p,dt):s.rotation+=s.rotation_speed*dt
+
+
+@rule('renderers','render_sprite_trail','animation rate','min length','max length','length fade in time','constrain radius to length')
+def sprite_trail(s,p,dt):pass

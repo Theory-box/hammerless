@@ -51,7 +51,7 @@ class OscillationTests(unittest.TestCase):
         spec=oscillator(True,**{'oscillation field':6,'oscillation rate min':(-10,10,0),'oscillation rate max':(-10,10,0)})
         s=Simulation(definition(operators=[spec]));s.spawn(1);s.advance(.5)
         np.testing.assert_allclose(s.color[0,:3],(0,1,1))
-        for field in (1,12,16,999):
+        for field in (1,999):
             d=definition(operators=[oscillator(**{'oscillation field':field})])
             self.assertIn(f'Oscillate Scalar: unsupported oscillation field {field}',audit({'test':d})['test']['recursive_gaps'])
             s=Simulation(d);s.spawn(1);s.advance(.1)
