@@ -12,6 +12,9 @@ from ..core.particlematerial import blend_mode
 
 _state = {}
 _shader = None
+_selection = None
+_migrated_scene = None
+_library_cache = {}
 
 
 def control_point_bindings(scene,emitter):
@@ -71,6 +74,15 @@ def tick():
         points=sample_control_points(_state['bindings'],_state['frame'],_state['scale'])
         _state['effect_simulation'].advance(dt,points)
         _state['time']=_state['effect_simulation'].time
+        tree=_state['effect_simulation']
+        if tree.finished():
+            _state['finished_since']=_state.get('finished_since',now)
+            if now-_state['finished_since']>=.75:
+                tree=_state['factory'](points)
+                _state['effect_simulation']=tree
+                _state['systems']=[(sim,0,*_state['textures'][sim.definition.attrs.get('material','')]) for sim in tree.systems]
+                _state.pop('finished_since',None)
+        else:_state.pop('finished_since',None)
         for wm in bpy.data.window_managers:
             for window in wm.windows:
                 for area in window.screen.areas:
@@ -169,6 +181,7 @@ class HL_OT_particle_preview(bpy.types.Operator):
     bl_description='Experimental animation; reports unsupported rules. Does not change the map'
 
     def execute(self,context):
+        global _selection
         stop()
         from .ops import game_content, game_root
         from ..core.particlesheet import load_atlas
@@ -176,14 +189,21 @@ class HL_OT_particle_preview(bpy.types.Operator):
         obj=context.active_object
         if obj is None or obj.hammerless.classname!='info_particle_system':
             self.report({'ERROR'},'Select a Particle Effect first');return {'CANCELLED'}
+        from .particlebrowser import particle_empty
+        obj=particle_empty(obj)
         name=next((k.value for k in obj.hammerless.keyvalues if k.key=='effect_name'),'').casefold()
+        _selection=(context.scene.as_pointer(),obj.as_pointer(),name)
         content=game_content(game_root(context))
         if content is None:
             self.report({'ERROR'},'Set the game folder first');return {'CANCELLED'}
-        library,errors=load_library(content)
+        root=game_root(context)
+        if root not in _library_cache:
+            library,errors=load_library(content)
+            _library_cache[root]=(library,errors,audit(library))
+        library,errors,coverage=_library_cache[root]
         if name not in library:
             self.report({'ERROR'},'Particle definition not found');return {'CANCELLED'}
-        coverage=audit(library);systems=[];textures={};profiles={};warnings=list(coverage[name]['recursive_gaps'])
+        systems=[];textures={};profiles={};warnings=list(coverage[name]['recursive_gaps'])
         def assets(definition):
             material=definition.attrs.get('material','')
             if material not in textures:
@@ -203,8 +223,18 @@ class HL_OT_particle_preview(bpy.types.Operator):
             scale=max(.001,context.scene.hammerless.units_per_meter)
             bindings,binding_warnings=control_point_bindings(context.scene,obj)
             warnings.extend(binding_warnings)
-            effect_simulation=EffectSimulation(library,name,asset_loader=assets,
-                control_points=sample_control_points(bindings,frame,scale))
+            def trace(origin,direction,length):
+                world_origin=frame@Vector(origin/scale)
+                world_direction=frame.to_3x3()@Vector(direction)
+                factor=world_direction.length
+                if factor<1e-9:return origin
+                hit,location,*_=context.scene.ray_cast(context.evaluated_depsgraph_get(),world_origin,world_direction.normalized(),distance=length/scale*factor)
+                return np.asarray(frame.inverted_safe()@location)*scale if hit else origin+direction*length
+            def factory(points):
+                tree=EffectSimulation(library,name,asset_loader=assets,control_points=points)
+                for sim in tree.systems:sim.trace_callback=trace
+                return tree
+            effect_simulation=factory(sample_control_points(bindings,frame,scale))
             warnings.extend(sorted(effect_simulation.warnings))
             for sim in effect_simulation.systems:
                 texture,additive,sequences=textures[sim.definition.attrs.get('material','')]
@@ -214,7 +244,7 @@ class HL_OT_particle_preview(bpy.types.Operator):
         except Exception as exc:
             self.report({'ERROR'},str(exc));return {'CANCELLED'}
         _state.update(object=obj,effect=name,scene=context.scene,systems=systems,last=time.perf_counter(),time=0,
-                      warnings=warnings,errors=errors,profiles=profiles,effect_simulation=effect_simulation,frame=frame,scale=scale,bindings=bindings)
+                      warnings=warnings,errors=errors,profiles=profiles,effect_simulation=effect_simulation,frame=frame,scale=scale,bindings=bindings,factory=factory,textures=textures)
         print('Hammerless particle preview gaps for',name,':',warnings)
         _state['handle']=bpy.types.SpaceView3D.draw_handler_add(draw,(),'WINDOW','POST_VIEW')
         bpy.app.timers.register(tick,first_interval=.03)
@@ -229,8 +259,39 @@ class HL_OT_particle_preview_stop(bpy.types.Operator):
         stop();return {'FINISHED'}
 
 
+def watch_selection():
+    global _selection,_migrated_scene
+    try:
+        context=bpy.context
+        if context.scene is None or context.mode != 'OBJECT':return .2
+        from .particlebrowser import particle_empty
+        scene_key=context.scene.as_pointer()
+        if scene_key!=_migrated_scene:
+            stop()
+            for obj in list(context.scene.objects):
+                if obj.hammerless.classname=='info_particle_system':particle_empty(obj)
+            _migrated_scene=scene_key
+        obj=context.active_object
+        enabled=getattr(context.window_manager,'hl_pfx_autoplay',False)
+        valid=enabled and obj is not None and obj.select_get() and obj.hammerless.classname=='info_particle_system'
+        if valid:
+            obj=particle_empty(obj)
+            name=next((k.value for k in obj.hammerless.keyvalues if k.key=='effect_name'),'')
+            token=(scene_key,obj.as_pointer(),name)
+        else:token=None
+        if token!=_selection:
+            _selection=token
+            stop()
+            if token is not None and name and obj.visible_get():bpy.ops.hammerless.particle_preview()
+    except Exception as exc:
+        print('Hammerless particle selection preview:',exc)
+    return .2
+
+
 @bpy.app.handlers.persistent
 def on_load(*args):
+    global _selection,_migrated_scene
+    _selection=None;_migrated_scene=None
     stop()
 
 
@@ -238,11 +299,14 @@ def register():
     bpy.utils.register_class(HL_OT_particle_preview)
     bpy.utils.register_class(HL_OT_particle_preview_stop)
     bpy.app.handlers.load_pre.append(on_load)
+    if not bpy.app.background:bpy.app.timers.register(watch_selection,first_interval=.5,persistent=True)
 
 
 def unregister():
     global _shader
     stop();_shader=None
+    if bpy.app.timers.is_registered(watch_selection):bpy.app.timers.unregister(watch_selection)
+    _library_cache.clear()
     if on_load in bpy.app.handlers.load_pre:bpy.app.handlers.load_pre.remove(on_load)
     bpy.utils.unregister_class(HL_OT_particle_preview_stop)
     bpy.utils.unregister_class(HL_OT_particle_preview)

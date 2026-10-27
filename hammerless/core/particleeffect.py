@@ -47,3 +47,19 @@ class EffectSimulation:
                 if self.time+dt>delay+1e-10:sim.step(dt)
             self.time+=dt;self.accumulator-=dt
         self.inputs={k:v.copy() for k,v in self.targets.items()}
+
+
+    def finished(self):
+        """No living particles and no supported emitter can produce more."""
+        for sim,delay in zip(self.systems,self.delays):
+            if len(sim.age) or self.time<=delay:return False
+            for i,p in enumerate(sim.definition.rules['emitters']):
+                kind=p.get('functionName','').casefold()
+                start=float(p.get('emission_start_time',0))
+                if kind=='emit_instantaneously':
+                    if i not in sim.emission:return False
+                elif kind=='emit_continuously':
+                    duration=float(p.get('emission_duration',0))
+                    if float(p.get('emission_rate',100))>0 and (duration<=0 or sim.time<start+duration):return False
+                else:return False  # Unknown emission is not evidence of completion.
+        return True

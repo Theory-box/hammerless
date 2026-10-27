@@ -70,3 +70,13 @@ class MaterialTests(unittest.TestCase):
         g,w=build_geometry(s,r,seq,np.eye(4),[1,0,0],[0,1,0],[0,0,10],material={'dual_mode':1})
         self.assertFalse(w);self.assertGreaterEqual(g['uv'][:,0].min(),.5)
         self.assertLessEqual(g['uv2'][:,0].max(),.5)
+
+    def test_fire_crop_keeps_uvs_in_authored_cell(self):
+        p=profile({'$cropfactor':'[0.5 1]'})
+        self.assertEqual(p['crop'],(.5,1))
+        s=Simulation(definition());s.spawn(1);s.radius[:]=1
+        seq=Sequence(False,np.array([1.]),np.array([[[-.03125,0,.09375,.125]]]))
+        g,_=build_geometry(s,{'functionName':'render_animated_sprites'},{0:seq},np.eye(4),[1,0,0],[0,1,0],[0,0,10],material=p)
+        self.assertAlmostEqual(g['uv'][:,0].min(),0)
+        self.assertAlmostEqual(g['uv'][:,0].max(),.0625)
+        np.testing.assert_allclose(np.ptp(g['pos'],axis=0),[1,2,0])

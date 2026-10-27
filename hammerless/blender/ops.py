@@ -706,6 +706,7 @@ def cache_name(prefix: str, key: str, scale: float | None = None) -> str:
 def preview_mesh(classname: str, scale: float, model: str = ""):
     """Shared wireframe box + forward arrow showing an entity's size and facing.
     With a model path, the box is the model's real bounds (read from the game)."""
+    if classname == "info_particle_system": return None
     bounds = None
     if model.startswith("pfx:"):                 # (a particle effect: crossed planes with its picture)
         from .particlebrowser import particle_mesh
@@ -747,6 +748,9 @@ def real_model_mesh(model: str, scale: float):
 
 def style_entity_object(obj) -> None:
     """Real models draw textured; wire placeholders respect scene occlusion."""
+    if obj.type == "EMPTY" and obj.hammerless.classname == "info_particle_system":
+        obj.empty_display_type = "PLAIN_AXES"
+        obj.empty_display_size = .15
     if obj.data is not None and obj.data.get("hl_model"):
         obj.display_type = "TEXTURED"
         obj.show_in_front = False
@@ -796,6 +800,7 @@ def make_entity_object(context, classname: str, location, collection=None, rotat
     (collection or context.collection).objects.link(obj)
     obj.hammerless.role = "ENTITY"
     obj.hammerless.classname = classname  # fills default keyvalues
+    style_entity_object(obj)
     for k, v in (keyvalues or {}).items():
         kv = next((x for x in obj.hammerless.keyvalues if x.key == k), None) or obj.hammerless.keyvalues.add()
         kv.key, kv.value = k, v
@@ -952,8 +957,12 @@ class HL_OT_set_entity_class(bpy.types.Operator):
             obj.hammerless.classname = self.classname
         if obj.type == "MESH" and obj.hammerless.role in ("ENTITY", "AUTO"):
             kv = {k.key: k.value for k in obj.hammerless.keyvalues}
-            obj.data = preview_mesh(self.classname, context.scene.hammerless.units_per_meter,
+            mesh = preview_mesh(self.classname, context.scene.hammerless.units_per_meter,
                                     preview_model(self.classname, kv) or "")
+            if mesh is not None:obj.data = mesh
+            else:
+                from .particlebrowser import particle_empty
+                obj = particle_empty(obj)
             style_entity_object(obj)
         return {"FINISHED"}
 
@@ -2226,7 +2235,8 @@ class HL_OT_pick_model(bpy.types.Operator):
                     from .placedchar import placed_model_changed
                     placed_model_changed(context, obj, self.model)
                 else:
-                    obj.data = preview_mesh(hs.classname, s.units_per_meter, self.model)
+                    mesh = preview_mesh(hs.classname, s.units_per_meter, self.model)
+                    if mesh is not None:obj.data = mesh
                 style_entity_object(obj)
         self.report({"INFO"}, self.model)
         return {"FINISHED"}
@@ -2299,6 +2309,10 @@ class HL_OT_refresh_previews(bpy.types.Operator):
                 models += bool(refresh_preview(context, obj))
                 continue
             mesh = preview_mesh(hs.classname, s.units_per_meter, model)
+            if mesh is None:
+                from .particlebrowser import particle_empty
+                particle_empty(obj)
+                continue
             if mesh is not obj.data:
                 obj.data = mesh
                 style_entity_object(obj)

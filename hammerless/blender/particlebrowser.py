@@ -166,6 +166,29 @@ def _material(name: str, path: str):
 
 # ---------------------------------------------------------------- the grid
 
+def particle_empty(obj):
+    """Replace only generated legacy cards; remap references and retain entity data."""
+    if obj.type=='EMPTY':return obj
+    if obj.type!='MESH' or not obj.data.get('hl_particle'):return obj
+    if obj.animation_data or obj.constraints or obj.modifiers:
+        # Keep unusual user-authored object behavior; remove only generated faces.
+        mesh=bpy.data.meshes.new('Particle marker');mesh.from_pydata([(0,0,0),(.15,0,0)],[(0,1)],[])
+        obj.data=mesh;return obj
+    marker=bpy.data.objects.new(obj.name+'_marker',None)
+    for key,value in obj.items():marker[key]=value.to_dict() if hasattr(value,'to_dict') else value
+    marker.parent=obj.parent;marker.parent_type=obj.parent_type;marker.parent_bone=obj.parent_bone
+    marker.matrix_parent_inverse=obj.matrix_parent_inverse.copy();marker.matrix_basis=obj.matrix_basis.copy()
+    marker.hide_render=obj.hide_render;marker.hide_viewport=obj.hide_viewport
+    marker.empty_display_type='PLAIN_AXES';marker.empty_display_size=.15
+    for collection in obj.users_collection:collection.objects.link(marker)
+    selected=obj.select_get();active=bpy.context.view_layer.objects.active==obj
+    name=obj.name;hidden=obj.hide_get();obj.user_remap(marker)
+    bpy.data.objects.remove(obj,do_unlink=True);marker.name=name
+    marker.select_set(selected);marker.hide_set(hidden)
+    if active:bpy.context.view_layer.objects.active=marker
+    return marker
+
+
 class HL_OT_place_particle(bpy.types.Operator):
     bl_idname = "hammerless.place_particle"
     bl_label = "Place Particle Effect"
@@ -185,8 +208,7 @@ class HL_OT_place_particle(bpy.types.Operator):
             kv = next((x for x in obj.hammerless.keyvalues if x.key == "effect_name"), None) \
                 or obj.hammerless.keyvalues.add()
             kv.key, kv.value = "effect_name", self.effect
-            obj.data = preview_mesh("info_particle_system", s.units_per_meter,
-                                    preview_model("info_particle_system", {"effect_name": self.effect}))
+            obj = particle_empty(obj)
             style_entity_object(obj)
             obj.name = self.effect
             if context.window_manager.hl_pfx_autoplay:
@@ -237,7 +259,7 @@ class HL_PT_particles(bpy.types.Panel):
         row.prop(wm, "hl_pfx_search", text="", icon="VIEWZOOM")
         row.prop(wm, "hl_pfx_parts", text="", icon="OUTLINER_OB_POINTCLOUD")
         layout.prop(wm, "hl_pfx_group", text="")
-        layout.prop(wm, "hl_pfx_autoplay", text="Preview when placing")
+        layout.prop(wm, "hl_pfx_autoplay", text="Auto-preview selection")
         items = shown(context)
         pages = max(1, (len(items) + PER_PAGE - 1) // PER_PAGE)
         page = min(wm.hl_pfx_page, pages - 1)
@@ -256,7 +278,11 @@ class HL_PT_particles(bpy.types.Panel):
             active = next((k for k in obj.hammerless.keyvalues if k.key == 'start_active'), None)
             if active is not None: layout.prop(active, 'value', text='Starts on in game (1=yes, 0=no)')
             layout.label(text='Build & Play uses this placed effect', icon='INFO')
-            layout.label(text='Approximate preview; some effects need control points')
+            warnings=particlepreview._state.get('warnings',[]) if playing else []
+            if warnings:
+                box=layout.box();box.label(text=f'{len(warnings)} preview limitations',icon='ERROR')
+                for warning in warnings[:5]:box.label(text=warning[:100])
+            else:layout.label(text='Approximate preview; visual comparison still needed')
             layout.prop(wm, "hl_pfx_replace", text=f"Change '{obj.name[:24]}'", icon="FILE_REFRESH")
         grid = layout.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True, align=False)
         for eff in items[page * PER_PAGE:(page + 1) * PER_PAGE]:
@@ -292,7 +318,7 @@ def register():
                                              description="The game's particle file the effects come from")
     wm.hl_pfx_parts = bpy.props.BoolProperty(name="Parts too", update=_reset_page,
                                              description="Also list effects that are only parts of others")
-    wm.hl_pfx_autoplay = bpy.props.BoolProperty(name="Preview when placing", default=True, description="Animate the selected effect after placing or changing it; does not affect game export")
+    wm.hl_pfx_autoplay = bpy.props.BoolProperty(name="Auto-preview selection", default=True, description="Play the selected particle; finished bursts replay, continuous effects keep running. Preview only")
     wm.hl_pfx_page = bpy.props.IntProperty(name="Page", min=0)
     wm.hl_pfx_replace = bpy.props.BoolProperty(
         name="Change Selected", description="Clicking an effect changes the selected Particle Effect's effect "

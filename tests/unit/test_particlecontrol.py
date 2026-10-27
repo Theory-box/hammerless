@@ -103,3 +103,39 @@ class ControlPointTests(unittest.TestCase):
         e=EffectSimulation({'root':d},'root');e.advance(.1)
         self.assertTrue(np.isfinite(e.systems[0].position).all())
         np.testing.assert_allclose(e.systems[0].control_points.current[2][:3,3],0)
+
+
+class CompletionTests(unittest.TestCase):
+    def test_delayed_burst_and_continuous_completion(self):
+        d=burst([{'functionName':'Lifespan Decay'}]);d.rules['emitters'][0]['emission_start_time']=2
+        e=EffectSimulation({'root':d},'root');e.advance(1);self.assertFalse(e.finished())
+        e.advance(12);self.assertTrue(e.finished())
+        d=definition([{'functionName':'emit_continuously','emission_rate':.1}])
+        e=EffectSimulation({'root':d},'root');e.advance(1);self.assertFalse(e.finished())
+        d.rules['emitters'][0]['emission_duration']=.5
+        e=EffectSimulation({'root':d},'root');e.advance(1);self.assertTrue(e.finished())
+
+
+class PathTests(unittest.TestCase):
+    def test_impact_endpoint_and_path_do_not_connect_random_births(self):
+        d=burst([{'functionName':'Set Control Point to Impact Point','Max Trace Length':100},
+                 {'functionName':'Movement Maintain Position Along Path','end control point number':2,'particles to map from start to end':10,'bulge':.5}])
+        d.rules['emitters'][0]['num_to_emit']=20
+        tree=EffectSimulation({'root':d},'root')
+        calls=[]
+        def trace(origin,direction,length):
+            calls.append(length);return np.array([10.,0.,-20.])
+        sim=tree.systems[0];sim.trace_callback=trace
+        tree.advance(.05)
+        self.assertEqual(len(calls),1)
+        np.testing.assert_allclose(sim.position[0],[0,0,0])
+        np.testing.assert_allclose(sim.position[9:],[np.array([10.,0.,-20.])]*11)
+        self.assertTrue(np.isfinite(sim.position).all())
+
+    def test_missing_endpoint_hides_rope(self):
+        from hammerless.core.particlegeometry import build_geometry
+        d=burst([{'functionName':'Movement Maintain Position Along Path','end control point number':2}])
+        sim=Simulation(d);sim.advance(.05)
+        batch,gaps=build_geometry(sim,{'functionName':'render_rope'},{},np.eye(4),[1,0,0],[0,1,0],[0,0,10])
+        self.assertEqual(len(batch['pos']),0)
+        self.assertTrue(any('endpoint' in gap for gap in gaps))

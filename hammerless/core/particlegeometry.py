@@ -83,11 +83,12 @@ def sprite_geometry(sim,renderer,sequences,transform,centers,right,up,eye,scale,
             side=np.where((length<1e-9)[:,None],rotation[:,0],side/np.maximum(length[:,None],1e-9))
     elif mode!=0:gaps.add(f'unsupported sprite orientation {mode}')
     yaw=sim.yaw[ids,None];side=side*np.cos(yaw)+np.cross(side,vertical)*np.sin(yaw)
-    co=np.cos(sim.rotation[ids,None]);si=np.sin(sim.rotation[ids,None]);x=CORNERS[:,0];y=CORNERS[:,1]
+    corners=CORNERS*np.asarray(material.get('crop',(1.,1.)))
+    co=np.cos(sim.rotation[ids,None]);si=np.sin(sim.rotation[ids,None]);x=corners[:,0];y=corners[:,1]
     radius=np.maximum(0,sim.radius[ids,None,None])/scale
     positions=centers[ids,None,:]+((x*co-y*si)[:,:,None]*side[:,None,:]+(x*si+y*co)[:,:,None]*vertical[:,None,:])*radius
     def uv(bounds,zoom):
-        coords=(CORNERS[None,:,:]/zoom[:,None,None]+1)/2
+        coords=(corners[None,:,:]/zoom[:,None,None]+1)/2
         u0=np.where(sim.flip[ids],bounds[:,2],bounds[:,0]);u1=np.where(sim.flip[ids],bounds[:,0],bounds[:,2])
         return np.stack((u0[:,None]+(u1-u0)[:,None]*coords[:,:,0],1-(bounds[:,1,None]+(bounds[:,3]-bounds[:,1])[:,None]*(1-coords[:,:,1]))),axis=-1)
     zoom=1+(max(1,float(material.get('zoom2',1)))-1)*np.clip(sim.age[ids]/np.maximum(sim.life[ids],1e-9),0,1)
@@ -109,6 +110,10 @@ def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1,texture
     scale=max(float(scale),.001)
     centers=(sim.position/scale)@transform[:3,:3].T+transform[:3,3]
     if kind=='render_rope':
+        for spec in sim.definition.rules['operators']:
+            if spec.get('functionName','').casefold()=='movement maintain position along path':
+                if sim.control_points.get(int(spec.get('end control point number',1))) is None:
+                    return empty,{'Rope hidden: required path endpoint is unavailable'}
         from .particlerope import geometry
         batch,gaps=geometry(sim,renderer,centers,right,up,eye,scale,texture_height)
         batch['uv2']=batch['uv'].copy()
@@ -167,12 +172,12 @@ def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1,texture
             yaw=sim.yaw[i]
             side=basis_right*np.cos(yaw)+basis_normal*np.sin(yaw)
             co=np.cos(sim.rotation[i]);si=np.sin(sim.rotation[i])
-            x=CORNERS[:,0];y=CORNERS[:,1]
+            x=CORNERS[:,0]*material.get('crop',(1,1))[0];y=CORNERS[:,1]*material.get('crop',(1,1))[1]
             points=centers[i]+(x*co-y*si)[:,None]*side*radius+(x*si+y*co)[:,None]*basis_up*radius
         def uv_for(bounds,zoom=1):
             u0,v0,u1,v1=bounds
             if sim.flip[i]:u0,u1=u1,u0
-            coords=(CORNERS/zoom+1)/2
+            coords=(CORNERS*np.asarray(material.get('crop',(1,1)))/zoom+1)/2
             return np.column_stack((u0+(u1-u0)*coords[:,0],1-(v0+(v1-v0)*(1-coords[:,1]))))
         zoom=1+(max(1,float(material.get('zoom2',1)))-1)*np.clip(sim.age[i]/max(sim.life[i],1e-9),0,1)
         uv=uv_for(rect);uv2=uv_for(rect2,zoom)

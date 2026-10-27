@@ -292,3 +292,33 @@ simulation+geometry time fell from 4.101 seconds to .094 seconds total (about
 137 to 3.1 ms/frame). This excludes GPU upload, viewport drawing and scene cost;
 it is not a measured viewport FPS. The viewport timer now targets 60 Hz rather
 than 30 Hz, subtracting simulation work from its scheduling delay.
+
+
+## Selection playback, crop factors, and path-dependent water
+
+New particle placements are empties. The selection watcher converts only generated
+legacy particle cards, retaining entity keyvalues, transforms, parent links and
+remapping object references. Objects with animation/constraints/modifiers keep their
+object identity and receive a wire marker instead. No file is saved automatically.
+Selection autoplay starts each selected effect; Stop stays stopped until selection
+changes. Finished bursts replay after a .75-second gap; continuous and delayed
+emitters are not restarted prematurely. This loop affects preview only.
+
+SpriteCard `$cropfactor` now shrinks both card geometry and UV sampling around each
+frame's center. The installed env_fire_tiny_smoke child uses [0.5 1], and its VTF
+contains padded frame bounds crossing texture edges. Cropping moves its first
+frame U range from approximately [-.031,.094] into [0,.0625].
+
+fire_hydrant requires path maintenance and an impact control point. The preview now
+uses an independent quadratic path approximation and a throttled Blender scene
+raycast for the impact endpoint, plus a distance-to-path constraint. Missing
+endpoints suppress the dependent rope instead of joining random birth positions.
+Viewport geometry differs from compiled collision; collision groups and refraction
+remain unsupported. All unimplemented material keys are now reported, including
+platform-conditional keys, and the panel shows the first five limitations. Rule
+and parameter coverage remains in the full audit. No claim of complete engine
+parity or support for every setting is made.
+
+Validation: 73 particle unit tests, background Blender empty placement/replacement,
+legacy conversion/reference preservation and exported entity checks pass. Visual
+comparison remains user-led; no desktop control or game launch was performed.

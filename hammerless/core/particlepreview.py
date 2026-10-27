@@ -214,6 +214,9 @@ class Simulation:
             if name=='set control point positions':continue
             entry=RULES.get(('operators',name))
             if entry:entry[0](self,spec,dt)
+        for spec in self.definition.rules['constraints']:
+            entry=RULES.get(('constraints',spec.get('functionName','').casefold()))
+            if entry:entry[0](self,spec,dt)
         self.time+=dt
 
     def retain(self, mask):
@@ -656,3 +659,55 @@ def sequence_two(s,p,sl):
 
 @rule('renderers','render_rope','subdivision_count','texel_size','texture_scroll_rate')
 def rope_renderer(s,p,dt):pass
+
+
+PATH_PARAMETERS=('start control point number','end control point number','bulge','random bulge','mid point position','bulge control 0=random 1=orientation of start pnt 2=orientation of end point')
+
+def path_positions(s,p,t):
+    start=s.control_points.get(int(p.get('start control point number',0)),s.warnings)
+    end=s.control_points.get(int(p.get('end control point number',1)),s.warnings)
+    if start is None or end is None:return None
+    a=start[:3,3];b=end[:3,3]
+    mode=int(p.get('bulge control 0=random 1=orientation of start pnt 2=orientation of end point',0))
+    direction=(end if mode==2 else start)[:3,0] if mode in (1,2) else np.array([0.,0.,1.])
+    midpoint=float(np.clip(p.get('mid point position',.5),0,1))
+    bulge=float(p.get('bulge',p.get('random bulge',0)))
+    control=a+(b-a)*midpoint+direction*np.linalg.norm(b-a)*bulge
+    t=np.clip(t,0,1)[:,None]
+    s.warnings.add('Control-point path uses an approximate quadratic curve')
+    return (1-t)**2*a+2*t*(1-t)*control+t*t*b
+
+@rule('operators','Movement Maintain Position Along Path',*PATH_PARAMETERS,'particles to map from start to end')
+def maintain_path(s,p,dt):
+    count=max(2,int(p.get('particles to map from start to end',10)))
+    # Saturated tails stay at the endpoint instead of wrapping into extra ropes.
+    t=np.arange(len(s.age),dtype=float)/max(1,count-1)
+    points=path_positions(s,p,t)
+    if points is not None:s.position[:]=points;s.previous_position[:]=points
+
+@rule('constraints','Constrain distance to path between two control points',*PATH_PARAMETERS,'maximum distance','travel time')
+def constrain_path(s,p,dt):
+    points=path_positions(s,p,s.age/max(.001,float(p.get('travel time',1))))
+    if points is None:return
+    offset=s.position-points;distance=np.linalg.norm(offset,axis=1)
+    maximum=max(0,float(p.get('maximum distance',0)))
+    s.position[:]=points+offset*np.minimum(1,maximum/np.maximum(distance,1e-9))[:,None]
+
+@rule('operators','Set Control Point to Impact Point','Control Point to Set','Trace Direction Override','Trace Update Rate','Max Trace Length','trace collision group','Control Point to Trace From')
+def impact_point(s,p,dt):
+    callback=getattr(s,'trace_callback',None)
+    if callback is None:
+        s.warnings.add('Impact control point needs a scene trace');return
+    due=getattr(s,'next_impact_trace',0)
+    if s.time<due:return
+    s.next_impact_trace=s.time+max(dt,float(p.get('Trace Update Rate',.1)))
+    index=int(p.get('Control Point to Trace From',1))
+    start=s.control_points.get(index)
+    if start is None:start=s.control_points.get(0,s.warnings)
+    if start is None:return
+    direction=np.asarray(p.get('Trace Direction Override',(0,0,-1)),dtype=float)
+    direction=direction/max(np.linalg.norm(direction),1e-9)
+    point=callback(start[:3,3],direction,max(0,float(p.get('Max Trace Length',128))))
+    matrix=start.copy();matrix[:3,3]=point
+    s.control_points.set(int(p.get('Control Point to Set',2)),matrix)
+    s.warnings.add('Impact trace uses viewport geometry, not compiled game collision groups')
