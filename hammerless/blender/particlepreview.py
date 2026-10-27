@@ -84,17 +84,36 @@ def shader():
     global _shader
     if _shader is None:
         interface = gpu.types.GPUStageInterfaceInfo('hl_particle_preview')
-        interface.smooth('VEC2','uvInterp'); interface.smooth('VEC4','tintInterp')
+        interface.smooth('VEC2','uvInterp'); interface.smooth('VEC2','uv2Interp'); interface.smooth('VEC4','tintInterp')
         info = gpu.types.GPUShaderCreateInfo()
         info.push_constant('MAT4','mvp')
         info.push_constant('FLOAT','repeat_v')
+        info.push_constant('VEC4','material_settings')
         info.sampler(0,'FLOAT_2D','sprite')
-        info.vertex_in(0,'VEC3','pos'); info.vertex_in(1,'VEC2','uv'); info.vertex_in(2,'VEC4','tint')
+        info.vertex_in(0,'VEC3','pos'); info.vertex_in(1,'VEC2','uv'); info.vertex_in(2,'VEC4','tint'); info.vertex_in(3,'VEC2','uv2')
         info.vertex_out(interface); info.fragment_out(0,'VEC4','fragColor')
-        info.vertex_source('void main(){uvInterp=uv;tintInterp=tint;gl_Position=mvp*vec4(pos,1.0);}')
-        info.fragment_source('void main(){fragColor=texture(sprite,vec2(uvInterp.x,repeat_v>0.5?fract(uvInterp.y):uvInterp.y))*tintInterp;}')
+        info.vertex_source('void main(){uvInterp=uv;uv2Interp=uv2;tintInterp=tint;gl_Position=mvp*vec4(pos,1.0);}')
+        info.fragment_source("""
+        void main(){
+            vec4 a=texture(sprite,vec2(uvInterp.x,repeat_v>0.5?fract(uvInterp.y):uvInterp.y));
+            if(material_settings.x>=0.0){
+                vec4 b=texture(sprite,uv2Interp);
+                if(material_settings.x<0.5)a=(a+b)*0.5;
+                else if(material_settings.x<1.5)a=vec4(b.rgb,a.a);
+                else {float opacity=b.a+a.a*(1.0-b.a);
+                    a=vec4((b.rgb*b.a+a.rgb*a.a*(1.0-b.a))/max(opacity,0.000001),opacity);}
+            }
+            a*=tintInterp;a.rgb*=material_settings.y;a.a*=material_settings.z;
+            if(a.a<material_settings.w)discard;
+            fragColor=a;
+        }""")
         _shader = gpu.shader.create_from_info(info)
     return _shader
+
+
+def bind_material(sh,material=None):
+    p=material or {}
+    sh.uniform_float('material_settings',(float(p.get('dual_mode',-1)),p.get('brightness',1),p.get('alpha',1),p.get('cutoff',-1)))
 
 
 def draw():
@@ -114,9 +133,10 @@ def draw():
         for sim, delay, texture, additive, sequences in _state['systems']:
             if texture is None or not len(sim.age): continue
             eye=context.region_data.view_matrix.inverted().translation
+            profile=_state['profiles'].get(sim.definition.attrs.get('material',''),{})
             for renderer in sim.definition.rules['renderers']:
                 if renderer.get('functionName','').casefold() not in RENDERERS:continue
-                geometry,gaps=build_geometry(sim,renderer,sequences,matrix,right,up,eye,scale,texture_height=texture.height)
+                geometry,gaps=build_geometry(sim,renderer,sequences,matrix,right,up,eye,scale,texture_height=texture.height,material=profile)
                 for gap in gaps | sim.warnings:
                     warning=f'{sim.definition.name}: {gap}'
                     if warning not in _state['warnings']:
@@ -124,7 +144,7 @@ def draw():
                         print('Hammerless particle preview:',warning)
                 if not len(geometry['pos']):continue
                 gpu.state.blend_set('ADDITIVE' if additive else 'ALPHA')
-                sh.bind();sh.uniform_float('repeat_v',float(renderer.get('functionName','').casefold()=='render_rope'));sh.uniform_float('mvp',context.region_data.perspective_matrix);sh.uniform_sampler('sprite',texture)
+                sh.bind();bind_material(sh,dict(profile,dual_mode=-1) if renderer.get('functionName','').casefold()=='render_rope' else profile);sh.uniform_float('repeat_v',float(renderer.get('functionName','').casefold()=='render_rope'));sh.uniform_float('mvp',context.region_data.perspective_matrix);sh.uniform_sampler('sprite',texture)
                 batch_for_shader(sh,'TRIS',geometry).draw(sh)
     finally:
         gpu.state.blend_set(old_blend);gpu.state.depth_test_set(old_depth);gpu.state.depth_mask_set(old_mask)
@@ -139,6 +159,7 @@ class HL_OT_particle_preview(bpy.types.Operator):
         stop()
         from .ops import game_content, game_root
         from ..core.particlesheet import load_atlas
+        from ..core.particlematerial import load_profile
         obj=context.active_object
         if obj is None or obj.hammerless.classname!='info_particle_system':
             self.report({'ERROR'},'Select a Particle Effect first');return {'CANCELLED'}
@@ -149,10 +170,12 @@ class HL_OT_particle_preview(bpy.types.Operator):
         library,errors=load_library(content)
         if name not in library:
             self.report({'ERROR'},'Particle definition not found');return {'CANCELLED'}
-        coverage=audit(library);systems=[];textures={};warnings=list(coverage[name]['recursive_gaps'])
+        coverage=audit(library);systems=[];textures={};profiles={};warnings=list(coverage[name]['recursive_gaps'])
         def assets(definition):
             material=definition.attrs.get('material','')
             if material not in textures:
+                profiles[material]=load_profile(content,material) if material else {}
+                warnings.extend(material+': '+w for w in profiles[material].get('warnings',[]))
                 image=load_atlas(content,material) if material else None
                 if image is None:
                     textures[material]=(None,False,{})
@@ -178,7 +201,7 @@ class HL_OT_particle_preview(bpy.types.Operator):
         except Exception as exc:
             self.report({'ERROR'},str(exc));return {'CANCELLED'}
         _state.update(object=obj,effect=name,scene=context.scene,systems=systems,last=time.perf_counter(),time=0,
-                      warnings=warnings,errors=errors,effect_simulation=effect_simulation,frame=frame,scale=scale,bindings=bindings)
+                      warnings=warnings,errors=errors,profiles=profiles,effect_simulation=effect_simulation,frame=frame,scale=scale,bindings=bindings)
         print('Hammerless particle preview gaps for',name,':',warnings)
         _state['handle']=bpy.types.SpaceView3D.draw_handler_add(draw,(),'WINDOW','POST_VIEW')
         bpy.app.timers.register(tick,first_interval=.03)

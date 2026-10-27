@@ -17,6 +17,7 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--game',required=True)
     parser.add_argument('--output',required=True)
+    parser.add_argument('--geometry',action='store_true',help='Validate renderer arrays and material profiles at the final simulation time')
     parser.add_argument('--trees',action='store_true',help='Simulate synchronized child systems too')
     parser.add_argument('--textures',action='store_true',help='Also decode every referenced material and animation sheet')
     parser.add_argument('--seconds',type=float,default=.25,help='Simulation duration per effect (default .25)')
@@ -27,7 +28,7 @@ def main():
     library,errors=load_library(content)
     report=audit(library)
     failures=[]
-    runtime_warnings={};sheets={}
+    runtime_warnings={};sheets={};profiles={};geometry_batches=0
     def assets(definition):
         from hammerless.core.particlesheet import load_sequences
         material=definition.attrs.get('material','')
@@ -48,13 +49,26 @@ def main():
                 assert all(len(getattr(sim,k))==len(sim.age) for k in ('position','velocity','color','radius','life','ids','flip','sequence','sequence2'))
                 assert len(sim.age)<=64
                 warnings.update(sim.warnings)
+                if args.geometry:
+                    from hammerless.core.particlegeometry import build_geometry,RENDERERS
+                    from hammerless.core.particlematerial import load_profile
+                    material=sim.definition.attrs.get('material','')
+                    if material not in profiles:profiles[material]=load_profile(content,material) if material else {}
+                    profile=profiles[material];warnings.update(profile.get('warnings',[]))
+                    for renderer in sim.definition.rules['renderers']:
+                        if renderer.get('functionName','').casefold() not in RENDERERS:continue
+                        geometry,gaps=build_geometry(sim,renderer,sim.sequences,np.eye(4),[1,0,0],[0,0,1],[0,-10000,0],material=profile)
+                        assert all(np.isfinite(a).all() for a in geometry.values())
+                        assert all(len(a)==len(geometry['pos']) for a in geometry.values())
+                        assert len(geometry['pos'])<=64*16*6
+                        warnings.update(gaps);geometry_batches+=1
             if warnings:runtime_warnings[name]=sorted(warnings)
         except Exception as exc:
             failures.append({'effect':name,'error':str(exc)})
     priority=Counter(gap for effect in report.values() for gap in effect['missing_rules'])
     parameter_priority=Counter(gap for effect in report.values() for gap in effect['unmapped_parameters'])
     result={'trees':args.trees,'systems':len(library),'simulation_seconds':args.seconds,'parse_errors':errors,'smoke_failures':failures,
-            'runtime_warnings':runtime_warnings,
+            'runtime_warnings':runtime_warnings,'geometry_batches':geometry_batches,'material_profiles':profiles,
             'missing_rule_priority':dict(priority.most_common()),
             'unmapped_parameter_priority':dict(parameter_priority.most_common()),
             'limitations':['Independent approximate maths; not visually validated against Source',

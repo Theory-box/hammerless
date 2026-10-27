@@ -107,7 +107,7 @@ not bundled with the addon. The tool never opens or saves the user's blend file.
 ## Next gaps
 
 Remaining attribute targets, operator strength/time
-envelopes, bone attachments and control-point hierarchies, secondary sequences,
+envelopes, bone attachments and control-point hierarchies, secondary material refinements,
 collision and non-sprite material shaders remain missing; rope rendering is now an approximation.
 Unsupported fields stay visible in reports. Missing atlas sequences are skipped
 and reported rather than displaying the entire sheet as one particle.
@@ -166,8 +166,8 @@ wraps only the rope's longitudinal coordinate; sprite atlas UVs stay unwrapped.
 
 `Sequence Two Random` and the authored `sequence_number 1` value now have a
 separate integer array preserved across births and deaths. Dual-sequence material
-blending is still unsupported and stays explicitly listed in the coverage report;
-storing these choices does not mean those materials render correctly.
+blending now has a separate approximate material profile (see below); storing
+sequence choices alone does not establish correct material rendering.
 
 Validation includes deterministic ribbon topology, particle removal, coincident
 points, camera-aligned paths, bounded subdivision, scrolling, texture density,
@@ -176,3 +176,33 @@ renders include drainage streams, hydrant water and rain. Missing control points
 and water distortion shaders visibly limit fidelity; these samples are not
 claimed to match the game. The implementation uses independent geometry maths,
 not third-party simulator source.
+
+## Material profiles and dual-sequence blending
+
+The viewport and sample tool now load resolved VMT settings separately from the
+texture atlas. Independent UVs animate each sequence. Preview modes 0/1/2 use,
+respectively, an RGBA average, secondary RGB with primary alpha, and secondary
+over primary. These are independent approximate compositing rules, not a claim
+that every SpriteCard variant matches Source. Unsupported modes are reported.
+The shader also applies overbrightfactor, alpha and alphatest/reference. Ropes
+keep their base-texture path and report dual-sequence materials as unsupported.
+
+Refraction is explicitly reported as a base-texture fallback: it needs captured
+scene colour/depth and distortion textures, which this overlay does not yet
+provide. Depth blending, frame interpolation, maximum-luminance frame blending,
+secondary zoom, addself/addoverblend and distance-alpha shaders remain reported
+material gaps. Ground fog samples produce visible dual-sequence smoke; effects
+requiring a parent still need that parent, rather than inventing root emissions.
+
+`tools/audit_particles.py --geometry` now checks bounded finite vertex/UV/colour
+arrays and resolved material profiles, alongside the existing simulation audit.
+GPU tests exercise distinct atlas regions and unequal alpha values for all three
+preview blend modes, brightness/opacity and alpha rejection. None of these checks
+replace a visual comparison against the game. No game materials are bundled.
+
+Material-batch validation: 58 unit tests passed, Blender lifecycle passed, and
+floating-point GPU tests passed (including brightness above one). A .25-second
+whole-library audit covered 1,785 roots, 3,275 geometry batches and 235 material
+profile cache entries with no parse/simulation/geometry errors. Eight sample PNGs
+were generated; fog was visually inspected. Empty parent-dependent standalone
+samples are reported, not counted as successful visual reproduction.

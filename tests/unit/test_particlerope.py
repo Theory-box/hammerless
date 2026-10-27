@@ -43,8 +43,8 @@ class RopeTests(unittest.TestCase):
         before=s.sequence2.copy();s.retain(s.ids%2==0)
         np.testing.assert_array_equal(s.sequence2,before[::2])
         s.spawn(3);self.assertEqual(len(s.sequence2),len(s.age))
-        self.assertTrue(any('blending is unsupported' in w for w in s.warnings))
-        self.assertIn('material: dual-sequence blending unsupported',audit({'test':d})['test']['recursive_gaps'])
+        self.assertTrue(any('supported material profile' in w for w in s.warnings))
+        self.assertIn('material: dual-sequence blending requires supported material profile',audit({'test':d})['test']['recursive_gaps'])
 
     def test_texture_density_scales_with_texture_height(self):
         from hammerless.core.particlegeometry import build_geometry

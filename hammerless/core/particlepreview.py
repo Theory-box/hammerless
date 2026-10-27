@@ -85,7 +85,7 @@ def audit(definitions):
                         if value not in supported:
                             parameters.append(f'{name}: unsupported oscillation field {value}')
         if 'sequence_number 1' in definition.attrs or any(p.get('functionName','').casefold()=='sequence two random' for p in definition.rules['initializers']):
-            parameters.append('material: dual-sequence blending unsupported')
+            parameters.append('material: dual-sequence blending requires supported material profile')
         system_parameters = sorted(set(definition.attrs)-set(CATEGORIES)-{'children'}-SYSTEM_PARAMETERS)
         result[key] = {'missing_rules': sorted(set(missing)), 'unmapped_parameters': sorted(set(parameters)),
                        'unmapped_system_parameters': system_parameters,
@@ -648,7 +648,7 @@ def along_path(s,p,sl):
 def sequence_two(s,p,sl):
     lo,hi=sorted((int(p.get('sequence_min',0)),int(p.get('sequence_max',0))))
     s.sequence2[sl]=s.rng.integers(lo,hi+1,len(s.age[sl]))
-    s.warnings.add('Secondary sequence stored; dual-sequence material blending is unsupported')
+    s.warnings.add('Secondary sequence requires a supported material profile')
 
 
 @rule('renderers','render_rope','subdivision_count','texel_size','texture_scroll_rate')

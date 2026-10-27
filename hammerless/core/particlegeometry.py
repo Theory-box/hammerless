@@ -17,10 +17,12 @@ def trail_quad(head,tail,radius,eye,right,up):
     return np.array([tail-side,tail+side,head+side,tail-side,head+side,head-side])
 
 
-def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1,texture_height=1):
+def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1,texture_height=1,material=None):
     """Return triangles and diagnostic gaps. Positions are in Blender world units."""
+    material=material or {}
+    dual=material.get('dual_mode',-1)>=0
     kind=renderer.get('functionName','').casefold()
-    empty={'pos':np.zeros((0,3)),'uv':np.zeros((0,2)),'tint':np.zeros((0,4))}
+    empty={'pos':np.zeros((0,3)),'uv':np.zeros((0,2)),'uv2':np.zeros((0,2)),'tint':np.zeros((0,4))}
     if kind not in RENDERERS:return empty,{f'unsupported renderer {kind}'}
     if not len(sim.age):return empty,set()
     transform=np.asarray(transform,dtype=float);right=np.asarray(right);up=np.asarray(up);eye=np.asarray(eye)
@@ -28,10 +30,13 @@ def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1,texture
     centers=(sim.position/scale)@transform[:3,:3].T+transform[:3,3]
     if kind=='render_rope':
         from .particlerope import geometry
-        return geometry(sim,renderer,centers,right,up,eye,scale,texture_height)
+        batch,gaps=geometry(sim,renderer,centers,right,up,eye,scale,texture_height)
+        batch['uv2']=batch['uv'].copy()
+        if dual:gaps.add('Dual-sequence rope rendering unsupported')
+        return batch,gaps
     order=np.argsort(-np.sum((centers-eye)**2,axis=1),kind='stable')
     normal=np.cross(right,up)
-    positions=[];uvs=[];colors=[];gaps=set()
+    positions=[];uvs=[];uvs2=[];colors=[];gaps=set()
     for i in order:
         sheet=sequences.get(int(sim.sequence[i]))
         if sequences and sheet is None:
@@ -43,6 +48,16 @@ def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1,texture
                 fit=bool(renderer.get('animation_fit_lifetime',False)),
                 fps=bool(renderer.get('use animation rate as FPS',False)))
             rect=sheet.rectangles[frame,0]
+        rect2=rect
+        if dual:
+            sheet2=sequences.get(int(sim.sequence2[i]))
+            if sheet2 is None:
+                gaps.add(f'missing secondary sheet sequence {sim.sequence2[i]}');continue
+            frame2=sheet2.frame(float(sim.age[i]),float(sim.life[i]),
+                rate=float(renderer.get('animation rate 2',renderer.get('animation rate',1))),
+                fit=bool(renderer.get('animation_fit_lifetime',False)),
+                fps=bool(renderer.get('use animation rate as FPS',False)))
+            rect2=sheet2.rectangles[frame2,0]
         radius=max(0,float(sim.radius[i]))/scale
         if kind=='render_sprite_trail':
             motion=(sim.position[i]-sim.previous_position[i])*60
@@ -73,6 +88,10 @@ def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1,texture
         if sim.flip[i]:u0,u1=u1,u0
         uv=np.column_stack((u0+(u1-u0)*(CORNERS[:,0]+1)/2,
                             1-(v0+(v1-v0)*(1-CORNERS[:,1])/2)))
+        a,b,c,d=rect2
+        if sim.flip[i]:a,c=c,a
+        uv2=np.column_stack((a+(c-a)*(CORNERS[:,0]+1)/2,1-(b+(d-b)*(1-CORNERS[:,1])/2)))
+        uvs2.extend(uv2)
         tint=sim.color[i].copy();tint[3]*=sim.alpha2[i]
         positions.extend(points);uvs.extend(uv);colors.extend([tint]*6)
     if not positions:return empty,gaps
@@ -80,4 +99,5 @@ def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1,texture
     # reliably convert float64 NumPy arrays when filling a float vertex format.
     return {'pos':np.ascontiguousarray(positions,dtype=np.float32),
             'uv':np.ascontiguousarray(uvs,dtype=np.float32),
+            'uv2':np.ascontiguousarray(uvs2,dtype=np.float32),
             'tint':np.ascontiguousarray(colors,dtype=np.float32)},gaps

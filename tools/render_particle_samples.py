@@ -35,9 +35,10 @@ def run():
         from hammerless.core.particleeffect import EffectSimulation
         from hammerless.core.particlesheet import load_atlas
         from hammerless.core.particlegeometry import build_geometry,RENDERERS
-        from hammerless.blender.particlepreview import shader
+        from hammerless.blender.particlepreview import shader,bind_material
+        from hammerless.core.particlematerial import load_profile
         content=GameContent(args.game);library,errors=load_library(content)
-        coverage=audit(library);materials={};report={'parse_errors':errors,'samples':[]}
+        coverage=audit(library);materials={};profiles={};report={'parse_errors':errors,'samples':[]}
         offscreen=gpu.types.GPUOffScreen(512,512)
         sh=shader()
         for effect in args.effects:
@@ -47,6 +48,8 @@ def run():
                 def assets(definition):
                     material=definition.attrs.get('material','')
                     if material not in materials:
+                        profiles[material]=load_profile(content,material) if material else {}
+                        warnings.update(profiles[material].get('warnings',[]))
                         atlas=load_atlas(content,material) if material else None
                         if atlas is None:materials[material]=(None,{},False)
                         else:
@@ -68,13 +71,15 @@ def run():
                 for sim,texture,sequences,additive in systems:
                     if texture is None:
                         warnings.add('Missing material: '+sim.definition.attrs.get('material',''));continue
+                    profile=profiles.get(sim.definition.attrs.get('material',''),{})
+                    warnings.update(profile.get('warnings',[]))
                     for renderer in sim.definition.rules['renderers']:
                         if renderer.get('functionName','').casefold() not in RENDERERS:continue
-                        geometry,gaps=build_geometry(sim,renderer,sequences,np.eye(4),[1,0,0],[0,0,1],[0,-10000,0],texture_height=texture.height)
+                        geometry,gaps=build_geometry(sim,renderer,sequences,np.eye(4),[1,0,0],[0,0,1],[0,-10000,0],texture_height=texture.height,material=profile)
                         warnings.update(gaps)
-                        if len(geometry['pos']):batches.append((geometry,texture,additive,renderer.get('functionName','').casefold()=='render_rope'))
+                        if len(geometry['pos']):batches.append((geometry,texture,additive,renderer.get('functionName','').casefold()=='render_rope',profile))
                 if batches:
-                    vertices=np.concatenate([g['pos'] for g,_,_,_ in batches])
+                    vertices=np.concatenate([g['pos'] for g,_,_,_,_ in batches])
                     lo=vertices.min(axis=0);hi=vertices.max(axis=0);center=(lo+hi)/2
                     extent=max(1,hi[0]-lo[0],hi[2]-lo[2])*1.15
                 else:center=np.zeros(3);extent=1
@@ -84,9 +89,9 @@ def run():
                 with offscreen.bind():
                     fb=gpu.state.active_framebuffer_get();fb.clear(color=(.015,.015,.015,1))
                     gpu.state.viewport_set(0,0,512,512);gpu.state.depth_test_set('NONE')
-                    for geometry,texture,additive,repeat_v in batches:
+                    for geometry,texture,additive,repeat_v,profile in batches:
                         gpu.state.blend_set('ADDITIVE' if additive else 'ALPHA')
-                        sh.bind();sh.uniform_float('repeat_v',float(repeat_v));sh.uniform_float('mvp',mvp);sh.uniform_sampler('sprite',texture)
+                        sh.bind();bind_material(sh,dict(profile,dual_mode=-1) if repeat_v else profile);sh.uniform_float('repeat_v',float(repeat_v));sh.uniform_float('mvp',mvp);sh.uniform_sampler('sprite',texture)
                         batch_for_shader(sh,'TRIS',geometry).draw(sh)
                     pixels=np.array(fb.read_color(0,0,512,512,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(-1)
                     if not np.isfinite(pixels).all():raise ValueError('nonfinite GPU output')
