@@ -5,11 +5,41 @@ import gpu
 import numpy as np
 from mathutils import Vector
 from gpu_extras.batch import batch_for_shader
-from ..core.particlepreview import load_library, audit, Simulation
+from ..core.particlepreview import load_library, audit
+from ..core.particleeffect import EffectSimulation
 from ..core.particlegeometry import build_geometry, RENDERERS
 
 _state = {}
 _shader = None
+
+
+def control_point_bindings(scene,emitter):
+    """Resolve authored cpoint1..63 target names without changing scene data."""
+    names={};duplicates=set()
+    for obj in scene.objects:
+        target=next((k.value for k in obj.hammerless.keyvalues if k.key=='targetname' and k.value),'')
+        for name in {obj.name,target}-{''}:
+            if name in names and names[name]!=obj:duplicates.add(name)
+            names[name]=obj
+    bindings={0:emitter};warnings=[]
+    for kv in emitter.hammerless.keyvalues:
+        if not kv.key.startswith('cpoint') or not kv.key[6:].isdigit() or not kv.value:continue
+        index=int(kv.key[6:])
+        if not 1<=index<64:continue
+        if kv.value in duplicates:warnings.append('Ambiguous control-point target: '+kv.value)
+        elif kv.value in names:bindings[index]=names[kv.value]
+        else:warnings.append('Missing control-point target: '+kv.value)
+    return bindings,warnings
+
+
+def sample_control_points(bindings,frame,scale):
+    inverse=frame.inverted_safe()
+    result={}
+    for index,obj in bindings.items():
+        matrix=np.asarray(inverse@obj.matrix_world,dtype=float)
+        matrix[:3,3]*=scale
+        result[index]=matrix
+    return result
 
 
 def stop(*args):
@@ -37,11 +67,9 @@ def tick():
         now = time.perf_counter()
         dt = min(.1, now-_state['last'])
         _state['last'] = now
-        previous = _state['time']; _state['time'] += dt
-        for sim, delay, texture, additive, sequences in _state['systems']:
-            elapsed = max(0,_state['time']-delay)-max(0,previous-delay)
-            if elapsed:
-                sim.advance(elapsed)
+        points=sample_control_points(_state['bindings'],_state['frame'],_state['scale'])
+        _state['effect_simulation'].advance(dt,points)
+        _state['time']=_state['effect_simulation'].time
         for wm in bpy.data.window_managers:
             for window in wm.windows:
                 for area in window.screen.areas:
@@ -73,8 +101,8 @@ def draw():
     if not _state or context.region_data is None: return
     obj = _state['object']
     if not obj.visible_get() or context.scene != _state['scene']: return
-    scale = max(.001, context.scene.hammerless.units_per_meter)
-    matrix = obj.matrix_world
+    scale = _state['scale']
+    matrix = _state['frame']
     view = context.region_data.view_matrix.inverted().to_3x3()
     right, up = view @ Vector((1,0,0)), view @ Vector((0,1,0))
     sh = shader()
@@ -121,33 +149,35 @@ class HL_OT_particle_preview(bpy.types.Operator):
         if name not in library:
             self.report({'ERROR'},'Particle definition not found');return {'CANCELLED'}
         coverage=audit(library);systems=[];textures={};warnings=list(coverage[name]['recursive_gaps'])
-        def add(key,delay,path):
-            if key in path or key not in library: return
-            if len(systems)>=16:
-                warnings.append('Preview limited to 16 child systems');return
-            definition=library[key];material=definition.attrs.get('material','')
+        def assets(definition):
+            material=definition.attrs.get('material','')
             if material not in textures:
                 image=load_atlas(content,material) if material else None
                 if image is None:
                     textures[material]=(None,False,{})
-                    if material: warnings.append('Missing sprite: '+material)
+                    if material:warnings.append('Missing sprite: '+material)
                 else:
                     rgba,sequences,additive=image;h,w=rgba.shape[:2]
                     pixels=np.ascontiguousarray(rgba[::-1],dtype=np.float32)
                     textures[material]=(gpu.types.GPUTexture((w,h),format='RGBA32F',data=gpu.types.Buffer('FLOAT',pixels.size,pixels.ravel())),additive,sequences)
-            texture,additive,sequences=textures[material]
-            if not any(p.get('functionName','').casefold() in RENDERERS
-                       for p in definition.rules['renderers']):
-                texture = None  # Do not disguise unsupported renderers as sprites.
-            systems.append((Simulation(definition,seed=len(systems),limit=256,sequences=sequences),delay,texture,additive,sequences))
-            for child,wait in definition.children: add(child,delay+max(0,wait),path|{key})
+            return textures[material][2]
         try:
-            add(name,0,set())
+            frame=obj.matrix_world.copy()
+            scale=max(.001,context.scene.hammerless.units_per_meter)
+            bindings,binding_warnings=control_point_bindings(context.scene,obj)
+            warnings.extend(binding_warnings)
+            effect_simulation=EffectSimulation(library,name,asset_loader=assets,
+                control_points=sample_control_points(bindings,frame,scale))
+            warnings.extend(sorted(effect_simulation.warnings))
+            for sim in effect_simulation.systems:
+                texture,additive,sequences=textures[sim.definition.attrs.get('material','')]
+                if not any(p.get('functionName','').casefold() in RENDERERS for p in sim.definition.rules['renderers']):texture=None
+                systems.append((sim,0,texture,additive,sequences))
             shader()
         except Exception as exc:
             self.report({'ERROR'},str(exc));return {'CANCELLED'}
         _state.update(object=obj,effect=name,scene=context.scene,systems=systems,last=time.perf_counter(),time=0,
-                      warnings=warnings,errors=errors)
+                      warnings=warnings,errors=errors,effect_simulation=effect_simulation,frame=frame,scale=scale,bindings=bindings)
         print('Hammerless particle preview gaps for',name,':',warnings)
         _state['handle']=bpy.types.SpaceView3D.draw_handler_add(draw,(),'WINDOW','POST_VIEW')
         bpy.app.timers.register(tick,first_interval=.03)

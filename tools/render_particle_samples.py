@@ -27,11 +27,12 @@ def run():
     parser.add_argument('--effects',nargs='+',default=['gas_smoke','small_sparks'])
     parser.add_argument('--times',nargs='+',type=float,default=[.25,1,2])
     args=parser.parse_args(sys.argv[sys.argv.index('--')+1:])
-    output=Path(args.output);output.mkdir(parents=True,exist_ok=True)
+    output=Path(args.output).resolve();output.mkdir(parents=True,exist_ok=True)
     offscreen=None
     try:
         from hammerless.core.vpk import GameContent
-        from hammerless.core.particlepreview import load_library,Simulation,audit
+        from hammerless.core.particlepreview import load_library,audit
+        from hammerless.core.particleeffect import EffectSimulation
         from hammerless.core.particlesheet import load_atlas
         from hammerless.core.particlegeometry import build_geometry,RENDERERS
         from hammerless.blender.particlepreview import shader
@@ -43,9 +44,7 @@ def run():
             for seconds in args.times:
                 if not np.isfinite(seconds) or not 0<=seconds<=60:raise ValueError('sample time must be 0..60 seconds')
                 systems=[];warnings=set()
-                def add(name,delay,path):
-                    if name in path or len(systems)>=16:return
-                    definition=library[name]
+                def assets(definition):
                     material=definition.attrs.get('material','')
                     if material not in materials:
                         atlas=load_atlas(content,material) if material else None
@@ -56,12 +55,14 @@ def run():
                             texture=gpu.types.GPUTexture((w,h),format='RGBA32F',data=gpu.types.Buffer('FLOAT',pixels.size,pixels.ravel()))
                             materials[material]=(texture,sequences,additive)
                     texture,sequences,additive=materials[material]
-                    sim=Simulation(definition,seed=len(systems),limit=256,sequences=sequences)
-                    sim.advance(max(0,seconds-delay));warnings.update(sim.warnings)
+                    return sequences
+                effect_tree=EffectSimulation(library,effect,asset_loader=assets)
+                effect_tree.advance(seconds)
+                warnings.update(effect_tree.warnings)
+                for sim in effect_tree.systems:
+                    warnings.update(sim.warnings)
+                    texture,sequences,additive=materials[sim.definition.attrs.get('material','')]
                     systems.append((sim,texture,sequences,additive))
-                    for child,wait in definition.children:
-                        if child in library:add(child,delay+max(wait,0),path|{name})
-                add(effect.casefold(),0,set())
                 batches=[]
                 # View along -Y: Source Z is vertical in the sample image.
                 for sim,texture,sequences,additive in systems:

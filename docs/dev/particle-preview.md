@@ -107,7 +107,7 @@ not bundled with the addon. The tool never opens or saves the user's blend file.
 ## Next gaps
 
 Remaining attribute targets, operator strength/time
-envelopes, live control points and parent inheritance, secondary sequences,
+envelopes, bone attachments and control-point hierarchies, secondary sequences,
 rope renderers, collision, and non-sprite material shaders remain missing.
 Unsupported fields stay visible in reports. Missing atlas sequences are skipped
 and reported rather than displaying the entire sheet as one particle.
@@ -115,3 +115,40 @@ and reported rather than displaying the entire sheet as one particle.
 Use the generated priority list to choose shared operators that unlock multiple
 effects. Compare representative effects visually with the game before claiming
 fidelity; keep numerical smoke checks separate from that comparison.
+
+## Control points and child systems
+
+`EffectSimulation` advances a bounded parent-first effect tree on one fixed clock.
+Children inherit parent control points and can emit from live parent particles;
+child delays are cumulative. Cycles, missing children and system limits produce
+warnings. Parent-dependent births without a live parent are suppressed.
+
+The viewport resolves cpoint1..63 by object name or targetname. Missing/ambiguous
+targets are reported. Moving emitters affect new particles; old particles stay
+in their original world frame unless a lock operator follows a control point.
+No objects, keyvalues, cursor or viewport preferences are written by preview.
+The starting frame and unit scale stay fixed for a preview session.
+
+Supported approximations include translation/rotation locks with lifetime fades,
+control-point velocity inheritance, relative authored point positions, particle
+centers, child control points, straight sequential paths and inverse-power pull.
+Rotation interpolation, parent selection and force defaults are independent
+approximations. Lock rotation moves positions but does not rotate particle roll
+or velocity. World-space authored CP positions, distance fades, bone attachments,
+parent CP hierarchies, path bulges and child group IDs remain unsupported.
+
+Add `--trees` to the audit to validate whole synchronized trees. Run
+`python -m unittest tests.unit.test_particlecontrol` for deterministic motion,
+birth, delay and isolation checks. Blender integration uses a disposable factory
+scene: `blender --background --factory-startup --python-exit-code 1 --python
+ tests/blender/test_particle_controlpoints.py` (one line). It checks named targets,
+ambiguity, moving emitters, free/locked particles and non-mutating cleanup.
+
+Validation for the control-point batch: 50 unit tests passed; Blender 4.4.3
+factory-scene integration, lifecycle and GPU tests passed. All 1,785 installed
+L4D2 effect trees ran for three seconds with no parse or simulation errors.
+343 roots reported runtime warnings (including absent external CPs, child-only
+systems tested as roots, bounded tree limits and missing sheet data). Six sample
+frames rendered; smoke and sparks were visually inspected. These are simulator
+checks, not a comparison against game captures. Missing-rule occurrences fell
+from 2,345 to 1,645; that count is not a visual-completeness percentage.

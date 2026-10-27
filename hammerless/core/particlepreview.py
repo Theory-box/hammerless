@@ -9,6 +9,7 @@ import struct
 import numpy as np
 from .particles import read_dmx
 from . import particlefields as fields
+from . import particlecontrol as control
 from .particleoscillation import offsets as oscillation_offsets, PARAMETERS as OSCILLATION_PARAMETERS
 
 CATEGORIES = ('emitters', 'initializers', 'operators', 'forces', 'constraints', 'renderers')
@@ -105,7 +106,7 @@ def audit(definitions):
 
 class Simulation:
     """Fixed-step, bounded, seeded array simulation of one definition in Source units."""
-    def __init__(self, definition, seed=0, limit=2048, sequences=None):
+    def __init__(self, definition, seed=0, limit=2048, sequences=None, parent=None):
         self.definition = definition
         self.rng = np.random.default_rng(seed)
         self.force_rng = np.random.default_rng(np.random.SeedSequence([seed, 1]))
@@ -115,6 +116,10 @@ class Simulation:
         self.sequences = sequences or {}
         self.warnings = set()
         self.initial_fields = {}
+        self.control_points=control.ControlPoints()
+        self.parent=parent;self.children=[];self.incoming_points={}
+        self.step_dt=1/60
+        self.step_first_id=0
         self.accumulator = 0.0
         self.emission = {}
         self.seed = seed
@@ -140,6 +145,10 @@ class Simulation:
         self.life = np.zeros(0)
 
     def spawn(self, count):
+        if any(p.get('functionName','').casefold()=='position from parent particles' for p in self.definition.rules['initializers']):
+            if self.parent is None:
+                self.warnings.add('Position From Parent Particles: no parent system');return
+            if not len(self.parent.age):return
         count = max(0, min(int(count), self.limit-len(self.age)))
         if not count:
             return
@@ -150,7 +159,8 @@ class Simulation:
         self.rotation = np.concatenate((self.rotation,np.full(count,math.radians(float(self.definition.attrs.get('rotation',0))))))
         self.sequence = np.concatenate((self.sequence,np.full(count,int(self.definition.attrs.get('sequence_number',0)),dtype=np.int32)))
         attrs = self.definition.attrs
-        for name, values in [('position', np.zeros((count, 3))), ('velocity', np.zeros((count, 3))),
+        origin=self.control_points.current[0][:3,3]
+        for name, values in [('position', np.tile(origin,(count,1))), ('velocity', np.zeros((count, 3))),
                              ('previous_position', np.zeros((count,3))),
                              ('rotation_speed', np.full(count,math.radians(float(attrs.get('rotation_speed',0))))),
                              ('yaw', np.zeros(count)), ('trail', np.full(count,.1)),
@@ -177,22 +187,28 @@ class Simulation:
         dt = 1 / 60
         while self.accumulator + 1e-10 >= dt:
             self.accumulator -= dt
-            self.evaluation_time=self.time
-            for i, spec in enumerate(self.definition.rules['emitters']):
-                entry = RULES.get(('emitters', spec.get('functionName', '').casefold()))
-                if entry:
-                    entry[0](self, spec, (i, dt))
-            self.age += dt
-            self.evaluation_time=self.time+dt
-            self.previous_position=self.position.copy()
-            self.color = self.initial_color.copy()
-            self.radius = self.initial_radius.copy()
-            self.alpha2 = self.initial_fields.get(16,self.alpha2).copy()
-            for self.operator_index, spec in enumerate(self.definition.rules['operators']):
-                entry = RULES.get(('operators', spec.get('functionName', '').casefold()))
-                if entry:
-                    entry[0](self, spec, dt)
-            self.time += dt
+            self.step(dt)
+            self.control_points.previous={k:v.copy() for k,v in self.control_points.current.items()}
+
+    def step(self,dt):
+        self.step_dt=dt;self.evaluation_time=self.time
+        self.step_first_id=self.next_id
+        # Definitions of CP positions must be ready before birth initializers.
+        for spec in self.definition.rules['operators']:
+            if spec.get('functionName','').casefold()=='set control point positions':control.set_positions(self,spec)
+        for i,spec in enumerate(self.definition.rules['emitters']):
+            entry=RULES.get(('emitters',spec.get('functionName','').casefold()))
+            if entry:entry[0](self,spec,(i,dt))
+        self.age+=dt;self.evaluation_time=self.time+dt
+        self.previous_position=self.position.copy()
+        self.color=self.initial_color.copy();self.radius=self.initial_radius.copy()
+        self.alpha2=self.initial_fields.get(16,self.alpha2).copy()
+        for self.operator_index,spec in enumerate(self.definition.rules['operators']):
+            name=spec.get('functionName','').casefold()
+            if name=='set control point positions':continue
+            entry=RULES.get(('operators',name))
+            if entry:entry[0](self,spec,dt)
+        self.time+=dt
 
     def retain(self, mask):
         for name in ('position','previous_position','velocity','color','initial_color','radius','initial_radius','age','life','ids','rotation','sequence','flip',
@@ -256,7 +272,7 @@ def alpha(s,p,sl):
 
 @rule('initializers', 'Position Within Sphere Random', 'distance_min', 'distance_max', 'speed_min', 'speed_max',
       'distance_bias','distance_bias_absolute_value','speed_random_exponent',
-      'speed_in_local_coordinate_system_min','speed_in_local_coordinate_system_max')
+      'speed_in_local_coordinate_system_min','speed_in_local_coordinate_system_max','control_point_number')
 def sphere(s,p,sl):
     count=len(s.age[sl]);direction=s.rng.normal(size=(count,3))
     direction/=np.maximum(np.linalg.norm(direction,axis=1,keepdims=True),1e-12)
@@ -265,19 +281,20 @@ def sphere(s,p,sl):
     direction/=np.maximum(np.linalg.norm(direction,axis=1,keepdims=True),1e-12)
     lo,hi=sorted((max(0,float(p.get('distance_min',0))),max(0,float(p.get('distance_max',0)))))
     radius=np.cbrt(s.rng.uniform(lo**3,hi**3,count))
-    s.position[sl]+=direction*radius[:,None]
+    cp=int(p.get('control_point_number',0));point=control.point(s,cp)
+    if point is not None:s.position[sl]=point[:3,3]+control.local_vector(s,direction*radius[:,None],cp)
     lo,hi=sorted((float(p.get('speed_min',0)),float(p.get('speed_max',0))))
     speed=lo+(hi-lo)*s.rng.random(count)**max(.001,float(p.get('speed_random_exponent',1)))
-    s.velocity[sl]+=direction*speed[:,None]
+    s.velocity[sl]+=control.local_vector(s,direction*speed[:,None],cp)
     a=np.asarray(p.get('speed_in_local_coordinate_system_min',(0,0,0)))
     b=np.asarray(p.get('speed_in_local_coordinate_system_max',(0,0,0)))
-    s.velocity[sl]+=s.rng.uniform(np.minimum(a,b),np.maximum(a,b),(count,3))
+    s.velocity[sl]+=control.local_vector(s,s.rng.uniform(np.minimum(a,b),np.maximum(a,b),(count,3)),cp)
 
 
 @rule('initializers', 'Position Within Box Random', 'min', 'max')
 def box(s,p,sl):
     a=np.array(p.get('min',(0,0,0)));b=np.array(p.get('max',(0,0,0)))
-    s.position[sl]+=s.rng.uniform(np.minimum(a,b),np.maximum(a,b),(len(s.age[sl]),3))
+    s.position[sl]+=control.local_vector(s,s.rng.uniform(np.minimum(a,b),np.maximum(a,b),(len(s.age[sl]),3)))
 
 
 @rule('initializers', 'Position Modify Offset Random', 'offset min', 'offset max')
@@ -405,7 +422,7 @@ def velocity_random(s,p,sl):
     s.velocity[sl]+=direction*s.rng.uniform(lo,hi,count)[:,None]
     lo=np.asarray(p.get('speed_in_local_coordinate_system_min',(0,0,0)))
     hi=np.asarray(p.get('speed_in_local_coordinate_system_max',(0,0,0)))
-    s.velocity[sl]+=s.rng.uniform(np.minimum(lo,hi),np.maximum(lo,hi),(count,3))
+    s.velocity[sl]+=control.local_vector(s,s.rng.uniform(np.minimum(lo,hi),np.maximum(lo,hi),(count,3)))
 
 
 @rule('forces','random force','min force','max force')
@@ -544,3 +561,80 @@ def rotation_basic(s,p,dt):s.rotation+=s.rotation_speed*dt
 
 @rule('renderers','render_sprite_trail','animation rate','min length','max length','length fade in time','constrain radius to length')
 def sprite_trail(s,p,dt):pass
+
+
+@rule('operators','Movement Lock to Control Point','control_point_number','lock rotation',
+      'start_fadeout_min','start_fadeout_max','start_fadeout_exponent',
+      'end_fadeout_min','end_fadeout_max','end_fadeout_exponent')
+def lock_control_point(s,p,dt):control.lock(s,p,dt)
+
+
+@rule('initializers','Velocity Inherit from Control Point','control point number','velocity scale')
+def inherit_cp_velocity(s,p,sl):
+    s.velocity[sl]+=s.control_points.velocity(int(p.get('control point number',0)),s.step_dt,s.warnings)*float(p.get('velocity scale',1))
+
+
+@rule('initializers','Velocity Set from Control Point','control point number','velocity scale')
+def set_cp_velocity(s,p,sl):
+    cp=control.point(s,int(p.get('control point number',0)))
+    if cp is not None:s.velocity[sl]=cp[:3,3]*float(p.get('velocity scale',1))
+
+
+@rule('initializers','Position From Parent Particles','Inherited Velocity Scale','Random Parent Particle Distribution')
+def from_parent(s,p,sl):control.parent_position(s,p,sl)
+
+
+@rule('operators','Set Control Point Positions','Control Point to offset positions from',
+      *[f'{label} Control Point {suffix}' for label in ('First','Second','Third','Fourth') for suffix in ('Number','Location')])
+def set_cp_positions(s,p,dt):control.set_positions(s,p)
+
+
+@rule('operators',"Set Control Point To Particles' Center",'Control Point Number to Set','Center Offset')
+def center_cp(s,p,dt):
+    if not len(s.age):return
+    index=int(p.get('Control Point Number to Set',1))
+    if not 0<=index<64:s.warnings.add(f'Invalid control point {index}');return
+    value=np.eye(4);value[:3,3]=np.mean(s.position,axis=0)+np.asarray(p.get('Center Offset',(0,0,0)))
+    s.control_points.set(index,value)
+
+
+@rule('operators','Set child control points from particle positions','# of control points to set',
+      'First control point to set','first particle to copy')
+def child_points(s,p,dt):
+    first=int(p.get('First control point to set',0));start=max(0,int(p.get('first particle to copy',0)))
+    count=max(0,min(int(p.get('# of control points to set',1)),64-first,len(s.age)-start))
+    if first<0:return
+    for child in s.children:
+        for i in range(count):
+            value=np.eye(4);value[:3,3]=s.position[start+i]
+            child.incoming_points[first+i]=value
+
+
+@rule('forces','Pull towards control point','control point number','amount of force','falloff power')
+def pull_cp(s,p,dt):
+    cp=control.point(s,int(p.get('control point number',0)))
+    if cp is None:return np.zeros_like(s.velocity)
+    delta=cp[:3,3]-s.position;distance=np.linalg.norm(delta,axis=1)
+    # Independent inverse-power falloff with a bounded denominator at the CP.
+    power=np.clip(float(p.get('falloff power',0)),-8,8)
+    magnitude=float(p.get('amount of force',0))*np.maximum(distance,1)**(-power)
+    return delta/np.maximum(distance[:,None],1e-9)*magnitude[:,None]
+
+
+@rule('initializers','Position Along Path Sequential','start control point number','end control point number',
+      'particles to map from start to end','restart behavior (0 = bounce, 1 = loop )','maximum distance')
+def along_path(s,p,sl):
+    start=control.point(s,int(p.get('start control point number',0)))
+    end=control.point(s,int(p.get('end control point number',1)))
+    if start is None or end is None:return
+    count=max(2,int(float(p.get('particles to map from start to end',100))))
+    ids=s.ids[sl]
+    if p.get('restart behavior (0 = bounce, 1 = loop )',False):t=(ids%count)/(count-1)
+    else:
+        phase=(ids%(2*(count-1)))/(count-1)
+        t=np.where(phase<=1,phase,2-phase)
+    s.position[sl]=start[:3,3]*(1-t[:,None])+end[:3,3]*t[:,None]
+    distance=max(0,float(p.get('maximum distance',0)))
+    if distance:
+        offset=s.rng.normal(size=(len(t),3));offset/=np.maximum(np.linalg.norm(offset,axis=1,keepdims=True),1e-9)
+        s.position[sl]+=offset*(distance*np.cbrt(s.rng.random(len(t))))[:,None]
