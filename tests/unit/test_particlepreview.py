@@ -116,3 +116,37 @@ class ParticlePreviewTests(unittest.TestCase):
             s=Simulation(d);s.spawn(3)
             s.retain(np.array([False,True,True]))
             np.testing.assert_array_equal(s.flip,np.full(2,bool(probability)))
+
+    def test_velocity_noise_varies_with_birth_time_and_position(self):
+        d=definition(initializers=[{'functionName':'Velocity Noise',
+            'Spatial Noise Coordinate Scale':1,'Time Noise Coordinate Scale':1,
+            'output minimum':(-10,-20,-30),'output maximum':(10,20,30)}])
+        a,b=Simulation(d,seed=9),Simulation(d,seed=9)
+        a.spawn(3);b.spawn(3)
+        np.testing.assert_array_equal(a.velocity,b.velocity)
+        np.testing.assert_array_equal(a.velocity[0],a.velocity[1])
+        a.advance(.5);a.spawn(1)
+        self.assertFalse(np.allclose(a.velocity[0],a.velocity[-1]))
+        d.rules['initializers'].insert(0,{'functionName':'Position Within Box Random','min':(-10,-10,-10),'max':(10,10,10)})
+        s=Simulation(d);s.spawn(20)
+        self.assertGreater(np.ptp(s.velocity[:,0]),1)
+        self.assertTrue(np.all(np.abs(s.velocity)<=np.array([10,20,30])))
+
+    def test_noise_emission_is_frame_partition_independent(self):
+        d=definition([{'functionName':'emit_continuously','emission_rate':30}],
+            [{'functionName':'Velocity Noise','output minimum':(-10,-10,-10),'output maximum':(10,10,10)}],
+            [{'functionName':'Movement Basic'}])
+        a,b=Simulation(d),Simulation(d)
+        a.advance(1)
+        for _ in range(10):b.advance(.1)
+        np.testing.assert_allclose(a.position,b.position)
+        np.testing.assert_allclose(a.velocity,b.velocity)
+
+    def test_fixed_velocity_noise_and_random_endpoints(self):
+        for spec in [{'functionName':'Velocity Noise','output minimum':(3,4,5),'output maximum':(3,4,5)},
+                     {'functionName':'Velocity Random','speed_in_local_coordinate_system_min':(3,4,5),
+                      'speed_in_local_coordinate_system_max':(3,4,5)}]:
+            s=Simulation(definition(initializers=[spec]));s.spawn(2)
+            np.testing.assert_allclose(s.velocity,[(3,4,5),(3,4,5)])
+        d=definition(initializers=[{'functionName':'Velocity Noise','Apply Velocity in Local Space (0/1)':False}])
+        self.assertIn('Velocity Noise: Apply Velocity in Local Space (0/1)',audit({'test':d})['test']['recursive_gaps'])

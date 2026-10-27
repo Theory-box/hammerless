@@ -17,6 +17,9 @@ bounded to 16 systems and 256 live particles per system.
 - Animated atlas frames, camera-facing cards, horizontal yaw flips, tint and
   alpha/additive blending.
 - Gravity, drag and random forces consumed by Movement Basic.
+- Random initial velocity and coherent velocity noise driven by birth time and
+  position. Noise honours per-axis bounds, absolute/inverted-absolute masks,
+  coordinate offsets and scales; control-point transforms remain unsupported.
 - Roll spin with a linear slowdown to minimum speed, measured in seconds.
 - Radius/colour changes, random alpha fades, lifespan decay and combined
   alpha fade/decay. Random fade-out duration is measured backward from death.
@@ -26,6 +29,13 @@ Operator semantics were checked against the public
 and parameter names against installed L4D2 definitions. Maths, easing, omitted
 parameter defaults and random distributions remain independent approximations;
 these checks do not establish Source parity.
+
+`particlenoise.py` is an independently written four-dimensional value-noise
+implementation, using hashed lattice values and quintic interpolation. It does
+not reproduce Valve's noise function or permutation tables. The same position,
+birth time and seed yield the same velocity regardless of draw-frame timing or
+how particles are batched. Defaults and coordinate-space behaviour remain
+approximate; fields for unsupported CP transforms stay in the coverage report.
 
 ## Coverage and validation
 
@@ -38,7 +48,7 @@ and missing materials. Every effect remains labelled approximate, even if it
 has no recorded gaps. Zero smoke-test failures does not mean zero visual errors.
 
 Unit tests: `python -m unittest tests.unit.test_particlepreview
-tests.unit.test_particlesheet` (one line). Blender lifecycle test:
+tests.unit.test_particlesheet tests.unit.test_particlenoise` (one line). Blender lifecycle test:
 `blender --background --factory-startup --python tests/blender/test_particle_preview.py`.
 GPU test requires a separate window:
 `blender --factory-startup --python tests/blender/test_particle_gpu.py`.
@@ -48,7 +58,7 @@ NumPy buffer conversion produced corrupt images in Blender 4.4 on the test host.
 
 ## Next gaps
 
-Velocity noise, scalar/vector remapping and oscillation, operator strength/time
+Scalar/vector remapping and oscillation, operator strength/time
 envelopes, live control points and parent inheritance, secondary sequences,
 trail/rope renderers, collision, and non-sprite material shaders remain missing.
 Unsupported fields stay visible in reports. Missing atlas sequences are skipped

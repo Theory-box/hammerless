@@ -326,6 +326,40 @@ def yaw_flip(s,p,sl):
     s.flip[sl]=s.rng.random(len(s.age[sl])) < np.clip(float(p.get('Flip Percentage',.5)),0,1)
 
 
+@rule('initializers','Velocity Noise','Spatial Coordinate Offset','Spatial Noise Coordinate Scale',
+      'Time Coordinate Offset','Time Noise Coordinate Scale','output minimum','output maximum',
+      'Absolute Value','Invert Abs Value')
+def velocity_noise(s,p,sl):
+    from .particlenoise import noise4
+    count=len(s.age[sl])
+    coords=np.zeros((count,4))
+    coords[:,:3]=(s.position[sl]+np.asarray(p.get('Spatial Coordinate Offset',(0,0,0))))*float(p.get('Spatial Noise Coordinate Scale',.01))
+    coords[:,3]=(s.time+float(p.get('Time Coordinate Offset',0)))*float(p.get('Time Noise Coordinate Scale',1))
+    values=noise4(coords,s.seed)
+    absolute=np.asarray(p.get('Absolute Value',(0,0,0)))!=0
+    inverted=np.asarray(p.get('Invert Abs Value',(0,0,0)))!=0
+    values=np.where(absolute,np.abs(values*2-1),values)
+    values=np.where(absolute & inverted,1-values,values)
+    lo=np.asarray(p.get('output minimum',(0,0,0)))
+    hi=np.asarray(p.get('output maximum',(1,1,1)))
+    s.velocity[sl]+=lo+(hi-lo)*values
+    # CP transforms/local-space selection are deliberately not claimed by the
+    # registry: the preview currently simulates in the emitter's local frame.
+
+
+@rule('initializers','Velocity Random','random_speed_min','random_speed_max',
+      'speed_in_local_coordinate_system_min','speed_in_local_coordinate_system_max')
+def velocity_random(s,p,sl):
+    count=len(s.age[sl])
+    direction=s.rng.normal(size=(count,3))
+    direction/=np.maximum(np.linalg.norm(direction,axis=1,keepdims=True),1e-12)
+    lo,hi=sorted((float(p.get('random_speed_min',0)),float(p.get('random_speed_max',0))))
+    s.velocity[sl]+=direction*s.rng.uniform(lo,hi,count)[:,None]
+    lo=np.asarray(p.get('speed_in_local_coordinate_system_min',(0,0,0)))
+    hi=np.asarray(p.get('speed_in_local_coordinate_system_max',(0,0,0)))
+    s.velocity[sl]+=s.rng.uniform(np.minimum(lo,hi),np.maximum(lo,hi),(count,3))
+
+
 @rule('forces','random force','min force','max force')
 def random_force(s,p,dt):
     lo=np.asarray(p.get('min force',(0,0,0)),dtype=float)
