@@ -61,3 +61,12 @@ class MaterialTests(unittest.TestCase):
         p=profile({'$addself':'1','$additive':'1'})
         self.assertEqual(p['addself'],0);self.assertTrue(any('ignored' in w for w in p['warnings']))
         self.assertEqual(blend_mode(True,p),'ADDITIVE')
+
+    def test_authored_secondary_animation_rate_is_independent(self):
+        s=Simulation(definition());s.spawn(1);s.sequence2[:]=1;s.age[:]=.75
+        frames=np.array([[[0,0,.5,1]],[[.5,0,1,1]]])
+        seq={k:Sequence(False,np.array([.5,.5]),frames) for k in (0,1)}
+        r={'functionName':'render_animated_sprites','animation rate':1,'second sequence animation rate':0,'animation rate 2':9}
+        g,w=build_geometry(s,r,seq,np.eye(4),[1,0,0],[0,1,0],[0,0,10],material={'dual_mode':1})
+        self.assertFalse(w);self.assertGreaterEqual(g['uv'][:,0].min(),.5)
+        self.assertLessEqual(g['uv2'][:,0].max(),.5)

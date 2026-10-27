@@ -7,6 +7,7 @@ Never loads/saves a blend file. Outputs local diagnostic PNGs and JSON, not
 redistributable addon assets. Requires an interactive GPU context (no -b).
 """
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -25,8 +26,12 @@ def run():
     parser.add_argument('--game',required=True)
     parser.add_argument('--output',required=True)
     parser.add_argument('--effects',nargs='+',default=['gas_smoke','small_sparks'])
+    parser.add_argument('--reference-report',help='Render the effects/times/camera of an existing L4D2 capture report')
+    parser.add_argument('--camera',help='JSON fixed perspective camera in Source units; omit for auto-fit diagnostics')
     parser.add_argument('--times',nargs='+',type=float,default=[.25,1,2])
     args=parser.parse_args(sys.argv[sys.argv.index('--')+1:])
+    reference=json.loads(Path(args.reference_report).read_text()) if args.reference_report else None
+    if reference and (reference.get('producer')!='l4d2-game' or not reference.get('camera')):raise ValueError('Expected a fixed-camera L4D2 reference report')
     output=Path(args.output).resolve();output.mkdir(parents=True,exist_ok=True)
     offscreen=None
     try:
@@ -39,10 +44,16 @@ def run():
         from hammerless.core.particlematerial import load_profile,blend_mode
         content=GameContent(args.game);library,errors=load_library(content)
         coverage=audit(library);materials={};profiles={};report={'parse_errors':errors,'samples':[]}
-        offscreen=gpu.types.GPUOffScreen(512,512)
+        from hammerless.core.particlecamera import camera
+        camera_spec=json.loads(Path(args.camera).read_text()) if args.camera else reference.get('camera') if reference else None
+        fixed=camera(camera_spec) if camera_spec else None
+        width,height=(fixed['width'],fixed['height']) if fixed else (512,512)
+        report.update(producer='hammerless-preview',camera=camera_spec,framing='fixed-perspective' if fixed else 'auto-fit',width=width,height=height)
+        offscreen=gpu.types.GPUOffScreen(width,height)
         sh=shader()
-        for effect in args.effects:
-            for seconds in args.times:
+        cases=[(s['effect'],[s['seconds']]) for s in reference['samples']] if reference else [(effect,args.times) for effect in args.effects]
+        for effect,times in cases:
+            for seconds in times:
                 if not np.isfinite(seconds) or not 0<=seconds<=60:raise ValueError('sample time must be 0..60 seconds')
                 systems=[];warnings=set()
                 def assets(definition):
@@ -75,7 +86,7 @@ def run():
                     warnings.update(profile.get('warnings',[]))
                     for renderer in sim.definition.rules['renderers']:
                         if renderer.get('functionName','').casefold() not in RENDERERS:continue
-                        geometry,gaps=build_geometry(sim,renderer,sequences,np.eye(4),[1,0,0],[0,0,1],[0,-10000,0],texture_height=texture.height,material=profile)
+                        geometry,gaps=build_geometry(sim,renderer,sequences,np.eye(4),fixed['right'] if fixed else [1,0,0],fixed['up'] if fixed else [0,0,1],fixed['eye'] if fixed else [0,-10000,0],texture_height=texture.height,material=profile)
                         warnings.update(gaps)
                         if len(geometry['pos']):batches.append((geometry,texture,additive,renderer.get('functionName','').casefold()=='render_rope',profile))
                 if batches:
@@ -86,24 +97,27 @@ def run():
                 mvp=Matrix(((2/extent,0,0,-2*center[0]/extent),
                             (0,0,2/extent,-2*center[2]/extent),
                             (0,0,0,0),(0,0,0,1)))
+                if fixed:mvp=Matrix(fixed['mvp'].tolist())
                 with offscreen.bind():
                     fb=gpu.state.active_framebuffer_get();fb.clear(color=(.015,.015,.015,1))
-                    gpu.state.viewport_set(0,0,512,512);gpu.state.depth_test_set('NONE')
+                    gpu.state.viewport_set(0,0,width,height);gpu.state.depth_test_set('NONE')
                     for geometry,texture,additive,repeat_v,profile in batches:
                         gpu.state.blend_set(blend_mode(additive,profile))
                         sh.bind();bind_material(sh,dict(profile,dual_mode=-1) if repeat_v else profile);sh.uniform_float('repeat_v',float(repeat_v));sh.uniform_float('mvp',mvp);sh.uniform_sampler('sprite',texture)
                         batch_for_shader(sh,'TRIS',geometry).draw(sh)
-                    pixels=np.array(fb.read_color(0,0,512,512,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(-1)
+                    pixels=np.array(fb.read_color(0,0,width,height,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(-1)
                     if not np.isfinite(pixels).all():raise ValueError('nonfinite GPU output')
                     changed_pixels=int(np.count_nonzero(np.max(np.abs(pixels.reshape(-1,4)[:,:3]-.015),axis=1)>.001))
                     if batches and changed_pixels==0:warnings.add('Geometry produced no visible pixels at this sample time')
                     filename=re.sub(r'[^a-zA-Z0-9_-]','_',effect)+f'_{seconds:g}s.png'
-                    image=bpy.data.images.new('Particle diagnostic',512,512,alpha=True)
+                    image=bpy.data.images.new('Particle diagnostic',width,height,alpha=True)
                     image.pixels.foreach_set(pixels);image.filepath_raw=str(output/filename);image.file_format='PNG';image.save()
                     bpy.data.images.remove(image)
                 report['samples'].append({'effect':effect,'seconds':seconds,'file':filename,
                     'particles':sum(len(s.age) for s,_,_,_ in systems),'batches':len(batches),
                     'changed_pixels':changed_pixels,
+                    'definition_file':library[effect.casefold()].file,
+                    'definition_sha256':hashlib.sha256(content.read(library[effect.casefold()].file)).hexdigest(),
                     'runtime_warnings':sorted(warnings),'coverage_gaps':coverage[effect.casefold()]['recursive_gaps']})
         (output/'report.json').write_text(json.dumps(report,indent=2))
         print('PASS rendered',len(report['samples']),'particle samples to',output,flush=True)

@@ -235,3 +235,60 @@ geometry batches without errors. Eight sample images rendered. Visual inspection
 caught unmasked glow in an intermediate implementation; it was fixed and a GPU
 regression now asserts that transparent texture pixels preserve the background.
 Final smoke samples were inspected after that correction.
+
+## Orientation fixes and standalone visual testing
+
+Sprite mode 0 faces the camera, mode 1 stays upright around the control point's
+vertical axis, and mode 2 lies in its XY plane. The authored orientation control
+point rotates that basis. Unknown modes and missing points remain reported.
+The real PCF key `second sequence animation rate` now overrides the primary
+animation speed; a zero rate holds the secondary frame. Geometry tests cover
+flat/vertical planes, camera independence, CP rotation and independent UV timing.
+
+Users can run the branch without replacing their installed addon:
+`blender --factory-startup --python tools/particle_preview_lab.py -- --game GAME`
+(one line). This opens a disposable scene with one emitter. In the sidebar's
+**Preview Lab** tab, search all installed effects, pick presets, Restart short
+bursts or Stop playback. Orbit/zoom normally. The branch is imported directly;
+no map is opened or saved. `--smoke-test` automatically switches five presets,
+checks the simulation timer and stops cleanly in a separate Blender process.
+
+`render_particle_samples.py --camera tests/fixtures/particle_reference_camera.json`
+provides fixed perspective instead of per-frame fitting. `--reference-report`
+uses an L4D2 capture report's camera, names and measured times. Reports contain
+PCF fingerprints. `compare_particle_samples.py` makes a local side-by-side HTML
+review and flags metadata mismatches; it never declares visual parity.
+
+The first live game captures were exploratory, not golden references: lingering
+fog and HUD overlays contaminated later frames, and a short spark capture was
+late. The capture harness now reloads between effects and shortens spark timing;
+those capture changes await the user's visual testing. Do not use the original
+exploratory images as automated pass/fail baselines. Further game visual testing
+is user-led; automated checks remain local and separate from the user's map.
+
+
+## In-addon comparison workflow and batching
+
+Open Hammerless > Particles, choose an effect at the 3D cursor, and keep
+Preview when placing enabled. The selected emitter animates immediately;
+Restart Preview replays short bursts and Stop ends the transient animation.
+Placed entities retain their normal `info_particle_system` export and default
+`start_active=1`. Build & Play loads that same effect through the game. Preview
+remains selected-object only; it does not simulate every emitter in the map.
+Restart Blender after installing changed Python modules; no live reload or
+user scene edits are performed by the installer.
+
+Sprite geometry and atlas sampling now operate on NumPy batches grouped by
+sequence. CP orientation is computed once per renderer, not once per card.
+A deterministic 40-particle comparison covers all three orientations, secondary
+sheets, flips, yaw, nonuniform durations, looping/clamping, lifetime fit and FPS
+sampling against the scalar path. 69 unit tests and background Blender placement,
+replacement and lifecycle checks pass. All 1,785 installed definitions pass the
+bounded tree/geometry audit. No new game or visual fidelity claim is made.
+
+`tools/profile_particles.py --game GAME` profiles 30 fog frames after five
+seconds warmup with the existing particle limits. On this machine, profiled CPU
+simulation+geometry time fell from 4.101 seconds to .094 seconds total (about
+137 to 3.1 ms/frame). This excludes GPU upload, viewport drawing and scene cost;
+it is not a measured viewport FPS. The viewport timer now targets 60 Hz rather
+than 30 Hz, subtracting simulation work from its scheduling delay.

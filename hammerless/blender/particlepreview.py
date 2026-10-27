@@ -75,7 +75,7 @@ def tick():
             for window in wm.windows:
                 for area in window.screen.areas:
                     if area.type == 'VIEW_3D': area.tag_redraw()
-        return 1/30
+        return max(.001, 1/60-(time.perf_counter()-now))
     except Exception as exc:
         print('Hammerless particle preview stopped:', exc)
         stop(); return None

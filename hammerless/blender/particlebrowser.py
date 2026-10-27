@@ -189,6 +189,9 @@ class HL_OT_place_particle(bpy.types.Operator):
                                     preview_model("info_particle_system", {"effect_name": self.effect}))
             style_entity_object(obj)
             obj.name = self.effect
+            if context.window_manager.hl_pfx_autoplay:
+                context.view_layer.update()
+                bpy.ops.hammerless.particle_preview()
             return {"FINISHED"}
         for o in context.selected_objects:
             o.select_set(False)
@@ -196,6 +199,9 @@ class HL_OT_place_particle(bpy.types.Operator):
                                  keyvalues={"effect_name": self.effect}, name=self.effect)
         obj.select_set(True)
         context.view_layer.objects.active = obj
+        if context.window_manager.hl_pfx_autoplay:
+            context.view_layer.update()
+            bpy.ops.hammerless.particle_preview()
         return {"FINISHED"}
 
 
@@ -231,6 +237,7 @@ class HL_PT_particles(bpy.types.Panel):
         row.prop(wm, "hl_pfx_search", text="", icon="VIEWZOOM")
         row.prop(wm, "hl_pfx_parts", text="", icon="OUTLINER_OB_POINTCLOUD")
         layout.prop(wm, "hl_pfx_group", text="")
+        layout.prop(wm, "hl_pfx_autoplay", text="Preview when placing")
         items = shown(context)
         pages = max(1, (len(items) + PER_PAGE - 1) // PER_PAGE)
         page = min(wm.hl_pfx_page, pages - 1)
@@ -242,9 +249,14 @@ class HL_PT_particles(bpy.types.Panel):
         swapping = obj is not None and obj.select_get() and obj.hammerless.classname == "info_particle_system"
         if swapping:
             row = layout.row(align=True)
-            row.operator('hammerless.particle_preview', text='Preview Animation', icon='PLAY')
+            from . import particlepreview
+            playing = particlepreview._state.get('object') == obj
+            row.operator('hammerless.particle_preview', text='Restart Preview' if playing else 'Preview Animation', icon='PLAY')
             row.operator('hammerless.particle_preview_stop', text='', icon='PAUSE')
-            layout.label(text='Experimental: incomplete rules and rendering', icon='INFO')
+            active = next((k for k in obj.hammerless.keyvalues if k.key == 'start_active'), None)
+            if active is not None: layout.prop(active, 'value', text='Starts on in game (1=yes, 0=no)')
+            layout.label(text='Build & Play uses this placed effect', icon='INFO')
+            layout.label(text='Approximate preview; some effects need control points')
             layout.prop(wm, "hl_pfx_replace", text=f"Change '{obj.name[:24]}'", icon="FILE_REFRESH")
         grid = layout.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True, align=False)
         for eff in items[page * PER_PAGE:(page + 1) * PER_PAGE]:
@@ -280,6 +292,7 @@ def register():
                                              description="The game's particle file the effects come from")
     wm.hl_pfx_parts = bpy.props.BoolProperty(name="Parts too", update=_reset_page,
                                              description="Also list effects that are only parts of others")
+    wm.hl_pfx_autoplay = bpy.props.BoolProperty(name="Preview when placing", default=True, description="Animate the selected effect after placing or changing it; does not affect game export")
     wm.hl_pfx_page = bpy.props.IntProperty(name="Page", min=0)
     wm.hl_pfx_replace = bpy.props.BoolProperty(
         name="Change Selected", description="Clicking an effect changes the selected Particle Effect's effect "
@@ -290,7 +303,7 @@ def unregister():
     from . import particlepreview
     particlepreview.unregister()
     wm = bpy.types.WindowManager
-    for p in ("hl_pfx_search", "hl_pfx_group", "hl_pfx_parts", "hl_pfx_page", "hl_pfx_replace"):
+    for p in ("hl_pfx_search", "hl_pfx_group", "hl_pfx_parts", "hl_pfx_page", "hl_pfx_replace", "hl_pfx_autoplay"):
         if hasattr(wm, p):
             delattr(wm, p)
     for c in reversed(CLASSES):

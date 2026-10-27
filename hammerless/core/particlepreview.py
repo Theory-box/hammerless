@@ -79,6 +79,8 @@ def audit(definitions):
                 else:
                     parameters.extend(name + ': ' + p for p in spec if p != 'functionName' and p not in entry[1])
                     parameters.extend(name+': '+gap for gap in fields.field_gaps(name.casefold(),spec))
+                    if name.casefold()=='render_animated_sprites' and int(spec.get('orientation_type',0)) not in (0,1,2):
+                        parameters.append(f"{name}: unsupported sprite orientation {spec['orientation_type']}")
                     if name.casefold() in OSCILLATION_FIELDS:
                         default, supported = OSCILLATION_FIELDS[name.casefold()]
                         value = int(spec.get('oscillation field',default))
@@ -333,7 +335,8 @@ def radius_scale(s,p,dt):
     s.radius*=float(p.get('radius_start_scale',1))*(1-t)+float(p.get('radius_end_scale',1))*t
 
 
-@rule('renderers', 'render_animated_sprites', 'animation rate', 'animation_fit_lifetime', 'use animation rate as FPS')
+@rule('renderers', 'render_animated_sprites', 'animation rate', 'animation_fit_lifetime', 'use animation rate as FPS',
+      'second sequence animation rate','orientation_type','orientation_control_point')
 def sprites(s,p,dt):
     pass
 
