@@ -2,7 +2,7 @@
 import numpy as np
 
 
-def geometry(sim,renderer,centers,right,up,eye,scale,texture_height):
+def geometry(sim,renderer,centers,right,up,eye,scale,texture_height,material=None):
     empty={k:np.zeros((0,n),dtype=np.float32) for k,n in [('pos',3),('uv',2),('tint',4)]}
     if len(centers)<2:return empty,set()
     # Birth order is topology. Camera depth sorting would scramble the rope.
@@ -57,7 +57,18 @@ def geometry(sim,renderer,centers,right,up,eye,scale,texture_height):
     density=max(0,float(renderer.get('texel_size',1)))
     height=max(1,texture_height)
     offset=sim.time*float(renderer.get('texture_scroll_rate',0))/height
-    v=distance*density/height+(offset%1.)
+    if (material or {}).get('rope_texture_aspect',False):
+        # The plain-texture substitute for water uses equal world units per
+        # texture pixel along/across the ribbon. Warp-material texel density
+        # is not a useful mapping for this intentionally non-refractive view.
+        aspect=height/max(1,float(material.get('mapping_width',height)))
+        positive=sim.initial_radius[sim.initial_radius>1e-6]
+        nominal_radius=float(np.median(positive)) if len(positive) else 1.
+        repeat_length=max(1e-6,2*nominal_radius*aspect)
+        v=distance/repeat_length+(offset%1.)
+        gaps.add('Water ribbon uses aspect-preserving base-texture UVs; authored warp density is not reproduced')
+    else:
+        v=distance*density/height+(offset%1.)
     positions=[];uv=[];tints=[]
     for i in range(len(path)-1):
         for index,edge in ((i,0),(i,1),(i+1,1),(i,0),(i+1,1),(i+1,0)):

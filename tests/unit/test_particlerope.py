@@ -71,3 +71,19 @@ class RopeTests(unittest.TestCase):
         self.assertLessEqual(b['pos'][:,0].max(),2)
         self.assertGreaterEqual(b['pos'][:,0].min(),0)
         self.assertEqual(len(b['pos']),36)
+
+    def test_water_preview_preserves_texture_proportions(self):
+        from hammerless.core.particlegeometry import build_geometry
+        s=self.sim();s.position[:]=[[0,0,0],[0,0,96],[0,0,192]]
+        s.radius[:]=24;s.initial_radius[:]=24
+        material={'rope_texture_aspect':True,'mapping_width':128,'mapping_height':256}
+        r={'functionName':'render_rope','texel_size':400}
+        b,gaps=build_geometry(s,r,{},np.eye(4),[1,0,0],[0,1,0],[0,10,0],material=material)
+        # A 128x256 texture over a 48-unit width repeats every 96 units.
+        self.assertAlmostEqual(np.ptp(b['uv'][:,1]),2)
+        self.assertAlmostEqual(np.ptp(b['uv'][:,0]),1)
+        self.assertTrue(any('aspect-preserving' in g for g in gaps))
+        # Width fading must not make the texture retile hundreds of times.
+        s.radius[:]=.01
+        c,_=build_geometry(s,r,{},np.eye(4),[1,0,0],[0,1,0],[0,10,0],material=material)
+        np.testing.assert_allclose(b['uv'],c['uv'])

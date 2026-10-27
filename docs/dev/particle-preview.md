@@ -341,3 +341,17 @@ endpoints cannot manufacture loops beyond the endpoint. No refraction added.
 75 unit tests cover density, scroll, resolution independence, and duplicate-endpoint
 bounds. The authored quadratic path remains approximate; this change does not
 claim to have established the exact engine arc.
+
+
+## Plain water texture proportions
+
+User screenshots showed that the density interpretation over-tiled the hydrant.
+For the intentionally non-refractive water-material substitute, ribbon UVs now
+use the original texture aspect and nominal authored width: repeat length equals
+2 * initial radius * texture height / texture width. The 128x256 water image on
+a 48-unit-wide ribbon therefore occupies 96 units along the path, rather than
+hundreds of compressed copies. U spans the width and V follows arc length;
+no arbitrary 90-degree rotation is applied. Width animation does not re-tile UVs.
+This is explicitly an aspect-preserving preview substitution, not an assertion
+about the game's warp-material texel semantics. Other ribbon materials retain
+their existing mapping. The UI reports the substitution. 76 unit tests pass.

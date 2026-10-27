@@ -115,7 +115,7 @@ def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1,texture
                 if sim.control_points.get(int(spec.get('end control point number',1))) is None:
                     return empty,{'Rope hidden: required path endpoint is unavailable'}
         from .particlerope import geometry
-        batch,gaps=geometry(sim,renderer,centers,right,up,eye,scale,material.get('mapping_height',texture_height))
+        batch,gaps=geometry(sim,renderer,centers,right,up,eye,scale,material.get('mapping_height',texture_height),material=material)
         batch['uv2']=batch['uv'].copy()
         batch['uv_next']=batch['uv'].copy();batch['uv2_next']=batch['uv'].copy()
         batch['frame_mix']=np.zeros((len(batch['uv']),2),dtype=np.float32)

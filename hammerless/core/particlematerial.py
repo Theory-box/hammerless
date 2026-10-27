@@ -34,7 +34,7 @@ def profile(params):
         warnings.append('Combined additive and addself material: addself ignored');addself=0
     if addself or number('$zoomanimateseq2',0) or number('$maxlumframeblend1',0) or number('$maxlumframeblend2',0):
         warnings.append('Self-add, zoom and maximum-luminance behavior are independent approximations')
-    return dict(crop=crop,addself=addself,blend_frames=number('$blendframes',0)!=0,
+    return dict(rope_texture_aspect=(shader=='refract'),crop=crop,addself=addself,blend_frames=number('$blendframes',0)!=0,
                 maxlum1=number('$maxlumframeblend1',0)!=0,maxlum2=number('$maxlumframeblend2',0)!=0,
                 zoom2=max(1,number('$zoomanimateseq2',1)),dual_mode=mode,brightness=max(0,number('$overbrightfactor',1)),
                 alpha=max(0,min(1,number('$alpha',1))),
@@ -48,7 +48,7 @@ def load_profile(content,material):
     import struct
     data,_=material_texture(content,material)
     if data is not None and len(data)>=20 and data[:4]==b'VTF\0':
-        result['mapping_height']=struct.unpack_from('<H',data,18)[0]
+        result['mapping_width'],result['mapping_height']=struct.unpack_from('<HH',data,16)
     return result
 
 
