@@ -11,6 +11,7 @@ from .particles import read_dmx
 
 CATEGORIES = ('emitters', 'initializers', 'operators', 'forces', 'constraints', 'renderers')
 RULES = {}
+SYSTEM_PARAMETERS = {'max_particles','radius','color','rotation','sequence_number','material'}
 
 
 def rule(category, name, *parameters):
@@ -73,7 +74,9 @@ def audit(definitions):
                     missing.append(category + ': ' + name)
                 else:
                     parameters.extend(name + ': ' + p for p in spec if p != 'functionName' and p not in entry[1])
+        system_parameters = sorted(set(definition.attrs)-set(CATEGORIES)-{'children'}-SYSTEM_PARAMETERS)
         result[key] = {'missing_rules': sorted(set(missing)), 'unmapped_parameters': sorted(set(parameters)),
+                       'unmapped_system_parameters': system_parameters,
                        'children': [c for c, _ in definition.children], 'status': 'approximate'}
     def collect(key, path):
         if key in path:
@@ -82,6 +85,7 @@ def audit(definitions):
             return {'missing child: ' + key}
         r = result[key]
         gaps = set(r['missing_rules']) | set(r['unmapped_parameters'])
+        gaps.update('system: '+p for p in r['unmapped_system_parameters'])
         for child in r['children']:
             gaps |= collect(child, path | {key})
         return gaps
@@ -95,6 +99,7 @@ class Simulation:
     def __init__(self, definition, seed=0, limit=2048):
         self.definition = definition
         self.rng = np.random.default_rng(seed)
+        self.force_rng = np.random.default_rng(np.random.SeedSequence([seed, 1]))
         self.limit = max(0, min(limit, int(definition.attrs.get('max_particles', limit))))
         self.time = 0.0
         self.accumulator = 0.0
@@ -104,6 +109,7 @@ class Simulation:
         self.ids = np.zeros(0,dtype=np.uint64)
         self.rotation = np.zeros(0)
         self.sequence = np.zeros(0,dtype=np.int32)
+        self.flip = np.zeros(0,dtype=bool)
         self.operator_index = 0
         self.position = np.zeros((0, 3))
         self.velocity = np.zeros((0, 3))
@@ -121,6 +127,7 @@ class Simulation:
         start = len(self.age)
         self.ids = np.concatenate((self.ids,np.arange(self.next_id,self.next_id+count,dtype=np.uint64)))
         self.next_id += count
+        self.flip = np.concatenate((self.flip,np.zeros(count,dtype=bool)))
         self.rotation = np.concatenate((self.rotation,np.full(count,math.radians(float(self.definition.attrs.get('rotation',0))))))
         self.sequence = np.concatenate((self.sequence,np.full(count,int(self.definition.attrs.get('sequence_number',0)),dtype=np.int32)))
         attrs = self.definition.attrs
@@ -157,7 +164,7 @@ class Simulation:
             self.time += dt
 
     def retain(self, mask):
-        for name in ('position','velocity','color','initial_color','radius','initial_radius','age','life','ids','rotation','sequence'):
+        for name in ('position','velocity','color','initial_color','radius','initial_radius','age','life','ids','rotation','sequence','flip'):
             setattr(self, name, getattr(self, name)[mask])
 
     def stable_random(self):
@@ -236,7 +243,12 @@ def offset(s,p,sl):
 
 @rule('operators', 'Movement Basic', 'gravity', 'drag')
 def movement(s,p,dt):
-    s.velocity+=np.array(p.get('gravity',(0,0,0)))*dt
+    acceleration=np.broadcast_to(p.get('gravity',(0,0,0)),s.velocity.shape).astype(float).copy()
+    for spec in s.definition.rules['forces']:
+        entry=RULES.get(('forces',spec.get('functionName','').casefold()))
+        if entry:
+            acceleration+=entry[0](s,spec,dt)
+    s.velocity+=acceleration*dt
     s.velocity*=max(0,1-float(p.get('drag',0)))**(dt*30)
     s.position+=s.velocity*dt
 
@@ -286,7 +298,7 @@ def fade_random(s,p,fade_in):
         factor=smooth(age/np.maximum(boundary,1e-9))
     else:
         end=np.ones(len(age)) if proportional else s.life
-        factor=smooth((end-age)/np.maximum(end-boundary,1e-9))
+        factor=smooth((end-age)/np.maximum(boundary,1e-9))
     s.color[:,3]*=factor
 
 
@@ -305,3 +317,55 @@ def color_fade(s,p,dt):
     if p.get('ease_in_and_out',True):t=smooth(t)
     target=np.array(p.get('color_fade',(255,255,255,255)))[:3]/255
     s.color[:,:3]=s.color[:,:3]*(1-t[:,None])+target*t[:,None]
+
+
+@rule('initializers','Rotation Yaw Flip Random','Flip Percentage')
+def yaw_flip(s,p,sl):
+    # For camera-facing cards a 180-degree yaw is a horizontal UV mirror.
+    # Arbitrary yaw/orientation modes remain unsupported.
+    s.flip[sl]=s.rng.random(len(s.age[sl])) < np.clip(float(p.get('Flip Percentage',.5)),0,1)
+
+
+@rule('forces','random force','min force','max force')
+def random_force(s,p,dt):
+    lo=np.asarray(p.get('min force',(0,0,0)),dtype=float)
+    hi=np.asarray(p.get('max force',(0,0,0)),dtype=float)
+    return s.force_rng.uniform(np.minimum(lo,hi),np.maximum(lo,hi),s.velocity.shape)
+
+
+@rule('operators','Rotation Spin Roll','spin_rate_degrees','spin_rate_min','spin_stop_time')
+def spin_roll(s,p,dt):
+    rate=float(p.get('spin_rate_degrees',0))
+    minimum=float(p.get('spin_rate_min',0))
+    stop=float(p.get('spin_stop_time',0))
+    # Independent approximation: integrate a linear spin-down in seconds,
+    # including the partial step that crosses the stop time.
+    if stop>0:
+        a=np.maximum(0,s.age-dt);b=s.age
+        def integral(t):
+            ramp=np.minimum(t,stop)
+            return rate*ramp+(minimum-rate)*ramp*ramp/(2*stop)+minimum*np.maximum(t-stop,0)
+        degrees=integral(b)-integral(a)
+    else:
+        degrees=rate*dt
+    s.rotation+=np.deg2rad(degrees)
+
+
+@rule('operators','Alpha Fade and Decay','start_alpha','end_alpha',
+      'start_fade_in_time','end_fade_in_time','start_fade_out_time','end_fade_out_time')
+def fade_and_decay(s,p,dt):
+    s.retain(s.age < s.life)
+    age=s.age/np.maximum(s.life,1e-9)
+    start=float(p.get('start_fade_in_time',0));end=float(p.get('end_fade_in_time',.5))
+    out_start=float(p.get('start_fade_out_time',.5));out_end=float(p.get('end_fade_out_time',1))
+    alpha=s.initial_color[:,3].copy()
+    # Linear preview interpolation; no claim of exact engine easing/defaults.
+    if end>start:
+        t=np.clip((age-start)/(end-start),0,1)
+        alpha=float(p.get('start_alpha',0))*(1-t)+alpha*t
+    if out_end>out_start:
+        t=np.clip((age-out_start)/(out_end-out_start),0,1)
+        alpha=alpha*(1-t)+float(p.get('end_alpha',0))*t
+    else:
+        alpha=np.where(age>=out_end,float(p.get('end_alpha',0)),alpha)
+    s.color[:,3]=np.clip(alpha,0,1)

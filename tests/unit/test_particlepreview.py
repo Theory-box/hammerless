@@ -40,6 +40,8 @@ class ParticlePreviewTests(unittest.TestCase):
         report=audit({'test':d})['test']
         self.assertIn('operators: unknown_rule',report['missing_rules'])
         self.assertIn('emit_continuously: unknown_parameter',report['unmapped_parameters'])
+        d.attrs['rotation_speed']=2
+        self.assertIn('system: rotation_speed',audit({'test':d})['test']['recursive_gaps'])
 
     def test_child_cycles_and_missing_children(self):
         d=definition();d.children=[('test',0),('missing',0)]
@@ -70,3 +72,47 @@ class ParticlePreviewTests(unittest.TestCase):
         s=Simulation(d);s.advance(.02)
         self.assertEqual(set(s.sequence),{2,3,4})
         np.testing.assert_allclose(s.rotation,np.pi/2)
+
+    def test_fade_out_is_duration_before_death(self):
+        for proportional,duration in [(True,.25),(False,.5)]:
+            d=definition(initializers=[{'functionName':'Lifetime Random','lifetime_min':2,'lifetime_max':2}],
+                operators=[{'functionName':'Alpha Fade Out Random','fade out time min':duration,
+                            'fade out time max':duration,'proportional 0/1':proportional}])
+            s=Simulation(d);s.spawn(1);s.advance(1.5)
+            np.testing.assert_allclose(s.color[:,3],1)
+            s.advance(.25);np.testing.assert_allclose(s.color[:,3],.5)
+            s.advance(.25);np.testing.assert_allclose(s.color[:,3],0,atol=1e-10)
+
+    def test_combined_fade_reclaims_capacity(self):
+        d=definition([{'functionName':'emit_continuously','emission_rate':60}],
+            operators=[{'functionName':'Alpha Fade and Decay','end_fade_in_time':.25,'start_fade_out_time':.75}])
+        s=Simulation(d,limit=8);s.advance(3)
+        self.assertGreater(s.next_id,8)
+        self.assertLessEqual(len(s.age),8)
+        self.assertTrue(np.all((s.color[:,3]>=0)&(s.color[:,3]<=1)))
+        self.assertTrue(np.all(s.age<1))
+
+    def test_spin_integrates_across_stop_time(self):
+        d=definition(operators=[{'functionName':'Rotation Spin Roll','spin_rate_degrees':90,
+                                'spin_rate_min':10,'spin_stop_time':.3}])
+        s=Simulation(d);s.spawn(1);s.advance(1)
+        np.testing.assert_allclose(s.rotation,np.deg2rad(22))
+        s.advance(1);np.testing.assert_allclose(s.rotation,np.deg2rad(32))
+
+    def test_forces_need_movement_and_preserve_emission_random_stream(self):
+        d=definition(initializers=[{'functionName':'Position Within Box Random','min':(-1,-1,-1),'max':(1,1,1)}])
+        d.rules['forces']=[{'functionName':'random force','min force':(6,0,0),'max force':(6,0,0)}]
+        s=Simulation(d);s.spawn(1);original=s.position.copy();s.advance(.5)
+        np.testing.assert_allclose(s.position,original)
+        d.rules['operators']=[{'functionName':'Movement Basic'}]
+        s.advance(.5);np.testing.assert_allclose(s.velocity,[(3,0,0)])
+        a,b=Simulation(d),Simulation(d);a.spawn(1);b.spawn(1)
+        a.advance(.5);a.spawn(1);b.spawn(1)
+        np.testing.assert_allclose(a.position[-1],b.position[-1])
+
+    def test_mirror_state_survives_death(self):
+        for probability in (0,1):
+            d=definition(initializers=[{'functionName':'Rotation Yaw Flip Random','Flip Percentage':probability}])
+            s=Simulation(d);s.spawn(3)
+            s.retain(np.array([False,True,True]))
+            np.testing.assert_array_equal(s.flip,np.full(2,bool(probability)))

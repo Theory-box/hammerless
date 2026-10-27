@@ -4,6 +4,7 @@ python tools/audit_particles.py --game ".../Left 4 Dead 2" --output report.json
 No game assets are copied into the repository or report.
 """
 import argparse
+from collections import Counter
 import json
 import sys
 from pathlib import Path
@@ -17,7 +18,10 @@ def main():
     parser.add_argument('--game',required=True)
     parser.add_argument('--output',required=True)
     parser.add_argument('--textures',action='store_true',help='Also decode every referenced material and animation sheet')
+    parser.add_argument('--seconds',type=float,default=.25,help='Simulation duration per effect (default .25)')
     args=parser.parse_args()
+    if not np.isfinite(args.seconds) or not 0 < args.seconds <= 60:
+        parser.error('--seconds must be greater than 0 and at most 60')
     content=GameContent(args.game)
     library,errors=load_library(content)
     report=audit(library)
@@ -25,14 +29,17 @@ def main():
     for name,definition in library.items():
         try:
             sim=Simulation(definition,limit=64)
-            sim.advance(.25)
-            assert all(np.isfinite(getattr(sim,k)).all() for k in ('position','velocity','color','radius','life','age'))
+            sim.advance(args.seconds)
+            assert all(np.isfinite(getattr(sim,k)).all() for k in ('position','velocity','color','radius','life','age','rotation'))
+            assert all(len(getattr(sim,k))==len(sim.age) for k in ('position','velocity','color','radius','life','ids','flip','sequence'))
             assert len(sim.age)<=64
         except Exception as exc:
             failures.append({'effect':name,'error':str(exc)})
-    result={'systems':len(library),'parse_errors':errors,'smoke_failures':failures,
+    priority=Counter(gap for effect in report.values() for gap in effect['missing_rules'])
+    result={'systems':len(library),'simulation_seconds':args.seconds,'parse_errors':errors,'smoke_failures':failures,
+            'missing_rule_priority':dict(priority.most_common()),
             'limitations':['Independent approximate maths; not visually validated against Source',
-                           'Animated sprite sheets; no collision, forces, attachments or live control points',
+                           'Animated sprites and random forces; no collision, attachments or live control points',
                            'Smoke success does not establish visual fidelity or complete rule support'],
             'coverage':report}
     if args.textures:

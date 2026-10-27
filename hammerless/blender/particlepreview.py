@@ -107,6 +107,7 @@ def draw():
                         fps=bool(renderer.get('use animation rate as FPS',False)))
                     rect=sheet.rectangles[frame,0]
                 u0,v0,u1,v1=rect
+                if sim.flip[i]: u0,u1=u1,u0
                 angle=float(sim.rotation[i]);co=np.cos(angle);si=np.sin(angle)
                 center=centers[i];radius=max(0,float(sim.radius[i]))/scale
                 for x,y in [(-1,-1),(1,-1),(1,1),(-1,-1),(1,1),(-1,1)]:
