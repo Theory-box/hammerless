@@ -1827,3 +1827,5 @@ EXAMPLES_3 = [
 # Append to preserve saved example indices.
 from .logic_examples_economy import examples as economy_examples
 EXAMPLES_3.extend(economy_examples())
+from .logic_examples_laser import examples as laser_examples
+EXAMPLES_3.extend(laser_examples())
