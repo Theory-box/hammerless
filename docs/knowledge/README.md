@@ -23,6 +23,7 @@ One folder per area. Each folder has a `README.md` giving the overview and an in
 | `director/` | AI Director: the flow, wanderer placement read from `server.dll` and fitted in game, the special/mob filter, the budget limit, the spawn preview check, options/scopes/hooks, item densities, quirks | written |
 | `logic/` | Graph -> VScript compiler and the facts it is built on, the script API dump method, scripted mode and hooks, the NetProps catalogue method and what sticks, the test bench, examples and what each measured, enemies on bot bodies | written |
 | `models/` | The own model writer matched to studiomdl, animated models through SMD/QC and what studiomdl was measured to do, the game's `.mdl`/`.ani` format decoded (frame-anims), game skeletons and placed characters, VTF/VMT, alpha, materials, parallax, collision from meshes (Convert to Brushes: Extend-or-Fill, Organic, Slabs; invisible materials, Vis Only brushes) | written |
+| [particles/](particles/README.md) | Independent particle preview, selection playback, atlas/material rules, control points, ribbon fixes, performance evidence and limits | written |
 | `sound/` | What a map can control of the sound engine (measured), new sounds through an addon VPK with its own `sound.cache` (format decoded), DSP presets, the automatic soundscapes, the shelved impulse-response work | written |
 | `loading/` | Build & Play step by step, the game prestart, the parallel build and its critical path, smart builds and `hlvbsp -onlyents`, the kept nav, Fast Map Loading (`sv_lan 1`), the stringtable dictionary, every load timing | written |
 | `game-facts/` | The BSP as L4D2 writes it (lump order, game lump, pakfile, `stale.txt`), the game's physics DLL from our tools, reading the game's content, Valve's maps decompiled, the VMF importer's exact round trip (and its shape-after-modifiers rule), engine behaviours met in testing, limits hit, reference maps, testing rules; weather (precipitation as Valve uses it, measured in game) | written |
@@ -136,3 +137,5 @@ Every page follows these rules so the facts stay traceable and checkable:
 | [known-issues.md](known-issues.md) | Open behaviour problems from the October 2026 audits, re-checked in the code: what happens, where, the suggested fix; and what's been fixed since |
 
 Last checked: 2026-10-17 against branch brush-tools, commit 55c63a0 (release 0.18.0 is being made from it: the behaviours slice 2, brains, the brush tools and the importer's modifiers fix).
+
+Particle section added 2026-10-27 for release 0.20.20; other sections retain their individual verification dates.

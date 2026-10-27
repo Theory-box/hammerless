@@ -60,8 +60,23 @@ def stop(*args):
                     area.tag_redraw()
 
 
+def work_busy():
+    """Do no particle simulation, tracing, migration or GPU drawing during builds."""
+    from . import ops,navview
+    if ops._BUILDING or ops._BAKES or ops.export_running() or navview._state.get('busy',False):return True
+    for job in ('RENDER','OBJECT_BAKE'):
+        try:
+            if bpy.app.is_job_running(job):return True
+        except (ValueError,TypeError):pass
+    return False
+
+
 def tick():
     try:
+        if work_busy():
+            _state['last']=time.perf_counter()
+            _state.pop('finished_since',None)
+            return .25
         obj = _state.get('object')
         if obj is None or obj.name not in bpy.context.scene.objects or bpy.context.active_object != obj:
             stop(); return None
@@ -142,6 +157,7 @@ def bind_material(sh,material=None):
 
 
 def draw():
+    if work_busy():return
     context = bpy.context
     if not _state or context.region_data is None: return
     obj = _state['object']
@@ -182,6 +198,9 @@ class HL_OT_particle_preview(bpy.types.Operator):
 
     def execute(self,context):
         global _selection
+        if work_busy():
+            self.report({'INFO'},'Particle preview waits until building or baking finishes')
+            return {'CANCELLED'}
         stop()
         from .ops import game_content, game_root
         from ..core.particlesheet import load_atlas
@@ -262,6 +281,7 @@ class HL_OT_particle_preview_stop(bpy.types.Operator):
 def watch_selection():
     global _selection,_migrated_scene
     try:
+        if work_busy():return .25
         context=bpy.context
         if context.scene is None or context.mode != 'OBJECT':return .2
         from .particlebrowser import particle_empty

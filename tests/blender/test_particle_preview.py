@@ -59,3 +59,20 @@ ir,_=extract_scene(bpy.context,Report())
 assert any(e.classname=='info_particle_system' and e.keyvalues.get('effect_name')=='gas_smoke' for e in ir.entities)
 print('PASS legacy plane migration preserves properties/parent/references; empty exports particle entity')
 
+
+# No preview CPU, traces, scene migration or drawing while a build owns resources.
+from hammerless.blender import ops
+from unittest.mock import Mock
+fake=Mock();particlepreview._state.update(effect_simulation=fake,last=0)
+ops._BUILDING.add('particle-test-build')
+try:
+    assert particlepreview.work_busy()
+    assert particlepreview.tick()==.25
+    assert particlepreview.watch_selection()==.25
+    particlepreview.draw()
+    fake.advance.assert_not_called()
+finally:
+    ops._BUILDING.discard('particle-test-build');particlepreview._state.clear()
+assert not particlepreview.work_busy()
+assert all(not e.brushes for e in ir.entities if e.classname=='info_particle_system')
+print('PASS particle previews suspend during builds; particle entities have no bake brush geometry')

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.20.20 (test release, 2026-10-27)
+
+- Pause particle simulation, traces and viewport drawing during build/export, nav generation and baking, avoiding preview contention. Particle entities remain point entities without lightmap brush geometry.
+- Add animated particle previews from the user's installed game definitions and textures. Place effects in the Particles panel; select an effect to play it, restart short bursts, or stop playback. Continuous effects run continuously and completed bursts replay for preview only. Build & Play exports the same native particle entity.
+- Replace generated particle preview cards with empty markers, preserving entity settings and references. Animation/constraint-bearing legacy markers retain their object identity and use a wire marker. No automatic map save.
+- Add batched sprite geometry, animated atlases, child effects, control points, trails and ribbons. Fix fire material crop factors and preserve water texture proportions in the plain, non-refractive preview. User confirmed the final hydrant scaling works.
+- Surface unsupported rules/material settings. This is an approximate preview, not complete engine parity: no refraction; path/collision and several shading features remain limited. Playback is selected-effect only; global playback is deferred.
+- Add particle knowledge-base documentation, coverage audits, CPU profiling and optional comparison tools. 76 focused particle tests passed; background Blender checks cover entity placement, lifecycle, legacy migration and export. The fog CPU benchmark improved from about 137 to 3 ms/frame under profiling, excluding GPU/scene overhead; this is not a map-wide FPS guarantee.
+
+Restart Blender after installing. Existing maps receive marker conversion when opened; save only when you want to retain it.
+
 - Add the static Laser Trap damage example to Custom. Editable damage, range, hit radius and independent damage budgets; idle time does not drain the budget. Fire damage applies to all intersecting damageable targets, including survivors. Existing laser graphs receive compatibility fixes on export.
 - Removing a Light Pattern behaviour now resets Pattern to Steady, preventing continued native flickering and recreation of the removed behaviour on file load.
 
