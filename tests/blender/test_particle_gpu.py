@@ -43,6 +43,7 @@ def run():
                 'pos': [(-1,-1,0),(1,-1,0),(1,1,0),(-1,-1,0),(1,1,0),(-1,1,0)],
                 'uv': [(0,0),(1,0),(1,1),(0,0),(1,1),(0,1)],
                 'uv2': [(0,0)] * 6,
+                'uv_next':[(0,0)]*6,'uv2_next':[(0,0)]*6,'frame_mix':[(0,0)]*6,
                 'tint': [(0.5,0.5,0.5,1)] * 6,
             }).draw(sh)
             result = np.array(fb.read_color(0,0,32,32,4,0,'FLOAT').to_list(),
@@ -73,7 +74,8 @@ def run():
             assert result[2,2,3]<.01, 'rope escaped its bounds'
             # Two atlas regions: primary red, secondary green.
             quad={'pos':[(-1,-1,0),(1,-1,0),(1,1,0),(-1,-1,0),(1,1,0),(-1,1,0)],
-                  'uv':[(.25,.5)]*6,'uv2':[(.75,.5)]*6,'tint':[(1,1,1,1)]*6}
+                  'uv':[(.25,.5)]*6,'uv2':[(.75,.5)]*6,
+                  'uv_next':[(.75,.5)]*6,'uv2_next':[(.25,.5)]*6,'frame_mix':[(0,0)]*6,'tint':[(1,1,1,1)]*6}
             masked=pixels.copy();masked[:,:4,3]=.4;masked[:,4:,3]=.8
             mask_texture=gpu.types.GPUTexture((8,8),format='RGBA32F',data=gpu.types.Buffer('FLOAT',masked.size,masked.ravel()))
             sh.uniform_sampler('sprite',mask_texture)
@@ -83,10 +85,29 @@ def run():
                 batch_for_shader(sh,'TRIS',quad).draw(sh)
                 pixel=np.array(fb.read_color(16,16,1,1,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(4)
                 np.testing.assert_allclose(pixel,expected,atol=.005)
+            quad['frame_mix']=[(.25,0)]*6
+            for maximum,expected in [(False,(.75,.25,0,.5)),(True,(.75,.25,0,.3))]:
+                bind_material(sh,{'maxlum1':maximum});fb.clear(color=(0,0,0,0))
+                batch_for_shader(sh,'TRIS',quad).draw(sh)
+                pixel=np.array(fb.read_color(16,16,1,1,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(4)
+                np.testing.assert_allclose(pixel,expected,atol=.005)
+            quad['frame_mix']=[(0,0)]*6
             bind_material(sh,{'brightness':2,'alpha':.25})
             fb.clear(color=(0,0,0,0));batch_for_shader(sh,'TRIS',quad).draw(sh)
             pixel=np.array(fb.read_color(16,16,1,1,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(4)
             np.testing.assert_allclose(pixel,(2,0,0,.1),atol=.005)
+            bind_material(sh,{'addself':1});gpu.state.blend_set('ALPHA_PREMULT')
+            fb.clear(color=(0,0,1,1));batch_for_shader(sh,'TRIS',quad).draw(sh)
+            pixel=np.array(fb.read_color(16,16,1,1,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(4)
+            np.testing.assert_allclose(pixel,(.8,0,.6,1),atol=.005)
+            transparent=masked.copy();transparent[:,:,3]=0
+            transparent_texture=gpu.types.GPUTexture((8,8),format='RGBA32F',data=gpu.types.Buffer('FLOAT',transparent.size,transparent.ravel()))
+            sh.uniform_sampler('sprite',transparent_texture)
+            fb.clear(color=(0,0,1,1));batch_for_shader(sh,'TRIS',quad).draw(sh)
+            pixel=np.array(fb.read_color(16,16,1,1,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(4)
+            np.testing.assert_allclose(pixel,(0,0,1,1),atol=.005)
+            sh.uniform_sampler('sprite',mask_texture)
+            gpu.state.blend_set('NONE')
             bind_material(sh,{'brightness':2,'alpha':.25,'cutoff':.5})
             fb.clear(color=(0,0,0,0));batch_for_shader(sh,'TRIS',quad).draw(sh)
             pixel=np.array(fb.read_color(16,16,1,1,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(4)

@@ -189,9 +189,9 @@ keep their base-texture path and report dual-sequence materials as unsupported.
 
 Refraction is explicitly reported as a base-texture fallback: it needs captured
 scene colour/depth and distortion textures, which this overlay does not yet
-provide. Depth blending, frame interpolation, maximum-luminance frame blending,
-secondary zoom, addself/addoverblend and distance-alpha shaders remain reported
-material gaps. Ground fog samples produce visible dual-sequence smoke; effects
+provide. Depth blending, addoverblend and distance-alpha shaders remain reported
+material gaps. Frame interpolation, maximum-luminance blending, zoom and addself
+now have independent preview approximations described below. Ground fog samples produce visible dual-sequence smoke; effects
 requiring a parent still need that parent, rather than inventing root emissions.
 
 `tools/audit_particles.py --geometry` now checks bounded finite vertex/UV/colour
@@ -206,3 +206,32 @@ whole-library audit covered 1,785 roots, 3,275 geometry batches and 235 material
 profile cache entries with no parse/simulation/geometry errors. Eight sample PNGs
 were generated; fog was visually inspected. Empty parent-dependent standalone
 samples are reported, not counted as successful visual reproduction.
+
+## Animation smoothing and glow
+
+Sheet sampling returns current/next frames and a fractional weight, including
+nonuniform durations, FPS timing, loop wrap, clamped terminal frames and lifetime
+fit. `$blendframes` enables separate GPU interpolation for both sequences. Each
+frame uses its own atlas rectangle; coordinates never interpolate through adjacent
+sprites. Maximum-luminance preview uses a componentwise maximum of weighted
+samples. Secondary zoom crops each rectangle around its own center, progressing
+from 1 to the authored zoom over particle lifetime. These latter rules are
+independent approximations awaiting game comparisons, not established engine
+semantics. Shrinking below 1 is not implemented.
+
+Self-additive preview uses alpha-masked premultiplied colour, boosted by
+`1 + addself`, with unchanged coverage alpha. This keeps transparent sprite
+backgrounds from glowing. Additive/addself combinations fall back to additive
+and report the ignored setting. Exact HDR appearance, bloom and Source's
+material-specific response remain outside this approximation.
+
+Tests cover nonuniform timing, loop/clamp/FPS/fit boundaries, per-frame UVs,
+secondary zoom staying inside its atlas rectangle, GPU linear and maximum frame
+blending, HDR brightness and premultiplied glow over a coloured background.
+
+Smoothing-batch validation: 62 unit tests, the GPU suite and Blender lifecycle
+checks passed. The .25-second audit again covered 1,785 effect trees and 3,275
+geometry batches without errors. Eight sample images rendered. Visual inspection
+caught unmasked glow in an intermediate implementation; it was fixed and a GPU
+regression now asserts that transparent texture pixels preserve the background.
+Final smoke samples were inspected after that correction.

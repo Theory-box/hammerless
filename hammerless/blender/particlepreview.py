@@ -8,6 +8,7 @@ from gpu_extras.batch import batch_for_shader
 from ..core.particlepreview import load_library, audit
 from ..core.particleeffect import EffectSimulation
 from ..core.particlegeometry import build_geometry, RENDERERS
+from ..core.particlematerial import blend_mode
 
 _state = {}
 _shader = None
@@ -84,20 +85,29 @@ def shader():
     global _shader
     if _shader is None:
         interface = gpu.types.GPUStageInterfaceInfo('hl_particle_preview')
-        interface.smooth('VEC2','uvInterp'); interface.smooth('VEC2','uv2Interp'); interface.smooth('VEC4','tintInterp')
+        interface.smooth('VEC2','uvInterp'); interface.smooth('VEC2','uv2Interp');
+        interface.smooth('VEC2','uvNextInterp');interface.smooth('VEC2','uv2NextInterp');interface.smooth('VEC2','frameMixInterp'); interface.smooth('VEC4','tintInterp')
         info = gpu.types.GPUShaderCreateInfo()
         info.push_constant('MAT4','mvp')
         info.push_constant('FLOAT','repeat_v')
         info.push_constant('VEC4','material_settings')
+        info.push_constant('VEC2','maxlum')
+        info.push_constant('FLOAT','addself')
         info.sampler(0,'FLOAT_2D','sprite')
-        info.vertex_in(0,'VEC3','pos'); info.vertex_in(1,'VEC2','uv'); info.vertex_in(2,'VEC4','tint'); info.vertex_in(3,'VEC2','uv2')
+        info.vertex_in(0,'VEC3','pos'); info.vertex_in(1,'VEC2','uv'); info.vertex_in(2,'VEC4','tint'); info.vertex_in(3,'VEC2','uv2');info.vertex_in(4,'VEC2','uv_next');info.vertex_in(5,'VEC2','uv2_next');info.vertex_in(6,'VEC2','frame_mix')
         info.vertex_out(interface); info.fragment_out(0,'VEC4','fragColor')
-        info.vertex_source('void main(){uvInterp=uv;uv2Interp=uv2;tintInterp=tint;gl_Position=mvp*vec4(pos,1.0);}')
+        info.vertex_source('void main(){uvInterp=uv;uv2Interp=uv2;uvNextInterp=uv_next;uv2NextInterp=uv2_next;frameMixInterp=frame_mix;tintInterp=tint;gl_Position=mvp*vec4(pos,1.0);}')
         info.fragment_source("""
+        vec4 blendFrames(vec4 a,vec4 b,float t,float maximum){
+            if(t<=0.0)return a;
+            return maximum>0.5?max(a*(1.0-t),b*t):mix(a,b,t);
+        }
         void main(){
             vec4 a=texture(sprite,vec2(uvInterp.x,repeat_v>0.5?fract(uvInterp.y):uvInterp.y));
+            if(frameMixInterp.x>0.0)a=blendFrames(a,texture(sprite,uvNextInterp),frameMixInterp.x,maxlum.x);
             if(material_settings.x>=0.0){
                 vec4 b=texture(sprite,uv2Interp);
+                if(frameMixInterp.y>0.0)b=blendFrames(b,texture(sprite,uv2NextInterp),frameMixInterp.y,maxlum.y);
                 if(material_settings.x<0.5)a=(a+b)*0.5;
                 else if(material_settings.x<1.5)a=vec4(b.rgb,a.a);
                 else {float opacity=b.a+a.a*(1.0-b.a);
@@ -105,6 +115,7 @@ def shader():
             }
             a*=tintInterp;a.rgb*=material_settings.y;a.a*=material_settings.z;
             if(a.a<material_settings.w)discard;
+            if(addself>0.0)a.rgb=a.rgb*a.a*(1.0+addself);
             fragColor=a;
         }""")
         _shader = gpu.shader.create_from_info(info)
@@ -113,6 +124,8 @@ def shader():
 
 def bind_material(sh,material=None):
     p=material or {}
+    sh.uniform_float('addself',float(p.get('addself',0)))
+    sh.uniform_float('maxlum',(float(p.get('maxlum1',False)),float(p.get('maxlum2',False))))
     sh.uniform_float('material_settings',(float(p.get('dual_mode',-1)),p.get('brightness',1),p.get('alpha',1),p.get('cutoff',-1)))
 
 
@@ -143,7 +156,7 @@ def draw():
                         _state['warnings'].append(warning)
                         print('Hammerless particle preview:',warning)
                 if not len(geometry['pos']):continue
-                gpu.state.blend_set('ADDITIVE' if additive else 'ALPHA')
+                gpu.state.blend_set(blend_mode(additive,profile))
                 sh.bind();bind_material(sh,dict(profile,dual_mode=-1) if renderer.get('functionName','').casefold()=='render_rope' else profile);sh.uniform_float('repeat_v',float(renderer.get('functionName','').casefold()=='render_rope'));sh.uniform_float('mvp',context.region_data.perspective_matrix);sh.uniform_sampler('sprite',texture)
                 batch_for_shader(sh,'TRIS',geometry).draw(sh)
     finally:

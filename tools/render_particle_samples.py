@@ -36,7 +36,7 @@ def run():
         from hammerless.core.particlesheet import load_atlas
         from hammerless.core.particlegeometry import build_geometry,RENDERERS
         from hammerless.blender.particlepreview import shader,bind_material
-        from hammerless.core.particlematerial import load_profile
+        from hammerless.core.particlematerial import load_profile,blend_mode
         content=GameContent(args.game);library,errors=load_library(content)
         coverage=audit(library);materials={};profiles={};report={'parse_errors':errors,'samples':[]}
         offscreen=gpu.types.GPUOffScreen(512,512)
@@ -90,7 +90,7 @@ def run():
                     fb=gpu.state.active_framebuffer_get();fb.clear(color=(.015,.015,.015,1))
                     gpu.state.viewport_set(0,0,512,512);gpu.state.depth_test_set('NONE')
                     for geometry,texture,additive,repeat_v,profile in batches:
-                        gpu.state.blend_set('ADDITIVE' if additive else 'ALPHA')
+                        gpu.state.blend_set(blend_mode(additive,profile))
                         sh.bind();bind_material(sh,dict(profile,dual_mode=-1) if repeat_v else profile);sh.uniform_float('repeat_v',float(repeat_v));sh.uniform_float('mvp',mvp);sh.uniform_sampler('sprite',texture)
                         batch_for_shader(sh,'TRIS',geometry).draw(sh)
                     pixels=np.array(fb.read_color(0,0,512,512,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(-1)

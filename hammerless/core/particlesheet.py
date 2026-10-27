@@ -11,19 +11,30 @@ class Sequence:
     durations: np.ndarray
     rectangles: np.ndarray  # frames x coordinate sets x four UV bounds
 
-    def frame(self, age, lifetime, rate=1, fit=False, fps=False):
-        if not math.isfinite(age) or not math.isfinite(rate):
-            return 0
+    def sample(self, age, lifetime, rate=1, fit=False, fps=False):
+        """Current frame, following frame and fractional progress through current."""
+        count=len(self.durations)
+        if not math.isfinite(age) or not math.isfinite(rate):return 0,0,0.
         total=float(self.durations.sum())
         if fit:
             t=min(max(age/max(lifetime,1e-9),0),np.nextafter(1.,0))*total
         elif fps:
-            index=max(0,int(age*rate))
-            return min(index,len(self.durations)-1) if self.clamp else index%len(self.durations)
+            position=max(0,age*rate);index=int(position)
+            if self.clamp and index>=count-1:return count-1,count-1,0.
+            current=index%count
+            return current,(current+1)%count,float(position-index)
         else:
             t=max(0,age*rate)
             t=min(t,np.nextafter(total,0)) if self.clamp else t%total
-        return min(int(np.searchsorted(np.cumsum(self.durations),t,side='right')),len(self.durations)-1)
+        cumulative=np.cumsum(self.durations)
+        current=min(int(np.searchsorted(cumulative,t,side='right')),count-1)
+        if (self.clamp or fit) and current==count-1:return current,current,0.
+        start=0 if current==0 else cumulative[current-1]
+        weight=float(np.clip((t-start)/self.durations[current],0,1))
+        return current,(current+1)%count,weight
+
+    def frame(self, age, lifetime, rate=1, fit=False, fps=False):
+        return self.sample(age,lifetime,rate,fit,fps)[0]
 
 
 def read_sequences(vtf):
