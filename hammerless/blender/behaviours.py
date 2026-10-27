@@ -144,7 +144,13 @@ class HL_OT_behaviour_remove(bpy.types.Operator):
         if slot is None:
             return {"CANCELLED"}
         hs = obj.hammerless
+        from .lightpresets import TAG
+        removed_light_pattern = obj.type == 'LIGHT' and slot.graph is not None and bool(slot.graph.get(TAG))
         hs.behaviours.remove(hs.behaviours_index)
+        if removed_light_pattern:
+            # The dropdown also drives native export and old-file migration. Leaving
+            # it set would keep flickering and recreate the removed graph on load.
+            hs.light_pattern = '0'
         hs.behaviours_index = max(0, min(hs.behaviours_index, len(hs.behaviours) - 1))
         return {"FINISHED"}
 
