@@ -87,11 +87,12 @@ def shader():
         interface.smooth('VEC2','uvInterp'); interface.smooth('VEC4','tintInterp')
         info = gpu.types.GPUShaderCreateInfo()
         info.push_constant('MAT4','mvp')
+        info.push_constant('FLOAT','repeat_v')
         info.sampler(0,'FLOAT_2D','sprite')
         info.vertex_in(0,'VEC3','pos'); info.vertex_in(1,'VEC2','uv'); info.vertex_in(2,'VEC4','tint')
         info.vertex_out(interface); info.fragment_out(0,'VEC4','fragColor')
         info.vertex_source('void main(){uvInterp=uv;tintInterp=tint;gl_Position=mvp*vec4(pos,1.0);}')
-        info.fragment_source('void main(){fragColor=texture(sprite,uvInterp)*tintInterp;}')
+        info.fragment_source('void main(){fragColor=texture(sprite,vec2(uvInterp.x,repeat_v>0.5?fract(uvInterp.y):uvInterp.y))*tintInterp;}')
         _shader = gpu.shader.create_from_info(info)
     return _shader
 
@@ -115,7 +116,7 @@ def draw():
             eye=context.region_data.view_matrix.inverted().translation
             for renderer in sim.definition.rules['renderers']:
                 if renderer.get('functionName','').casefold() not in RENDERERS:continue
-                geometry,gaps=build_geometry(sim,renderer,sequences,matrix,right,up,eye,scale)
+                geometry,gaps=build_geometry(sim,renderer,sequences,matrix,right,up,eye,scale,texture_height=texture.height)
                 for gap in gaps | sim.warnings:
                     warning=f'{sim.definition.name}: {gap}'
                     if warning not in _state['warnings']:
@@ -123,7 +124,7 @@ def draw():
                         print('Hammerless particle preview:',warning)
                 if not len(geometry['pos']):continue
                 gpu.state.blend_set('ADDITIVE' if additive else 'ALPHA')
-                sh.bind();sh.uniform_float('mvp',context.region_data.perspective_matrix);sh.uniform_sampler('sprite',texture)
+                sh.bind();sh.uniform_float('repeat_v',float(renderer.get('functionName','').casefold()=='render_rope'));sh.uniform_float('mvp',context.region_data.perspective_matrix);sh.uniform_sampler('sprite',texture)
                 batch_for_shader(sh,'TRIS',geometry).draw(sh)
     finally:
         gpu.state.blend_set(old_blend);gpu.state.depth_test_set(old_depth);gpu.state.depth_mask_set(old_mask)

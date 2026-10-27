@@ -45,7 +45,7 @@ def main():
                 sim.advance(args.seconds);systems=[sim]
             for sim in systems:
                 assert all(np.isfinite(getattr(sim,k)).all() for k in ('position','velocity','color','radius','life','age','rotation'))
-                assert all(len(getattr(sim,k))==len(sim.age) for k in ('position','velocity','color','radius','life','ids','flip','sequence'))
+                assert all(len(getattr(sim,k))==len(sim.age) for k in ('position','velocity','color','radius','life','ids','flip','sequence','sequence2'))
                 assert len(sim.age)<=64
                 warnings.update(sim.warnings)
             if warnings:runtime_warnings[name]=sorted(warnings)

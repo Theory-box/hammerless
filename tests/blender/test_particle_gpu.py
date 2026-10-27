@@ -35,6 +35,7 @@ def run():
             gpu.state.blend_set('NONE')
             gpu.state.depth_test_set('NONE')
             sh.bind()
+            sh.uniform_float('repeat_v',0.)
             sh.uniform_float('mvp', Matrix.Identity(4))
             sh.uniform_sampler('sprite', texture)
             batch_for_shader(sh, 'TRIS', {
@@ -59,7 +60,16 @@ def run():
             result=np.array(fb.read_color(0,0,32,32,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(32,32,4)
             assert result[16,20,3]>.9, 'trail missing from expected screen region'
             assert result[2,2,3]<.01, 'trail escaped its bounds'
-        print('PASS particle GPU upload, shader, UV orientation, tint and production trail geometry', flush=True)
+            sim.spawn(2);sim.position[:]=[[-.75,0,0],[0,.25,0],[.75,0,0]];sim.radius[:]=.1
+            geometry,gaps=build_geometry(sim,{'functionName':'render_rope','subdivision_count':4},
+                {},np.eye(4),[1,0,0],[0,1,0],[0,0,10])
+            assert not gaps and len(geometry['pos'])==48
+            fb.clear(color=(0,0,0,0));sh.uniform_float('repeat_v',1.)
+            batch_for_shader(sh,'TRIS',geometry).draw(sh)
+            result=np.array(fb.read_color(0,0,32,32,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(32,32,4)
+            assert result[20,16,3]>.9, 'rope missing at middle control point'
+            assert result[2,2,3]<.01, 'rope escaped its bounds'
+        print('PASS particle GPU upload, shader, UV orientation, tint and production trail/rope geometry', flush=True)
     except Exception:
         traceback.print_exc()
         # Blender can otherwise exit successfully after a Python error.

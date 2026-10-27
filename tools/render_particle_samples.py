@@ -70,11 +70,11 @@ def run():
                         warnings.add('Missing material: '+sim.definition.attrs.get('material',''));continue
                     for renderer in sim.definition.rules['renderers']:
                         if renderer.get('functionName','').casefold() not in RENDERERS:continue
-                        geometry,gaps=build_geometry(sim,renderer,sequences,np.eye(4),[1,0,0],[0,0,1],[0,-10000,0])
+                        geometry,gaps=build_geometry(sim,renderer,sequences,np.eye(4),[1,0,0],[0,0,1],[0,-10000,0],texture_height=texture.height)
                         warnings.update(gaps)
-                        if len(geometry['pos']):batches.append((geometry,texture,additive))
+                        if len(geometry['pos']):batches.append((geometry,texture,additive,renderer.get('functionName','').casefold()=='render_rope'))
                 if batches:
-                    vertices=np.concatenate([g['pos'] for g,_,_ in batches])
+                    vertices=np.concatenate([g['pos'] for g,_,_,_ in batches])
                     lo=vertices.min(axis=0);hi=vertices.max(axis=0);center=(lo+hi)/2
                     extent=max(1,hi[0]-lo[0],hi[2]-lo[2])*1.15
                 else:center=np.zeros(3);extent=1
@@ -84,9 +84,9 @@ def run():
                 with offscreen.bind():
                     fb=gpu.state.active_framebuffer_get();fb.clear(color=(.015,.015,.015,1))
                     gpu.state.viewport_set(0,0,512,512);gpu.state.depth_test_set('NONE')
-                    for geometry,texture,additive in batches:
+                    for geometry,texture,additive,repeat_v in batches:
                         gpu.state.blend_set('ADDITIVE' if additive else 'ALPHA')
-                        sh.bind();sh.uniform_float('mvp',mvp);sh.uniform_sampler('sprite',texture)
+                        sh.bind();sh.uniform_float('repeat_v',float(repeat_v));sh.uniform_float('mvp',mvp);sh.uniform_sampler('sprite',texture)
                         batch_for_shader(sh,'TRIS',geometry).draw(sh)
                     pixels=np.array(fb.read_color(0,0,512,512,4,0,'FLOAT').to_list(),dtype=np.float32).reshape(-1)
                     if not np.isfinite(pixels).all():raise ValueError('nonfinite GPU output')

@@ -63,7 +63,7 @@ the SDK implementation is not included or linked.
 Trail length is approximated as speed times the particle's trail-duration field,
 clamped by renderer length settings. If the particle has initial velocity but
 no movement operator, that velocity can still stretch its trail. This is not a
-history ribbon and does not implement rope subdivision. Sample comparisons with
+history ribbon and does not itself implement rope subdivision; the separate rope renderer handles connected ribbons. Sample comparisons with
 the game are still required for exact shape, defaults and material blending.
 
 Remap outputs for angular attributes are interpreted as degrees and stored in
@@ -108,7 +108,7 @@ not bundled with the addon. The tool never opens or saves the user's blend file.
 
 Remaining attribute targets, operator strength/time
 envelopes, bone attachments and control-point hierarchies, secondary sequences,
-rope renderers, collision, and non-sprite material shaders remain missing.
+collision and non-sprite material shaders remain missing; rope rendering is now an approximation.
 Unsupported fields stay visible in reports. Missing atlas sequences are skipped
 and reported rather than displaying the entire sheet as one particle.
 
@@ -152,3 +152,27 @@ systems tested as roots, bounded tree limits and missing sheet data). Six sample
 frames rendered; smoke and sparks were visually inspected. These are simulator
 checks, not a comparison against game captures. Missing-rule occurrences fell
 from 2,345 to 1,645; that count is not a visual-completeness percentage.
+
+## Ribbon renderer and secondary sequence storage
+
+`render_rope` connects particles in birth-ID order, never camera depth order.
+It generates a camera-facing ribbon with shared edge vertices, interpolated
+radius/colour/secondary opacity, independently implemented cubic Hermite
+subdivision (capped at 16), and scrolling repeated UVs. Coincident points are
+collapsed and view-aligned tangents have fallback axes. Texture density uses
+texel_size times decoded texture height; downsampling, material UV transforms
+and Source's exact spline/default behaviour remain approximations. The shader
+wraps only the rope's longitudinal coordinate; sprite atlas UVs stay unwrapped.
+
+`Sequence Two Random` and the authored `sequence_number 1` value now have a
+separate integer array preserved across births and deaths. Dual-sequence material
+blending is still unsupported and stays explicitly listed in the coverage report;
+storing these choices does not mean those materials render correctly.
+
+Validation includes deterministic ribbon topology, particle removal, coincident
+points, camera-aligned paths, bounded subdivision, scrolling, texture density,
+secondary sequence lifecycle and actual GPU ribbon pixels. Installed-game sample
+renders include drainage streams, hydrant water and rain. Missing control points
+and water distortion shaders visibly limit fidelity; these samples are not
+claimed to match the game. The implementation uses independent geometry maths,
+not third-party simulator source.

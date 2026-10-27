@@ -1,7 +1,7 @@
 """CPU geometry shared by viewport drawing and headless preview checks."""
 import numpy as np
 
-RENDERERS={'render_animated_sprites','render_sprite_trail'}
+RENDERERS={'render_animated_sprites','render_sprite_trail','render_rope'}
 CORNERS=np.array([[-1,-1],[1,-1],[1,1],[-1,-1],[1,1],[-1,1]])
 
 
@@ -17,7 +17,7 @@ def trail_quad(head,tail,radius,eye,right,up):
     return np.array([tail-side,tail+side,head+side,tail-side,head+side,head-side])
 
 
-def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1):
+def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1,texture_height=1):
     """Return triangles and diagnostic gaps. Positions are in Blender world units."""
     kind=renderer.get('functionName','').casefold()
     empty={'pos':np.zeros((0,3)),'uv':np.zeros((0,2)),'tint':np.zeros((0,4))}
@@ -26,6 +26,9 @@ def build_geometry(sim,renderer,sequences,transform,right,up,eye,scale=1):
     transform=np.asarray(transform,dtype=float);right=np.asarray(right);up=np.asarray(up);eye=np.asarray(eye)
     scale=max(float(scale),.001)
     centers=(sim.position/scale)@transform[:3,:3].T+transform[:3,3]
+    if kind=='render_rope':
+        from .particlerope import geometry
+        return geometry(sim,renderer,centers,right,up,eye,scale,texture_height)
     order=np.argsort(-np.sum((centers-eye)**2,axis=1),kind='stable')
     normal=np.cross(right,up)
     positions=[];uvs=[];colors=[];gaps=set()

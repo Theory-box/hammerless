@@ -14,7 +14,7 @@ from .particleoscillation import offsets as oscillation_offsets, PARAMETERS as O
 
 CATEGORIES = ('emitters', 'initializers', 'operators', 'forces', 'constraints', 'renderers')
 RULES = {}
-SYSTEM_PARAMETERS = {'max_particles','radius','color','rotation','rotation_speed','sequence_number','material'}
+SYSTEM_PARAMETERS = {'max_particles','radius','color','rotation','rotation_speed','sequence_number','sequence_number 1','material'}
 OSCILLATION_FIELDS = {'oscillate scalar': (7, {3,4,7,12,16}), 'oscillate vector': (0, {0,6})}
 
 
@@ -84,6 +84,8 @@ def audit(definitions):
                         value = int(spec.get('oscillation field',default))
                         if value not in supported:
                             parameters.append(f'{name}: unsupported oscillation field {value}')
+        if 'sequence_number 1' in definition.attrs or any(p.get('functionName','').casefold()=='sequence two random' for p in definition.rules['initializers']):
+            parameters.append('material: dual-sequence blending unsupported')
         system_parameters = sorted(set(definition.attrs)-set(CATEGORIES)-{'children'}-SYSTEM_PARAMETERS)
         result[key] = {'missing_rules': sorted(set(missing)), 'unmapped_parameters': sorted(set(parameters)),
                        'unmapped_system_parameters': system_parameters,
@@ -132,6 +134,7 @@ class Simulation:
         self.alpha2 = np.zeros(0)
         self.birth = np.zeros(0)
         self.sequence = np.zeros(0,dtype=np.int32)
+        self.sequence2 = np.zeros(0,dtype=np.int32)
         self.flip = np.zeros(0,dtype=bool)
         self.operator_index = 0
         self.position = np.zeros((0, 3))
@@ -158,6 +161,7 @@ class Simulation:
         self.flip = np.concatenate((self.flip,np.zeros(count,dtype=bool)))
         self.rotation = np.concatenate((self.rotation,np.full(count,math.radians(float(self.definition.attrs.get('rotation',0))))))
         self.sequence = np.concatenate((self.sequence,np.full(count,int(self.definition.attrs.get('sequence_number',0)),dtype=np.int32)))
+        self.sequence2 = np.concatenate((self.sequence2,np.full(count,int(self.definition.attrs.get('sequence_number 1',0)),dtype=np.int32)))
         attrs = self.definition.attrs
         origin=self.control_points.current[0][:3,3]
         for name, values in [('position', np.tile(origin,(count,1))), ('velocity', np.zeros((count, 3))),
@@ -211,7 +215,7 @@ class Simulation:
         self.time+=dt
 
     def retain(self, mask):
-        for name in ('position','previous_position','velocity','color','initial_color','radius','initial_radius','age','life','ids','rotation','sequence','flip',
+        for name in ('position','previous_position','velocity','color','initial_color','radius','initial_radius','age','life','ids','rotation','sequence','sequence2','flip',
                      'rotation_speed','yaw','trail','alpha2','birth'):
             setattr(self, name, getattr(self, name)[mask])
         for field in self.initial_fields:self.initial_fields[field]=self.initial_fields[field][mask]
@@ -638,3 +642,14 @@ def along_path(s,p,sl):
     if distance:
         offset=s.rng.normal(size=(len(t),3));offset/=np.maximum(np.linalg.norm(offset,axis=1,keepdims=True),1e-9)
         s.position[sl]+=offset*(distance*np.cbrt(s.rng.random(len(t))))[:,None]
+
+
+@rule('initializers','Sequence Two Random','sequence_min','sequence_max')
+def sequence_two(s,p,sl):
+    lo,hi=sorted((int(p.get('sequence_min',0)),int(p.get('sequence_max',0))))
+    s.sequence2[sl]=s.rng.integers(lo,hi+1,len(s.age[sl]))
+    s.warnings.add('Secondary sequence stored; dual-sequence material blending is unsupported')
+
+
+@rule('renderers','render_rope','subdivision_count','texel_size','texture_scroll_rate')
+def rope_renderer(s,p,dt):pass
