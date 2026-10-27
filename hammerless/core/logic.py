@@ -1560,14 +1560,16 @@ class _Compiler:
                     f'{self.typed_in(n, "attach", vs.THING)}, {self.typed_in(n, "seconds", vs.NUM)});\n')
             self.script_action(nid, fn, line + "@@then@@", ["then"], take)
         elif k == "SCRIPT_CODE":
+            from .laser_compat import upgrade as upgrade_laser
+            script_code = upgrade_laser(s.get("code") or "")
             # Older scene-owned examples used the Source name absent in L4D2.
             # Supply its calling convention at export without rewriting users' graphs.
-            if "EntFireByHandle(" in (s.get("code") or ""):
+            if "EntFireByHandle(" in script_code:
                 self.helper("EntFireByHandle", '::EntFireByHandle <- function(entity, input, value, delay, activator, caller) {\n'
                             '    if (entity != null && entity.IsValid()) DoEntFire("!self", input, value, delay.tofloat(), activator, entity);\n'
                             '}')
             args = "".join(f"    local {x} = {self.typed_in(n, x, vs.ANY)};\n" for x in "abcd")
-            code = "\n".join("    " + line for line in (s.get("code") or "").splitlines())
+            code = "\n".join("    " + line for line in script_code.splitlines())
             body = (f"{args}    local result = null;\n{code}\n"
                     f'    ::HL_R["{slug}"] <- result;\n@@then@@')
             self.script_action(nid, fn, body, ["then"], take)

@@ -51,15 +51,34 @@ if (delta.LengthSqr() < 0.01) return;
 local radius = min(32.0, max(1.0, b.radius.tofloat()));
 local perHit = min(10000.0, max(0.0, b.dps.tofloat())) * dt;
 if (perHit <= 0) return;
-// Slab intersection against each common's bounds: test EVERY infected, not a first-hit trace.
-local hits = []; local requested = 0.0; local ent = null;
-while ((ent = Entities.FindByClassname(ent, "infected")) != null) {
-    if (!ent.IsValid() || ent.GetHealth() <= 0) continue;
-    local lo = ent.GetOrigin() + ent.GetBoundingMins() - Vector(radius, radius, radius);
-    local hi = ent.GetOrigin() + ent.GetBoundingMaxs() + Vector(radius, radius, radius);
+// Slab intersection against EVERY damageable entity; characters use upright collision bounds.
+local hits = []; local requested = 0.0;
+for (local ent = Entities.First(); ent != null; ent = Entities.Next(ent)) {
+    if (!ent.IsValid() || ent == a || ent.GetHealth() <= 0) continue;
+    if (!NetProps.HasProp(ent, "m_Collision.m_vecMins") || !NetProps.HasProp(ent, "m_Collision.m_vecMaxs")) continue;
+    if (NetProps.HasProp(ent, "m_takedamage") && NetProps.GetPropInt(ent, "m_takedamage") == 0) continue;
+    local boundsMin = NetProps.GetPropVector(ent, "m_Collision.m_vecMins");
+    local boundsMax = NetProps.GetPropVector(ent, "m_Collision.m_vecMaxs");
+    local localStart = start - ent.GetOrigin(); local localDelta = delta;
+    local cls = ent.GetClassname();
+    // SOLID_BBOX is upright; brush/physics props use their rotated local box.
+    if (cls != "player" && cls != "infected" && cls != "witch" &&
+        (!NetProps.HasProp(ent, "m_Collision.m_nSolidType") || NetProps.GetPropInt(ent, "m_Collision.m_nSolidType") != 2)) {
+        local ang = ent.GetAngles(); local rad = 0.0174532925199433;
+        local sp = sin(ang.x*rad); local cp = cos(ang.x*rad);
+        local sy = sin(ang.y*rad); local cy = cos(ang.y*rad);
+        local sr = sin(ang.z*rad); local cr = cos(ang.z*rad);
+        local forward = Vector(cp*cy, cp*sy, -sp);
+        local left = Vector(sr*sp*cy-cr*sy, sr*sp*sy+cr*cy, sr*cp);
+        local up = Vector(cr*sp*cy+sr*sy, cr*sp*sy-sr*cy, cr*cp);
+        localStart = Vector(localStart.Dot(forward), localStart.Dot(left), localStart.Dot(up));
+        localDelta = Vector(delta.Dot(forward), delta.Dot(left), delta.Dot(up));
+    }
+    local lo = boundsMin - Vector(radius, radius, radius);
+    local hi = boundsMax + Vector(radius, radius, radius);
     local enter = 0.0; local leave = 1.0; local intersects = true;
     foreach (axis in ["x", "y", "z"]) {
-        local direction = delta[axis]; local origin = start[axis];
+        local direction = localDelta[axis]; local origin = localStart[axis];
         if (fabs(direction) < 0.00001) {
             if (origin < lo[axis] || origin > hi[axis]) { intersects = false; break; }
         } else {
@@ -71,11 +90,12 @@ while ((ent = Entities.FindByClassname(ent, "infected")) != null) {
     }
     if (!intersects) continue;
     // Do not let the beam's thickness reach through a thin wall beside it.
-    local center = (lo + hi) * 0.5;
+    local center = ent.GetCenter();
     local t = max(0.0, min(1.0, (center-start).Dot(delta) / delta.LengthSqr()));
     local sight = {start = start + delta*t, end = center, mask = 16395, ignore = a};
     TraceLine(sight);
-    if (("startsolid" in sight && sight.startsolid) || ("hit" in sight && sight.hit)) continue;
+    local hitsTarget = "enthit" in sight && sight.enthit == ent;
+    if (!hitsTarget && (("startsolid" in sight && sight.startsolid) || ("hit" in sight && sight.hit))) continue;
     local amount = min(perHit, ent.GetHealth().tofloat());
     hits.append({entity = ent, amount = amount}); requested += amount;
 }
@@ -85,7 +105,7 @@ foreach (hit in hits) {
     local target = hit.entity;
     if (!target.IsValid() || target.GetHealth() <= 0) continue;
     local amount = min(state.remaining, hit.amount * share);
-    target.TakeDamage(amount, 1024, a);
+    target.TakeDamage(amount, 8, a);
     state.remaining = max(0.0, state.remaining - amount);
     if (state.remaining < 0.0001) state.remaining = 0.0;
 }
@@ -106,7 +126,7 @@ def examples():
         nodes.append(N(key, 'HL_NodeExposedSetting', 0, i+2, ui_name=title, value_type='INT', default_integer=value))
         links.append((key+'.value', 'settings.f_'+key))
     about = ('One emitter firing along its local +X (red) axis. Place slightly in front of the wall and rotate to aim. '
-             'Damages every common infected intersecting the beam; survivors and specials are unaffected. '
+             'Fire-type damage to every damageable entity touching the beam, including survivors, infected and breakable props. '
              'Walls and solid brushes stop it. Damage spent drains its own budget; idle time costs nothing. '
              'Budget resets on map/round restart. Edit settings in Behaviours or edit the Timer and Script nodes. '
              'No points purchase or stagger in this first version.')
