@@ -241,6 +241,10 @@ class HL_PT_particles(bpy.types.Panel):
         obj = context.active_object
         swapping = obj is not None and obj.select_get() and obj.hammerless.classname == "info_particle_system"
         if swapping:
+            row = layout.row(align=True)
+            row.operator('hammerless.particle_preview', text='Preview Animation', icon='PLAY')
+            row.operator('hammerless.particle_preview_stop', text='', icon='PAUSE')
+            layout.label(text='Experimental: static frames, incomplete rules', icon='INFO')
             layout.prop(wm, "hl_pfx_replace", text=f"Change '{obj.name[:24]}'", icon="FILE_REFRESH")
         grid = layout.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True, align=False)
         for eff in items[page * PER_PAGE:(page + 1) * PER_PAGE]:
@@ -265,6 +269,8 @@ CLASSES = (HL_OT_place_particle, HL_OT_particle_page, HL_PT_particles)
 
 
 def register():
+    from . import particlepreview
+    particlepreview.register()
     for c in CLASSES:
         bpy.utils.register_class(c)
     wm = bpy.types.WindowManager
@@ -281,6 +287,8 @@ def register():
 
 
 def unregister():
+    from . import particlepreview
+    particlepreview.unregister()
     wm = bpy.types.WindowManager
     for p in ("hl_pfx_search", "hl_pfx_group", "hl_pfx_parts", "hl_pfx_page", "hl_pfx_replace"):
         if hasattr(wm, p):
