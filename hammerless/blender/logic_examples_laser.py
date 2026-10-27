@@ -27,7 +27,7 @@ local finish = start + a.GetForwardVector() * limit;
 local trace = {start = start, end = finish, ignore = a, mask = 16395};
 TraceLine(trace);
 if ("startsolid" in trace && trace.startsolid) {
-    if (state.beam != null && state.beam.IsValid()) EntFireByHandle(state.beam, "TurnOff", "", 0, null, null);
+    if (state.beam != null && state.beam.IsValid()) DoEntFire("!self", "TurnOff", "", 0.0, null, state.beam);
     return;
 }
 if ("hit" in trace && trace.hit) finish = trace.pos;
@@ -45,7 +45,7 @@ if (state.beam == null || !state.beam.IsValid()) {
 }
 if (state.start == null || state.finish == null || state.beam == null) return;
 state.start.SetOrigin(start); state.finish.SetOrigin(finish);
-EntFireByHandle(state.beam, "TurnOn", "", 0, null, null);
+DoEntFire("!self", "TurnOn", "", 0.0, null, state.beam);
 local delta = finish - start;
 if (delta.LengthSqr() < 0.01) return;
 local radius = min(32.0, max(1.0, b.radius.tofloat()));
@@ -89,7 +89,7 @@ foreach (hit in hits) {
     state.remaining = max(0.0, state.remaining - amount);
     if (state.remaining < 0.0001) state.remaining = 0.0;
 }
-if (state.remaining <= 0 && state.beam.IsValid()) EntFireByHandle(state.beam, "TurnOff", "", 0, null, null);
+if (state.remaining <= 0 && state.beam.IsValid()) DoEntFire("!self", "TurnOff", "", 0.0, null, state.beam);
 result = state.remaining;
 '''
 
