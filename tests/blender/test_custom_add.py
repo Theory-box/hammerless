@@ -12,7 +12,7 @@ from hammerless.blender.extract import extract_scene
 from hammerless.blender.logic import compile_logic
 from hammerless.core.build import Report
 
-ids={'custom:swelling_pod', 'custom:emergency_knife'}
+ids={'custom:swelling_pod', 'custom:emergency_knife', 'custom:laser_trap'}
 assert {i.id for i in filtered('CUSTOM')}==ids
 count=len(SPAWN_ITEMS)
 register_examples(all_examples())
