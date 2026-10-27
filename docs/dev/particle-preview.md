@@ -322,3 +322,22 @@ parity or support for every setting is made.
 Validation: 73 particle unit tests, background Blender empty placement/replacement,
 legacy conversion/reference preservation and exported entity checks pass. Visual
 comparison remains user-led; no desktop control or game launch was performed.
+
+
+## Hydrant ribbon UV correction
+
+The previous units-per-texel interpretation stretched the hydrant's 256-unit
+ribbon over only .0025 of its texture when texel_size=400 and texture height=256.
+The preview now interprets this parameter as density: distance * texel_size /
+original texture height, and scroll as texels/second. This is an independent
+interpretation supported by the installed parameter ranges (extremely small
+laser/melee values versus large hydrant values), still requiring user visual
+confirmation. It supersedes the earlier repeat-length assumption, not a claim of
+verified Source shader parity. Original VTF height keeps density independent of
+preview downsampling; wrapping the scroll offset prevents long-running float loss.
+
+Coincident path points are removed before Hermite subdivision, so repeated
+endpoints cannot manufacture loops beyond the endpoint. No refraction added.
+75 unit tests cover density, scroll, resolution independence, and duplicate-endpoint
+bounds. The authored quadratic path remains approximate; this change does not
+claim to have established the exact engine arc.

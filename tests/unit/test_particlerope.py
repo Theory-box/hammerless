@@ -21,8 +21,8 @@ class RopeTests(unittest.TestCase):
     def test_width_color_scroll_and_dead_particles(self):
         s=self.sim();s.radius[:]=[.1,.2,.3];s.alpha2[:]=.5
         r={'functionName':'render_rope','texel_size':2,'texture_scroll_rate':3}
-        a,_=geometry(s,r);s.time=2;b,_=geometry(s,r)
-        np.testing.assert_allclose(b['uv'][:,1]-a['uv'][:,1],3)
+        a,_=geometry(s,r);s.time=.25;b,_=geometry(s,r)
+        np.testing.assert_allclose(b['uv'][:,1]-a['uv'][:,1],.75)
         np.testing.assert_allclose(b['tint'][:,3],.5)
         self.assertAlmostEqual(np.linalg.norm(a['pos'][1]-a['pos'][0]),.2)
         s.retain(np.array([True,False,True]));self.assertEqual(len(geometry(s,r)[0]['pos']),6)
@@ -52,3 +52,22 @@ class RopeTests(unittest.TestCase):
         a,_=geometry(s,r)
         b,_=build_geometry(s,r,{},np.eye(4),[1,0,0],[0,1,0],[0,0,10],texture_height=8)
         np.testing.assert_allclose(a['uv'][:,1]/8,b['uv'][:,1])
+
+    def test_hydrant_density_does_not_sample_one_texture_row(self):
+        from hammerless.core.particlegeometry import build_geometry
+        s=self.sim();s.position[:]=[[0,0,0],[0,0,128],[0,0,256]]
+        r={'functionName':'render_rope','texel_size':400}
+        a,_=build_geometry(s,r,{},np.eye(4),[1,0,0],[0,1,0],[0,10,0],texture_height=256)
+        self.assertAlmostEqual(np.ptp(a['uv'][:,1]),400)
+        b,_=build_geometry(s,r,{},np.eye(4),[1,0,0],[0,1,0],[0,10,0],texture_height=64,material={'mapping_height':256})
+        np.testing.assert_allclose(a['uv'],b['uv'])
+        r['texel_size']=1e-10
+        c,_=build_geometry(s,r,{},np.eye(4),[1,0,0],[0,1,0],[0,10,0],texture_height=256)
+        self.assertLess(np.ptp(c['uv'][:,1]),1e-8)
+
+    def test_duplicate_endpoint_does_not_make_fold(self):
+        s=self.sim();s.position[:]=[[0,0,0],[2,0,0],[2,0,0]]
+        b,_=geometry(s,{'functionName':'render_rope','subdivision_count':6})
+        self.assertLessEqual(b['pos'][:,0].max(),2)
+        self.assertGreaterEqual(b['pos'][:,0].min(),0)
+        self.assertEqual(len(b['pos']),36)

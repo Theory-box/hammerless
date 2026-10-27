@@ -43,7 +43,13 @@ def profile(params):
 
 
 def load_profile(content,material):
-    return profile(read_vmt(content,material.replace('\\','/').removesuffix('.vmt')))
+    result=profile(read_vmt(content,material.replace('\\','/').removesuffix('.vmt')))
+    from .particlesheet import material_texture
+    import struct
+    data,_=material_texture(content,material)
+    if data is not None and len(data)>=20 and data[:4]==b'VTF\0':
+        result['mapping_height']=struct.unpack_from('<H',data,18)[0]
+    return result
 
 
 def blend_mode(additive,material):

@@ -10,6 +10,11 @@ def geometry(sim,renderer,centers,right,up,eye,scale,texture_height):
     centers=centers[order]
     radius=np.maximum(sim.radius[order],0)/scale
     tint=sim.color[order].copy();tint[:,3]*=sim.alpha2[order]
+    # Remove zero-length spans before interpolation: their nonzero neighboring
+    # tangents otherwise manufacture a small loop beyond the endpoint.
+    keep=np.r_[True,np.linalg.norm(np.diff(centers,axis=0),axis=1)>1e-9]
+    centers=centers[keep];radius=radius[keep];tint=tint[keep]
+    if len(centers)<2:return empty,set()
     divisions=max(1,min(16,int(renderer.get('subdivision_count',1))))
     gaps=set()
     if int(renderer.get('subdivision_count',1))>16:gaps.add('rope subdivision limit: 16')
@@ -45,10 +50,14 @@ def geometry(sim,renderer,centers,right,up,eye,scale,texture_height):
     sides=np.asarray(sides)*widths[:,None]
     left=path-sides;right_edge=path+sides
     distance=np.r_[0,np.cumsum(np.linalg.norm(np.diff(path,axis=0),axis=1))]*scale
-    # Convert units per texel into a repeat length using the preview texture.
-    # Downsampled textures and material transforms remain approximations.
-    repeat=max(abs(float(renderer.get('texel_size',1))),1e-6)*max(1,texture_height)
-    v=(distance+sim.time*float(renderer.get('texture_scroll_rate',0)))/repeat
+    # Independent preview interpretation: texel_size is a density, not a
+    # repeat length. Tiny authored values keep laser/melee ribbons uniform;
+    # large values expose the water texture instead of stretching one row.
+    # Use the original mapping height (never the downsampled GPU resolution).
+    density=max(0,float(renderer.get('texel_size',1)))
+    height=max(1,texture_height)
+    offset=sim.time*float(renderer.get('texture_scroll_rate',0))/height
+    v=distance*density/height+(offset%1.)
     positions=[];uv=[];tints=[]
     for i in range(len(path)-1):
         for index,edge in ((i,0),(i,1),(i+1,1),(i,0),(i+1,1),(i+1,0)):
