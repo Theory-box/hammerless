@@ -244,7 +244,7 @@ class HL_PT_particles(bpy.types.Panel):
             row = layout.row(align=True)
             row.operator('hammerless.particle_preview', text='Preview Animation', icon='PLAY')
             row.operator('hammerless.particle_preview_stop', text='', icon='PAUSE')
-            layout.label(text='Experimental: static frames, incomplete rules', icon='INFO')
+            layout.label(text='Experimental: incomplete rules and rendering', icon='INFO')
             layout.prop(wm, "hl_pfx_replace", text=f"Change '{obj.name[:24]}'", icon="FILE_REFRESH")
         grid = layout.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True, align=False)
         for eff in items[page * PER_PAGE:(page + 1) * PER_PAGE]:

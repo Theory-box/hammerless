@@ -51,3 +51,22 @@ class ParticlePreviewTests(unittest.TestCase):
         s=Simulation(definition())
         for dt in [-1,float('nan'),float('inf')]:
             with self.assertRaises(ValueError):s.advance(dt)
+
+    def test_fades_and_identity_survive_removal(self):
+        d=definition([{'functionName':'emit_instantaneously','num_to_emit':3}],
+                     [{'functionName':'Lifetime Random','lifetime_min':2,'lifetime_max':2}],
+                     [{'functionName':'Alpha Fade In Random','fade in time min':.5,'fade in time max':.5}])
+        s=Simulation(d,seed=7);s.advance(.5)
+        np.testing.assert_allclose(s.color[:,3],.5)
+        samples=s.stable_random().copy()
+        s.retain(np.array([False,True,True]))
+        np.testing.assert_array_equal(s.stable_random(),samples[1:])
+        s.advance(.5);np.testing.assert_allclose(s.color[:,3],1)
+
+    def test_sequence_and_rotation_are_per_particle(self):
+        d=definition([{'functionName':'emit_instantaneously','num_to_emit':64}],
+                     [{'functionName':'Sequence Random','sequence_min':2,'sequence_max':4},
+                      {'functionName':'Rotation Random','rotation_offset_min':90,'rotation_offset_max':90}])
+        s=Simulation(d);s.advance(.02)
+        self.assertEqual(set(s.sequence),{2,3,4})
+        np.testing.assert_allclose(s.rotation,np.pi/2)

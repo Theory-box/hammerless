@@ -16,8 +16,10 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--game',required=True)
     parser.add_argument('--output',required=True)
+    parser.add_argument('--textures',action='store_true',help='Also decode every referenced material and animation sheet')
     args=parser.parse_args()
-    library,errors=load_library(GameContent(args.game))
+    content=GameContent(args.game)
+    library,errors=load_library(content)
     report=audit(library)
     failures=[]
     for name,definition in library.items():
@@ -30,11 +32,23 @@ def main():
             failures.append({'effect':name,'error':str(exc)})
     result={'systems':len(library),'parse_errors':errors,'smoke_failures':failures,
             'limitations':['Independent approximate maths; not visually validated against Source',
-                           'First sprite frame only; no collision, forces, attachments or live control points',
+                           'Animated sprite sheets; no collision, forces, attachments or live control points',
                            'Smoke success does not establish visual fidelity or complete rule support'],
             'coverage':report}
+    if args.textures:
+        from hammerless.core.particlesheet import load_atlas
+        materials=sorted({d.attrs.get('material','') for d in library.values()}-{''})
+        textures={'materials':len(materials),'animated_atlases':0,'sequences':0,'missing':[],'errors':[]}
+        for material in materials:
+            try:
+                atlas=load_atlas(content,material)
+                if atlas is None:textures['missing'].append(material)
+                else:
+                    textures['animated_atlases']+=bool(atlas[1]);textures['sequences']+=len(atlas[1])
+            except Exception as exc:textures['errors'].append({'material':material,'error':str(exc)})
+        result['textures']=textures
     Path(args.output).write_text(json.dumps(result,indent=2),encoding='utf8')
     print(json.dumps({k:v for k,v in result.items() if k!='coverage'},indent=2))
-    return int(bool(errors or failures))
+    return int(bool(errors or failures or result.get('textures',{}).get('errors')))
 
 if __name__=='__main__':sys.exit(main())

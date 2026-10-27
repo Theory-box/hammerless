@@ -99,6 +99,12 @@ class Simulation:
         self.time = 0.0
         self.accumulator = 0.0
         self.emission = {}
+        self.seed = seed
+        self.next_id = 0
+        self.ids = np.zeros(0,dtype=np.uint64)
+        self.rotation = np.zeros(0)
+        self.sequence = np.zeros(0,dtype=np.int32)
+        self.operator_index = 0
         self.position = np.zeros((0, 3))
         self.velocity = np.zeros((0, 3))
         self.color = np.zeros((0, 4))
@@ -113,6 +119,10 @@ class Simulation:
         if not count:
             return
         start = len(self.age)
+        self.ids = np.concatenate((self.ids,np.arange(self.next_id,self.next_id+count,dtype=np.uint64)))
+        self.next_id += count
+        self.rotation = np.concatenate((self.rotation,np.full(count,math.radians(float(self.definition.attrs.get('rotation',0))))))
+        self.sequence = np.concatenate((self.sequence,np.full(count,int(self.definition.attrs.get('sequence_number',0)),dtype=np.int32)))
         attrs = self.definition.attrs
         for name, values in [('position', np.zeros((count, 3))), ('velocity', np.zeros((count, 3))),
                              ('color', np.tile(np.array(attrs.get('color', (255,255,255,255)))/255, (count,1))),
@@ -140,15 +150,22 @@ class Simulation:
             self.age += dt
             self.color = self.initial_color.copy()
             self.radius = self.initial_radius.copy()
-            for spec in self.definition.rules['operators']:
+            for self.operator_index, spec in enumerate(self.definition.rules['operators']):
                 entry = RULES.get(('operators', spec.get('functionName', '').casefold()))
                 if entry:
                     entry[0](self, spec, dt)
             self.time += dt
 
     def retain(self, mask):
-        for name in ('position','velocity','color','initial_color','radius','initial_radius','age','life'):
+        for name in ('position','velocity','color','initial_color','radius','initial_radius','age','life','ids','rotation','sequence'):
             setattr(self, name, getattr(self, name)[mask])
+
+    def stable_random(self):
+        """Stable per-particle/operator samples, unaffected by particle death or frame rate."""
+        x=(self.ids+np.uint64((self.seed+self.operator_index*65537)&0xffffffff)) & np.uint64(0xffffffff)
+        x=((x ^ (x >> 16))*np.uint64(0x45d9f3b)) & np.uint64(0xffffffff)
+        x=((x ^ (x >> 16))*np.uint64(0x45d9f3b)) & np.uint64(0xffffffff)
+        return (x ^ (x >> 16)).astype(np.float64)/4294967296
 
 
 @rule('emitters', 'emit_continuously', 'emission_rate', 'emission_start_time', 'emission_duration')
@@ -236,7 +253,55 @@ def radius_scale(s,p,dt):
     s.radius*=float(p.get('radius_start_scale',1))*(1-t)+float(p.get('radius_end_scale',1))*t
 
 
-# The first renderer uses one sprite frame. Mark animation explicitly unsupported.
-@rule('renderers', 'render_animated_sprites')
+@rule('renderers', 'render_animated_sprites', 'animation rate', 'animation_fit_lifetime', 'use animation rate as FPS')
 def sprites(s,p,dt):
     pass
+
+
+@rule('initializers','Sequence Random','sequence_min','sequence_max')
+def sequence(s,p,sl):
+    lo,hi=sorted((int(p.get('sequence_min',0)),int(p.get('sequence_max',0))))
+    s.sequence[sl]=s.rng.integers(lo,hi+1,len(s.age[sl]))
+
+
+@rule('initializers','Rotation Random','rotation_initial','rotation_offset_min','rotation_offset_max')
+def rotation(s,p,sl):
+    lo,hi=sorted((float(p.get('rotation_offset_min',0)),float(p.get('rotation_offset_max',360))))
+    s.rotation[sl]=np.deg2rad(float(p.get('rotation_initial',0))+s.rng.uniform(lo,hi,len(s.age[sl])))
+
+
+def smooth(values):
+    t=np.clip(values,0,1)
+    return t*t*(3-2*t)
+
+
+def fade_random(s,p,fade_in):
+    prefix='fade in time' if fade_in else 'fade out time'
+    lo=float(p.get(prefix+' min',.25));hi=float(p.get(prefix+' max',.25))
+    exponent=max(.001,float(p.get(prefix+' exponent',1)))
+    boundary=lo+(hi-lo)*s.stable_random()**exponent
+    proportional=bool(p.get('proportional 0/1',True))
+    age=s.age/np.maximum(s.life,1e-9) if proportional else s.age
+    if fade_in:
+        factor=smooth(age/np.maximum(boundary,1e-9))
+    else:
+        end=np.ones(len(age)) if proportional else s.life
+        factor=smooth((end-age)/np.maximum(end-boundary,1e-9))
+    s.color[:,3]*=factor
+
+
+@rule('operators','Alpha Fade In Random','fade in time min','fade in time max','fade in time exponent','proportional 0/1')
+def fade_in(s,p,dt):fade_random(s,p,True)
+
+
+@rule('operators','Alpha Fade Out Random','fade out time min','fade out time max','fade out time exponent','proportional 0/1')
+def fade_out(s,p,dt):fade_random(s,p,False)
+
+
+@rule('operators','Color Fade','color_fade','fade_start_time','fade_end_time','ease_in_and_out')
+def color_fade(s,p,dt):
+    lo=float(p.get('fade_start_time',0));hi=float(p.get('fade_end_time',1))
+    t=np.clip((s.age/np.maximum(s.life,1e-9)-lo)/max(hi-lo,1e-9),0,1)
+    if p.get('ease_in_and_out',True):t=smooth(t)
+    target=np.array(p.get('color_fade',(255,255,255,255)))[:3]/255
+    s.color[:,:3]=s.color[:,:3]*(1-t[:,None])+target*t[:,None]
