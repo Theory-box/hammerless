@@ -23,6 +23,9 @@ bounded to 16 systems and 256 live particles per system.
 - Roll spin with a linear slowdown to minimum speed, measured in seconds.
 - Radius/colour changes, random alpha fades, lifespan decay and combined
   alpha fade/decay. Random fade-out duration is measured backward from death.
+- Scalar oscillation of radius, roll and alpha; vector oscillation of position
+  and RGB. Per-particle frequency/rate and start/end windows are stable across
+  frame partitions and particle removal. Lifespan-relative timing is supported.
 
 Operator semantics were checked against the public
 [particle operator documentation](https://www.dota2.com.cn/wiki/Dota_2_Workshop_Tools/Particles/Particle_System_Operators.htm)
@@ -37,6 +40,15 @@ birth time and seed yield the same velocity regardless of draw-frame timing or
 how particles are batched. Defaults and coordinate-space behaviour remain
 approximate; fields for unsupported CP transforms stay in the coverage report.
 
+Oscillation integrates a sine rate analytically. Radius/colour receive cumulative
+offsets because they reset to initial values each tick; position/rotation receive
+only that step's change. This is a preview approximation, especially when other
+operators also affect the same field. Lifetime, yaw and secondary alpha targets
+remain unsupported and are reported by value, not merely by parameter name.
+Attribute IDs were checked against Valve's public
+[particle attribute declarations](https://github.com/ValveSoftware/source-sdk-2013/blob/master/src/public/particles/particles.h);
+the SDK implementation is not included or linked.
+
 ## Coverage and validation
 
 Run `python tools/audit_particles.py --game GAME_ROOT --output REPORT.json
@@ -48,7 +60,8 @@ and missing materials. Every effect remains labelled approximate, even if it
 has no recorded gaps. Zero smoke-test failures does not mean zero visual errors.
 
 Unit tests: `python -m unittest tests.unit.test_particlepreview
-tests.unit.test_particlesheet tests.unit.test_particlenoise` (one line). Blender lifecycle test:
+tests.unit.test_particlesheet tests.unit.test_particlenoise tests.unit.test_particleoscillation`
+(one line). Blender lifecycle test:
 `blender --background --factory-startup --python tests/blender/test_particle_preview.py`.
 GPU test requires a separate window:
 `blender --factory-startup --python tests/blender/test_particle_gpu.py`.
@@ -58,7 +71,7 @@ NumPy buffer conversion produced corrupt images in Blender 4.4 on the test host.
 
 ## Next gaps
 
-Scalar/vector remapping and oscillation, operator strength/time
+Scalar/vector remapping, remaining oscillation targets, operator strength/time
 envelopes, live control points and parent inheritance, secondary sequences,
 trail/rope renderers, collision, and non-sprite material shaders remain missing.
 Unsupported fields stay visible in reports. Missing atlas sequences are skipped

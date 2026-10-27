@@ -8,10 +8,12 @@ import math
 import struct
 import numpy as np
 from .particles import read_dmx
+from .particleoscillation import offsets as oscillation_offsets, PARAMETERS as OSCILLATION_PARAMETERS
 
 CATEGORIES = ('emitters', 'initializers', 'operators', 'forces', 'constraints', 'renderers')
 RULES = {}
 SYSTEM_PARAMETERS = {'max_particles','radius','color','rotation','sequence_number','material'}
+OSCILLATION_FIELDS = {'oscillate scalar': (7, {3,4,7}), 'oscillate vector': (0, {0,6})}
 
 
 def rule(category, name, *parameters):
@@ -74,6 +76,11 @@ def audit(definitions):
                     missing.append(category + ': ' + name)
                 else:
                     parameters.extend(name + ': ' + p for p in spec if p != 'functionName' and p not in entry[1])
+                    if name.casefold() in OSCILLATION_FIELDS:
+                        default, supported = OSCILLATION_FIELDS[name.casefold()]
+                        value = int(spec.get('oscillation field',default))
+                        if value not in supported:
+                            parameters.append(f'{name}: unsupported oscillation field {value}')
         system_parameters = sorted(set(definition.attrs)-set(CATEGORIES)-{'children'}-SYSTEM_PARAMETERS)
         result[key] = {'missing_rules': sorted(set(missing)), 'unmapped_parameters': sorted(set(parameters)),
                        'unmapped_system_parameters': system_parameters,
@@ -167,9 +174,9 @@ class Simulation:
         for name in ('position','velocity','color','initial_color','radius','initial_radius','age','life','ids','rotation','sequence','flip'):
             setattr(self, name, getattr(self, name)[mask])
 
-    def stable_random(self):
+    def stable_random(self, stream=0):
         """Stable per-particle/operator samples, unaffected by particle death or frame rate."""
-        x=(self.ids+np.uint64((self.seed+self.operator_index*65537)&0xffffffff)) & np.uint64(0xffffffff)
+        x=(self.ids+np.uint64((self.seed+self.operator_index*65537+stream*104729)&0xffffffff)) & np.uint64(0xffffffff)
         x=((x ^ (x >> 16))*np.uint64(0x45d9f3b)) & np.uint64(0xffffffff)
         x=((x ^ (x >> 16))*np.uint64(0x45d9f3b)) & np.uint64(0xffffffff)
         return (x ^ (x >> 16)).astype(np.float64)/4294967296
@@ -403,3 +410,24 @@ def fade_and_decay(s,p,dt):
     else:
         alpha=np.where(age>=out_end,float(p.get('end_alpha',0)),alpha)
     s.color[:,3]=np.clip(alpha,0,1)
+
+
+@rule('operators','Oscillate Scalar',*OSCILLATION_PARAMETERS)
+def oscillate_scalar(s,p,dt):
+    if not len(s.age):return
+    field=int(p.get('oscillation field',7))
+    if field not in OSCILLATION_FIELDS['oscillate scalar'][1]:return
+    total,delta=oscillation_offsets(s,p,dt,1)
+    if field==3:s.radius=np.maximum(0,s.radius+total[:,0])
+    elif field==4:s.rotation+=delta[:,0]
+    elif field==7:s.color[:,3]=np.clip(s.color[:,3]+total[:,0],0,1)
+
+
+@rule('operators','Oscillate Vector',*OSCILLATION_PARAMETERS)
+def oscillate_vector(s,p,dt):
+    if not len(s.age):return
+    field=int(p.get('oscillation field',0))
+    if field not in OSCILLATION_FIELDS['oscillate vector'][1]:return
+    total,delta=oscillation_offsets(s,p,dt,3)
+    if field==0:s.position+=delta
+    elif field==6:s.color[:,:3]=np.clip(s.color[:,:3]+total,0,1)

@@ -36,8 +36,10 @@ def main():
         except Exception as exc:
             failures.append({'effect':name,'error':str(exc)})
     priority=Counter(gap for effect in report.values() for gap in effect['missing_rules'])
+    parameter_priority=Counter(gap for effect in report.values() for gap in effect['unmapped_parameters'])
     result={'systems':len(library),'simulation_seconds':args.seconds,'parse_errors':errors,'smoke_failures':failures,
             'missing_rule_priority':dict(priority.most_common()),
+            'unmapped_parameter_priority':dict(parameter_priority.most_common()),
             'limitations':['Independent approximate maths; not visually validated against Source',
                            'Animated sprites and random forces; no collision, attachments or live control points',
                            'Smoke success does not establish visual fidelity or complete rule support'],
