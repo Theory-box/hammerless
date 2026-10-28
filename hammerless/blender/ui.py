@@ -1042,7 +1042,7 @@ class HL_PT_light_quality(_Nested, _Sub, bpy.types.Panel):
         ss.prop(s, "light_ss_passes")
         ss.prop(s, "light_ss_threshold")
         full.prop(s, "light_bounces")
-        if ours and not s.light_exact and s.light_bounce_method == "GI":
+        if ours and not s.light_exact and (s.light_bounce_method == "GI" or s.light_mixing):
             full.prop(s, "light_gi_rays")
         else:
             full.prop(s, "light_patch_size")

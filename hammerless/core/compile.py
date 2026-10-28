@@ -126,12 +126,9 @@ class CompileOptions:
         if self.fix_quirks:
             args.append("-fixquirks")
         if self.gi and not self.light_exact and self.bounces > 0:
-            # (a bounce a pass: each passes on about a twentieth of the light, so 8 is as good as vrad's 100)
-            args += ["-gi", str(min(self.bounces, GI_MAX_PASSES)), "-girays", str(self.gi_rays)]
+            # Stop earlier once every sampled surface settles.
+            args += ["-gi", str(self.bounces), "-girays", str(self.gi_rays)]
         return args
-
-
-GI_MAX_PASSES = 8
 
 
 def _num(x: float) -> str:

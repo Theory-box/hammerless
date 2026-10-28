@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.20.27 (test release, 2026-10-28)
+
+- Unify patch and GPU GI limits under Max Bounces; GPU GI no longer has a hidden eight-pass ceiling. Preserve the effective limit from the experimental two-control settings.
+- Stop GPU GI after three consecutive settled passes, checking absolute changes in individual RGB, bump, and light-layer samples. Reuse ray directions between passes and report convergence versus the bounce limit in the build log.
+
 ## 0.20.26 (test release, 2026-10-28)
 
 - Apply decal spatial invalidation to Edit Mode mesh updates as well as object transforms. Unrelated edits do not schedule preview rebuilds; entering/leaving receivers and linked mesh users are checked.

@@ -127,6 +127,14 @@ def _same(a, b) -> bool:
 def migrate(s):
     """A scene saved with the single Quality (Quick / Fast / Normal / Final / Custom): the same build with the new
     settings. Custom kept its Visibility, Lighting (vrad) and prop lighting choices."""
+    # Fold the experimental GPU-only ceiling into the single visible control once.
+    # Removed RNA properties remain readable as ID properties in saved files.
+    if not s.get("_hl_unified_bounces", False):
+        if s.light_tool == "HAMMERLESS" and not s.light_exact and (s.light_bounce_method == "GI" or s.light_mixing):
+            _set(s, {"light_bounces": min(s.light_bounces, max(1, int(s.get("light_gi_ceiling", 32))))})
+        if "light_gi_ceiling" in s:
+            del s["light_gi_ceiling"]
+        s["_hl_unified_bounces"] = True
     if s.settings_version >= SETTINGS_VERSION:
         return
     if s.settings_version == 1:

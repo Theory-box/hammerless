@@ -8,6 +8,7 @@
 #include <float.h>
 #include <xmmintrin.h>
 #include "hlvrad.h"
+#include "gi_convergence.h"
 
 #define NUM_BUMP_VECTS 3
 #define MAXLIGHTMAPS 4
@@ -2175,8 +2176,11 @@ void BuildIndirectGPU(void) {
         junk = xalloc(sizeof(float) * 64 * (size_t)(n + 1));
     }
     double last = 0;
+    double *faceChange = xalloc(sizeof(double) * (numfaces + 1));
+    int stablePasses = 0;
     for (int pass = 0; pass < g_giPasses; pass++) {
         double t0 = Seconds(), total = 0;
+        memset(faceChange, 0, sizeof(double) * (numfaces + 1));
         GPU_Lightmaps();
         for (int first = 0; first < g_numLayers; first += GI_LAYER_BATCH) {     /* (-layers: theirs, batch by batch) */
             int nl = g_numLayers - first < GI_LAYER_BATCH ? g_numLayers - first : GI_LAYER_BATCH;
@@ -2209,7 +2213,7 @@ void BuildIndirectGPU(void) {
                 }
             GPU_GILayers(grids, gridluxels, gridofs, numfaces, nl);
             double tr3 = Seconds();
-            GPU_GIGather(groups, n, g_giRays, pass + 1, first ? junk : out, lout);
+            GPU_GIGather(groups, n, g_giRays, 1, first ? junk : out, lout);
             double tr4 = Seconds();
             if (getenv("HLLAYERDBG") && !first) {
                 double sm = 0, sl = 0, worst = 0;
@@ -2237,7 +2241,12 @@ void BuildIndirectGPU(void) {
                                 if (b[0] == 0 && b[1] == 0 && b[2] == 0) continue;
                                 *dst = xalloc(sizeof(vec3_t) * (fl->numsamples + 1));
                             }
-                            for (int c = 0; c < 3; c++) (*dst)[at + i][c] = (d ? d[at + i][c] : 0.0f) + b[c];
+                            for (int c = 0; c < 3; c++) {
+                                float base = d ? d[at + i][c] : 0.0f;
+                                double change = GIChange((*dst)[at + i][c] - base, b[c]);
+                                if (change > faceChange[facenum]) faceChange[facenum] = change;
+                                (*dst)[at + i][c] = base + b[c];
+                            }
                         }
                     }
                 }
@@ -2246,7 +2255,7 @@ void BuildIndirectGPU(void) {
                 Msg("  layers %d-%d: radial %.3f, grids %.3f, upload %.3f, gather %.3f, add %.3f s\n", first + 1, first + nl,
                     tr1 - tr0, tr2 - tr1, tr3 - tr2, tr4 - tr3, Seconds() - tr4);
         }
-        if (!g_numLayers) GPU_GIGather(groups, n, g_giRays, pass + 1, out, NULL);
+        if (!g_numLayers) GPU_GIGather(groups, n, g_giRays, 1, out, NULL);
         for (int g = 0; g < n; g++)
             for (int i = 0; i < groups[g].lanes; i++)
                 for (int c = 0; c < 3; c++) total += out[64 * (size_t)g + 16 * i + c];
@@ -2256,13 +2265,30 @@ void BuildIndirectGPU(void) {
             for (int i = 0; i < groups[g].lanes; i++)
                 for (int b = 0; b < groups[g].normalCount; b++)
                     for (int c = 0; c < 3; c++)
-                        fl->light[k][b][first + i][c] = direct[facenum][b][first + i][c] + out[64 * (size_t)g + 16 * i + 3 * b + c];
+                    {
+                        float base = direct[facenum][b][first + i][c];
+                        float next = out[64 * (size_t)g + 16 * i + 3 * b + c];
+                        double change = GIChange(fl->light[k][b][first + i][c] - base, next);
+                        if (change > faceChange[facenum]) faceChange[facenum] = change;
+                        fl->light[k][b][first + i][c] = base + next;
+                    }
         }
         RunThreadsOn(numfaces, FinalWork);
         if (getenv("HLGPUDBG")) Msg("GI pass %d: %d points, %d rays each, %.3f s\n", pass + 1, 4 * n, g_giRays, Seconds() - t0);
-        /* (a pass gives all the bounced light so far: once one adds next to nothing, stop, as vrad's bounces do) */
-        Msg("\tGI bounce #%i: %.2f%% more\n", pass + 1, last > 0 ? 100.0 * (total - last) / last : 100.0);
-        if (pass > 0 && total - last < 0.002 * last) break;
+        int unsettled = 0;
+        double worst = 0;
+        for (int f = 0; f < numfaces; f++) {
+            if (faceChange[f] > 1.0) unsettled++;
+            if (faceChange[f] > worst) worst = faceChange[f];
+        }
+        /* Fixed ray directions compare transport changes, not new random samples.
+         * Check absolute changes in every RGB/bump/layer sample: bright rooms cannot
+         * hide dark ones, and decreasing energy is not automatically convergence. */
+        stablePasses = pass > 0 && !unsettled ? stablePasses + 1 : 0;
+        Msg("\tGI bounce #%i: %.2f%% more, %d unsettled faces, worst change %.3fx tolerance, stable %d/3\n",
+            pass + 1, last > 0 ? 100.0 * (total - last) / last : 100.0, unsettled, worst, stablePasses);
+        if (stablePasses >= 3) { Msg("GI stopped: surface convergence\n"); break; }
+        if (pass + 1 == g_giPasses) Msg("GI stopped: bounce ceiling (%d)\n", g_giPasses);
         last = total;
     }
     for (int facenum = 0; facenum < numfaces; facenum++)
@@ -2274,6 +2300,7 @@ void BuildIndirectGPU(void) {
         }
         free(ldirect), free(gridofs), free(grids), free(lout), free(junk);
     }
+    free(faceChange);
     free(groups), free(where), free(k0), free(direct), free(out);
 }
 
