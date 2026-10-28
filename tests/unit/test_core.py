@@ -2295,7 +2295,7 @@ class TestVisCompiler(unittest.TestCase):
                     with open(base + ".bsp", "rb") as f:
                         self.assertEqual(f.read(), fog.read(want.format(mode)), (name, mode))
 
-    def test_falls_back_to_valve(self):
+    def test_failed_vis_does_not_fall_back_to_valve(self):
         import sys
         from hammerless.core import compile as cc
         job = self._job(cc.CompileOptions(vis_tool="HAMMERLESS"))
@@ -2316,8 +2316,9 @@ class TestVisCompiler(unittest.TestCase):
             lines.append(job._q.get())
         text = " | ".join(str(x) for x in lines)
         self.assertIn("Hammerless vis failed", text)
-        self.assertIn("VALVE VVIS RAN", text)
-        self.assertIn(("OK",), lines)
+        self.assertNotIn("VALVE VVIS RAN", text)
+        self.assertIn("Automatic fallback to Valve is disabled", text)
+        self.assertIn(("FAILED",), lines)
 
 
 class TestSkyImage(unittest.TestCase):
@@ -2372,7 +2373,7 @@ class TestLightCompilerGpu(unittest.TestCase):
         o = cc.CompileOptions(sky_rays=16, supersample=False, bounces=50, patch_size=2, static_prop_lighting=True,
                               prop_polys=True)
         self.assertEqual(o.vrad_args(), ["-hdr", "-extrasky", "16", "-noextra", "-bounce", "50", "-chop", "2",
-                                         "-maxchop", "2", "-StaticPropLighting", "-StaticPropPolys"])
+                                         "-maxchop", "2", "-StaticPropLighting", "-StaticPropPolys", "-textureshadows"])
         u = cc.CompileOptions(ss_points=8, ss_passes=8, ss_threshold=0.03, fix_quirks=True, light_exact=True)
         self.assertEqual(u.hlvrad_args(), ["-sspoints", "8", "-sspasses", "8", "-ssthreshold", "0.03", "-fixquirks"])
         a = cc.CompileOptions(light_tool="HAMMERLESS")
@@ -2728,7 +2729,7 @@ class TestSettingsAndScripts(unittest.TestCase):
         from hammerless.core.compile import CompileOptions
         o = CompileOptions(vis="SKIP", rad="FINAL", hdr="LDR", extra_vrad="-bounce 50")   # (LDR: gone, always HDR)
         self.assertIsNone(o.vvis_args())
-        self.assertEqual(o.vrad_args(), ["-hdr", "-final", "-StaticPropLighting", "-StaticPropPolys", "-bounce", "50"])
+        self.assertEqual(o.vrad_args(), ["-hdr", "-final", "-StaticPropLighting", "-StaticPropPolys", "-textureshadows", "-bounce", "50"])
 
     def test_extra_tool_options_sorted(self):
         """Extra Valve options: ours takes the ones it does, the rest are left out with a note (never Valve's tool)."""

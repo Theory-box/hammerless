@@ -629,6 +629,12 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
         report.info.append("Sealed the map in an automatic skybox shell.")
 
     entities = [e for e in ir.entities if e.classname not in PSEUDO_ENTITIES]
+    from .tonemapper import configure as configure_tonemappers
+    try:
+        entities = configure_tonemappers(entities)
+    except ValueError as exc:
+        report.errors.append(str(exc))
+        return None, report
     # point crescendo outputs at the map-specific script file
     for e in entities:
         for o in e.outputs:

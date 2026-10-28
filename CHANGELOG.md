@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.20.23 (test release, 2026-10-28)
+
+- Fix tonemapper startup ordering: reset exposure before applying custom limits so reversed Source output order cannot clear them. Fixed exposure uses matching networked min/max limits; remove the unsupported initial-blend control.
+
+- Add Tonemapper under Add > Lights with exposed exposure modes/limits, adaptation speed, fixed exposure, bloom strength/exponent/saturation, histogram brightness targeting and master priority. Generate native startup I/O; blank values preserve engine settings.
+
+- Always enable texture shadows and full-model prop shadow geometry for bakes, without a checkbox or manual compiler options. Check every static-prop model for material alpha; no model flag or forcetextureshadow RAD entry is required. Opaque materials remain solid. Also check solid and window brush materials, not only grate brushes; preserve non-shadowing windows when no usable alpha texture exists.
+
 ## 0.20.22 (test release, 2026-10-27)
 
 - Convert to Brushes now preserves source materials and affine UV alignment on matching surfaces, with Keep Materials & UVs enabled by default. New interior faces stay nodraw; merged seams and simplified surfaces may need adjustment.

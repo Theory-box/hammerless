@@ -1,11 +1,12 @@
 /* -textureshadows: alpha-tested textures cast partial shadows (vrad's CShadowTextureList, as L4D2's vrad_dll.dll
  * does it, read from its disassembly).
  *
- * What casts them in L4D2's vrad:
- *  - static props drawn as their triangles (-StaticPropPolys only) whose model has the "cast texture shadows" flag
- *    or is named by a lights.rad "forcetextureshadow" line (models/ and the extension left out, case as written);
- *  - world brushes with CONTENTS_GRATE (only with -textureshadows: without it they cast no shadow at all): each
- *    side whose material has a texture with alpha; their other sides are solid.
+ * What casts them in Hammerless:
+ *  - all static props drawn as their triangles (-StaticPropPolys only). Unlike Valve,
+ *    no model flag or lights.rad forcetextureshadow entry is required;
+ *  - solid, grate and window brushes with -textureshadows: sides with usable material
+ *    alpha get coverage checks; other sides stay solid. Windows without usable alpha
+ *    retain their previous non-shadowing behavior.
  * A material counts when its .vmt has "$translucent" or "$alphatest" anywhere in it (searched through every block,
  * so "patch" materials count too); its $basetexture's largest mip gives the alpha. A model's materials are looked
  * for in its first $cdmaterials folder only (vrad's KeyValues loader "succeeds" on a missing file, which ends the

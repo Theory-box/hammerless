@@ -109,8 +109,8 @@ class CompileOptions:
                 args += ["-chop", _num(self.patch_size), "-maxchop", _num(self.patch_size)]
         if self.static_prop_lighting or self.rad == "FINAL":
             args.append("-StaticPropLighting")
-        if self.prop_polys or self.rad == "FINAL":
-            args.append("-StaticPropPolys")
+        # Always trace texture alpha against full prop geometry, including draft bakes.
+        args += ["-StaticPropPolys", "-textureshadows"]
         return args + self.extra("vrad", ours)
 
     def hlvrad_args(self) -> list[str]:

@@ -410,6 +410,8 @@ class HL_PT_object(_Panel, bpy.types.Panel):
             box.label(text="Particle Effect")
             op = box.operator("hammerless.change_particle", text=effect or "Choose Effect", icon="VIEWZOOM")
             op.object_name = obj.name
+        if hs.classname == "env_tonemap_controller":
+            _draw_tonemapper(layout, hs)
         if hs.classname == "hammerless_control":
             _draw_control(layout, hs)
         elif hs.classname == "func_precipitation" and any(k.key == "weather" for k in hs.keyvalues):
@@ -1040,7 +1042,6 @@ class HL_PT_light_quality(_Nested, _Sub, bpy.types.Panel):
             full.prop(s, "light_gi_rays")
         else:
             full.prop(s, "light_patch_size")
-        col.prop(s, "light_prop_polys")
 
 
 class HL_PT_light_advanced(_Nested, _Sub, bpy.types.Panel):
@@ -1526,3 +1527,30 @@ def unregister():
     bpy.types.VIEW3D_MT_add.remove(_add_menu)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
+
+
+def _draw_tonemapper(layout, hs):
+    from ..core.tonemapper import PARAMETERS, PREFIX
+    items = {k.key: k for k in hs.keyvalues}
+    if PREFIX + "mode" not in items:
+        return
+    col = _settings(layout.box())
+    col.label(text="Tonemapper")
+    mode = items[PREFIX + "mode"].value
+    row = col.row(align=True)
+    for value, label in (("AUTO", "Automatic"), ("DEFAULT", "Game Defaults"), ("FIXED", "Fixed")):
+        op = row.operator("hammerless.kv_set", text=label, depress=mode == value)
+        op.key, op.value = PREFIX + "mode", value
+    for key, label, _input in PARAMETERS:
+        if key in ("min", "max") and mode != "AUTO": continue
+        if key == "rate" and mode == "FIXED": continue
+        if PREFIX + key in items: col.prop(items[PREFIX + key], "value", text=label)
+    if mode == "FIXED":
+        for key, label in (("scale", "Fixed Exposure"),):
+            if PREFIX + key in items: col.prop(items[PREFIX + key], "value", text=label)
+    row = col.row(align=True)
+    row.label(text="Master")
+    for value, label in (("1", "Yes"), ("0", "No")):
+        op = row.operator("hammerless.kv_set", text=label, depress=items["spawnflags"].value == value)
+        op.key, op.value = "spawnflags", value
+    col.label(text="Blank = unchanged; applies in game at map start", icon='INFO')

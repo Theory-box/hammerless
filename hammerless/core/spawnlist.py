@@ -48,6 +48,7 @@ _LABELS = {"func_ladder": "Ladder Volume (no model)", "hammerless_crescendo": "C
            "info_zombie_spawn": "Infected Spawn Spot"}
 # Extra search words
 _ALIASES = {
+    "env_tonemap_controller": "tonemapper tone map exposure adaptation bloom hdr brightness",
     "func_movelinear": "gate door lift elevator moving slide platform garage drawbridge",
     "weapon_item_spawn": "random pills health throwable molotov pipe bomb bile adrenaline medkit",
     "weapon_first_aid_kit_spawn": "medkit health heal", "weapon_pain_pills_spawn": "health heal",

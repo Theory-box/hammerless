@@ -388,6 +388,22 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               "A Blender spot light, shining along its -Z: its colour, Power and cone (Spot Size, Blend), and in the "
               "Light panel its Pattern, Switchable and Start Off.",
               (KeyDef("_light", "255 240 220 600", "Color + brightness"),), floor_origin=False),
+    EntityDef("env_tonemap_controller", "Tonemapper", "Lights",
+              "Controls in-game exposure, eye adaptation and bloom. Settings apply at map start; "
+              "position does not matter. Use one master per map. Blank numeric fields keep game defaults.",
+              (KeyDef("targetname", "", "Name"), KeyDef("spawnflags", "1", "Master"),
+               KeyDef("_hl_tm_mode", "AUTO", "Exposure Mode"),
+               KeyDef("_hl_tm_min", "0.1", "Minimum Exposure"),
+               KeyDef("_hl_tm_max", "4", "Maximum Exposure"),
+               KeyDef("_hl_tm_rate", "1", "Adaptation Speed"),
+               KeyDef("_hl_tm_scale", "1", "Fixed Exposure"),
+               KeyDef("_hl_tm_blend", "0", "Initial Blend Seconds"),
+               KeyDef("_hl_tm_bloom", "", "Bloom Strength"),
+               KeyDef("_hl_tm_bloom_exponent", "", "Bloom Exponent"),
+               KeyDef("_hl_tm_bloom_saturation", "", "Bloom Saturation"),
+               KeyDef("_hl_tm_bright_pixels", "", "Bright Pixels (%)"),
+               KeyDef("_hl_tm_target", "", "Target Brightness (%)"),
+               KeyDef("_hl_tm_min_luminance", "", "Minimum Average Luminance")), floor_origin=False),
     EntityDef("light_environment", "Sun", "Lights",
               "A Blender sun: the map's sun and sky light, pointing the way it shines (Lighting > Environment sets "
               "the same when there's no sun in the scene).",

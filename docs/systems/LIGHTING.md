@@ -6,6 +6,20 @@ Hammerless has its own: **hlvrad** (`native/hlvrad/*.c`). It is the default ligh
 
 This page explains how it works, what was measured, and what each setting in the **Lighting** panel does.
 
+## In-game exposure and bloom
+
+Add **Lights > Tonemapper** and use its Selected Object settings. One master controls the default exposure for the map; its position does not matter. Hammerless creates the startup entity I/O automatically. Automatic mode applies exposure limits, Fixed mode sets both limits to the same value, and Game Defaults resets custom exposure limits. Optional bloom and metering fields still apply when filled. Blank fields leave engine settings unchanged.
+
+**Bright Pixels (%)** controls the bright percentile used for metering; enter `5` for 5%, not `0.05`. L4D2 defaults are 1% bright pixels, 45% target brightness, and 3% Minimum Average Luminance. That last setting protects dark scenery from excessive darkening around bright flames. A blank field retains this protection; `0` disables it. Disabling it was confirmed in-game to restore noticeable adaptation in a dark map, but flames can then darken the whole screen dramatically. Intermediate values are tuning choices, not universal presets. Exposure is global, not local tonemapping.
+
+The installed L4D2 client was checked against Valve's [exposure presentation (pages 30–32)](https://cdn.steamstatic.com/apps/valve/2008/GDC2008_PostProcessingInTheOrangeBox.pdf): it combines bright-percentile metering with a median-luminance protection floor. Changing exposure limits does not replace that metering rule. A dark scene already at Maximum Exposure cannot brighten further.
+
+Startup resets run before custom settings. Fixed mode uses networked minimum/maximum inputs rather than the unreliable server-only scale command. Settings are exported on Build & Play; they do not change the baked lighting itself.
+
+## Transparent shadows
+
+Bakes automatically enable texture shadows and full-model prop shadow geometry. Hammerless checks every static prop's material alpha without requiring a model flag or a `forcetextureshadow` list. Solid, grate and window brush materials are checked too. Opaque materials remain solid; windows without usable alpha retain their previous non-shadowing behavior. This change does not add transparency support to bounce lighting.
+
 ## What a light compiler writes
 
 vrad (and hlvrad) fill these parts of the compiled map:

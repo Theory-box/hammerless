@@ -162,9 +162,10 @@ static int AddPropPolys(int id, const char *name, const vec3_t origin, const vec
     if (ok) {
         float m[3][4];
         MatrixAngles(angles, origin, m);
-        /* -textureshadows: the model's alpha textures, when it casts them (its flag, or lights.rad's list) */
-        int *shadowtex = NULL, ntex = 0, flags = I32(mdl + 0x98);
-        if (g_bTextureShadows && ((flags & 0x40000) || TS_ModelForced(name))) shadowtex = TS_ModelTextures(mdl, mlen, &ntex);
+        /* Check every model when texture shadows are enabled. Material alpha still
+         * decides coverage; opaque materials stay solid. No model opt-in list needed. */
+        int *shadowtex = NULL, ntex = 0;
+        if (g_bTextureShadows) shadowtex = TS_ModelTextures(mdl, mlen, &ntex);
         int vstart = I32(vvd + 56), numbp = I32(mdl + 232), bpindex = I32(mdl + 236), vtxbp = I32(vtx + 32);
         for (int b = 0; b < numbp; b++) {
             int bp = bpindex + 16 * b, nmodels = I32(mdl + bp + 4), modelindex = I32(mdl + bp + 12);

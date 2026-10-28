@@ -741,18 +741,24 @@ float TestLine_DoesHitSky(const vec3_t start, const vec3_t stop, int static_prop
  * L4D2 does this around a point inside the brush (the origin pushed onto any side it is behind, up to 4
  * passes) for precision, then moves the result back. */
 #define CONTENTS_GRATE 0x8
+#define CONTENTS_WINDOW 0x2
 static void AddBrush(int b) {
     const dbrush_t *brush = &dbrushes[b];
-    /* -textureshadows: grates too (L4D2's vrad), their sides with alpha textures see-through */
+    /* Inspect materials on ordinary solid brushes as well as grates/windows.
+     * Clip, trigger and water-only volumes must not become shadow casters. */
+    int opaque = (brush->contents & MASK_OPAQUE) != 0;
     int grate = g_bTextureShadows && (brush->contents & CONTENTS_GRATE);
-    if (!(brush->contents & MASK_OPAQUE) && !grate) return;
+    int window = g_bTextureShadows && (brush->contents & CONTENTS_WINDOW);
+    if (!opaque && !grate && !window) return;
     int sidetex[256], anytex = 0;
-    if (grate && brush->numsides < 256)
+    if (g_bTextureShadows && brush->numsides < 256)
         for (int i = 0; i < brush->numsides; i++) {
             const dbrushside_t *side = &dbrushsides[brush->firstside + i];
             sidetex[i] = side->texinfo >= 0 && side->texinfo < numtexinfo ? TS_MaterialTexture(TexDataName(texinfo[side->texinfo].texdata)) : -1;
             if (sidetex[i] >= 0) anytex = 1;
         }
+    /* Preserve the old non-shadowing window behavior if no usable alpha exists. */
+    if (!opaque && !grate && !anytex) return;
     vec3_t c = {0, 0, 0};
     for (int pass = 0, done = 0; pass < 4 && !done; pass++) {
         done = 1;
