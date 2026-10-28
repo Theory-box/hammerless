@@ -1354,6 +1354,7 @@ def scene_settings_to_ir(s) -> MapSettings:
         adaptive_lightmaps=s.adaptive_lightmaps and s.light_tool == "HAMMERLESS",
         lightmap_near=s.lightmap_near, lightmap_max_scale=s.lightmap_max_scale,
         lightmap_distance=s.lightmap_distance,
+        lightmap_view_margin=s.lightmap_view_margin,
         fog_enabled=s.fog_enabled, fog_color=_rgb(s.fog_color), fog_start=fog_start,
         fog_end=fog_end, fog_max_density=s.fog_max_density,
         mode_options=mode_settings_values(s),

@@ -1,7 +1,7 @@
 """Conservative, pre-compile lightmap scaling. No lighting bake or scene mutation.
 
-Viewing regions cover ALL upward brush surfaces, including unreachable roofs, plus
-prop hulls and spawn positions. This deliberately overestimates playable space.
+Viewing regions come from freshly predicted navigation areas with edge padding
+and a crouch-to-jump eye-height envelope. Missing nav keeps original scales.
 An occlusion decision must cover an entire receiver bounds AND eye region, not
 just a handful of rays. Unknown visibility keeps detail. No geometry is removed.
 """
@@ -20,6 +20,7 @@ class Options:
     maximum: int = 64
     distance: bool = True
     budget: int = 2000000
+    view_margin: float = 16.0
 
 
 def bounds(points):
@@ -76,6 +77,41 @@ def scale_for(base, nearest, options):
         scale *= 2
         threshold *= 2
     return scale
+
+
+class Occluders:
+    """Vectorized version of the same whole-bundle halfspace proof."""
+    def __init__(self, brushes):
+        import numpy as np
+        self.np = np
+        self.boxes = np.asarray([(b.mins, b.maxs) for b in brushes], dtype=float).reshape(-1, 2, 3)
+        self.counts = np.asarray([len(b.sides) for b in brushes], dtype=int)
+        self.owner = np.repeat(np.arange(len(brushes)), self.counts)
+        self.normals = np.asarray([s.normal for b in brushes for s in b.sides], dtype=float).reshape(-1, 3)
+        self.distances = np.asarray([s.dist - 0.05 for b in brushes for s in b.sides])
+
+    def blocked(self, eye, target, remaining):
+        np = self.np
+        lo, hi = np.minimum(eye[0], target[0]), np.maximum(eye[1], target[1])
+        eligible = np.all((self.boxes[:, 0] <= hi + 0.05) & (self.boxes[:, 1] >= lo - 0.05), axis=1)
+        ids = np.flatnonzero(eligible)[:remaining]
+        if not len(ids):
+            return False, 0
+        eligible[:] = False
+        eligible[ids] = True
+        mask = eligible[self.owner]
+        n, c = self.normals[mask], self.distances[mask]
+        a = (n * np.where(n >= 0, eye[1], eye[0])).sum(axis=1)
+        b = (n * np.where(n >= 0, target[1], target[0])).sum(axis=1)
+        delta = b - a
+        parallel = np.abs(delta) < 1e-12
+        t = np.divide(c - a, delta, out=np.zeros_like(delta), where=~parallel)
+        starts = np.r_[0, np.cumsum(self.counts[ids])[:-1]]
+        lower = np.maximum.reduceat(np.where((delta < 0) & ~parallel, t, 0.00001), starts)
+        upper = np.minimum.reduceat(np.where((delta > 0) & ~parallel, t, 0.99999), starts)
+        bad = np.logical_or.reduceat(parallel & (a > c), starts)
+        hits = np.flatnonzero((lower <= upper) & ~bad)
+        return (True, int(hits[0]) + 1) if len(hits) else (False, len(ids))
 
 
 @dataclass
@@ -144,11 +180,38 @@ def _opaque(name, content, cache):
     return ok
 
 
-def optimize(text, content=None, options=Options()):
+def nav_view_regions(text, options, regions=(), climbs=(), wall_climbs=False):
+    """Predict from this export, not last build's nav. Never write/replace game nav."""
+    from . import navpredict, fastnav
+    if not fastnav.available():
+        return []  # Avoid unexpectedly expensive Python nav generation during export.
+    mesh = navpredict.predict(text, regions, climbs=climbs, wall_climbs=wall_climbs, roofs=False)
+    return mesh_view_regions(mesh, options.view_margin)
+
+
+def mesh_view_regions(mesh, margin):
+    """Continuous eye envelopes over navigation; include ladder transit space."""
+    out = []
+    pad = max(0.0, margin)
+    for area in mesh.areas:
+        lo, hi = bounds(area.corners)
+        out.append(((lo[0] - pad, lo[1] - pad, lo[2] + 24),
+                    (hi[0] + pad, hi[1] + pad, hi[2] + 144)))
+    if not out:
+        return []
+    for ladder in mesh.ladders:
+        lo, hi = bounds([ladder.bottom, ladder.top])
+        width = max(16, ladder.width / 2) + pad
+        out.append(((lo[0] - width, lo[1] - width, lo[2] + 24),
+                    (hi[0] + width, hi[1] + width, hi[2] + 144)))
+    return out
+
+
+def optimize(text, content=None, options=Options(), regions=(), climbs=(), wall_climbs=False):
     """Return (VMF, summary). Only static world/detail receiving faces are changed.
 
-    This initial implementation uses geometry-derived viewing regions instead of
-    cached nav: never stale, and covers jumping, crouching and unreachable ledges.
+    Fresh navigation follows current geometry, with crouch/jump heights and edge
+    leeway. No stale BSP/nav is reused and no game nav file is overwritten.
     Unsupported moving platforms/instances fail open to the unmodified map.
     """
     doc = parse(text)
@@ -158,7 +221,7 @@ def optimize(text, content=None, options=Options()):
     if any(e.get('classname', '').lower() in unsafe for e in entities):
         return text, 'Adaptive lightmaps: kept original scales (moving viewpoints or unexpanded instances).'
     faces, blockers, eyes = [], [], []
-    material_cache, prop_cache = {}, {}
+    material_cache = {}
     worlds = [b for b in doc if b.name.lower() == 'world']
     for owner in worlds + entities:
         cls = owner.get('classname', '').lower()
@@ -171,9 +234,6 @@ def optimize(text, content=None, options=Options()):
             brush = brush_from_vmf_sides([(s.get('plane', ''), s.get('material', '')) for s in sides])
             if brush is None:
                 continue
-            if cls in {'func_ladder', 'func_simpleladder'}:
-                eyes.append(((brush.mins[0] - 32, brush.mins[1] - 32, brush.mins[2] + 24),
-                             (brush.maxs[0] + 32, brush.maxs[1] + 32, brush.maxs[2] + 144)))
             original = []
             for s in sides:
                 match = _POINTS.search(s.get('plane', ''))
@@ -192,70 +252,43 @@ def optimize(text, content=None, options=Options()):
                 if len(points) < 3:
                     continue
                 box = bounds(points)
-                if (plane.normal[2] >= 0.7 and not cls.startswith('trigger_')
-                        and side.get('material', '').lower() not in {'tools/toolsskybox', 'tools/toolsskybox2d'}):
-                    eyes.append(((box[0][0] - 32, box[0][1] - 32, box[0][2] + 24),
-                                 (box[1][0] + 32, box[1][1] + 32, box[1][2] + 144)))
                 if (static and not side.get('material', '').lower().startswith('tools/')
                         and (content is None or _opaque(side.get('material', ''), content, material_cache))):
                     base = max(1, int(side.get('lightmapscale', '16')))
                     faces.append(Face(side, plane.normal, plane.dist, box, base))
             if static and all(_opaque(s.get('material', ''), content, material_cache) for s in sides):
                 blockers.append(brush)
-        if cls.startswith('prop_'):
-            # Collision hulls are only used as possible viewpoints, never as opaque blockers.
-            from .navanalyze import _prop_pieces, _prop_solid, _prop_exists
-            if content is None:
-                return text, 'Adaptive lightmaps: kept original scales (prop viewing bounds unavailable).'
-            pieces = _prop_pieces(owner, content, prop_cache)
-            if not pieces and _prop_solid(owner):
-                model = owner.get('model', '').replace('\\', '/').lower()
-                if content.read(model) and not _prop_exists(cls, model, content, prop_cache):
-                    continue  # The compiler/game removes this invalid prop.
-                # Many foliage/decorative models have no physics file. Their
-                # model hull is a conservative fallback, including invalid
-                # static props the game itself would discard.
-                import copy
-                proxy = copy.deepcopy(owner)
-                _set(proxy, 'classname', 'prop_static')
-                _set(proxy, 'solid', '2')
-                pieces = _prop_pieces(proxy, content, {})
-                if not pieces:
-                    return text, 'Adaptive lightmaps: kept original scales (a prop has unknown viewing bounds).'
-            for p in pieces:
-                eyes.append(((p.mins[0] - 32, p.mins[1] - 32, p.mins[2] + 24),
-                             (p.maxs[0] + 32, p.maxs[1] + 32, p.maxs[2] + 144)))
-        if cls in {'info_player_start', 'info_survivor_position', 'info_landmark'}:
-            p = tuple(float(v) for v in owner.get('origin', '0 0 0').split())
-            eyes.append(((p[0] - 32, p[1] - 32, p[2] + 24), (p[0] + 32, p[1] + 32, p[2] + 144)))
+    eyes = nav_view_regions(text, options, regions, climbs, wall_climbs)
+    if not eyes:
+        return text, 'Adaptive lightmaps: no usable predicted nav; kept original scales.'
     eyes = sorted(set(eyes))
     if not eyes or not faces:
         return text, 'Adaptive lightmaps: no usable viewing regions or receiving faces; kept original scales.'
     changed = hidden = 0
     before = after = 0.0
     checks = 0
+    import numpy as np
+    eye_boxes = np.asarray(eyes)
+    occluders = Occluders(blockers)
     components = groups(faces)
     for component in components:
         box = bounds([p for f in component for p in f.box])
         n, d = component[0].normal, component[0].dist
         target = tuple(tuple(p[k] + n[k] * 0.5 for k in range(3)) for p in box)
         nearest = math.inf
-        candidates = sorted((distance(box, eye), eye) for eye in eyes if support(eye, n) >= d - 0.05)
+        normal = np.asarray(n)
+        facing = (np.where(normal >= 0, eye_boxes[:, 1], eye_boxes[:, 0]) * normal).sum(axis=1) > d + 0.05
+        ids = np.flatnonzero(facing)
+        gaps = np.maximum(0, np.maximum(eye_boxes[ids, 0] - box[1], box[0] - eye_boxes[ids, 1]))
+        distances = np.sqrt((gaps * gaps).sum(axis=1))
+        order = np.argsort(distances, kind='stable')
+        candidates = ((float(distances[k]), eyes[ids[k]]) for k in order)
         for dist, eye in candidates:
-            if dist <= options.near or checks >= options.budget:
+            if checks >= options.budget:
                 nearest = dist
                 break
-            occluded = False
-            bundle = bounds([*eye, *target])
-            for brush in blockers:
-                if not overlaps(bundle, (brush.mins, brush.maxs)):
-                    continue
-                checks += 1
-                if blocked(eye, target, brush):
-                    occluded = True
-                    break
-                if checks >= options.budget:
-                    break
+            occluded, used = occluders.blocked(eye, target, options.budget - checks)
+            checks += used
             if not occluded:
                 nearest = dist
                 break
@@ -284,6 +317,6 @@ def optimize(text, content=None, options=Options()):
         block.write(out)
     saved = 100 * (1 - after / before) if before else 0
     return ''.join(out), (f'Adaptive lightmaps: coarsened {changed}/{len(faces)} brush sides '
-                         f'({hidden} unseen), {len(components)} surfaces, {len(eyes)} viewing regions; '
+                         f'({hidden} unseen), {len(components)} surfaces, {len(eyes)} nav viewing regions; '
                          f'estimated receiver samples reduced {saved:.0f}% before BSP clipping. '
                          'Geometry and shadow casters retained.')

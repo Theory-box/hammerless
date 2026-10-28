@@ -724,7 +724,9 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
     if s.adaptive_lightmaps:
         from .lightvisibility import optimize, Options
         try:
-            text, summary = optimize(text, content, Options(s.lightmap_near, s.lightmap_max_scale, s.lightmap_distance))
+            text, summary = optimize(text, content,
+                Options(s.lightmap_near, s.lightmap_max_scale, s.lightmap_distance, view_margin=s.lightmap_view_margin),
+                collect_regions(ir)[0], collect_climbs(ir)[0], s.wall_climbs)
             report.info.append(summary)
         except (ValueError, OSError, ArithmeticError) as ex:
             report.warnings.append(f'Adaptive lightmaps could not analyze this map; original scales retained: {ex}')

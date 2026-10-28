@@ -860,6 +860,7 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
                 adaptive.prop(s, "lightmap_max_scale")
                 adaptive.prop(s, "lightmap_distance")
                 adaptive.prop(s, "lightmap_near")
+                adaptive.prop(s, "lightmap_view_margin")
                 _hint(adaptive, "Experimental: keeps uncertain surfaces detailed")
                 from .lightview import resolution_shown
                 showing_resolution = resolution_shown(context)

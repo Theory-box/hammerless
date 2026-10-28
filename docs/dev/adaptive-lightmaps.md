@@ -26,37 +26,44 @@ agree. No custom shader, geometry splitting pass, or change to texture UVs.
   are not disabled. They contribute to actual appearance. Live Light Mixing also
   requests extra saved lighting work; it is not a free optimization to remove it.
 
-## How the first version decides
+## Navigation-based viewing regions
 
-`core/lightvisibility.py` analyzes the exported VMF, never the editable Blender
-scene or a stale BSP/nav cache. It builds continuous viewing boxes above all
-upward brush surfaces, including unreachable ledges, plus prop collision/model
-bounds, ladders and spawn landmarks. Eye space extends 24–144 Hammer units above
-support surfaces and 32 sideways. Sky shell faces are not walkable supports.
-This deliberately includes more than the nav mesh. It cannot optimize as
-aggressively as a later reachable-space analysis, but doesn't require generating
-another nav mesh or miss a position merely because sparse rays skipped it.
+The earlier geometry-top heuristic preserved unreachable exterior sides. Current
+viewing regions use `navpredict.predict` on the current exported VMF, including
+manual nav regions, climb settings and prop collision. No existing .nav is read
+or overwritten; no game is launched. Automatic extra rooftop seeds are disabled.
+Missing native nav support or an empty prediction leaves original scales intact.
 
-Touching coplanar face bounds are grouped. Disconnected islands and opposite
-normals stay separate. A group's finest required spacing protects its other
-members; existing explicit coarser scales remain intact. Bounding boxes may join
-extra faces around holes, conservatively keeping more detail. No nonlinear UVs.
+Each nav area becomes a continuous viewing box covering all its corner heights,
+24–144 Hammer units above the floor. `Nav Edge Leeway` adds horizontal padding
+(default 16, adjustable 0–128). Ladder transit envelopes are included too.
+This covers crouching, standing and jumping near the nav; it does not prove every
+physics trick or scripted viewpoint is covered. Increase leeway for unusual
+routes or disable adaptive scaling when navigation does not represent play space.
 
-A surface stays detailed if any possible nearby viewing region faces it. Farther
-regions can be rejected only when an opaque stationary convex brush provably
-blocks **every segment between the entire viewing box and receiver box**. This
-uses halfspace bounds: find a shared segment parameter where the entire bundle
-is inside the blocker. A centre ray being blocked is insufficient. Alpha-tested,
-translucent, unknown and conditional/proxy materials are not used as occluders;
-receivers with unknown/non-opaque materials keep their original scales when
-material content is available. Doors/props never serve as permanent occluders.
+Touching coplanar face bounds share a resolution requirement; disconnected islands
+and opposite normals remain separate. Existing coarser overrides remain intact.
+Near faces now undergo the same occlusion checks as distant ones: proximity by
+itself is not evidence of visibility. An opaque stationary convex brush can
+reject a viewing region only if it blocks every segment from the entire region
+to the entire receiver bounds. Vectorized halfspace interval tests implement the
+same proof as the scalar reference. Unknown/transparent materials, doors and
+props never act as permanent occluders. `%keywords` is harmless browser metadata
+and is allowed; actual compile flags and unsupported conditional materials stay
+conservative.
 
-Distance is the lower bound between boxes. Default spacing doubles at 1024,
-2048, etc. units; it never exceeds the configured coarsest spacing unless an
-existing face was already coarser. Entirely back-facing or proven occluded groups
-use that coarsest spacing. A bounded occlusion budget fails open (possible sight),
-not closed (hidden). Missing support data, moving platforms, teleports, unexpanded
-instances and displacement viewing regions retain the map's original scales.
+Distance uses a lower bound between boxes. Default spacing doubles at 1024,
+2048, etc. units. Back-facing/proven occluded surfaces use the coarsest spacing.
+The bounded occlusion budget fails open, retaining possible visibility. Moving
+platforms, teleports, unexpanded instances and displacements currently leave the
+map unchanged. No additional geometry splitting or texture-UV changes occur.
+
+On the user's already optimized exported map, the new pass found 88 additional
+sides to coarsen (73 unseen). Total analysis took about ten seconds, including
+fresh nav prediction (~1.5 seconds). This is export overhead, not a bake; actual
+bake-time or BSP savings have not been measured. Sixteen focused checks cover
+nav padding, missing-nav fallback, close occlusion, scalar/vector parity, material
+handling, and the existing resolution safety rules.
 
 ## Lighting preservation and limits
 
@@ -70,7 +77,7 @@ overrides can make the global transport floor conservative/expensive.
 
 The analysis does not know arbitrary runtime scripts or every physics-prop jump
 trick. Disable the option for unusual moving-world gameplay. Future work can use
-explicit playable volumes and verified nav coverage. Thin gaps are conservatively
+explicit playable volumes to supplement navigation coverage. Thin gaps are conservatively
 left visible; a surface hidden jointly by several blockers may remain detailed.
 
 Summary sample savings are geometric estimates over **eligible sides before BSP

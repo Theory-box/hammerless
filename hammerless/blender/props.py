@@ -1070,6 +1070,8 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
         description="Maximum lightmap spacing for hidden/distant surfaces; larger means fewer samples")
     lightmap_distance: BoolProperty(name="Also Reduce Distant Surfaces", default=True,
         description="Coarsen distant surfaces too; turn off to reduce only surfaces proven unseen from viewing regions")
+    lightmap_view_margin: FloatProperty(name="Nav Edge Leeway", default=16.0, min=0.0, max=128.0,
+        description="Extra horizontal viewing space around predicted nav areas, in Hammer units; larger protects more surfaces")
     lightmap_scale_imported: BoolProperty(name="Imported Brushes Too", default=False,
                                           description="An imported map's brushes keep the lightmap scale each face "
                                                       "had in the map: use this Lightmap Scale (or the material's "

@@ -109,6 +109,7 @@ class MapSettings:
     lightmap_near: float = 512.0
     lightmap_max_scale: int = 64
     lightmap_distance: bool = True
+    lightmap_view_margin: float = 16.0
     wall_climbs: bool = False         # Auto Climb Links (nav made in Blender)
 
     # fog
