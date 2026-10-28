@@ -278,25 +278,29 @@ def invalidate_receivers(item=None):
 @persistent
 def deps_changed(scene,depsgraph):
     updates=list(depsgraph.updates)
-    objects=[u for u in updates if isinstance(u.id,bpy.types.Object)]
-    transform_only=bool(objects) and all(u.is_updated_transform and not u.is_updated_geometry for u in objects)
+    objects={u.id.original.as_pointer():u.id.original for u in updates if isinstance(u.id,bpy.types.Object)}
+    meshes={u.id.original.as_pointer() for u in updates if isinstance(u.id,bpy.types.Mesh)}
+    if meshes:
+        # A mesh can have multiple users at different transforms. Check every
+        # user, including ones Blender didn't report as an Object update.
+        for obj in scene.objects:
+            if obj.type=="MESH" and obj.data.as_pointer() in meshes:objects[obj.as_pointer()]=obj
+    for item in objects.values():
+        if is_overlay(item):changed();continue
+        if item.type!="MESH":continue
+        if not receiver_move_affects_preview(item,depsgraph,scene):
+            # Geometry edits use the same old/new spatial gate as transforms.
+            # Discard for later without scheduling projection or GPU work now.
+            _state.get("receiver_cache",{}).pop(item.as_pointer(),None)
+            _state["faces"]=None
+        else:invalidate_receivers(item)
     for update in updates:
         item=update.id.original
-        if isinstance(item,bpy.types.Object) and is_overlay(item):changed()
-        elif isinstance(item,bpy.types.Object):
-            if item.type!="MESH":continue
-            if transform_only and not receiver_move_affects_preview(item,depsgraph,scene):
-                # Forget stale geometry for later, but keep already-drawn decals.
-                # No receiver scan, conversion, clipping or GPU batch rebuild.
-                _state.get("receiver_cache",{}).pop(item.as_pointer(),None)
-                _state["faces"]=None
-            else:invalidate_receivers(item)
-        elif isinstance(item,(bpy.types.Mesh,bpy.types.Material)):
-            invalidate_receivers(item)
+        if isinstance(item,bpy.types.Material):invalidate_receivers(item)
         elif isinstance(item,bpy.types.Collection):
-            # Blender also tags containing collections on every object move.
-            if not transform_only or _state.get("object_count")!=len(scene.objects):changed()
+            if not objects or _state.get("object_count")!=len(scene.objects):changed()
         elif isinstance(item,bpy.types.Scene):changed()
+
 
 
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.20.26 (test release, 2026-10-28)
+
+- Apply decal spatial invalidation to Edit Mode mesh updates as well as object transforms. Unrelated edits do not schedule preview rebuilds; entering/leaving receivers and linked mesh users are checked.
+
 ## 0.20.25 (test release, 2026-10-28)
 
 - Skip decal preview rebuilds for brush transforms outside every decal projection volume; check old and new bounds so entering/leaving surfaces still update. In the saved-map check, 100 unrelated brush moves caused zero conversions/rebuilds, with approximately 0.14 ms per notification handler (not a viewport FPS guarantee).
