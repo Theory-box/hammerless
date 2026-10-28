@@ -27,6 +27,27 @@ def scales(text):
 
 
 class VisibilityTests(unittest.TestCase):
+    def test_editor_keywords_do_not_protect_hidden_stock_materials(self):
+        from hammerless.core.lightvisibility import _opaque
+        class Content:
+            def read(self, path):
+                return b'LightmappedGeneric { "$basetexture" "brick/wall" "%keywords" "l4d2" }'
+        content = Content()
+        self.assertTrue(_opaque('brick/wall', content, {}))
+        floor = box_brush((-100, -100, -16), (100, 100, 0), 'brick/wall')
+        out, report = optimize(document([floor]), content)
+        self.assertEqual(scales(out), [16, 64, 16, 16, 16, 16])
+        self.assertIn('1 unseen', report)
+
+    def test_keywords_do_not_override_transparency_or_compile_flags(self):
+        from hammerless.core.lightvisibility import _opaque
+        class Content:
+            def __init__(self, flag): self.flag = flag
+            def read(self, path):
+                return ('LightmappedGeneric { "%keywords" "l4d2" "' + self.flag + '" "1" }').encode()
+        for flag in ('$translucent', '$alphatest', '$nocull', '%compileinvisible', '%compileclip'):
+            self.assertFalse(_opaque('brick/wall', Content(flag), {}))
+
     def test_disabled_by_default_and_export_does_not_analyze(self):
         from unittest.mock import patch
         from hammerless.core.ir import MapIR, Entity

@@ -344,18 +344,29 @@ class HL_OT_lightmap_show(bpy.types.Operator):
 class HL_OT_lightmap_resolution(bpy.types.Operator):
     bl_idname = "hammerless.lightmap_resolution"
     bl_label = "Show Baked Resolution"
-    bl_description = "Show actual lightmap cells from the last compiled map; does not bake or change your scene"
+    bl_description = "Toggle actual lightmap cells from the last compiled map; does not bake or change your scene"
 
     def execute(self, context):
+        s = context.scene.hammerless
+        if resolution_shown(context):
+            s.show_lightmap = False
+            _redraw()
+            return {"FINISHED"}
         err = load(context)
         if err:
             self.report({"WARNING"}, err)
             return {"CANCELLED"}
-        s = context.scene.hammerless
         s.lightmap_mode = "RESOLUTION"
         s.show_lightmap = s.show_bake_visualizations = True
         _redraw()
         return {"FINISHED"}
+
+
+def resolution_shown(context):
+    """The toggle reflects a visible resolution overlay belonging to this map."""
+    s = context.scene.hammerless
+    return (shown() and s.show_lightmap and s.show_bake_visualizations and s.lightmap_mode == "RESOLUTION"
+            and os.path.normcase(bsp_path(context)) == os.path.normcase(_state["path"] or ""))
 
 
 class HL_OT_lightmap_delete(bpy.types.Operator):

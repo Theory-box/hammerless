@@ -133,7 +133,10 @@ def _opaque(name, content, cache):
     ok = len(blocks) == 1 and blocks[0].name.lower() in {'lightmappedgeneric', 'worldvertextransition'}
     if ok:
         m = blocks[0]
-        ok = (all(isinstance(it, tuple) and not it[0].startswith('%') for it in m.items)
+        # %keywords is Hammer's material-browser metadata, not a compile flag.
+        # Rejecting it excluded most stock brick/stone/wood receiving surfaces.
+        ok = (all(isinstance(it, tuple) and (not it[0].startswith('%') or it[0].lower() == '%keywords')
+                  for it in m.items)
               and all(m.get(k, '0').strip() in {'0', '0.0', ''} for k in (
             '$translucent', '$alphatest', '$additive', '$nocull')) and m.get('$alpha', '1') in {'1', '1.0'}
               )
