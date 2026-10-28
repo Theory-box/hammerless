@@ -1061,6 +1061,14 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     lightmap_scale: IntProperty(name="Lightmap Scale", default=16, min=1, max=128,
                                 description="Shadow detail on brush faces: 8 = sharp, 16 = Valve default, "
                                             "32+ = soft but faster to compile")
+    adaptive_lightmaps: BoolProperty(name="Adaptive Lightmaps", default=False,
+        description="Keep close surfaces detailed and coarsen unseen/distant static surfaces before baking; experimental")
+    lightmap_near: FloatProperty(name="Keep Detail Within", default=512.0, min=64.0, max=16384.0,
+        description="Hammer units from possible viewing regions; close surfaces keep their original lightmap scale")
+    lightmap_max_scale: IntProperty(name="Coarsest Scale", default=64, min=1, max=128,
+        description="Maximum lightmap spacing for hidden/distant surfaces; larger means fewer samples")
+    lightmap_distance: BoolProperty(name="Also Reduce Distant Surfaces", default=True,
+        description="Coarsen distant surfaces too; turn off to reduce only surfaces proven unseen from viewing regions")
     lightmap_scale_imported: BoolProperty(name="Imported Brushes Too", default=False,
                                           description="An imported map's brushes keep the lightmap scale each face "
                                                       "had in the map: use this Lightmap Scale (or the material's "

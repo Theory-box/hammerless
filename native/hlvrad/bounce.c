@@ -67,6 +67,12 @@ static void MakePatchForFace(int fn, winding_t *w) {
     p->area = area;
     p->sky = tx->flags & SURF_SKY ? 1 : 0;
     p->luxscale = (chopscale[0] + chopscale[1]) / 2;
+    /* Adaptive receiver scaling must not silently coarsen the radiosity mesh.
+     * The exporter records the original finest scale, before changing receivers.
+     * Absent key: byte-for-byte old behaviour for ordinary maps. */
+    float transport = num_entities ? FloatForKey(&entities[0], "_hl_transport_lightmap_scale") : 0;
+    if (transport >= 1 && transport <= 128 && p->luxscale < 1.0f / transport)
+        p->luxscale = 1.0f / transport;
     p->chop = maxchop;
     p->winding = w;
     const dplane_t *pl = &dplanes[f->planenum];

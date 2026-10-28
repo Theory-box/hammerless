@@ -718,5 +718,14 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
     report.solid_sources = dict(w.solid_sources)
     if base is not None:
         from .vmfimport import write_document
-        return write_document(doc, world, base_entities, ent_blocks), report
-    return w.document(world, ent_blocks), report
+        text = write_document(doc, world, base_entities, ent_blocks)
+    else:
+        text = w.document(world, ent_blocks)
+    if s.adaptive_lightmaps:
+        from .lightvisibility import optimize, Options
+        try:
+            text, summary = optimize(text, content, Options(s.lightmap_near, s.lightmap_max_scale, s.lightmap_distance))
+            report.info.append(summary)
+        except (ValueError, OSError, ArithmeticError) as ex:
+            report.warnings.append(f'Adaptive lightmaps could not analyze this map; original scales retained: {ex}')
+    return text, report

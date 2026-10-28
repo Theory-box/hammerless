@@ -853,6 +853,14 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
         on = col.column()
         on.enabled = s.light_quality != "OFF"
         on.prop(s, "lightmap_scale", text="Lightmap Scale")
+        if ours:
+            on.prop(s, "adaptive_lightmaps")
+            if s.adaptive_lightmaps:
+                adaptive = on.column(align=True)
+                adaptive.prop(s, "lightmap_max_scale")
+                adaptive.prop(s, "lightmap_distance")
+                adaptive.prop(s, "lightmap_near")
+                _hint(adaptive, "Experimental: keeps uncertain surfaces detailed")
         from .vmfimport import imported as _imported
         if _imported(context.scene):
             on.prop(s, "lightmap_scale_imported")
