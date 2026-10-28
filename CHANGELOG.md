@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.20.21 (test release, 2026-10-27)
+
+- Add optional Adaptive Lightmaps, off by default. Use freshly predicted navigation areas, adjustable Nav Edge Leeway and crouch-to-jump viewing heights to reduce resolution on unseen and distant static surfaces before baking. Keep existing fine detail where needed, retain shadow geometry, and preserve a minimum radiosity patch density.
+- Group touching coplanar surfaces for resolution decisions. Check occlusion even for nearby surfaces; accept harmless material-browser keywords without relaxing transparency checks. Missing usable nav and unsupported moving-world configurations retain original scales.
+- Add Show/Hide Baked Resolution: a viewport toggle displaying the compiled map's actual lightmap spacing and cell grid, with a colour legend and measured spacing range. Existing bakes can be inspected without rebuilding. Uses compiled axes to avoid false readings on tiny triangles.
+- Add a Selected Object particle-effect picker that preserves placement and settings.
+- Stop automatic fallback to Valve compilers after a Hammerless compiler failure; report the failure instead. Explicitly selected Valve compilers remain available.
+- Validation: the user confirmed improved results in their map. Focused visibility, density and receiver checks pass; the native lightmapper was rebuilt. No claim of universal bake-time or file-size savings; unusual scripted viewpoints may need more nav leeway or adaptive scaling disabled.
+
+Restart Blender after installing. Adaptive Lightmaps remains disabled until enabled in Lighting. Rebuild to apply changed resolution settings; the resolution overlay reads the last completed bake.
+
 ## 0.20.20 (test release, 2026-10-27)
 
 - Pause particle simulation, traces and viewport drawing during build/export, nav generation and baking, avoiding preview contention. Particle entities remain point entities without lightmap brush geometry.
