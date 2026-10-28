@@ -779,6 +779,8 @@ class CompileJob:
             self.steps = [("vbsp", valve_vbsp)]
         self._valve_vvis = None             # Valve's vvis, run instead if ours fails
         self._stopping = False
+        self._cancel_event = threading.Event()
+        self._deployed = False
         if vvis is not None:
             valve = [tools.exe("vvis")] + vvis + game + [self.base]
             if use_hlvvis(opts):
@@ -819,7 +821,7 @@ class CompileJob:
         self.log: list[str] = []
         self.done = False
         self.failed = False
-        self.cancelled = False       # stopped by cancel(): nothing was copied to the game
+        self.cancelled = False       # stopped by cancel(); _deployed records a copy already in progress
         self.summary: LogSummary | None = None
         self.lighting: list = []     # bspcheck.lighting_problems after vrad: (message, location, object)
         self._q: queue.Queue = queue.Queue()
@@ -1193,6 +1195,7 @@ class CompileJob:
                 os.makedirs(self.tools.maps_dir, exist_ok=True)
                 self._copy_bsp(os.path.join(self.tools.maps_dir, self.name + ".bsp"))
                 self._q.put(f"Copied {self.name}.bsp to {self.tools.maps_dir}")
+            self._check_stop()
             if self._shaky:
                 # (made by a fallback after a failure: no record of it at all, so the next build, smart or not,
                 # has nothing to build on and compiles the map again)
@@ -1206,10 +1209,12 @@ class CompileJob:
                     f.write(self._record())
                 with open(self.base + ".stamp", "w", encoding="utf-8") as f:   # (last: up to date only once the
                     f.write(self._stamp(self._vmf_bytes))                     # whole record is written)
+            self._check_stop()
             self._q.put("Timing: " + ", ".join(f"{n} {t:.1f}s" for n, t in self.timings))
             self._q.put(("OK",))
         except _Cancelled:
-            self._q.put("Build cancelled: the compiled map wasn't copied to the game")
+            self._q.put("Build cancelled after the map was copied to the game" if self._deployed else
+                        "Build cancelled: the compiled map wasn't copied to the game")
             self._q.put(("CANCELLED",))
         except Exception as ex:  # surfaced to the user in the log
             self._q.put(f"!! {ex}")
@@ -1235,9 +1240,10 @@ class CompileJob:
         return self._bake_ok
 
     def cancel(self) -> None:
-        """Stop the compile now: the running compiler is killed, no fallback runs after it and nothing is
-        copied to the game (the next build compiles the map again: the build records are already removed)."""
+        """Stop compilers and pending deployment retries. An already-started file copy
+        cannot be undone; cancellation reports explicitly if deployment occurred."""
         self._stopping = True
+        self._cancel_event.set()
         self.bake_abandoned = True
         if self._light is not None:
             self._light["cancel"] = True
@@ -1384,14 +1390,17 @@ class CompileJob:
         from . import stringtables
         dictionary = stringtables.keep_for_next_build(dest, self.tools.gamedir)
         for attempt in range(12):
+            self._check_stop()
             try:
                 shutil.copy2(self.base + ".bsp", dest)
+                self._deployed = True
                 if dictionary:          # (the game's dictionary: it doesn't spend ~10 s building one at load)
                     try:
                         stringtables.put_dictionary(dest, stringtables.for_map(dictionary, self.name))
                     except Exception as ex:          # never fail a build over it: the game makes its own
                         self._q.put(f"(stringtable dictionary not kept: {ex})")
                 verify_deployed_bsp(self.base + ".bsp", dest)
+                self._check_stop()
                 return
             except PermissionError:
                 if attempt == 0:
@@ -1399,7 +1408,8 @@ class CompileJob:
                         break
                     self._q.put("The game has the map open: unloading it to copy the new one in")
                     send_commands(self.tools, ["disconnect"])
-                time.sleep(1.0)
+                self._cancel_event.wait(1.0)
+                self._check_stop()
         raise RuntimeError(f"Couldn't copy {self.name}.bsp into the game's maps folder: the file is in use. "
                            "Close Left 4 Dead 2 (or load another map) and build again")
 

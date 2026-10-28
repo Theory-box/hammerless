@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.25 (test release, 2026-10-28)
+
+- Skip decal preview rebuilds for brush transforms outside every decal projection volume; check old and new bounds so entering/leaving surfaces still update. In the saved-map check, 100 unrelated brush moves caused zero conversions/rebuilds, with approximately 0.14 ms per notification handler (not a viewport FPS guarantee).
+- Cache overlay receiver geometry per brush: moving or editing one brush no longer reconverts the whole map. Material changes invalidate only dependent receivers.
+
+- Respect cancellation during deployment retries; report accurately when cancellation arrives after a copy already started.
+- Scope assigned overlay receivers to their collection instance so reusable assets export correctly.
+- Refresh decal receiver caches when game-material paths or material datablocks change, without invalidating them on projector movement.
+
 ## 0.20.24 (test release, 2026-10-28)
 
 - Add brush overlays with projected/clipped viewport previews and native `info_overlay` export. Resolve receiving side IDs after brush export; expose dimensions, UV repeats, receiver depth, render order, nearest-brush alignment and optional brush assignment. Preview uses transient GPU drawing and pauses during builds/bakes.

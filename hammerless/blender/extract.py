@@ -1534,7 +1534,14 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report, content
             elif role == "ENTITY" and src.hammerless.classname:
                 from .overlays import is_overlay, entity as overlay_entity
                 if is_overlay(src):
-                    ir.entities.append(overlay_entity(src, scale, matrix))
+                    # Receiver names must use the same instance scope as brush
+                    # source labels. External, non-instanced references stay global.
+                    members=set(holder.instance_collection.all_objects) if holder.instance_collection else set()
+                    names=[f"{holder.name} > {r.object.name}" if r.object in members else r.object.name
+                           for r in src.hl_overlay.receivers if r.object is not None]
+                    overlay=overlay_entity(src, scale, matrix, receiver_names=names)
+                    overlay.source=label
+                    ir.entities.append(overlay)
                     continue
                 origin = tuple(c * scale for c in matrix.translation)
                 ir.entities.append(Entity(src.hammerless.classname, origin, source_angles(matrix),

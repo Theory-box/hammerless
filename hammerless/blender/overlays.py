@@ -44,7 +44,7 @@ def is_overlay(obj):
     return obj is not None and hasattr(obj,"hl_overlay") and obj.hl_overlay.enabled
 
 
-def entity(obj, scale, matrix=None):
+def entity(obj, scale, matrix=None, receiver_names=None):
     p=obj.hl_overlay; m=matrix if matrix is not None else obj.matrix_world
     axes=[tuple(m.to_3x3().col[i]) for i in range(3)]
     lengths=[g.length(a) for a in axes]
@@ -55,7 +55,7 @@ def entity(obj, scale, matrix=None):
     if abs(g.dot(g.normalize(g.cross(u,v)),n))<.9999:raise ValueError("Apply overlay shear before export")
     origin=tuple(c*scale for c in m.translation)
     w,h=p.width*lengths[0],p.height*lengths[1]
-    names=[r.object.name for r in p.receivers if r.object is not None]
+    names=receiver_names if receiver_names is not None else [r.object.name for r in p.receivers if r.object is not None]
     if p.restrict_receivers and not names:raise ValueError("No receiver brushes assigned")
     kv={"material":p.material.strip().lower().removeprefix("materials/").removesuffix(".vmt"),
         "BasisOrigin":fmt_vec(origin),"BasisU":" ".join(map(str,u)),"BasisV":" ".join(map(str,v)),"BasisNormal":" ".join(map(str,n)),
@@ -85,26 +85,64 @@ def receiver_faces(context):
     # Collection updates also happen whenever a child projector moves. Compare
     # actual receiver membership/visibility instead of treating those as geometry.
     visible=[obj for obj in objects if obj.visible_get()]
-    key=(context.scene.as_pointer(),context.view_layer.name,scale,
-         context.scene.hammerless.default_material,tuple(o.as_pointer() for o in visible))
-    if _state.get("faces") is not None and _state.get("face_key")==key:
+    context_key=(context.scene.as_pointer(),context.view_layer.name,scale,context.scene.hammerless.default_material)
+    cache=_state.setdefault("receiver_cache",{})
+    if _state.get("receiver_context")!=context_key:
+        cache.clear();_state["receiver_context"]=context_key;_state["faces"]=None
+    key=tuple((o.as_pointer(),o.name) for o in visible)
+    live={ptr for ptr,name in key}
+    for ptr in list(cache):
+        if ptr not in live:del cache[ptr]
+    if _state.get("faces") is not None and _state.get("face_key")==key and all(ptr in cache for ptr,name in key):
         return _state["faces"]
     deps=context.evaluated_depsgraph_get()
     from ..core.vmf import VMFWriter
     from ..core.vmfimport import solid_faces
-    writer=VMFWriter()
-    faces=[]
-    for obj in visible:
-        for brush in mesh_to_brushes(obj,deps,scale,Materials()):
-            # merge_coplanar retains a representative triangle, not the full
-            # surface. Reconstruct the same plane intersection used by export.
-            for side,verts in solid_faces(writer.solid(brush)):
-                faces.append((verts,side.get("material",""),brush.source))
     import numpy as np
+    writer=VMFWriter()
+    for obj in visible:
+        ptr=obj.as_pointer()
+        if ptr in cache and cache[ptr][5]==obj.name:continue
+        own=[]
+        for brush in mesh_to_brushes(obj,deps,scale,Materials()):
+            for side,verts in solid_faces(writer.solid(brush)):
+                own.append((verts,side.get("material",""),brush.source))
+        low=np.array([np.min(f[0],axis=0) for f in own]).reshape((-1,3))
+        high=np.array([np.max(f[0],axis=0) for f in own]).reshape((-1,3))
+        cache[ptr]=(own,low,high,obj.data.as_pointer(),
+                    {slot.material.as_pointer() for slot in obj.material_slots if slot.material},obj.name)
+    entries=[cache[ptr] for ptr,name in key]
+    faces=[face for entry in entries for face in entry[0]]
     _state["faces"]=faces;_state["face_key"]=key
-    _state["face_min"]=np.array([np.min(f[0],axis=0) for f in faces]).reshape((-1,3))
-    _state["face_max"]=np.array([np.max(f[0],axis=0) for f in faces]).reshape((-1,3))
+    _state["face_min"]=np.concatenate([e[1] for e in entries]) if entries else np.empty((0,3))
+    _state["face_max"]=np.concatenate([e[2] for e in entries]) if entries else np.empty((0,3))
     return faces
+
+
+def projection_bounds(kv):
+    origin=Vector(tuple(float(x) for x in kv["BasisOrigin"].split()))
+    n=Vector(tuple(float(x) for x in kv["BasisNormal"].split()))
+    origin-=n*float(kv["_hl_overlay_depth"])/2
+    half=Vector((.02,.02,.02))
+    for axis,size in (("BasisU","_hl_overlay_width"),("BasisV","_hl_overlay_height"),("BasisNormal","_hl_overlay_depth")):
+        values=[abs(float(x))*float(kv[size])/2 for x in kv[axis].split()]
+        half+=Vector(values)
+    return tuple(origin-half),tuple(origin+half)
+
+
+def receiver_move_affects_preview(obj, depsgraph, scene):
+    bounds=_state.get("projection_bounds")
+    if bounds is None:return True  # No completed preview to reuse yet.
+    if not bounds:return False
+    def intersects(lo,hi):
+        return any(all(lo[i]<=b[1][i] and hi[i]>=b[0][i] for i in range(3)) for b in bounds)
+    entry=_state.get("receiver_cache",{}).get(obj.as_pointer())
+    if entry and len(entry[1]) and intersects(entry[1].min(axis=0),entry[2].max(axis=0)):return True
+    evaluated=obj.evaluated_get(depsgraph)
+    scale=scene.hammerless.units_per_meter
+    points=[evaluated.matrix_world@Vector(p)*scale for p in evaluated.bound_box]
+    return intersects(tuple(min(p[i] for p in points) for i in range(3)),
+                      tuple(max(p[i] for p in points) for i in range(3)))
 
 
 def nearby_faces(kv,faces):
@@ -169,6 +207,11 @@ def rebuild(context):
     from .mapcollection import map_objects
     inside=map_objects(context.scene)
     overlays=[o for o in context.scene.objects if is_overlay(o) and o.name in inside and o.hl_overlay.preview and o.visible_get()]
+    _state["object_count"]=len(context.scene.objects)
+    try:
+        _state["projection_bounds"]=[projection_bounds(entity(o,context.scene.hammerless.units_per_meter).keyvalues) for o in overlays]
+    except ValueError:
+        _state["projection_bounds"]=None
     if not overlays:
         _state["textures"].clear();_state["dirty"]=False
         return
@@ -217,28 +260,49 @@ def draw():
         gpu.state.blend_set(old[0]);gpu.state.depth_test_set(old[1]);gpu.state.depth_mask_set(old[2])
 
 
+def invalidate_receivers(item=None):
+    cache=_state.setdefault("receiver_cache",{})
+    if item is None:
+        cache.clear()
+    else:
+        ptr=item.as_pointer()
+        if isinstance(item,bpy.types.Object):cache.pop(ptr,None)
+        elif isinstance(item,bpy.types.Mesh):
+            for key in [k for k,e in cache.items() if e[3]==ptr]:del cache[key]
+        elif isinstance(item,bpy.types.Material):
+            for key in [k for k,e in cache.items() if ptr in e[4]]:del cache[key]
+    _state["faces"]=None
+    changed()
+
+
 @persistent
 def deps_changed(scene,depsgraph):
-    for update in depsgraph.updates:
-        item=update.id
-        if isinstance(item,bpy.types.Object) and is_overlay(item):
-            changed()  # Moving a projector never reconverts the map brushes.
+    updates=list(depsgraph.updates)
+    objects=[u for u in updates if isinstance(u.id,bpy.types.Object)]
+    transform_only=bool(objects) and all(u.is_updated_transform and not u.is_updated_geometry for u in objects)
+    for update in updates:
+        item=update.id.original
+        if isinstance(item,bpy.types.Object) and is_overlay(item):changed()
         elif isinstance(item,bpy.types.Object):
-            from .extract import effective_role
-            if item.type=="MESH" and effective_role(item) in ("BRUSH","BRUSH_ENTITY"):
+            if item.type!="MESH":continue
+            if transform_only and not receiver_move_affects_preview(item,depsgraph,scene):
+                # Forget stale geometry for later, but keep already-drawn decals.
+                # No receiver scan, conversion, clipping or GPU batch rebuild.
+                _state.get("receiver_cache",{}).pop(item.as_pointer(),None)
                 _state["faces"]=None
-                changed()
-        elif isinstance(item,bpy.types.Mesh):
-            _state["faces"]=None
-            changed()
-        elif isinstance(item,(bpy.types.Collection,bpy.types.Scene)):
-            # Membership, visibility and units are checked by receiver_faces.
-            changed()
+            else:invalidate_receivers(item)
+        elif isinstance(item,(bpy.types.Mesh,bpy.types.Material)):
+            invalidate_receivers(item)
+        elif isinstance(item,bpy.types.Collection):
+            # Blender also tags containing collections on every object move.
+            if not transform_only or _state.get("object_count")!=len(scene.objects):changed()
+        elif isinstance(item,bpy.types.Scene):changed()
+
 
 
 @persistent
 def reset(*_):
-    _state.update(dirty=True,batches=[],textures={},messages={},faces=None)
+    _state.update(dirty=True,batches=[],textures={},messages={},faces=None,receiver_cache={},projection_bounds=None)
 
 
 class HL_OT_add_overlay(bpy.types.Operator):

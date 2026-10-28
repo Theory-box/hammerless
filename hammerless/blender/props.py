@@ -669,9 +669,14 @@ def _on_texture_scale(self, context):
             break
 
 
+def _on_source_material(self, context):
+    from . import overlays
+    overlays.invalidate_receivers(self.id_data)
+
+
 class HL_MaterialSettings(bpy.types.PropertyGroup):
     source_material: StringProperty(
-        name="Game Material",
+        name="Game Material", update=_on_source_material,
         description="L4D2 material path, e.g. concrete/concrete_floor_01. Leave empty to "
                     "convert this material's image texture into a custom material")
     texture_scale: FloatProperty(name="Texture Scale", default=0.25, min=0.01, max=16.0, update=_on_texture_scale,
