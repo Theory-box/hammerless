@@ -404,6 +404,12 @@ class HL_PT_object(_Panel, bpy.types.Panel):
                 box.scale_y = 0.85
                 for line in _wrap(d.description, 44):
                     box.label(text=line)
+        if hs.classname == "info_particle_system":
+            effect = next((k.value for k in hs.keyvalues if k.key == "effect_name"), "")
+            box = layout.box()
+            box.label(text="Particle Effect")
+            op = box.operator("hammerless.change_particle", text=effect or "Choose Effect", icon="VIEWZOOM")
+            op.object_name = obj.name
         if hs.classname == "hammerless_control":
             _draw_control(layout, hs)
         elif hs.classname == "func_precipitation" and any(k.key == "weather" for k in hs.keyvalues):

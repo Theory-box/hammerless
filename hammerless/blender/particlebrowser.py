@@ -227,6 +227,54 @@ class HL_OT_place_particle(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# Retain enum strings for Blender's search popup.
+_effect_choices = []
+
+
+def _effect_items(self, context):
+    return _effect_choices
+
+
+class HL_OT_change_particle(bpy.types.Operator):
+    bl_idname = "hammerless.change_particle"
+    bl_label = "Change Particle Effect"
+    bl_description = "Choose another effect, keeping this particle's placement and other settings"
+    bl_options = {"REGISTER", "UNDO"}
+    bl_property = "effect"
+
+    effect: bpy.props.EnumProperty(items=_effect_items)
+    object_name: bpy.props.StringProperty(options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        global _effect_choices
+        obj = context.scene.objects.get(self.object_name)
+        if obj is None or obj.hammerless.classname != "info_particle_system":
+            return {"CANCELLED"}
+        if not _load(context) or not _state["effects"]:
+            self.report({"WARNING"}, "Set the game folder in Settings to choose an effect")
+            return {"CANCELLED"}
+        _effect_choices = [(e.name, e.name, e.file) for e in _state["effects"]]
+        context.window_manager.invoke_search_popup(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        obj = context.scene.objects.get(self.object_name)
+        if obj is None or obj.hammerless.classname != "info_particle_system" or not self.effect:
+            return {"CANCELLED"}
+        kv = next((k for k in obj.hammerless.keyvalues if k.key == "effect_name"), None)
+        if kv is None:
+            kv = obj.hammerless.keyvalues.add()
+            kv.key = "effect_name"
+        kv.value = self.effect
+        from . import particlepreview
+        if particlepreview._state.get("object") == obj:
+            particlepreview.stop()
+        if context.active_object == obj and context.window_manager.hl_pfx_autoplay:
+            context.view_layer.update()
+            bpy.ops.hammerless.particle_preview()
+        return {"FINISHED"}
+
+
 class HL_OT_particle_page(bpy.types.Operator):
     bl_idname = "hammerless.particle_page"
     bl_label = "Page"
@@ -303,7 +351,7 @@ def _reset_page(self, context):
     self.hl_pfx_page = 0
 
 
-CLASSES = (HL_OT_place_particle, HL_OT_particle_page, HL_PT_particles)
+CLASSES = (HL_OT_place_particle, HL_OT_change_particle, HL_OT_particle_page, HL_PT_particles)
 
 
 def register():

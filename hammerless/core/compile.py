@@ -1021,11 +1021,13 @@ class CompileJob:
         return proc.wait(), out
 
     def _fallback(self, msg: str, failure: bool = False) -> None:
-        """Valve's tool runs instead of ours: in the log, and listed in Problems after the build."""
-        self._q.put(msg)
-        self.fallbacks.append(msg.lstrip("! "))
-        if failure:
-            self._shaky = True
+        """Stop at every automatic compiler handoff, including preparation and missing tools.
+
+        Callers must not continue into their legacy retry branches. Explicitly selected
+        Valve compilers do not pass through this gate and remain available.
+        """
+        reason = msg.lstrip("! ").split(": running Valve", 1)[0]
+        raise RuntimeError(reason + ". Automatic fallback to Valve is disabled; build stopped.")
 
     def _keep_last_light(self, steps):
         """-keeplight: the last build's .bsp (before this build replaces it) copied aside; when there's none, or it
