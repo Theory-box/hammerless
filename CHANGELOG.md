@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.20.22 (test release, 2026-10-27)
+
+- Convert to Brushes now preserves source materials and affine UV alignment on matching surfaces, with Keep Materials & UVs enabled by default. New interior faces stay nodraw; merged seams and simplified surfaces may need adjustment.
+- Fix converted textures being hidden by legacy Solid viewport display. Use original material datablocks rather than temporary evaluated references, fixing crashes during deletion, unparenting, or dependency-graph rebuilds.
+- Generated output is independent and never parented. Add Remove Original (off by default); conversion and source removal undo together. Remove the obsolete Blocks Vis setting and helper generation: brush output is ordinary World brushes.
+- Allow fractional Sky Light Brightness values, including 0.5 and smaller, through export.
+- Validation: background Blender checks cover transformed/mirrored UV transfer, materials, internal nodraw, source removal, undo and redo. The saved wall was checked for conversion and material-lifetime crashes. No new in-game testing.
+
+Restart Blender after installing. Recreate conversions made with the temporary material-reference bug from a pre-conversion save.
+
 ## 0.20.21 (test release, 2026-10-27)
 
 - Add optional Adaptive Lightmaps, off by default. Use freshly predicted navigation areas, adjustable Nav Edge Leeway and crouch-to-jump viewing heights to reduce resolution on unseen and distant static surfaces before baking. Keep existing fine detail where needed, retain shadow geometry, and preserve a minimum radiosity patch density.

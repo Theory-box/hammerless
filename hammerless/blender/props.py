@@ -460,6 +460,13 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
         name="Smallest Face", default=0.05, min=0.0, soft_max=1.0, precision=3,
         description="Convert to Brushes, Slabs: flat areas smaller than this (square metres) get no brush (trim, "
                     "small details)")
+    brush_remove_original: BoolProperty(
+        name="Remove Original", default=False,
+        description="Remove the source object after successful conversion. Ctrl+Z restores it and undoes the conversion")
+    brush_keep_appearance: BoolProperty(
+        name="Keep Materials & UVs", default=True,
+        description="Copy materials and UV alignment onto matching brush surfaces; new interior faces stay nodraw. "
+                    "Merged texture seams and simplified surfaces may need adjustment. Disable for invisible collision")
     collision_mode: EnumProperty(name="Collision As", default="BRUSHES", items=[
         ("BRUSHES", "Brushes", "Invisible brushes: the engine's cheapest collision, but they count toward the map's "
                                "8,192 brushes"),
@@ -544,11 +551,6 @@ class HL_ObjectSettings(bpy.types.PropertyGroup):
         description="General: at the end, join thin leftovers (under 2 units) to a neighbour, or thicken ones "
                     "under 1 unit (the smallest safe brush). Off: faster finish, but brushes thinner than a unit "
                     "can be left, which the map compiler may drop or mishandle")
-    collision_blocks_vis: BoolProperty(
-        name="Blocks Vis", default=False,
-        description="Convert to Brushes: the pieces also block visibility like world brushes, so the game skips "
-                    "drawing what's behind the walls. Brushes: they're world brushes. Props: Vis Only brushes as "
-                    "well, which use none of the map's brushes")
     physics_class_name: StringProperty(options={"HIDDEN"})
     physics_class: EnumProperty(name="Physics Class", items=lambda self, context: _physics_classes(),
                                 get=_physics_class_get, set=_physics_class_set,
@@ -1057,8 +1059,9 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                            "World's Environment Texture")
     sky_rotation: FloatProperty(name="Sky Rotation", default=0.0, min=-360.0, max=360.0, subtype="NONE",
                                 description="Turns the sky image round the vertical (degrees)")
-    ambient_brightness: IntProperty(name="Sky Light Brightness", default=80, min=0, max=2000,
-                                    description="Light from the sky dome that fills shadows")
+    ambient_brightness: FloatProperty(name="Sky Light Brightness", default=80.0, min=0.0, max=2000.0,
+                                      precision=3, step=10,
+                                      description="Light from the sky dome that fills shadows; fractional values such as 0.5 are supported")
     lightmap_scale: IntProperty(name="Lightmap Scale", default=16, min=1, max=128,
                                 description="Shadow detail on brush faces: 8 = sharp, 16 = Valve default, "
                                             "32+ = soft but faster to compile")

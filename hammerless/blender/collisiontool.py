@@ -13,7 +13,6 @@ from ..core.slabcollision import slab_brushes
 
 OF = "hl_collision_of"          # on the made objects: the name of the mesh they were made from
 SKIPPED_SUFFIX = " (skipped faces)"
-VIS_SUFFIX = " Collision (blocks vis)"
 MAX_BRUSHES_WARN = 3000          # (the map holds 8192 brushes in all)
 MAX_PROP_PIECES = 20             # (Valve-sized props: as fast as brushes with a horde, measured; bigger ones aren't)
 
@@ -31,45 +30,26 @@ def _world_triangles(obj, depsgraph):
         tri = tri.reshape(-1, 3)
         mi = np.empty(len(me.loop_triangles), np.int64)
         me.loop_triangles.foreach_get("material_index", mi)
-        mats = [s.material for s in ev.material_slots]
+        # Evaluated material IDs belong to the dependency graph. Persistent meshes
+        # must reference original datablocks, otherwise a graph rebuild frees them.
+        mats = [s.material.original if s.material is not None else None for s in ev.material_slots]
+        uv = None
+        if me.uv_layers.active:
+            uv = np.array([[tuple(me.uv_layers.active.data[i].uv) for i in t.loops]
+                           for t in me.loop_triangles], dtype=np.float64)
     finally:
         ev.to_mesh_clear()
     M = np.array(obj.matrix_world)
     co = co @ M[:3, :3].T + M[:3, 3]
     if np.linalg.det(M[:3, :3]) < 0:           # (mirrored: keep the faces looking the same way)
         tri = tri[:, ::-1]
-    return co, tri, mi, mats
-
-
-def _see_through(mats, context) -> list:
-    """Per material slot: is it glass, a fence or foliage (the game's $translucent / $alphatest / $additive, or a
-    Blender material whose alpha is used)? Those faces collide but mustn't block visibility."""
-    from .extract import _alpha_mode, game_path
-    content = game_dir = None
-    out = []
-    for mat in mats:
-        path = game_path(mat)
-        if path:
-            if content is None:
-                from .ops import game_content, game_root
-                import os
-                root = game_root(context)
-                content = game_content(root) or False
-                game_dir = os.path.join(root, "left4dead2") if root else None
-            vmt = {}
-            if content:
-                from ..core.gamematerials import read_vmt
-                vmt = read_vmt(content, path, game_dir)
-            out.append(any(str(vmt.get(k, "0")).strip() not in ("0", "")
-                           for k in ("$translucent", "$alphatest", "$additive")))
-        else:
-            out.append(mat is not None and _alpha_mode(mat) != "OPAQUE")
-    return out
+        if uv is not None:
+            uv = uv[:, ::-1]
+    return co, tri, mi, mats, uv
 
 
 def _outputs(src, skipped: bool):
-    """What Make Collision made from src: its collision children (a duplicated house's copies are the copy's
-    children, so each keeps its own), and unparented ones by name (made before they were parented)."""
+    """Find independent generated outputs by source name, plus legacy parented outputs."""
     return [o for o in bpy.data.objects
             if o.get(OF) is not None and o.name.endswith(SKIPPED_SUFFIX) == skipped
             and (o.parent == src or (o.parent is None and o.get(OF) == src.name))]
@@ -84,13 +64,11 @@ def _remove(objs):
 
 
 def _new_output(name, mesh, src):
-    """A made object: in the mesh's collections and parented to it (it moves with it; the world positions stay)."""
+    """Independent output in the source collections; mesh vertices are already world-space."""
     obj = bpy.data.objects.new(name, mesh)
     obj[OF] = src.name
     for c in src.users_collection:
         c.objects.link(obj)
-    obj.parent = src
-    obj.matrix_parent_inverse = src.matrix_world.inverted()
     return obj
 
 
@@ -119,6 +97,55 @@ def _mesh(name, brushes, rcol, material):
     attr.data.foreach_set("color", corner.ravel())
     mesh.materials.append(material)
     return mesh
+
+
+def _transfer_appearance(mesh, co, tri, mi, mats, uv):
+    """Copy a source triangle's affine mapping to each matching exterior brush plane.
+
+    The output is in world coordinates, as is co. Interior cut planes keep nodraw.
+    A brush face has one material and one affine mapping; a merged seam cannot be
+    represented without splitting the brush geometry.
+    """
+    from mathutils.bvhtree import BVHTree
+    from .extract import PAINTED
+    if not len(tri) or not mats:
+        return
+    tree = BVHTree.FromPolygons(co.tolist(), tri.tolist(), all_triangles=True)
+    points = co[tri]
+    normals = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0])
+    lengths = np.linalg.norm(normals, axis=1)
+    normals /= np.maximum(lengths[:, None], 1e-30)
+    tolerance = max(float(np.linalg.norm(np.ptp(co, axis=0))) * 1e-6, 1e-6)
+    slots = {}
+    for index, mat in enumerate(mats):
+        if mat is not None:
+            slots[index] = len(mesh.materials)
+            mesh.materials.append(mat)
+    layer = mesh.uv_layers.new(name="UVMap") if uv is not None else None
+    painted = mesh.attributes.new(PAINTED, 'INT', 'FACE') if layer else None
+    mesh.update()
+    for face in mesh.polygons:
+        center = face.center
+        # Range query avoids choosing the wrong triangle at a shared edge.
+        hits = tree.find_nearest_range(center, tolerance)
+        hits = [h for h in hits if lengths[h[2]] > 1e-20
+                and float(np.dot(normals[h[2]], face.normal)) > 0.9999]
+        if not hits:
+            continue
+        index = min(hits, key=lambda h: h[3])[2]
+        if int(mi[index]) not in slots:
+            continue
+        face.material_index = slots[int(mi[index])]
+        if layer is not None:
+            a, b, c = points[index]
+            # Project onto the source triangle's plane, then extend its affine UVs.
+            basis = np.stack((b - a, c - a), axis=1)
+            inverse = np.linalg.pinv(basis)
+            for loop in face.loop_indices:
+                point = np.array(mesh.vertices[mesh.loops[loop].vertex_index].co)
+                u, v = inverse @ (point - a)
+                layer.data[loop].uv = uv[index, 0] + u * (uv[index, 1] - uv[index, 0]) + v * (uv[index, 2] - uv[index, 0])
+            painted.data[face.index].value = 1
 
 
 class _Pieces:
@@ -155,7 +182,7 @@ class HL_OT_make_collision(bpy.types.Operator):
         src = context.active_object
         unit = context.scene.unit_settings.scale_length or 1.0
         inch = 0.0254 / unit
-        co, tri, mi, mats = _world_triangles(src, context.evaluated_depsgraph_get())
+        co, tri, mi, mats, uv = _world_triangles(src, context.evaluated_depsgraph_get())
         upm = context.scene.hammerless.units_per_meter or 52.49
         algo = src.hammerless.brush_algorithm
         eof = algo != "SLABS"                   # (Extend-or-Fill or Organic: convex pieces of a solid)
@@ -170,17 +197,9 @@ class HL_OT_make_collision(bpy.types.Operator):
             if not r.brushes:
                 self.report({"WARNING"}, f"'{src.name}' has no flat area bigger than Smallest Face: no brushes made")
                 return {"CANCELLED"}
-        # the vis blockers: the same pieces, or, with glass in the mesh, pieces of its opaque faces only
-        rv, clear = r, 0
-        if src.hammerless.collision_blocks_vis and mats and not eof:
-            see = np.array(_see_through(mats, context) + [False])
-            glass = see[np.clip(mi, 0, len(mats))]
-            clear = int(glass.sum())
-            if clear:
-                rv = slab_brushes(co, tri[~glass], inch, min_area, min_width=min_width) if clear < len(tri) else None
         rng = np.random.default_rng(7)
         rcol = {}
-        for _vs, _bf, ri in r.brushes + (rv.brushes if rv is not None and rv is not r else []):
+        for _vs, _bf, ri in r.brushes:
             rcol.setdefault(ri, (*rng.uniform(0.2, 1.0, 3), 1.0))
         # the previous result goes (its material and place are kept: e.g. tools/toolsinvisible set by hand)
         old = _outputs(src, False)
@@ -201,26 +220,23 @@ class HL_OT_make_collision(bpy.types.Operator):
             groups = [[b for _c, b in ch] for ch in _chunks(items, MAX_PROP_PIECES)]
         else:
             groups = [r.brushes]
+        keep = not props and src.hammerless.brush_keep_appearance
         made = []
         for k, group in enumerate(groups):
             name = src.name + (f" Collision Prop {k + 1}" if props else " Collision")
-            obj = _new_output(name, _mesh(name, group, rcol, material), src)
+            mesh = _mesh(name, group, rcol, game_material("tools/toolsnodraw") if keep else material)
+            if keep:
+                _transfer_appearance(mesh, co, tri, mi, mats, uv)
+            obj = _new_output(name, mesh, src)
             hs = obj.hammerless
             if props:
                 hs.role = "MODEL"
                 hs.model_kind = "STATIC"
                 hs.model_collision = "HULLS"
             else:
-                hs.role = "BRUSH"     # (world brushes block vis themselves, unless glass needs its own blockers)
-                hs.brush_detail = "WORLD" if src.hammerless.collision_blocks_vis and rv is r else "DETAIL"
-            obj.display_type = "SOLID"
-            made.append(obj)
-        if src.hammerless.collision_blocks_vis and rv is not None and rv.brushes and (props or rv is not r):
-            name = src.name + VIS_SUFFIX                     # the pieces blocking vis only
-            obj = _new_output(name, _mesh(name, rv.brushes, rcol, game_material("tools/toolsnodraw")), src)
-            obj.hammerless.role = "BRUSH"
-            obj.hammerless.brush_detail = "VIS"
-            obj.display_type = "WIRE"
+                hs.role = "BRUSH"
+                hs.brush_detail = "WORLD"
+            obj.display_type = "TEXTURED" if keep else "SOLID"
             made.append(obj)
         _remove(_outputs(src, True))     # (the skipped-faces object older versions made)
         what = (f"{len(groups)} invisible props of {len(r.brushes)} collision pieces" if props
@@ -259,14 +275,26 @@ class HL_OT_make_collision(bpy.types.Operator):
             msg = (f"{what} from {r.kept_regions} flat areas "
                    f"({100 * r.kept_share:.1f}% of the surface; {r.paired_walls} two-sided walls as one brush each); "
                    f"{r.regions - r.kept_regions} small areas and {r.thin} thin strips left out")
-        if clear:
-            msg += f"; {clear} see-through faces (glass, fences) collide but don't block vis"
         if not props and len(r.brushes) > MAX_BRUSHES_WARN:
             self.report({"WARNING"}, msg + f": that's a lot of the map's 8,192 brushes, raise Smallest Face")
         else:
             self.report({"INFO"}, msg)
-        if src.hammerless.role == "MODEL" and src.hammerless.model_collision != "NONE":
+        if not src.hammerless.brush_remove_original and src.hammerless.role == "MODEL" and src.hammerless.model_collision != "NONE":
             self.report({"WARNING"}, f"'{src.name}' still has its own collision: set its Collision to None")
+        if src.hammerless.brush_remove_original:
+            # Keep this inside the UNDO operator: one undo restores the source
+            # and removes all generated objects. Do not delete shared mesh data.
+            for child in list(src.children):
+                world = child.matrix_world.copy()
+                child.parent = None
+                child.matrix_world = world
+            for selected in context.selected_objects:
+                selected.select_set(False)
+            bpy.data.objects.remove(src, do_unlink=True)
+            for obj in made:
+                del obj[OF]  # no source left to regenerate; avoid matching a reused name
+                obj.select_set(True)
+            context.view_layer.objects.active = made[0]
         return {"FINISHED"}
 
 

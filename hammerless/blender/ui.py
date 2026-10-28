@@ -611,7 +611,9 @@ class HL_PT_obj_brushes(_Panel, bpy.types.Panel):
                 col.prop(hs, "brush_time_limit")
             col.prop(hs, "brush_max_sides")
         col.prop(hs, "collision_mode", text="As")
-        col.prop(hs, "collision_blocks_vis")
+        if hs.collision_mode == "BRUSHES":
+            col.prop(hs, "brush_keep_appearance")
+        col.prop(hs, "brush_remove_original")
         row = self.layout.row()
         row.scale_y = 1.2
         row.operator("hammerless.make_collision", icon="MOD_SOLIDIFY")

@@ -2576,6 +2576,7 @@ def test_make_collision_modes():
     bpy.context.collection.objects.link(house)
     house.hammerless.role = "MODEL"
     house.hammerless.model_collision = "NONE"
+    house.hammerless.brush_keep_appearance = False
     house.hammerless.collision_min_area = 0.0
     house.hammerless.brush_algorithm = "SLABS"      # (this test is the Slabs method's)
 
@@ -2588,12 +2589,12 @@ def test_make_collision_modes():
     assert len(b) == 1 and b[0].hammerless.role == "BRUSH", [o.name for o in b]
     faces = len(b[0].data.polygons)
     assert faces == 64 * 6, faces
-    assert b[0].parent == house and b[0].users_collection[0] == house.users_collection[0]
+    assert b[0].parent is None and b[0].users_collection[0] == house.users_collection[0]
     v0 = b[0].matrix_world @ b[0].data.vertices[0].co
-    house.location.x += 3.0                         # (parented: it moves with the mesh)
+    house.location.x += 3.0                         # (independent: source movement does not move output)
     bpy.context.view_layer.update()
     v1 = b[0].matrix_world @ b[0].data.vertices[0].co
-    assert abs(v1.x - v0.x - 3.0) < 1e-5, (v0, v1)
+    assert abs(v1.x - v0.x) < 1e-5, (v0, v1)
     house.location.x -= 3.0
     bpy.context.view_layer.update()
     mat = game_material("tools/toolsinvisible")
@@ -2619,22 +2620,13 @@ def test_make_collision_modes():
     house.hammerless.collision_mode = "BRUSHES"
     b = press()
     assert len(b) == 1 and b[0].data.materials[0] == mat
-    # Blocks Vis: world brushes; with props, a Vis Only copy too (exported as func_hl_visblock, not in the world)
-    house.hammerless.collision_blocks_vis = True
-    b = press()
-    assert len(b) == 1 and b[0].hammerless.brush_detail == "WORLD"
+    assert b[0].hammerless.brush_detail == "WORLD"
     house.hammerless.collision_mode = "PROPS"
-    p = press()
-    vis = [o for o in p if o.hammerless.brush_detail == "VIS"]
-    props = [o for o in p if o.hammerless.role == "MODEL"]
-    assert len(vis) == 1 and len(props) == 4 and all(o.data.materials[0] == mat for o in props), [o.name for o in p]
-    assert vis[0].data.materials[0] != mat
+    props = press()
+    assert len(props) == 4 and all(o.parent is None for o in props)
+    assert not any(o.hammerless.brush_detail == "VIS" for o in props)
     doc, log = export()
     assert doc is not None, log
-    ents = [e for e in doc if e.name == "entity" and e.get("classname") == "func_hl_visblock"]
-    assert len(ents) == 1 and len(ents[0].blocks("solid")) == 64, len(ents)
-    world = next(e for e in doc if e.name == "world")
-    assert len(world.blocks("solid")) == 6, len(world.blocks("solid"))      # (only the automatic seal's)
     # collision props get one leaf from our compiler only while they're nodraw (toolsinvisible ones are drawn)
     props_kv = [e for e in doc if e.name == "entity" and e.get("classname") == "prop_static"]
     assert len(props_kv) == 5 and not any(e.get("hl_collision_only") for e in props_kv)     # (the mesh + 4)
@@ -2643,23 +2635,6 @@ def test_make_collision_modes():
     doc, log = export()
     props_kv = [e for e in doc if e.name == "entity" and e.get("classname") == "prop_static"]
     assert sum(e.get("hl_collision_only") == "1" for e in props_kv) == 4, log      # (not the mesh itself)
-    house.hammerless.collision_blocks_vis = False
-    assert not [o for o in press() if o.hammerless.brush_detail == "VIS"]
-    # a duplicated house (with its collision): each one's Make Collision replaces only its own
-    bpy.ops.object.select_all(action="DESELECT")
-    house.select_set(True)
-    for o in house.children:
-        o.select_set(True)
-    bpy.context.view_layer.objects.active = house
-    bpy.ops.object.duplicate()
-    copy = next(o for o in bpy.context.selected_objects if o.get(OF) is None)
-    assert copy != house and len(copy.children) == len(house.children) == 4
-    copy_kids = set(copy.children)
-    press()
-    assert set(copy.children) == copy_kids and len(house.children) == 4
-    bpy.context.view_layer.objects.active = copy
-    assert bpy.ops.hammerless.make_collision() == {"FINISHED"}
-    assert len(copy.children) == 4 and not (set(copy.children) & copy_kids) and len(house.children) == 4
     # tools/toolsinvisible on a model: a see-through alpha-tested material with its own texture (decals stick)
     d = os.path.join(TMP, "game_inv")
     written = write_model_materials(d, "models/hammerless/x", {

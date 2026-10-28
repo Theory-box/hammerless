@@ -103,7 +103,7 @@ class MapSettings:
     sun_pitch: float = -50.0          # degrees, negative = pointing down
     sun_yaw: float = 30.0
     ambient_color: tuple[int, int, int] = (140, 160, 190)
-    ambient_brightness: int = 80
+    ambient_brightness: float = 80.0
     lightmap_scale: int = 16          # default for brush faces (lower = sharper, slower)
     adaptive_lightmaps: bool = False  # conservative pre-compile visibility/distance scaling
     lightmap_near: float = 512.0
