@@ -95,3 +95,25 @@ own diagnosis. Automatic Valve fallback stays disabled.
   their usual working scale, then Build & Play. Turning it off restores the
   exported original scales on the next build. No .blend settings are changed by
   installation; no releases are updated until this experimental branch is tested.
+
+## Resolution overlay
+
+Lighting > Adaptive Lightmaps > Show Baked Resolution loads the last compiled
+BSP and selects the new Resolution display mode. Also available in the baked
+lighting display modes, independently of whether adaptive scaling is enabled.
+Blue/cyan/green/orange/red/purple show progressively coarser spacing; an
+antialiased grid shows actual lightmap cells. The legend and measured spacing
+range appear in the baked-lighting panel. X-Ray is supported; props are omitted
+because their baked lighting is per vertex, not this brush lightmap grid.
+
+Flat-face spacing comes from the inverse compiled lightmap axes restricted to
+the face plane. It must not be estimated from float32 atlas UV derivatives on
+tiny triangles: those produce false extreme density values. Displacements use
+their local triangle mapping. Un-atlased luxel coordinates avoid atlas precision
+loss in the grid. Degenerate mappings are grey. Existing compile-following,
+scene-stale warnings, clear and unit-scale handling apply to the overlay.
+
+Colours show final spacing, not the optimizer's reason or a before/after diff.
+This works on existing bakes without rebuilding. It adds no Blender objects or
+materials and changes no bake setting. Five numerical checks and reading the
+user's existing BSP passed; viewport appearance remains for user testing.

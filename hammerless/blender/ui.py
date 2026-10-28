@@ -861,6 +861,7 @@ class HL_PT_lighting(_Panel, bpy.types.Panel):
                 adaptive.prop(s, "lightmap_distance")
                 adaptive.prop(s, "lightmap_near")
                 _hint(adaptive, "Experimental: keeps uncertain surfaces detailed")
+                adaptive.operator("hammerless.lightmap_resolution", text="Show Baked Resolution", icon="MESH_GRID")
         from .vmfimport import imported as _imported
         if _imported(context.scene):
             on.prop(s, "lightmap_scale_imported")

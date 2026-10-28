@@ -118,6 +118,8 @@ class Lightmaps:
     tri_material: np.ndarray = None   # (n,) int32: each triangle's material (an index into materials)
     materials: list = None      # material paths, as the map names them (lower case)
     face_at: dict = None        # face number -> (x, y, w, h): where its lightmap is in the atlas (light layers)
+    luxel_uvs: np.ndarray = None   # un-atlased cell coordinates, avoids atlas float32 precision loss
+    luxel_steps: np.ndarray = None # (triangles, 2) actual grid-axis world spacing
 
 
 def _lumps(data: bytes):
@@ -201,6 +203,7 @@ def read_lightmaps(data: bytes, style: int | None = 0) -> Lightmaps:
 
     blocks = []        # per face: (corner positions, corner luxel coords, triangles, (w, h), samples)
     face_nums = []
+    density_uvs, density_steps = [], []
     luxels = 0
     for k in range(len(faces) // FACE_SIZE):
         if k in hidden_faces:
@@ -255,6 +258,19 @@ def read_lightmaps(data: bytes, style: int | None = 0) -> Lightmaps:
         tex = (flat @ tvecs[:, :3].T + tvecs[:, 3]) / np.array([max(tw, 1), max(th, 1)], dtype=np.float64)
         if offset is not None:
             pos = pos + np.array(offset)
+        from .lightdensity import triangle_steps
+        if di < 0:
+            plane_id = struct.unpack_from('<H', faces, b)[0]
+            normal = np.array(struct.unpack_from('<3f', lump(1), 20 * plane_id))
+            matrix = np.vstack((lvecs[:, :3], normal))
+            if abs(np.linalg.det(matrix)) > 1e-12:
+                steps = np.linalg.norm(np.linalg.inv(matrix)[:, :2], axis=0)
+                density_steps.append(np.tile(steps, (len(tris), 1)))
+            else:
+                density_steps.append(np.zeros((len(tris), 2)))
+        else:
+            density_steps.append(triangle_steps(pos[tris].reshape(-1, 3), lux[tris].reshape(-1, 2)))
+        density_uvs.append((lux[tris] + 0.5).reshape(-1, 2))
         blocks.append((pos, lux, tris, (w, h), sum(decode_luxels(raw) for raw in raws).reshape(h, w, 3), tex, mat))
         face_nums.append(k)
         luxels += w * h
@@ -278,6 +294,8 @@ def read_lightmaps(data: bytes, style: int | None = 0) -> Lightmaps:
         atlas=atlas, faces=len(blocks), luxels=luxels, hdr=hdr,
         tex_uvs=np.concatenate(tex_uvs).astype(np.float32) if tex_uvs else np.zeros((0, 2), np.float32),
         tri_material=np.concatenate(tri_mats) if tri_mats else np.zeros(0, np.int32), materials=materials,
+        luxel_uvs=np.concatenate(density_uvs).astype(np.float32) if density_uvs else np.zeros((0, 2), np.float32),
+        luxel_steps=np.concatenate(density_steps) if density_steps else np.zeros((0, 2)),
         face_at={f: (x, y, blk[3][0], blk[3][1]) for f, blk, (x, y) in zip(face_nums, blocks, at)})
 
 

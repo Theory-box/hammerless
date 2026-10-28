@@ -850,6 +850,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                 "lighting and Texture colour): shadows darken your textures, coloured light tints them"),
         ("GAME", "Textured", "The compiled map as the game draws it: each surface's game texture times its baked "
                  "light, props too (their model textures and baked vertex light)"),
+        ("RESOLUTION", "Resolution", "Actual compiled lightmap cell spacing: blue is fine, red/purple is coarse"),
     ])
     lightmap_exposure: FloatProperty(name="Exposure", default=0.0, soft_min=-4.0, soft_max=4.0, step=10,
                                      update=lambda self, c: _light_display(self, c),

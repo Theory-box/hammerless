@@ -17,11 +17,66 @@ from ..core.lightmap import read_lightmaps
 
 _state = {"path": None, "mtime": None, "data": None, "batch": None, "texture": None, "scale": None,
           "error": None, "loaded_at": None, "checked": 0.0, "edited": False, "props": None, "pbatch": None,
-          "tbatches": None, "content": None, "game_dir": None, "mix": None}
+          "tbatches": None, "content": None, "game_dir": None, "mix": None,
+          "rbatch": None, "rscale": None, "rlimits": None}
 _status = {"key": None, "time": 0.0, "value": ("NONE", "")}
 _handlers = []
 _SHADER = None
 _PSHADER = None
+_RSHADER = None
+
+
+def _resolution_shader():
+    global _RSHADER
+    if _RSHADER is not None:
+        return _RSHADER
+    iface = gpu.types.GPUStageInterfaceInfo("hl_lightdensity_iface")
+    iface.smooth("VEC2", "cell")
+    iface.smooth("VEC3", "tint")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant("MAT4", "ModelViewProjectionMatrix")
+    info.push_constant("FLOAT", "bias")
+    info.vertex_in(0, "VEC3", "pos")
+    info.vertex_in(1, "VEC2", "lux")
+    info.vertex_in(2, "VEC3", "col")
+    info.vertex_out(iface)
+    info.fragment_out(0, "VEC4", "fragColor")
+    info.vertex_source('''void main() {
+        cell = lux; tint = col;
+        gl_Position = ModelViewProjectionMatrix * vec4(pos, 1.0);
+        gl_Position.z -= bias * gl_Position.w;
+    }''')
+    info.fragment_source('''void main() {
+        vec2 footprint = max(fwidth(cell), vec2(0.00001));
+        vec2 edge = min(fract(cell), 1.0 - fract(cell)) / footprint;
+        float line = 1.0 - smoothstep(0.35, 1.1, min(edge.x, edge.y));
+        // Fade subpixel cells instead of turning distant dense surfaces black.
+        line *= 1.0 - smoothstep(0.3, 1.0, max(footprint.x, footprint.y));
+        fragColor = vec4(tint * (1.0 - 0.7 * line), 1.0);
+    }''')
+    _RSHADER = gpu.shader.create_from_info(info)
+    return _RSHADER
+
+
+def _draw_resolution(s):
+    if _state["rbatch"] is None or _state["rscale"] != s.units_per_meter:
+        from ..core.lightdensity import resolution_mesh
+        data = _state["data"]
+        lux, colors, limits = resolution_mesh(data)
+        _state["rbatch"] = batch_for_shader(_resolution_shader(), "TRIS", {
+            "pos": (data.positions / s.units_per_meter).astype(np.float32), "lux": lux, "col": colors})
+        _state.update(rscale=s.units_per_meter, rlimits=limits)
+    shader = _resolution_shader()
+    shader.bind()
+    shader.uniform_float("ModelViewProjectionMatrix", gpu.matrix.get_projection_matrix() @ gpu.matrix.get_model_view_matrix())
+    shader.uniform_float("bias", 0.0 if s.lightmap_xray else 2e-5)
+    gpu.state.blend_set("NONE")
+    gpu.state.depth_test_set("NONE" if s.lightmap_xray else "LESS_EQUAL")
+    gpu.state.face_culling_set("NONE")
+    try:
+        _state["rbatch"].draw(shader)
+    finally:
+        gpu.state.depth_test_set("NONE")
 
 
 def _prop_shader():
@@ -137,14 +192,14 @@ def load(context, path: str | None = None) -> str | None:
         props = None
     _state.update(path=path, mtime=os.path.getmtime(path), data=data, batch=None, texture=None, scale=None,
                   error=None, loaded_at=time.time(), edited=False, props=props, pbatch=None, tbatches=None,
-                  content=content, game_dir=game_dir, mix=mix)
+                  content=content, game_dir=game_dir, mix=mix, rbatch=None, rscale=None, rlimits=None)
     _redraw()
     return None
 
 
 def clear() -> None:
     _state.update(path=None, mtime=None, data=None, batch=None, texture=None, scale=None, error=None,
-                  loaded_at=None, props=None, pbatch=None, tbatches=None, mix=None)
+                  loaded_at=None, props=None, pbatch=None, tbatches=None, mix=None, rbatch=None, rscale=None, rlimits=None)
     _redraw()
 
 
@@ -217,6 +272,9 @@ def _draw():
     except Exception:
         return
     _follow_compiles()
+    if s.lightmap_mode == "RESOLUTION":
+        _draw_resolution(s)
+        return
     if _state["batch"] is None or _state["scale"] != s.units_per_meter:
         _build(s.units_per_meter)
     if s.lightmap_mode == "GAME":
@@ -280,6 +338,23 @@ class HL_OT_lightmap_show(bpy.types.Operator):
         d = _state["data"]
         self.report({"INFO"}, f"Baked lighting: {d.faces} faces, {d.luxels:,} light samples"
                               + ("" if d.hdr else " (LDR)"))
+        return {"FINISHED"}
+
+
+class HL_OT_lightmap_resolution(bpy.types.Operator):
+    bl_idname = "hammerless.lightmap_resolution"
+    bl_label = "Show Baked Resolution"
+    bl_description = "Show actual lightmap cells from the last compiled map; does not bake or change your scene"
+
+    def execute(self, context):
+        err = load(context)
+        if err:
+            self.report({"WARNING"}, err)
+            return {"CANCELLED"}
+        s = context.scene.hammerless
+        s.lightmap_mode = "RESOLUTION"
+        s.show_lightmap = s.show_bake_visualizations = True
+        _redraw()
         return {"FINISHED"}
 
 
@@ -386,9 +461,20 @@ def draw_panel(layout, context):
         return
     row = layout.row(align=True)
     row.prop(s, "lightmap_mode", expand=True)
-    layout.prop(s, "lightmap_exposure", slider=True)
+    if s.lightmap_mode == "RESOLUTION":
+        _note(layout, ["Actual last-build spacing (Hammer units)",
+                       "Blue: ≤4    Cyan: ≤8    Green: ≤16",
+                       "Orange: ≤32    Red: ≤64    Purple: >64",
+                       "Grid = lightmap cells; larger = less detail",
+                       "Colour shows spacing, not why it changed"])
+        if _state["rlimits"]:
+            lo, hi = _state["rlimits"]
+            _note(layout, [f"Measured axis spacing: {lo:.2g}–{hi:.2g}"])
+    else:
+        layout.prop(s, "lightmap_exposure", slider=True)
     row = layout.row(align=True)
-    row.prop(s, "lightmap_props", toggle=True)
+    if s.lightmap_mode != "RESOLUTION":
+        row.prop(s, "lightmap_props", toggle=True)
     row.prop(s, "lightmap_xray", toggle=True)
     row.operator("hammerless.lightmap_clear", text="", icon="X")
     row.operator("hammerless.lightmap_delete", text="", icon="TRASH")
@@ -397,7 +483,7 @@ def draw_panel(layout, context):
     _note(layout, [f"Built {mins} min ago" if mins else "Built just now",
                    f"{d.faces:,} faces, {d.luxels:,} light samples"], icon="TIME")
     p = _state["props"]
-    if s.lightmap_props:
+    if s.lightmap_props and s.lightmap_mode != "RESOLUTION":
         if p is None:
             _note(layout, ["Props: the game's files couldn't be read"], icon="ERROR")
         elif p.props == 0:
@@ -421,7 +507,7 @@ def draw_panel(layout, context):
         _note(layout, [_state["error"]], icon="ERROR")
 
 
-CLASSES = (HL_OT_lightmap_show, HL_OT_lightmap_clear, HL_OT_lightmap_delete)
+CLASSES = (HL_OT_lightmap_show, HL_OT_lightmap_clear, HL_OT_lightmap_delete, HL_OT_lightmap_resolution)
 
 
 @bpy.app.handlers.persistent
