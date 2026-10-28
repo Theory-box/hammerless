@@ -380,6 +380,10 @@ class HL_PT_object(_Panel, bpy.types.Panel):
         obj = entity_object(context)
         hs = obj.hammerless
         layout = self.layout
+        from .overlays import is_overlay, draw_settings
+        if is_overlay(obj):
+            draw_settings(layout, context)
+            return
         if obj != context.object:
             row = layout.row(align=True)
             row.label(text=f"Entity: {obj.name}", icon="LINKED")

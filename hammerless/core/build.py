@@ -721,6 +721,12 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
         ent_blocks.append(w.entity(Entity("func_detail"), [w.solid(b) for b in detail]))
     report.info.append(
         f"{len(ir.brushes)} brushes, {n_patches} terrain patches, {len(entities)} entities.")
+    from .overlays import resolve as resolve_overlays
+    try:
+        resolve_overlays(world, [e for e in base_entities if e is not None] + ent_blocks if base is not None else ent_blocks, w, report)
+    except ValueError as exc:
+        report.errors.append(str(exc))
+        return None, report
     report.solid_sources = dict(w.solid_sources)
     if base is not None:
         from .vmfimport import write_document

@@ -1440,6 +1440,10 @@ def extract_scene(context, report, game_dir: str | None = None, content=None,
             elif role == "TERRAIN" and obj.type == "MESH":
                 ir.terrains.append(mesh_to_terrain(obj, depsgraph, scale, materials))
             elif role == "ENTITY":
+                from .overlays import is_overlay, entity as overlay_entity
+                if is_overlay(obj):
+                    ir.entities.append(overlay_entity(obj, scale))
+                    continue
                 if not obj.hammerless.classname:
                     report.warnings.append(f"'{obj.name}' is a Point Entity but has no class. Skipped.")
                     continue
@@ -1528,6 +1532,10 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report, content
                                           mesh_to_brushes(src, depsgraph, scale, materials, matrix, label, mesh=geo),
                                           label, object_outputs(src)))
             elif role == "ENTITY" and src.hammerless.classname:
+                from .overlays import is_overlay, entity as overlay_entity
+                if is_overlay(src):
+                    ir.entities.append(overlay_entity(src, scale, matrix))
+                    continue
                 origin = tuple(c * scale for c in matrix.translation)
                 ir.entities.append(Entity(src.hammerless.classname, origin, source_angles(matrix),
                                           object_keyvalues(src), [], label, object_outputs(src)))

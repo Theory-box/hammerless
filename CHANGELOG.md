@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.20.24 (test release, 2026-10-28)
+
+- Add brush overlays with projected/clipped viewport previews and native `info_overlay` export. Resolve receiving side IDs after brush export; expose dimensions, UV repeats, receiver depth, render order, nearest-brush alignment and optional brush assignment. Preview uses transient GPU drawing and pauses during builds/bakes.
+- Add a searchable thumbnail Decal Browser for the selected overlay, with an all-materials option. Native game materials remain unchanged; the panel identifies preview material limitations.
+
+- Automatically align new overlays to nearby brushes. Reconstruct full brush sides for triangulated receivers and draw above the baked-light preview.
+- Cache receiver geometry across decal transforms, including collection update notifications; bounds-filter nearby faces before clipping. The saved-map CPU profile improved from approximately 1,030 ms to 11 ms per transform update; this is not a viewport FPS guarantee.
+- Project from the empty along local -Z. Add Stop at Surface, on by default, to exclude receivers occluded by nearer surfaces in both preview and export. Native overlays select whole sides, so partially occluded faces are excluded entirely; disable the toggle for multi-layer projection.
+- Validation: projection/export tests, background Blender creation/alignment/cache tests, and native overlay fixtures. User confirmed preview and interaction improvements. Material shading remains approximate; no new in-game visual comparison.
+
+Restart Blender after installing. Brush receivers only; terrain, props and moving brush entities are not supported yet.
 
 ## 0.20.23 (test release, 2026-10-28)
 

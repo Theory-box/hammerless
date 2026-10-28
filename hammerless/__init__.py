@@ -9,7 +9,7 @@ the `blender` package is only loaded when running inside Blender.
 bl_info = {
     "name": "Hammerless",
     "author": "Hammerless contributors",
-    "version": (0, 20, 23),
+    "version": (0, 20, 24),
     "blender": (4, 0, 0),
     "location": "3D View > Sidebar (N) > Hammerless",
     "description": "Build and play Left 4 Dead 2 maps straight from Blender",
@@ -55,9 +55,13 @@ def register():
     particlebrowser.register()   # (after the main panels: its panel sits below them)
     from .blender import ladderview
     ladderview.register()
+    from .blender import overlays
+    overlays.register()
 
 
 def unregister():
+    from .blender import overlays
+    overlays.unregister()
     from .blender import ladderview
     ladderview.unregister()
     from .blender import props, ops, ui, presets, spawn, problems, navview, lightview, logic, logic_examples, watchdog, visview, sound, quality, vmfimport, skyview, mapcollection, texturing, gameskeleton, placedchar, particlebrowser, collisiontool, animpreview, behaviours, brushtools, drawbrush
