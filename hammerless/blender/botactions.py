@@ -173,6 +173,7 @@ class HL_BAOverride(_Inside, bpy.types.Node):
     property_name: StringProperty(name="Net Property")
     value_type: EnumProperty(name="Type", items=[(s, s.title(), "") for s in ("float", "int", "vector", "flags")], update=changed)
     mask: IntProperty(name="Owned Flag Bits", default=32, min=1)
+    restore_on_death: BoolProperty(name="Restore on Death", description="Release this owned property on death too, allowing paused AI and animation to finish death processing")
 
     def make_sockets(self):
         self.ev_in("run", "Run")
@@ -180,13 +181,15 @@ class HL_BAOverride(_Inside, bpy.types.Node):
         self.ev_out("next", "Next")
 
     def settings(self):
-        return {"property": self.property_name, "type": self.value_type, "mask": self.mask}
+        return {"property": self.property_name, "type": self.value_type, "mask": self.mask,
+                "restore_on_death": self.restore_on_death}
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "property_name")
         layout.prop(self, "value_type")
         if self.value_type == "flags":
             layout.prop(self, "mask")
+        layout.prop(self, "restore_on_death")
 
 
 class HL_BAParam(_Inside, bpy.types.Node):
@@ -261,7 +264,7 @@ class HL_BACommand(_Inside, bpy.types.Node):
         layout.label(text="Player bots only; commands aren't undone")
 
 
-def new_action(name="Bot Action", preset=False):
+def new_action(name="Bot Action", preset=False, family="SPECIALS"):
     from .logicgroups import new_group_tree
     tree = new_group_tree(name)
     tree.bot_action = True
@@ -269,17 +272,74 @@ def new_action(name="Bot Action", preset=False):
     inputs = tree.nodes.new("HL_NodeGroupInput")
     inputs.location = (0, -240)
     if preset:
-        tree.action_supports, tree.action_channels = "SPECIALS", "Movement"
+        tree.action_supports, tree.action_channels = family, "Movement"
         move = tree.nodes.new("HL_BAOverride")
-        move.property_name, move.value_type = "movetype", "int"
+        move.property_name, move.value_type = ("m_nNextThinkTick" if family == "COMMONS" else "movetype"), "int"
         move.location = (250, 0)
         flags = tree.nodes.new("HL_BAOverride")
-        flags.property_name, flags.value_type, flags.mask = "m_fFlags", "flags", 32
-        flags.inputs["Value"].value = 32
+        flags.property_name, flags.value_type, flags.mask = ("m_flPlaybackRate" if family == "COMMONS" else "m_fFlags"), ("float" if family == "COMMONS" else "flags"), 32
+        flags.inputs["Value"].value = 0 if family == "COMMONS" else 32
         flags.location = (500, 0)
         tree.links.new(entry.outputs["Start"], move.inputs["Run"])
         tree.links.new(move.outputs["Next"], flags.inputs["Run"])
+        if family == "COMMONS":
+            move.inputs["Value"].value = -1
+            move.restore_on_death = flags.restore_on_death = True
+            tree.links.new(entry.outputs["Update"], move.inputs["Run"])
     return tree
+
+
+def _stock_special_freeze(tree):
+    """Recognize only our untouched old preset, never rewrite user-authored actions."""
+    if not tree or not tree.name.startswith("Freeze Special Infected (experimental)"):
+        return False
+    if tree.action_supports != "SPECIALS" or tree.action_channels != "Movement" or tree.group_items:
+        return False
+    if len(tree.nodes) != 4 or len(tree.links) != 2:
+        return False
+    entries = [n for n in tree.nodes if n.bl_idname == "HL_BAEntry"]
+    inputs = [n for n in tree.nodes if n.bl_idname == "HL_NodeGroupInput"]
+    props = {n.property_name: n for n in tree.nodes if n.bl_idname == "HL_BAOverride"}
+    if len(entries) != 1 or len(inputs) != 1 or set(props) != {"movetype", "m_fFlags"}:
+        return False
+    move, flags = props["movetype"], props["m_fFlags"]
+    if move.value_type != "int" or move.inputs["Value"].value != 0 or flags.value_type != "flags" or flags.mask != 32 or flags.inputs["Value"].value != 32:
+        return False
+    if any(n.mute for n in tree.nodes) or move.restore_on_death or flags.restore_on_death:
+        return False
+    links = {(l.from_node.name, l.from_socket.identifier, l.to_node.name, l.to_socket.identifier) for l in tree.links}
+    return links == {(entries[0].name, "start", move.name, "run"), (move.name, "next", flags.name, "run")}
+
+
+@bpy.app.handlers.persistent
+def repair_common_examples(*_args):
+    """Replace the untouched special preset only where a Commons loop requests it."""
+    replacements = {}
+    for tree in list(bpy.data.node_groups):
+        if tree.bl_idname != TREE:
+            continue
+        def source(node, socket):
+            return next((l.from_node for l in tree.links if l.to_node == node and l.to_socket.identifier == socket), None)
+        for apply in list(tree.nodes):
+            if apply.bl_idname != "HL_BAApply":
+                continue
+            loop, action = source(apply, "bot"), source(apply, "action")
+            if not loop or loop.bl_idname != "HL_BALoop" or not action or action.bl_idname != "HL_BAAction":
+                continue
+            query = source(loop, "bots")
+            if not query or query.bl_idname != "HL_BAFind" or query.selection != "COMMONS" or not _stock_special_freeze(action.group):
+                continue
+            old_name = action.group.name
+            if old_name not in replacements:
+                replacements[old_name] = new_action("Freeze Common Infected", True, "COMMONS")
+            # A shared Action node could also feed a Specials loop. Give only
+            # this Apply a separate reference rather than changing those users.
+            reference = tree.nodes.new("HL_BAAction")
+            reference.group = replacements[old_name]
+            reference.location = action.location.copy()
+            reference.location.y -= 200
+            socket = next(s for s in apply.inputs if s.identifier == "action")
+            tree.links.new(reference.outputs["Action"], socket)
 
 
 class HL_OT_bot_action_new(bpy.types.Operator):
@@ -287,6 +347,7 @@ class HL_OT_bot_action_new(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
     node_name: StringProperty()
     preset: BoolProperty(default=False)
+    family: EnumProperty(items=KINDS, default="COMMONS")
     group_name: StringProperty()
 
     def execute(self, context):
@@ -297,7 +358,8 @@ class HL_OT_bot_action_new(bpy.types.Operator):
         asset = bpy.data.node_groups.get(self.group_name) if self.group_name else None
         if self.group_name and (asset is None or not getattr(asset, "bot_action", False)):
             return {"CANCELLED"}
-        node.group = asset or new_action("Freeze Special Infected (experimental)" if self.preset else "Bot Action", self.preset)
+        title = "Freeze Common Infected" if self.family == "COMMONS" else "Freeze Special Infected (experimental)"
+        node.group = asset or new_action(title if self.preset else "Bot Action", self.preset, self.family)
         node.select = True
         tree.nodes.active = node
         return {"FINISHED"}
@@ -318,7 +380,8 @@ def watched_example(tree):
         node.width = 220
         node.select = True
     seen.humans_only = True
-    action.group = new_action("Freeze Special Infected (experimental)", preset=True)
+    find.selection = "COMMONS"
+    action.group = new_action("Freeze Common Infected", preset=True, family="COMMONS")
     for src, out, dst, inp in ((start, "On Map Start", loop, "Start"),
                                (find, "Bots", loop, "Bots"),
                                (loop, "Each Bot", apply, "Run"),
@@ -331,8 +394,8 @@ def watched_example(tree):
 
 
 class HL_OT_bot_action_example(bpy.types.Operator):
-    bl_idname, bl_label = "hammerless.bot_action_example", "Freeze When Watched (experimental)"
-    bl_description = "Add an editable example for special infected bots; game behavior needs testing"
+    bl_idname, bl_label = "hammerless.bot_action_example", "Freeze Commons When Watched"
+    bl_description = "Add an editable common-infected freeze action that resumes when humans look away"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -362,7 +425,9 @@ class HL_MT_bot_actions(bpy.types.Menu):
             self.layout.separator()
             self.layout.operator("hammerless.bot_action_example", icon="HELP")
             self.layout.operator("hammerless.bot_action_new", text="New Editable Action")
-            self.layout.operator("hammerless.bot_action_new", text="Freeze Special Infected (experimental)").preset = True
+            self.layout.operator("hammerless.bot_action_new", text="Freeze Common Infected").preset = True
+            op = self.layout.operator("hammerless.bot_action_new", text="Freeze Special Infected (experimental)")
+            op.preset, op.family = True, "SPECIALS"
             for tree in sorted(bpy.data.node_groups, key=lambda t: t.name):
                 if getattr(tree, "bot_action", False):
                     self.layout.operator("hammerless.bot_action_new", text=tree.name, icon="NODETREE").group_name = tree.name
@@ -382,10 +447,14 @@ def register():
     logic.HL_LogicTree.action_channels = StringProperty(name="Owned Channels", description="Comma-separated channels, such as Movement or Appearance")
     for cls in CLASSES:
         bpy.utils.register_class(cls)
+    bpy.app.handlers.load_post.append(repair_common_examples)
+    repair_common_examples()
 
 
 def unregister():
     from . import logic
+    if repair_common_examples in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(repair_common_examples)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
     for name in ("bot_action", "action_supports", "action_channels"):

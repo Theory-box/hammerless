@@ -106,3 +106,23 @@ foreach(bad in [0,-1,"fast",null,true,0.01,1.0e35]) {
  HLBA.Start("badinterval",bad,function(){return [];},function(s){});
  check(!("badinterval" in HLBA.loops),"invalid dynamic interval rejected");
 }
+// Explicit engine housekeeping overrides may restore after death; authored Stop never runs.
+local deathStops=0;
+b.props.speed=7;b.props.flags=2;
+a={id="deathcleanup",channels=[],startFn=function(ctx){
+ HLBA.Override(ctx,"speed","int",0,null,true);
+ HLBA.Override(ctx,"flags","int",0);
+},stopFn=function(ctx){deathStops++;}};
+HLBA.Start("deathcleanup",0.1,function(){return [b];},function(s){HLBA.Request(s,"a",b,a,true);});
+HLBA.TickAll(16);b.hp=-10;HLBA.TickAll(16.2);
+check(b.props.speed==7 && b.props.flags==0 && deathStops==0,"death cleanup is explicit and does not run Stop");HLBA.StopAll();
+// Death cleanup still respects external ownership changes.
+b.hp=100;b.props.speed=7;
+HLBA.Start("deathchanged",0.1,function(){return [b];},function(s){HLBA.Request(s,"a",b,a,true);});
+HLBA.TickAll(17);b.props.speed=3;b.hp=-1;HLBA.TickAll(17.2);
+check(b.props.speed==3,"death cleanup preserves external change");HLBA.StopAll();
+// Deleted handles receive no restoration, even for restore-on-death entries.
+b.hp=100;b.props.speed=7;
+HLBA.Start("deleted",0.1,function(){return [b];},function(s){HLBA.Request(s,"a",b,a,true);});
+HLBA.TickAll(18);b.valid=false;HLBA.TickAll(18.2);
+check(b.props.speed==0 && deathStops==0,"deleted handle not restored");HLBA.StopAll();

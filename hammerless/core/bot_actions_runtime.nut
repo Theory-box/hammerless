@@ -92,7 +92,7 @@
         if (kind == "vector") return a.x == b.x && a.y == b.y && a.z == b.z;
         return a == b;
     },
-    Override = function(ctx,key,kind,value,mask = null) {
+    Override = function(ctx,key,kind,value,mask = null,restoreOnDeath = false) {
         if (!Valid(ctx.bot)) return;
         if (kind != "int" && kind != "float" && kind != "vector" && kind != "flags") throw "Invalid override kind";
         if (kind == "flags" && mask == null) throw "Flags override requires a mask";
@@ -106,19 +106,25 @@
         local current=Read(ctx.bot,key,kind), entry=null;
         foreach (o in ctx.overrides) if (o.key == key) { entry=o; break; }
         if (entry == null) {
-            entry={key=key, kind=kind, original=current, owned=current, mask=mask};
+            entry={key=key, kind=kind, original=current, owned=current, mask=mask, restoreOnDeath=restoreOnDeath};
             ctx.overrides.append(entry);
-        } else if (entry.kind != kind || entry.mask != mask) throw "Override property kind/mask changed";
+        } else if (entry.kind != kind || entry.mask != mask || entry.restoreOnDeath != restoreOnDeath) throw "Override property kind/mask/cleanup changed";
         local result=kind == "flags" ? ((current & ~mask) | (value & mask)) : value;
         Write(ctx.bot,key,kind,result); entry.owned=result;
     },
     Release = function(instance) {
         local ctx=instance.ctx;
-        if (!Valid(ctx.bot)) return;
-        try { Call(instance.def,"stopFn",ctx); } catch(e) { Report("Action stop failed: " + e); }
+        try { if (ctx.bot == null || !ctx.bot.IsValid()) return; } catch(e) { return; }
+        local alive=Valid(ctx.bot);
+        if (alive) {
+            try { Call(instance.def,"stopFn",ctx); } catch(e) { Report("Action stop failed: " + e); }
+            alive=Valid(ctx.bot); // Stop may itself kill or remove the entity.
+        }
         for (local i=ctx.overrides.len()-1; i>=0; --i) {
             local o=ctx.overrides[i];
+            if (!alive && !("restoreOnDeath" in o && o.restoreOnDeath)) continue;
             try {
+                if (!ctx.bot.IsValid()) return;
                 local current=Read(ctx.bot,o.key,o.kind);
                 if (o.kind == "flags") {
                     // Restore only bits we still own; preserve unrelated/external changes.

@@ -171,6 +171,18 @@ class ActionCompiler:
                     self.fail(f"'{n.id}': plug an editable Bot Action group into Action")
                 if src[1] != "action":
                     self.fail(f"'{n.id}': Action needs the group's Action output")
+                # The typed Bot socket excludes props, but its selection can still
+                # be incompatible with this action's narrower supported bot family.
+                # ALL deliberately remains a mixed selection: supportsFn filters
+                # individual bots at runtime, so any intersecting family is useful.
+                loop_node = self.nodes[self.loop]
+                selector = self.nodes[self.source(loop_node, "bots")[0]]
+                selected = selector.settings.get("kind", "SPECIALS")
+                definition_data = action.settings.get("definition")
+                supported = definition_data.get("supports", "ALL") if isinstance(definition_data, dict) else "ALL"
+                if selected in KINDS and supported in KINDS and "ALL" not in (selected, supported) and selected != supported:
+                    self.fail(f"'{n.id}': Find Bots selects {selected.title()}, but action '{action.id}' supports "
+                              f"only {supported.title()}; choose a compatible action or bot selection")
                 definition = self.definition(action)
                 params = []
                 for uid, kind, default in action.settings["definition"].get("inputs", []):
@@ -191,7 +203,8 @@ class ActionCompiler:
                 mask = str(int(s.get("mask", 0))) if kind == "flags" else "null"
                 if kind == "flags" and int(s.get("mask", 0)) <= 0:
                     self.fail(f"'{n.id}': flag mask must be positive")
-                out.append(f"HLBA.Override(ctx, {quote(key)}, {quote(kind)}, {value}, {mask});")
+                restore_on_death = "true" if s.get("restore_on_death", False) else "false"
+                out.append(f"HLBA.Override(ctx, {quote(key)}, {quote(kind)}, {value}, {mask}, {restore_on_death});")
             elif k == "BA_STATE_SET" and self.lifecycle:
                 value = self.c.typed_in(n, "value", s.get("type", "num"))
                 out.append(f"ctx.state[{quote(s.get('name', 'state'))}] <- {value};")

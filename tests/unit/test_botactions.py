@@ -45,6 +45,31 @@ def compile_fixture(nodes=None, links=None, ir=None, graph=""):
 
 
 class BotActionCompilerTests(unittest.TestCase):
+    def test_disjoint_bot_selection_and_action_supports_are_fatal(self):
+        from hammerless.core.botactions import BotActionProblem
+        for selected, supported in (("COMMONS", "SPECIALS"), ("SPECIALS", "COMMONS"),
+                                    ("SURVIVORS", "SPECIALS"), ("SPECIALS", "SURVIVORS")):
+            with self.subTest(selected=selected, supported=supported):
+                nodes, links = fixture()
+                nodes[1].settings["kind"] = selected
+                nodes[4].settings["definition"]["supports"] = supported
+                errors, script, _ = compile_fixture(nodes, links)
+                self.assertTrue(any(isinstance(e, BotActionProblem) and "compatible action" in e for e in errors), errors)
+                self.assertNotIn('::HL_BA_Start_loop <-', script)
+
+    def test_matching_and_overlapping_bot_families_are_allowed(self):
+        for selected, supported in (("COMMONS", "COMMONS"), ("SPECIALS", "SPECIALS"),
+                                    ("SURVIVORS", "SURVIVORS"), ("COMMONS", "ALL"),
+                                    ("ALL", "SPECIALS"), ("ALL", "COMMONS"), ("ALL", "ALL")):
+            with self.subTest(selected=selected, supported=supported):
+                nodes, links = fixture()
+                nodes[1].settings["kind"] = selected
+                nodes[4].settings["definition"]["supports"] = supported
+                errors, script, _ = compile_fixture(nodes, links)
+                self.assertEqual(errors, [])
+                self.assertIn('::HL_BA_Start_loop <-', script)
+                self.assertIn(f'HLBA.Supports(bot, "{supported}")', script)
+
     @unittest.skipUnless(squirrel is not None and hasattr(squirrel, "SQVM"), "optional Squirrel interpreter")
     def test_commands_use_target_for_retreat_and_position_for_move(self):
         from hammerless.core.botactions import HELPERS
@@ -199,6 +224,16 @@ if (HL_Think() != 0.01) throw "Generated thinker did not schedule the fast tick"
             errors, script, _ = compile_fixture(nodes, links)
             self.assertEqual(errors, [])
             self.assertIn('(ctx.params["amount"]).tointeger()', script)
+
+    def test_override_restore_on_death_is_explicit_and_defaults_off(self):
+        nodes, links = fixture()
+        errors, script, _ = compile_fixture(nodes, links)
+        self.assertEqual(errors, [])
+        self.assertIn('ctx.params["amount"], null, false);', script)
+        nodes[4].settings["definition"]["nodes"][2].settings["restore_on_death"] = True
+        errors, script, _ = compile_fixture(nodes, links)
+        self.assertEqual(errors, [])
+        self.assertIn('ctx.params["amount"], null, true);', script)
 
     def test_current_bot_cannot_escape_to_ordinary_events(self):
         nodes, links = fixture()

@@ -142,8 +142,49 @@ assert not problems, problems
 assert re.search(r"HL_SeenBy\(ctx.bot,[^\n]+true\)", script), "Human-only watcher flag missing"
 cadence = re.search(r'HLBA.Start\("[^"\n]+", ([0-9.]+),', script)
 assert cadence and abs(float(cadence.group(1)) - 0.1) < 1e-6, [line for line in script.splitlines() if "HLBA.Start" in line]
-for channel in ("Movement", "property:movetype", "property:m_fFlags"):
+for channel in ("Movement", "property:m_nNextThinkTick", "property:m_flPlaybackRate"):
     assert channel in script, channel
+example_action = next(n for n in example.nodes if n.bl_idname == "HL_BAAction")
+assert example_action.group.action_supports == "COMMONS"
+assert next(n for n in example.nodes if n.bl_idname == "HL_BAFind").selection == "COMMONS"
+assert all(n.restore_on_death for n in example_action.group.nodes if n.bl_idname == "HL_BAOverride")
+assert re.search(r'HLBA.Override\(ctx, "m_nNextThinkTick"[^\n]+true\)', script)
+
+# Migration repairs only untouched old presets requested by Commons. Shared
+# Special consumers retain their original reference and group unchanged.
+migration = bpy.data.node_groups.new("Old common example", "HL_LogicTree")
+botactions.watched_example(migration)
+old_ref = next(n for n in migration.nodes if n.bl_idname == "HL_BAAction")
+old_asset = botactions.new_action("Freeze Special Infected (experimental)", True)
+old_ref.group = old_asset
+common_apply = next(n for n in migration.nodes if n.bl_idname == "HL_BAApply")
+special_find = migration.nodes.new("HL_BAFind")
+special_loop = migration.nodes.new("HL_BALoop")
+special_apply = migration.nodes.new("HL_BAApply")
+migration.links.new(special_find.outputs["Bots"], special_loop.inputs["Bots"])
+migration.links.new(special_loop.outputs["Current Bot"], special_apply.inputs["Bot"])
+migration.links.new(old_ref.outputs["Action"], special_apply.inputs["Action"])
+def action_source(t, node):
+    return next(l.from_node for l in t.links if l.to_node == node and l.to_socket.identifier == "action")
+botactions.repair_common_examples()
+repaired = action_source(migration, common_apply)
+assert repaired != old_ref and repaired.group.action_supports == "COMMONS"
+assert action_source(migration, special_apply) == old_ref
+assert old_ref.group == old_asset and old_asset.action_supports == "SPECIALS"
+assert botactions._stock_special_freeze(old_asset)
+count = len(migration.nodes)
+asset_count = len(bpy.data.node_groups)
+botactions.repair_common_examples()
+assert len(migration.nodes) == count and len(bpy.data.node_groups) == asset_count, "Migration is not idempotent"
+edited = bpy.data.node_groups.new("Edited old common example", "HL_LogicTree")
+botactions.watched_example(edited)
+edited_ref = next(n for n in edited.nodes if n.bl_idname == "HL_BAAction")
+edited_asset = botactions.new_action("Freeze Special Infected (experimental)", True)
+edited_ref.group = edited_asset
+next(n for n in edited_asset.nodes if n.bl_idname == "HL_BAOverride").inputs["Value"].value = 4
+edited_count = len(edited.nodes)
+botactions.repair_common_examples()
+assert edited_ref.group == edited_asset and len(edited.nodes) == edited_count, "Edited action was migrated"
 
 # Registration can be cycled without duplicated socket entries or lost classes.
 hammerless.unregister()

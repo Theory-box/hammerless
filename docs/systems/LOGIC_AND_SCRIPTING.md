@@ -20,7 +20,7 @@ The same rule applies to code. The **Script** and **Script Value** nodes (your o
 
 ### Experimental bot action graphs
 
-In the L4D2 Logic editor, **Add → Bot Actions → Freeze When Watched (experimental)** adds a complete wired example. It finds special-infected bots, checks whether a living human survivor sees each one, and requests an editable freeze action. This example still needs an in-game playtest; it does not promise to interrupt every infected animation or ability.
+In the L4D2 Logic editor, **Add → Bot Actions → Freeze Commons When Watched** adds a complete wired example. It finds common infected, checks whether a living human survivor sees each one, and requests an editable freeze action. The common action pauses native AI updates and animation with managed property overrides. In-game tests verified stationary holds, looking-away release, repeat cycles, damage while frozen, and cleanup after lethal damage. Special infected have a separate experimental action; changing the Find Bots selection does not change which action is connected.
 
 **Bot Action Loop** owns the repeated updates. Wire a Find Bots query into Bots, an event into Start, and its Each Bot output into Apply Bot Action. Wire Current Bot explicitly into Apply's Bot input. **Apply Bot Action** takes an Action socket, not an action dropdown. Enabled false, a bot leaving the selection, or stopping the loop releases that action's managed overrides. Next means the request was collected; After Update runs after requests have been applied.
 
@@ -28,7 +28,9 @@ Click **Edit Action** to change an action's Start, Update and Stop graphs. Use o
 
 Use **New Editable Action** to create another asset, or pick an existing action in the Bot Actions menu. These graphs are synchronous: Delay, timers and arbitrary script/event actions inside the loop's per-bot path or lifecycle are rejected at build time. Bot sockets reject props and generic entities. An action's declared Supports setting also limits which bots may run it.
 
-The compiler, lifecycle runtime, typed group boundaries, and Blender save/reload are tested automatically. Source's in-game save/load continuation and the experimental freeze preset's gameplay behavior remain unverified.
+Disjoint bot selections and action types now stop the build with a descriptive error. On file load, an untouched original special-infected preset connected to a Commons loop is replaced with the common action; edited assets and other consumers of shared actions are preserved. The common preset opts its scheduling and animation overrides into **Restore on Death**, allowing death processing to resume without running authored Stop actions on dead bots.
+
+The compiler, lifecycle runtime, typed group boundaries, and Blender save/reload are tested automatically. Source's in-game save/load continuation, multiplayer behavior and the special-infected preset remain unverified.
 
 ### The node editor
 
