@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.28 (test release, 2026-10-28)
+
+- Add a Model Browser panel with 5,501 packaged, unlit textured thumbnails, automatic framing, search, folder and feature filters, favourites, recent models, and models used in the map. Browsing does not render thumbnails.
+- Place models at the 3D cursor as Auto, Static, Physics, or Dynamic props, or replace selected props of the active type while retaining settings and transforms.
+- Include an offline thumbnail generator and support a custom destination for preview ZIP builds.
+- Known limitation: Physics placement does not yet validate model prop_data or override authored multiplayer physics behavior. Some scenery models disappear as ordinary physics props; some physics models intentionally do not collide with players. Static placement remains suitable for fixed compatible scenery.
+
 ## 0.20.27 (test release, 2026-10-28)
 
 - Unify patch and GPU GI limits under Max Bounces; GPU GI no longer has a hidden eight-pass ceiling. Preserve the effective limit from the experimental two-control settings.

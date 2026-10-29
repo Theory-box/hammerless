@@ -9,7 +9,7 @@ the `blender` package is only loaded when running inside Blender.
 bl_info = {
     "name": "Hammerless",
     "author": "Hammerless contributors",
-    "version": (0, 20, 27),
+    "version": (0, 20, 28),
     "blender": (4, 0, 0),
     "location": "3D View > Sidebar (N) > Hammerless",
     "description": "Build and play Left 4 Dead 2 maps straight from Blender",
@@ -44,6 +44,8 @@ def register():
     vmfimport.register()
     mapcollection.register()
     texturing.register()
+    from .blender import modelbrowser
+    modelbrowser.register()
     gameskeleton.register()
     placedchar.register()
     collisiontool.register()
@@ -74,6 +76,8 @@ def unregister():
     collisiontool.unregister()
     placedchar.unregister()
     gameskeleton.unregister()
+    from .blender import modelbrowser
+    modelbrowser.unregister()
     texturing.unregister()
     mapcollection.unregister()
     vmfimport.unregister()

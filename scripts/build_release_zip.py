@@ -6,6 +6,7 @@ Add-ons route works there too). Checked: installs, enables and draws its panels 
 
 Run:  python scripts/build_release_zip.py      -> dist/hammerless-<version>.zip
 """
+import argparse
 import os
 import re
 import zipfile
@@ -14,7 +15,10 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SRC = os.path.join(ROOT, "hammerless")
 manifest = open(os.path.join(SRC, "blender_manifest.toml"), encoding="utf-8").read()
 version = re.search(r'^version = "([^"]+)"', manifest, re.M).group(1)
-out = os.path.join(ROOT, "dist", f"hammerless-{version}.zip")
+parser = argparse.ArgumentParser()
+parser.add_argument("--output", help="Optional destination for a local preview package")
+args = parser.parse_args()
+out = os.path.abspath(args.output) if args.output else os.path.join(ROOT, "dist", f"hammerless-{version}.zip")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 count = 0
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
