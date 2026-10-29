@@ -448,11 +448,16 @@ def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.app.handlers.load_post.append(repair_common_examples)
-    repair_common_examples()
+    # Blender restricts bpy.data while enabling addons. Migrate only after
+    # registration finishes (or after a file loads), never inside register().
+    if not bpy.app.timers.is_registered(repair_common_examples):
+        bpy.app.timers.register(repair_common_examples, first_interval=0.1)
 
 
 def unregister():
     from . import logic
+    if bpy.app.timers.is_registered(repair_common_examples):
+        bpy.app.timers.unregister(repair_common_examples)
     if repair_common_examples in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(repair_common_examples)
     for cls in reversed(CLASSES):
