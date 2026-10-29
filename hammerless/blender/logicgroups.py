@@ -26,11 +26,13 @@ def node_title(node) -> str:
 ITEM_KINDS = [("event", "Event", "An event wire (orange)"), ("num", "Number", ""), ("bool", "True/False", ""),
               ("text", "Text", ""), ("vec", "Vector", ""), ("thing", "Entity / Player", ""),
               ("any", "Anything", "Any value"), ("bot", "Bot", "Verified bot entity"),
-              ("bots", "Bot List", "Bot selection"), ("action", "Bot Action", "Editable action definition")]
+              ("bots", "Bot List", "Bot selection"), ("action", "Bot Action", "Editable action definition"),
+              ("navarea", "Nav Area", "A navigation area, not an entity"), ("navareas", "Nav Area List", "Navigation areas")]
 KIND_OF_SOCKET = {"HL_EventSocket": "event", "HL_FloatSocket": "num", "HL_IntSocket": "num", "HL_BoolSocket": "bool",
                   "HL_TextSocket": "text", "HL_VectorSocket": "vec", "HL_ThingSocket": "thing", "HL_AnySocket": "any"}
 GROUP_COLOR = (0.20, 0.30, 0.22)
 KIND_OF_SOCKET.update(HL_BotSocket="bot", HL_BotListSocket="bots", HL_BotActionSocket="action")
+KIND_OF_SOCKET.update(HL_NavAreaSocket="navarea", HL_NavAreasSocket="navareas")
 
 
 def _rename_sockets(self, context):

@@ -1657,7 +1657,8 @@ class HL_NodeForEach(_Block, bpy.types.Node):
         ("COMMONS", "Common Infected", "Every common infected"),
         ("CLASS", "Entity of Class", "Every entity of a class (prop_physics, weapon_*...)"),
         ("NAME", "Entity Named", "Every entity with a name (* is a wildcard)"),
-        ("LIST", "Item in a List", "Every item of a list or table wired in")])
+        ("LIST", "Item in a List", "Every item of a list or table wired in"),
+        ("NAV_AREAS", "Nav Area", "Every area of a typed nav area list")])
 
     def make_sockets(self):
         self.ev_in("run", "Run")
@@ -1665,9 +1666,11 @@ class HL_NodeForEach(_Block, bpy.types.Node):
             self.data_in("text", "match", "Class" if self.what == "CLASS" else "Name")
         if self.what == "LIST":
             self.data_in("any", "list", "List")
+        if self.what == "NAV_AREAS":
+            self.data_in("navareas", "list", "Areas")
         self.ev_out("each", "Each")
         self.ev_out("done", "Done")
-        self.data_out("any" if self.what == "LIST" else "thing", "item", "Item")
+        self.data_out("navarea" if self.what == "NAV_AREAS" else "any" if self.what == "LIST" else "thing", "item", "Item")
         self.data_out("num", "index", "Number")
 
     def draw_buttons(self, context, layout):
@@ -2903,6 +2906,7 @@ def _add_menu(self, context):
         self.layout.menu(m.bl_idname)
     self.layout.menu("HL_MT_logic_groups", icon="NODETREE")
     self.layout.menu("HL_MT_bot_actions", icon="ARMATURE_DATA")
+    self.layout.menu("HL_MT_world_queries", icon="WORLD")
     if "HL_MT_logic_examples" in dir(bpy.types):
         self.layout.separator()
         self.layout.menu("HL_MT_logic_examples", icon="HELP")
@@ -2961,7 +2965,7 @@ def _compiled_links(tree, report):
                 if not isinstance(src, _Node):
                     continue
                 numbers = {out.bl_idname, inp.bl_idname} <= {"HL_FloatSocket", "HL_IntSocket"}   # (a number into a
-                strict = {"HL_BotSocket", "HL_BotListSocket", "HL_BotActionSocket"}
+                strict = {"HL_BotSocket", "HL_BotListSocket", "HL_BotActionSocket", "HL_NavAreaSocket", "HL_NavAreasSocket"}
                 bot_entity = out.bl_idname == "HL_BotSocket" and inp.bl_idname == "HL_ThingSocket"
                 if (out.bl_idname in strict or inp.bl_idname in strict) and out.bl_idname != inp.bl_idname and not bot_entity:
                     raise ValueError(f"{tree.name}: '{node_title(src)}' cannot connect {out.bl_label} to {inp.bl_label} on '{node_title(node)}'")
@@ -3363,6 +3367,8 @@ def register():
     logicgroups.register()
     from . import botactions
     botactions.register()
+    from . import worldqueries
+    worldqueries.register()
     bpy.types.NODE_MT_add.append(_add_menu)
     bpy.app.handlers.load_post.append(_on_load)
     bpy.app.handlers.load_post.append(_migrate_on_load)
@@ -3381,6 +3387,8 @@ def unregister():
     bpy.types.NODE_MT_add.remove(_add_menu)
     from . import logicgroups
     from . import botactions
+    from . import worldqueries
+    worldqueries.unregister()
     botactions.unregister()
     logicgroups.unregister()
     for c in reversed(CLASSES):

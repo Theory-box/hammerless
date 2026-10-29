@@ -6,7 +6,8 @@ from .logic import _Block, _rebuild, TREE
 KINDS = [(k, label, "") for k, label in (("SPECIALS", "Special Infected Bots"),
          ("SURVIVORS", "Survivor Bots"), ("COMMONS", "Common Infected"), ("ALL", "All Bots"))]
 TYPES = [(k, label, "") for k, label in (("num", "Number"), ("bool", "Boolean"),
-         ("text", "Text"), ("vec", "Vector"), ("thing", "Entity"))]
+         ("text", "Text"), ("vec", "Vector"), ("thing", "Entity"),
+         ("navarea", "Nav Area"), ("navareas", "Nav Area List"))]
 
 
 class _Wire:
@@ -134,7 +135,8 @@ class HL_BAAction(_Block, bpy.types.Node):
                 for name, socket in targets:
                     flat.links.append(LLink(nid, "value", name, socket, data=True))
         result = super().to_lnode(context)
-        defaults = {"num": 0.0, "bool": False, "text": "", "vec": (0, 0, 0), "thing": ""}
+        defaults = {"num": 0.0, "bool": False, "text": "", "vec": (0, 0, 0), "thing": "",
+                    "navarea": None, "navareas": None}
         result.settings["definition"] = {
             "nodes": flat.nodes, "links": flat.links,
             "inputs": [(it.uid, it.kind, defaults[it.kind]) for it in self.group.group_items

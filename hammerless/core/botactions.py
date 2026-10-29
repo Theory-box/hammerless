@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 
 from . import vscript as vs
+from . import worldqueries
 
 
 class BotActionProblem(str):
@@ -72,6 +73,8 @@ class ActionCompiler:
         self.loop = None
         self.lifecycle = False
         self.visiting = set()
+        self.query_path = ()
+        self.iteration_path = ()
 
     def fail(self, message):
         raise ValueError(message)
@@ -80,9 +83,11 @@ class ActionCompiler:
     def scope(self, nodes, links, loop=None, lifecycle=False):
         c = self.c
         saved = (c.nodes, c.data_links, c.expr_cache, c.value_expr, c.expr_out,
-                 self.nodes, self.links, self.loop, self.lifecycle, self.visiting)
+                 self.nodes, self.links, self.loop, self.lifecycle, self.visiting, self.query_path, self.iteration_path)
         self.nodes, self.links = nodes, links
         self.loop, self.lifecycle, self.visiting = loop, lifecycle, set()
+        self.query_path = ()
+        self.iteration_path = ()
         original = c.value_expr
         # Strip any outer scope wrapper when compiling a nested action definition.
         original = getattr(original, "_ba_original", original)
@@ -126,6 +131,14 @@ class ActionCompiler:
                 key = quote(n.settings.get("name", "state"))
                 fallback = c.typed_in(n, "default", n.settings.get("type", "num"))
                 return f"(({key} in ctx.state) ? ctx.state[{key}] : {fallback})"
+            if n.kind in worldqueries.KINDS:
+                if n.id not in self.query_path:
+                    self.fail(f"'{n.id}': run the world query earlier on this same synchronous path before reading it")
+                return worldqueries.output(n, socket, "HL_WQ_" + c.key_of(n.id))
+            if n.kind == "FOR_EACH" and n.settings.get("what") == "NAV_AREAS":
+                if n.id not in self.iteration_path:
+                    self.fail("Nav Area iteration outputs belong inside their Each path")
+                return ("HL_WQI_" if socket == "index" else "HL_WQA_") + c.key_of(n.id)
             if n.kind not in PURE:
                 self.fail(f"'{n.id}' ({n.kind}) cannot be evaluated inside a bot action; use synchronous value nodes")
             return original(n, socket)
@@ -135,7 +148,7 @@ class ActionCompiler:
             yield
         finally:
             (c.nodes, c.data_links, c.expr_cache, c.value_expr, c.expr_out,
-             self.nodes, self.links, self.loop, self.lifecycle, self.visiting) = saved
+             self.nodes, self.links, self.loop, self.lifecycle, self.visiting, self.query_path, self.iteration_path) = saved
 
     def source(self, n, socket):
         return self.c.data_links.get((n.id, socket))
@@ -153,6 +166,8 @@ class ActionCompiler:
             if not self.lifecycle:
                 self.owned.add(n.id)
             s, k = n.settings, n.kind
+            self.query_path = path
+            self.c.expr_cache = {}
             tail = path + (n.id,)
             if k == "IF":
                 if link.to_socket != "in":
@@ -162,6 +177,22 @@ class ActionCompiler:
                 continue
             if link.to_socket != "run":
                 self.fail(f"'{n.id}' must be connected through Run")
+            if k == "FOR_EACH" and s.get("what") == "NAV_AREAS":
+                values = self.c.typed_in(n, "list", "any")
+                key = self.c.key_of(n.id)
+                previous = self.iteration_path
+                self.iteration_path += (n.id,)
+                try:
+                    each = self.chain(n.id, 'each', tail)
+                finally:
+                    self.iteration_path = previous
+                # Inputs are captured once; these lists come from the capped Nearby query.
+                out.append(f"local HL_WQL_{key} = {values};\nif (typeof HL_WQL_{key} == \"array\") {{\n"
+                           f"for (local HL_WQI_{key}=0; HL_WQI_{key}<HL_WQL_{key}.len() && HL_WQI_{key}<128; ++HL_WQI_{key}) {{\n"
+                           f"local HL_WQA_{key}=HL_WQL_{key}[HL_WQI_{key}];\n{each}\n}}\n}}")
+                # The loop item is no longer in scope on Done.
+                out.append(self.chain(n.id, "done", tail))
+                continue
             if k == "BA_APPLY" and not self.lifecycle:
                 if self.source(n, "bot") != (self.loop, "current"):
                     self.fail(f"'{n.id}': Bot must come from this loop's Current Bot output")
@@ -193,6 +224,8 @@ class ActionCompiler:
                     params.append(f"[{quote(uid)}] = {value}")
                 enabled = self.c.expr_in(n, "enabled", True)
                 out.append(f"HLBA.Request(ctx, {quote(self.c.key_of(n.id))}, ctx.bot, {definition}, {enabled}, {{ {', '.join(params)} }});")
+            elif k in worldqueries.KINDS:
+                out.append(f"local HL_WQ_{self.c.key_of(n.id)} = {worldqueries.call(self.c, n)};")
             elif k == "BA_OVERRIDE" and self.lifecycle:
                 kind, key = s.get("type", "float"), s.get("property", "")
                 if kind not in {"float", "int", "vector", "flags"} or not key:

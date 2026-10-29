@@ -507,9 +507,15 @@ def _remove_old_models(gamedir: str, ir) -> None:
                 pass
 
 
-def write_map_scripts(gamedir: str, map_name: str, files: dict, rep: Report) -> None:
+def write_map_scripts(gamedir: str, map_name: str, files: dict, rep: Report,
+                      *, bsp_path: str | None = None) -> None:
     """The map's own game files (scripts, mode file): written, the ones this build no longer makes removed,
     and recorded. Raises OSError."""
+    # Ambient queries must use this successful build's BSP, never a previous bake
+    # discovered beside a newly exported VMF. Export-only leaves them unavailable.
+    from ..core.ambientquery import augment_scripts
+    files, diagnostics = augment_scripts(files, bsp_path, map_name)
+    rep.warnings.extend(diagnostics)
     for rel, content in files.items():
         full = os.path.join(gamedir, *rel.split("/"))
         os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -1724,13 +1730,14 @@ class HL_OT_build(bpy.types.Operator):
             return True
         rep = Report()
         try:
-            write_map_scripts(*pending, rep)
+            write_map_scripts(*pending, rep, bsp_path=self._job.base + ".bsp")
         except OSError as ex:
             self.report({"ERROR"}, f"Can't write the map's scripts into the game folder ({ex}). Is Left 4 Dead 2 "
                                    "installed somewhere that needs administrator rights?")
             return False
-        if rep.info:
-            write_log([f"info: {i}" for i in rep.info], append=True)
+        if rep.info or rep.warnings:
+            write_log([f"info: {i}" for i in rep.info] +
+                      [f"warning: {w}" for w in rep.warnings], append=True)
         return True
 
     def _stop_nav(self):

@@ -139,6 +139,61 @@ Node groups work like Blender's shader and Geometry Nodes groups (`hammerless/bl
 
 **Cleanup.** Re-adding an example reuses its groups instead of making `.001` copies, unless you edited them. Stale example groups that nothing uses are removed. **Remove Unused Groups** (Add > Groups) deletes every logic group no graph uses, repeating until none is left, and gives `.001` copies their plain names back.
 
+## World queries
+
+The Logic editor's **Add > World Queries** menu provides reusable map information for normal graphs,
+Bot Action Loops, and editable action groups:
+
+| Node | Result |
+|---|---|
+| Nearest Nav Area | Area and its center near a position; optional ground and line-of-sight checks |
+| Nearby Nav Areas | Areas sorted by distance, plus count and nearest center |
+| Nav Area at Index | One area from that list (zero-based) |
+| Nav Area Info | Center, ID, team blocking, and underwater state |
+| Nav Path Exists | Whether two areas have a nav route within the distance budget, respecting blockers by default |
+| Baked Ambient Light | Linear ambient RGB and luminance at a position, from the compiled BSP's ambient probes |
+
+These are **Run → Next** queries. Run each query before consuming its outputs: the outputs read a
+captured result, rather than repeating the search. Inside bot loops/actions, query results are local
+to that execution and the compiler rejects reading a query before it runs. **Available** distinguishes
+missing map data from a valid negative result; nav **Found** distinguishes a missing area from a valid
+area with no route. Nav handles have their own sockets, so they cannot be passed to entity operations.
+**For Each**, set to **Nav Areas**, iterates the typed list; its Item belongs on the Each branch.
+
+Example: Nearby Nav Areas → For Each (Nav Areas) → Nav Area Info → Baked Ambient Light, using the
+area center plus an eye-height offset as Position. Check Available before comparing Brightness, and
+check Nav Path Exists before choosing a candidate destination. Existing Trace Line and Seen By nodes
+provide actual visibility tests; VVIS is not a replacement for a line trace. A nav path does not
+guarantee an individual actor can or will follow it.
+
+Queries cap nav search radius at 4096 units, returned lists at 128 areas, and path distance at 32768
+units. These limits do not make engine searches constant-time. Avoid searching a large region for
+every zombie every frame; query shared destinations less frequently and use the loop interval.
+
+### Baked ambient data
+
+`core/ambientquery.py` exports existing BSP ambient cubes only when a graph uses the light query.
+It adds no ray tracing or bake pass. After a successful Build, `blender/ops.py` injects the current
+compiled data into the map script; export-only, missing probes, and unsupported/corrupt data leave
+Available false. Removing the graph removes its script through the normal file manifest. Failed
+builds do not replace the old map's script/data.
+
+The runtime selects the containing BSP leaf and interpolates that leaf's probes, averaging the six
+cube directions. It does not choose the nearest probe through a wall. **Neighbor Sample** reports
+when VRAD itself supplied a fallback leaf. Brightness is linear luminance, not an exposure-adjusted
+0–1 screen value. The result estimates baked ambient illumination; it excludes dynamic lights,
+flashlights, runtime exposure, and separate model direct-light contributions. It is a useful basis
+for light-sensitive behavior, not a complete renderer or a finished light-avoidance behavior.
+
+### Common infected movement test
+
+Stock-game testing found that `info_goal_infected_chase` can attract commons around obstacles, but
+it is a global lure and nearby survivors can take priority. In one five-common test, two reached
+the first target and one followed the retarget while survivors were nearby; moving survivors away
+allowed all five to reach the new target. Disabling the lure left them idling during the observation
+window, so reliable return to normal pursuit was not established. It is not exposed as a selected-bot
+Move action. Existing CommandABot actions remain restricted to survivor/special-infected player bots.
+
 ## Worked examples
 
 *Shift+A > Examples*, *Examples 2* and *Examples 3* add **62** ready-made graphs (`hammerless/blender/logic_examples.py`, `_2.py`, `_3.py`), from a hello message to Director tricks. Each comes with notes, numbered frames in the order things happen, and any objects it needs. Between them every node and every Override is used somewhere. The full list is in [Logic Nodes](../LOGIC_NODES.md#examples). A few of the more involved ones:
