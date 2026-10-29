@@ -2381,6 +2381,8 @@ class HL_NodeSeenBy(_Block, bpy.types.Node):
     kind = "SEEN"
     clear_sight: BoolProperty(name="Clear Sight", default=True,
                               description="Walls and solid props in between hide it (off: only where they look)")
+    humans_only: BoolProperty(name="Human Viewers Only", default=False,
+                             description="Ignore survivor bots when checking who sees the target")
 
     def make_sockets(self):
         self.data_in("thing", "target", "Target")
@@ -2392,9 +2394,10 @@ class HL_NodeSeenBy(_Block, bpy.types.Node):
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "clear_sight")
+        layout.prop(self, "humans_only")
 
     def settings(self):
-        return {"clear_sight": self.clear_sight}
+        return {"clear_sight": self.clear_sight, "humans_only": self.humans_only}
 
 
 class HL_NodeFindNearby(_Block, bpy.types.Node):
@@ -2899,6 +2902,7 @@ def _add_menu(self, context):
     for m in CATEGORY_MENUS:
         self.layout.menu(m.bl_idname)
     self.layout.menu("HL_MT_logic_groups", icon="NODETREE")
+    self.layout.menu("HL_MT_bot_actions", icon="ARMATURE_DATA")
     if "HL_MT_logic_examples" in dir(bpy.types):
         self.layout.separator()
         self.layout.menu("HL_MT_logic_examples", icon="HELP")
@@ -2957,7 +2961,11 @@ def _compiled_links(tree, report):
                 if not isinstance(src, _Node):
                     continue
                 numbers = {out.bl_idname, inp.bl_idname} <= {"HL_FloatSocket", "HL_IntSocket"}   # (a number into a
-                if out.bl_idname != inp.bl_idname and not numbers and not (    # whole number: the game rounds it)
+                strict = {"HL_BotSocket", "HL_BotListSocket", "HL_BotActionSocket"}
+                bot_entity = out.bl_idname == "HL_BotSocket" and inp.bl_idname == "HL_ThingSocket"
+                if (out.bl_idname in strict or inp.bl_idname in strict) and out.bl_idname != inp.bl_idname and not bot_entity:
+                    raise ValueError(f"{tree.name}: '{node_title(src)}' cannot connect {out.bl_label} to {inp.bl_label} on '{node_title(node)}'")
+                if out.bl_idname != inp.bl_idname and not bot_entity and not numbers and not (    # whole number: the game rounds it)
                         out.bl_idname in DATA_SOCKETS and inp.bl_idname in DATA_SOCKETS
                         and "HL_AnySocket" in (out.bl_idname, inp.bl_idname)):
                     report.warnings.append(f"{tree.name}: the wire from '{node_title(src)}' to "
@@ -3118,8 +3126,10 @@ def compile_logic(context, ir, report) -> None:
                                                           and e.classname == "func_detail")]
         links = flat.links
         name = f"{owner.name} {tree.name}" if behaviour else (tree.name if len(trees) > 1 else "")
+        from ..core.botactions import BotActionProblem
         for p in compile_graph(nodes, links, ir, name, log=context.scene.hammerless.debug_log):
-            report.warnings.append(f"{tree.name} on '{owner.name}': {p}" if behaviour else f"{tree.name}: {p}")
+            messages = report.errors if isinstance(p, BotActionProblem) else report.warnings
+            messages.append(f"{tree.name} on '{owner.name}': {p}" if behaviour else f"{tree.name}: {p}")
 
 
 # ---------------------------------------------------------------- operators
@@ -3351,6 +3361,8 @@ def register():
         bpy.utils.register_class(c)
     from . import logicgroups
     logicgroups.register()
+    from . import botactions
+    botactions.register()
     bpy.types.NODE_MT_add.append(_add_menu)
     bpy.app.handlers.load_post.append(_on_load)
     bpy.app.handlers.load_post.append(_migrate_on_load)
@@ -3368,6 +3380,8 @@ def unregister():
         bpy.app.handlers.load_post.remove(_migrate_on_load)
     bpy.types.NODE_MT_add.remove(_add_menu)
     from . import logicgroups
+    from . import botactions
+    botactions.unregister()
     logicgroups.unregister()
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

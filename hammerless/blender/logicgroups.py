@@ -25,10 +25,12 @@ def node_title(node) -> str:
 
 ITEM_KINDS = [("event", "Event", "An event wire (orange)"), ("num", "Number", ""), ("bool", "True/False", ""),
               ("text", "Text", ""), ("vec", "Vector", ""), ("thing", "Entity / Player", ""),
-              ("any", "Anything", "Any value")]
+              ("any", "Anything", "Any value"), ("bot", "Bot", "Verified bot entity"),
+              ("bots", "Bot List", "Bot selection"), ("action", "Bot Action", "Editable action definition")]
 KIND_OF_SOCKET = {"HL_EventSocket": "event", "HL_FloatSocket": "num", "HL_IntSocket": "num", "HL_BoolSocket": "bool",
                   "HL_TextSocket": "text", "HL_VectorSocket": "vec", "HL_ThingSocket": "thing", "HL_AnySocket": "any"}
 GROUP_COLOR = (0.20, 0.30, 0.22)
+KIND_OF_SOCKET.update(HL_BotSocket="bot", HL_BotListSocket="bots", HL_BotActionSocket="action")
 
 
 def _rename_sockets(self, context):
@@ -69,7 +71,7 @@ def _users_and_io(tree):
     out = [n for n in tree.nodes if n.bl_idname in ("HL_NodeGroupInput", "HL_NodeGroupOutput")]
     for t in bpy.data.node_groups:
         if t.bl_idname == "HL_LogicTree":
-            out += [n for n in t.nodes if n.bl_idname == "HL_NodeGroup" and n.group == tree]
+            out += [n for n in t.nodes if n.bl_idname in ("HL_NodeGroup", "HL_BAAction") and n.group == tree]
     return out
 
 
@@ -107,7 +109,7 @@ def _ancestors_ok(tree, group) -> bool:
 
 
 def _poll_group(self, tree):
-    return is_group(tree) and _ancestors_ok(self.id_data, tree)
+    return is_group(tree) and not getattr(tree, "bot_action", False) and _ancestors_ok(self.id_data, tree)
 
 
 def _group_changed(self, context):
@@ -223,6 +225,8 @@ def flatten(context, tree, report, prefix: str = "", stack: tuple = (), checked:
     by_id = {}
     for n in nodes.values():
         if n.kind == "GROUP":
+            if n.group is not None and getattr(n.group, "bot_action", False):
+                raise ValueError("Use a Bot Action Group node to reference an action asset")
             if n.group is None:
                 report.warnings.append(f"{tree.name}: Group node '{node_title(n)}' has no group picked")
                 continue
@@ -348,7 +352,7 @@ def used_groups() -> set:
     while todo:
         t = todo.pop()
         for n in t.nodes:
-            g = getattr(n, "group", None) if n.bl_idname == "HL_NodeGroup" else None
+            g = getattr(n, "group", None) if n.bl_idname in ("HL_NodeGroup", "HL_BAAction") else None
             if g is not None and g.name not in used:
                 used.add(g.name)
                 todo.append(g)
@@ -424,7 +428,7 @@ class HL_OT_logic_group_edit(_InLogic, bpy.types.Operator):
         space = context.space_data
         tree = space.edit_tree
         node = tree.nodes.get(self.node_name) if self.node_name else tree.nodes.active
-        if node is not None and node.bl_idname == "HL_NodeGroup" and node.group is not None and (
+        if node is not None and node.bl_idname in ("HL_NodeGroup", "HL_BAAction") and node.group is not None and (
                 self.node_name or node.select):
             space.path.append(node.group, node=node)
             return {"FINISHED"}
@@ -603,6 +607,13 @@ class HL_OT_logic_group_ungroup(_InLogic, bpy.types.Operator):
         return {"FINISHED"}
 
 
+ACTION_ITEM_KINDS = [item for item in ITEM_KINDS if item[0] in {"num", "bool", "text", "vec", "thing"}]
+
+
+def _editable_item_kinds(self, context):
+    return ACTION_ITEM_KINDS if getattr(_edit_tree(context), "bot_action", False) else ITEM_KINDS
+
+
 class HL_OT_logic_group_item(_InLogic, bpy.types.Operator):
     bl_idname = "hammerless.logic_group_item"
     bl_label = "Group Socket"
@@ -612,13 +623,17 @@ class HL_OT_logic_group_item(_InLogic, bpy.types.Operator):
     action: EnumProperty(items=[("ADD_IN", "Add Input", ""), ("ADD_OUT", "Add Output", ""), ("REMOVE", "Remove", ""),
                                 ("UP", "Up", ""), ("DOWN", "Down", ""), ("KIND", "Kind", "")])
     index: IntProperty(default=-1)
-    kind: EnumProperty(items=ITEM_KINDS, default="event")
+    kind: EnumProperty(items=_editable_item_kinds)
 
     def execute(self, context):
         tree = _edit_tree(context)
         if not is_group(tree):
             return {"CANCELLED"}
         coll = tree.group_items
+        if getattr(tree, "bot_action", False) and (self.action == "ADD_OUT" or
+                (self.action in ("ADD_IN", "KIND") and self.kind not in {"num", "bool", "text", "vec", "thing"})):
+            self.report({"WARNING"}, "Action groups accept value inputs; lifecycle events come from Action Lifecycle")
+            return {"CANCELLED"}
         if self.action in ("ADD_IN", "ADD_OUT"):
             new_item(tree, "Event" if self.kind == "event" else "Value", self.kind, self.action == "ADD_OUT")
         elif 0 <= self.index < len(coll):
@@ -646,7 +661,7 @@ class HL_OT_logic_group_add(_InLogic, bpy.types.Operator):
     def invoke(self, context, event):
         tree = _edit_tree(context)
         group = bpy.data.node_groups.get(self.group_name)
-        if not is_group(group):
+        if not is_group(group) or getattr(group, "bot_action", False):
             return {"CANCELLED"}
         if not _ancestors_ok(tree, group):
             self.report({"WARNING"}, "A group can't be put inside itself")
@@ -674,6 +689,8 @@ class HL_PT_logic_group(bpy.types.Panel):
         tree = _edit_tree(context)
         layout = self.layout
         for outputs, title in ((False, "Inputs"), (True, "Outputs")):
+            if outputs and getattr(tree, "bot_action", False):
+                continue
             layout.label(text=title)
             col = layout.column(align=True)
             for i, it in enumerate(tree.group_items):
@@ -708,7 +725,7 @@ class HL_MT_logic_groups(bpy.types.Menu):
                 cls = getattr(bpy.types, idname)
                 op = layout.operator("node.add_node", text=cls.bl_label, icon=cls.bl_icon)
                 op.type, op.use_transform = idname, True
-        groups = [g for g in bpy.data.node_groups if is_group(g) and g != tree]
+        groups = [g for g in bpy.data.node_groups if is_group(g) and g != tree and not getattr(g, "bot_action", False)]
         layout.operator("hammerless.logic_groups_cleanup", icon="TRASH")
         if groups:
             layout.separator()

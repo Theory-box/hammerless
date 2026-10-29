@@ -216,7 +216,7 @@ HELPERS = {
         "    if (secs > 0) DoEntFire(\"!self\", \"Kill\", \"\", secs.tofloat(), null, p);\n"
         "    return p;\n}"),
     "HL_SeenBy": (
-        "::HL_SeenBy <- function(target, pos, viewer, angle, sight) {   // who (if anyone) looks at it\n"
+        "::HL_SeenBy <- function(target, pos, viewer, angle, sight, humans_only = false) {   // who (if anyone) looks at it\n"
         "    local ent = target != null && typeof target == \"instance\" && target.IsValid();\n"
         "    if (ent) pos = target.GetCenter();\n"
         "    if (pos == null) return null;\n"
@@ -225,13 +225,14 @@ HELPERS = {
         "    foreach (p in who) {\n"
         "        if (p == null || typeof p != \"instance\" || !p.IsValid() || p == target) continue;\n"
         "        if (p.GetClassname() == \"player\" && p.IsDead()) continue;\n"
+        "        if (humans_only && (p.GetClassname() != \"player\" || !p.IsSurvivor() || IsPlayerABot(p))) continue;\n"
         "        local eye = HL_Eye(p);\n        local d = pos - eye;\n        local len = d.Length();\n"
         "        if (len < 1.0) return p;\n"
         "        if (HL_Fwd(HL_Look(p)).Dot(d) < c * len) continue;\n"
         "        if (sight) {\n"
         "            local t = { start = eye, end = pos, mask = 24705, ignore = p };\n"
         "            TraceLine(t);\n"
-        "            if (\"hit\" in t && t.hit && !(ent && \"enthit\" in t && t.enthit == target) && t.fraction < 0.98) continue;\n"
+        "            if (\"hit\" in t && t.hit && !(ent && \"enthit\" in t && t.enthit == target) && (1.0 - t.fraction) * len > 1.0) continue;\n"
         "        }\n        return p;\n    }\n    return null;\n}"),
     "HL_Nearby": (
         "::HL_NearOk <- function(x, what, ign) {   // one Find Nearby candidate: what it asked for, alive\n"
@@ -611,6 +612,10 @@ class _Compiler:
 
     def value_expr(self, n: LNode, sock: str) -> str:
         s, k = n.settings, n.kind
+        if k.startswith("BA_"):
+            from .botactions import BotActionProblem
+            self.problems.append(BotActionProblem(f"Logic node '{n.id}': bot action values are only available inside their owning loop or action group"))
+            return "null"
         slug = self.key_of(n.id)
         if k == "SCRIPT_CALL":
             f = vs.function(s.get("fn", ""))
@@ -1615,7 +1620,8 @@ class _Compiler:
             self.helper("HL_SeenBy", HELPERS["HL_SeenBy"])
             pos = self.typed_in(n, "position", vs.VEC) if (n.id, "position") in self.data_links or n.consts.get("position") else "null"
             who = (f"HL_SeenBy({self.typed_in(n, 'target', vs.THING)}, {pos}, {self.typed_in(n, 'viewer', vs.THING)}, "
-                   f"{self.typed_in(n, 'angle', vs.NUM)}, {'true' if s.get('clear_sight', True) else 'false'})")
+                   f"{self.typed_in(n, 'angle', vs.NUM)}, {'true' if s.get('clear_sight', True) else 'false'}, "
+                   f"{'true' if s.get('humans_only', False) else 'false'})")
             return f"({who} != null)" if sock == "seen" else who
         if k == "FIND_NEAR":
             self.helper("HL_Nearby", HELPERS["HL_Nearby"])
@@ -1821,7 +1827,7 @@ class _Compiler:
                 or ir.logic_script_events or ir.logic_hooks):
             return
         wall_weapons = bool(ir.__dict__.get("_wall_weapon_names"))
-        thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens or ir.logic_diropts or wall_weapons or ir.__dict__.get("_interactions"))
+        thinks = bool(ir.logic_progress or ir.logic_retry or ir.logic_whens or ir.logic_diropts or wall_weapons or ir.__dict__.get("_interactions") or ir.__dict__.get("_bot_actions"))
         parts = [f"// Hammerless logic graphs for {ir.settings.name}\n",
                  "::HL_Ctx <- {};   // the event being handled, its fields\n::HL_R <- {};     // what action nodes returned\n"
                  "::HL_L <- {};     // For Each: the current item\n::HL_I <- {};     // and its number\n"
@@ -1943,20 +1949,22 @@ class _Compiler:
                          "    }\n}\n")
         if thinks:
             interaction_tick = bool(ir.__dict__.get("_interactions"))
-            if interaction_tick:
+            fast_tick = interaction_tick or bool(ir.__dict__.get("_bot_actions"))
+            if fast_tick:
                 parts.append("HL_OtherThinkNext <- 0.0;\n")
             parts.append("function HL_Think() {\n"
+                         + ("    HLBA.TickAll();\n" if ir.__dict__.get("_bot_actions") else "")
                          + ("    HL_KnifeThink();\n" if ir.__dict__.get("_emergency_knife") else "")
-                         + ("    HL_InteractionThink();\n"
-                            "    if (Time() < HL_OtherThinkNext) return 0.01;\n"
-                            "    HL_OtherThinkNext = Time() + 0.1;\n" if interaction_tick else "")
+                         + ("    HL_InteractionThink();\n" if interaction_tick else "")
+                         + ("    if (Time() < HL_OtherThinkNext) return 0.01;\n"
+                            "    HL_OtherThinkNext = Time() + 0.1;\n" if fast_tick else "")
                          + ("    HL_WallThink();\n" if wall_weapons else "")
                          + ("    HL_Progress_Think();\n" if ir.logic_progress else "")
                          + ("    HL_When_Think();\n" if ir.logic_whens else "")
                          + ("    HL_Retry();\n" if ir.logic_retry else "")
                          + ("    if (Time() >= HL_OptsNext) { HL_OptsNext = Time() + 0.5; ::HL_ApplyOpts(); }\n"
                             if ir.logic_diropts else "")
-                         + ("    return 0.01;\n" if interaction_tick else "") + "}\n")
+                         + ("    return 0.01;\n" if fast_tick else "") + "}\n")
             if ir.logic_diropts:
                 parts.insert(-1, "HL_OptsNext <- 0.0;\n")
         events = {ev: list(t) for ev, t in ir.logic_events.items()}
@@ -2062,11 +2070,18 @@ def compile_graph(nodes: list[LNode], links: list[LLink], ir: MapIR, graph: str 
     c.cheat_uses = []
     c.nodes = {n.id: n for n in nodes}
     c.data_links = {(l.to_node, l.to_socket): (l.from_node, l.from_socket) for l in links if l.data}
+    from .botactions import prepare
+    ba_skip, ba_sources = prepare(c, nodes, links)
     makers = ("BUTTON", "MOVE", "SHOW_HIDE", "VOLUME")
     for n in sorted(nodes, key=lambda n: (n.kind == "COLLISION", n.kind not in makers)):
+        if n.id in ba_skip:
+            continue
         c.node(n)
     for l in links:
         if not l.data:
+            if l.from_node in ba_sources or (c.nodes.get(l.from_node) is not None
+                    and c.nodes[l.from_node].kind == "BA_LOOP" and l.from_socket == "each"):
+                continue
             c.link(l)
     c.render_script_nodes()
     c.finish_script()

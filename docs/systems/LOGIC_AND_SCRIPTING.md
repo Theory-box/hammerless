@@ -18,6 +18,18 @@ The same rule applies to code. The **Script** and **Script Value** nodes (your o
 
 ## From graph to game
 
+### Experimental bot action graphs
+
+In the L4D2 Logic editor, **Add → Bot Actions → Freeze When Watched (experimental)** adds a complete wired example. It finds special-infected bots, checks whether a living human survivor sees each one, and requests an editable freeze action. This example still needs an in-game playtest; it does not promise to interrupt every infected animation or ability.
+
+**Bot Action Loop** owns the repeated updates. Wire a Find Bots query into Bots, an event into Start, and its Each Bot output into Apply Bot Action. Wire Current Bot explicitly into Apply's Bot input. **Apply Bot Action** takes an Action socket, not an action dropdown. Enabled false, a bot leaving the selection, or stopping the loop releases that action's managed overrides. Next means the request was collected; After Update runs after requests have been applied.
+
+Click **Edit Action** to change an action's Start, Update and Stop graphs. Use ordinary **Group Input** sockets for parameters, and Get/Set Action State for values that belong to that bot's particular action instance. Override Bot Property temporarily owns a property or selected flag bits and restores its saved value when released, provided another system has not changed it. Bot Command issues Move, Attack, Retreat or Reset commands to supported player bots; commands are not automatically undone. Actions that claim conflicting channels or properties cannot run together.
+
+Use **New Editable Action** to create another asset, or pick an existing action in the Bot Actions menu. These graphs are synchronous: Delay, timers and arbitrary script/event actions inside the loop's per-bot path or lifecycle are rejected at build time. Bot sockets reject props and generic entities. An action's declared Supports setting also limits which bots may run it.
+
+The compiler, lifecycle runtime, typed group boundaries, and Blender save/reload are tested automatically. Source's in-game save/load continuation and the experimental freeze preset's gameplay behavior remain unverified.
+
 ### The node editor
 
 The editor lives in `hammerless/blender/logic.py`. It is a custom Blender node tree with its own socket types, coloured by what they carry (events, objects, numbers, true / false, text, vectors, entities; see [Logic Nodes](../LOGIC_NODES.md#wires)). When you build, the editor hands the compiler plain data: nodes (a kind, its settings, maybe a scene object and its position) and wires (from node and socket, to node and socket).
