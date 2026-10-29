@@ -4,6 +4,7 @@
 
 - Add a Model Browser panel with 5,501 packaged, unlit textured thumbnails, automatic framing, search, folder and feature filters, favourites, recent models, and models used in the map. Browsing does not render thumbnails.
 - Place models at the 3D cursor as Auto, Static, Physics, or Dynamic props, or replace selected props of the active type while retaining settings and transforms.
+- Fix decal preview slowdowns during duplication, undo, and redo: retain GPU textures and preview batches, check only nearby receivers for changes, and avoid rebuilding unrelated brush geometry.
 - Include an offline thumbnail generator and support a custom destination for preview ZIP builds.
 - Known limitation: Physics placement does not yet validate model prop_data or override authored multiplayer physics behavior. Some scenery models disappear as ordinary physics props; some physics models intentionally do not collide with players. Static placement remains suitable for fixed compatible scenery.
 

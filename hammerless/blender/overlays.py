@@ -76,7 +76,7 @@ def receiver_objects(context):
             and (effective_role(o)=="BRUSH" or (effective_role(o)=="BRUSH_ENTITY" and o.hammerless.classname=="func_detail"))]
 
 
-def receiver_faces(context):
+def receiver_faces(context, bounds=None):
     from .extract import mesh_to_brushes, game_path
     class Materials:
         def resolve(self,mat):return (game_path(mat) if mat else context.scene.hammerless.default_material,.25,16)
@@ -84,7 +84,8 @@ def receiver_faces(context):
     objects=receiver_objects(context)
     # Collection updates also happen whenever a child projector moves. Compare
     # actual receiver membership/visibility instead of treating those as geometry.
-    visible=[obj for obj in objects if obj.visible_get()]
+    deps=context.evaluated_depsgraph_get()
+    visible=[obj for obj in objects if obj.visible_get() and (bounds is None or object_intersects(obj,deps,scale,bounds))]
     context_key=(context.scene.as_pointer(),context.view_layer.name,scale,context.scene.hammerless.default_material)
     cache=_state.setdefault("receiver_cache",{})
     if _state.get("receiver_context")!=context_key:
@@ -130,10 +131,65 @@ def projection_bounds(kv):
     return tuple(origin-half),tuple(origin+half)
 
 
+def object_intersects(obj, depsgraph, scale, bounds):
+    evaluated=obj.evaluated_get(depsgraph)
+    points=[evaluated.matrix_world@Vector(p)*scale for p in evaluated.bound_box]
+    lo=tuple(min(p[i] for p in points) for i in range(3))
+    hi=tuple(max(p[i] for p in points) for i in range(3))
+    return any(all(lo[i]<=b[1][i] and hi[i]>=b[0][i] for i in range(3)) for b in bounds)
+
+
+def preview_signature(context):
+    """Detached values only: undo replaces Blender IDs, but not these snapshots or GPU textures.
+    Hash only nearby receivers; no brush conversion, texture decoding, or GPU work.
+    """
+    import hashlib
+    import numpy as np
+    from .extract import game_path
+    from .mapcollection import map_objects
+    scale=context.scene.hammerless.units_per_meter
+    inside=map_objects(context.scene)
+    overlays=[];bounds=[]
+    for obj in context.scene.objects:
+        if not (is_overlay(obj) and obj.name in inside and obj.hl_overlay.preview and obj.visible_get()):continue
+        try:
+            kv=entity(obj,scale).keyvalues
+            overlays.append((obj.name,tuple(sorted(kv.items()))))
+            bounds.append(projection_bounds(kv))
+        except ValueError as exc:overlays.append((obj.name,str(exc)))
+    receivers=[];near_names=set()
+    deps=context.evaluated_depsgraph_get()
+    if bounds:
+        for obj in receiver_objects(context):
+            if not obj.visible_get() or not object_intersects(obj,deps,scale,bounds):continue
+            near_names.add(obj.name)
+            digest=hashlib.blake2b(digest_size=16)
+            if obj.mode=='EDIT':
+                import bmesh
+                bm=bmesh.from_edit_mesh(obj.data)
+                bm.verts.index_update()
+                digest.update(repr(([tuple(v.co) for v in bm.verts],
+                                    [(tuple(v.index for v in f.verts),f.material_index) for f in bm.faces])).encode())
+            else:
+                mesh=obj.evaluated_get(deps).data
+                for collection,field,width,dtype in ((mesh.vertices,'co',3,np.float32),
+                        (mesh.loops,'vertex_index',1,np.int32),(mesh.polygons,'loop_total',1,np.int32),
+                        (mesh.polygons,'material_index',1,np.int32)):
+                    values=np.empty(len(collection)*width,dtype=dtype)
+                    collection.foreach_get(field,values);digest.update(values.tobytes())
+            receivers.append((obj.name,tuple(v for row in obj.matrix_world for v in row),
+                obj.hammerless.use_convex_hull,tuple(game_path(slot.material) if slot.material else '' for slot in obj.material_slots),
+                digest.digest()))
+    _state['near_names']=near_names
+    return (context.scene.name,context.view_layer.name,scale,context.scene.hammerless.default_material,
+            tuple(sorted(overlays)),tuple(sorted(receivers)))
+
+
 def receiver_move_affects_preview(obj, depsgraph, scene):
     bounds=_state.get("projection_bounds")
     if bounds is None:return True  # No completed preview to reuse yet.
     if not bounds:return False
+    if obj.name in _state.get("near_names",set()) and obj.as_pointer() not in _state.get("receiver_cache",{}):return True
     def intersects(lo,hi):
         return any(all(lo[i]<=b[1][i] and hi[i]>=b[0][i] for i in range(3)) for b in bounds)
     entry=_state.get("receiver_cache",{}).get(obj.as_pointer())
@@ -214,10 +270,11 @@ def rebuild(context):
         _state["projection_bounds"]=None
     if not overlays:
         _state["textures"].clear();_state["dirty"]=False
+        _state["preview_signature"]=preview_signature(context)
         return
     used={o.hl_overlay.material.strip().lower().removeprefix("materials/").removesuffix(".vmt") for o in overlays}
     _state["textures"]={k:v for k,v in _state["textures"].items() if k[1] in used}
-    faces=receiver_faces(context);scale=context.scene.hammerless.units_per_meter
+    faces=receiver_faces(context,_state["projection_bounds"]);scale=context.scene.hammerless.units_per_meter
     for obj in sorted(overlays,key=lambda o:o.hl_overlay.order):
         try:
             kv=entity(obj,scale).keyvalues;vertices=[];uvs=[];count=0
@@ -238,6 +295,7 @@ def rebuild(context):
                 if warning:_state["messages"][obj.name]+="; "+warning
         except Exception as exc:_state["messages"][obj.name]=str(exc)
     _state["dirty"]=False
+    _state["preview_signature"]=preview_signature(context)
 
 
 def draw():
@@ -250,6 +308,9 @@ def draw():
     if work_busy():return
     old=(gpu.state.blend_get(),gpu.state.depth_test_get(),gpu.state.depth_mask_get())
     try:
+        if _state.pop("check_needed",False):
+            _state["dirty"]=preview_signature(context)!=_state.get("preview_signature")
+            _state["object_count"]=len(context.scene.objects)
         if _state["dirty"]:rebuild(context)
         gpu.state.depth_test_set("LESS_EQUAL");gpu.state.depth_mask_set(False)
         for batch,tex,blend,modulate,threshold in _state["batches"]:
@@ -277,6 +338,7 @@ def invalidate_receivers(item=None):
 
 @persistent
 def deps_changed(scene,depsgraph):
+    if _state.get("history_busy"):return
     updates=list(depsgraph.updates)
     objects={u.id.original.as_pointer():u.id.original for u in updates if isinstance(u.id,bpy.types.Object)}
     meshes={u.id.original.as_pointer() for u in updates if isinstance(u.id,bpy.types.Mesh)}
@@ -288,6 +350,11 @@ def deps_changed(scene,depsgraph):
     for item in objects.values():
         if is_overlay(item):changed();continue
         if item.type!="MESH":continue
+        from .extract import effective_role
+        role=effective_role(item)
+        if (role!='BRUSH' and not (role=='BRUSH_ENTITY' and item.hammerless.classname=='func_detail')
+                and item.as_pointer() not in _state.get('receiver_cache',{}) and item.name not in _state.get('near_names',set())):
+            continue
         if not receiver_move_affects_preview(item,depsgraph,scene):
             # Geometry edits use the same old/new spatial gate as transforms.
             # Discard for later without scheduling projection or GPU work now.
@@ -298,15 +365,28 @@ def deps_changed(scene,depsgraph):
         item=update.id.original
         if isinstance(item,bpy.types.Material):invalidate_receivers(item)
         elif isinstance(item,bpy.types.Collection):
-            if not objects or _state.get("object_count")!=len(scene.objects):changed()
-        elif isinstance(item,bpy.types.Scene):changed()
+            if not objects or _state.get("object_count")!=len(scene.objects):_state["check_needed"]=True
+        elif isinstance(item,bpy.types.Scene):_state["check_needed"]=True
 
 
 
 
 @persistent
 def reset(*_):
-    _state.update(dirty=True,batches=[],textures={},messages={},faces=None,receiver_cache={},projection_bounds=None)
+    _state.update(dirty=True,batches=[],textures={},messages={},faces=None,receiver_cache={},projection_bounds=None,
+                  preview_signature=None,near_names=set(),check_needed=False,history_busy=False)
+
+
+@persistent
+def history_pre(*_):
+    _state['history_busy']=True
+
+
+@persistent
+def history_post(*_):
+    # Pointer-keyed geometry must not survive undo. Batches and standalone GPU
+    # textures contain no Blender IDs and remain valid if the preview is unchanged.
+    _state.update(history_busy=False,check_needed=True,faces=None,receiver_cache={})
 
 
 class HL_OT_add_overlay(bpy.types.Operator):
@@ -429,7 +509,9 @@ def register():
     bpy.types.HL_MT_add.append(add_menu)
     bpy.types.HL_PT_add.append(add_menu)
     bpy.app.handlers.depsgraph_update_post.append(deps_changed)
-    for handlers in (bpy.app.handlers.load_post,bpy.app.handlers.undo_post,bpy.app.handlers.redo_post):handlers.append(reset)
+    bpy.app.handlers.load_post.append(reset)
+    for handlers in (bpy.app.handlers.undo_pre,bpy.app.handlers.redo_pre):handlers.append(history_pre)
+    for handlers in (bpy.app.handlers.undo_post,bpy.app.handlers.redo_post):handlers.append(history_post)
     _handle=bpy.types.SpaceView3D.draw_handler_add(draw,(),"WINDOW","POST_VIEW")
 
 
@@ -440,8 +522,11 @@ def unregister():
     bpy.types.HL_MT_add.remove(add_menu)
     bpy.types.HL_PT_add.remove(add_menu)
     if deps_changed in bpy.app.handlers.depsgraph_update_post:bpy.app.handlers.depsgraph_update_post.remove(deps_changed)
-    for handlers in (bpy.app.handlers.load_post,bpy.app.handlers.undo_post,bpy.app.handlers.redo_post):
-        if reset in handlers:handlers.remove(reset)
+    if reset in bpy.app.handlers.load_post:bpy.app.handlers.load_post.remove(reset)
+    for handlers in (bpy.app.handlers.undo_pre,bpy.app.handlers.redo_pre):
+        if history_pre in handlers:handlers.remove(history_pre)
+    for handlers in (bpy.app.handlers.undo_post,bpy.app.handlers.redo_post):
+        if history_post in handlers:handlers.remove(history_post)
     del bpy.types.Object.hl_overlay
     for name in ("hl_decal_search","hl_decal_all","hl_decal_page"):delattr(bpy.types.WindowManager,name)
     for cls in reversed(CLASSES):bpy.utils.unregister_class(cls)
