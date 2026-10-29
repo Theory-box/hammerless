@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.30 (test release, 2026-10-29)
+
+- Add reusable nodes for AI bot behavior: typed bot selections, update loops, socket-connected action groups, per-bot state, and editable Start/Update/Stop logic.
+- Add managed property overrides with ownership checks, cleanup, and optional restoration on death, plus bot movement and attack commands.
+- Validate incompatible bot/action selections and invalid execution paths at build time.
+- Add human-only viewers to Seen By and improve obstruction checks.
+- Fix addon startup by deferring automatic graph repair until registration has completed.
+
 ## 0.20.29 (test release, 2026-10-28)
 
 - Fix intermittent missing map geometry caused by GPU visibility batch tuning skipping unfinished work. Preserve the dispatched endpoint when adjusting the next batch size.
