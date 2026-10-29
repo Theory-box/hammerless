@@ -698,7 +698,9 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
     p_run(PK_COMPACT, ns, 1);
     p_run(PK_SCAN1, 1, 1);
     p_run_indirect(PK_SNAP, C_ARGS1);
-    p_pc.item_end = p_items_per_pass;
+    /* Tuning after submission changes the next batch, not the work already dispatched. */
+    uint32_t end = p_items_per_pass;
+    p_pc.item_end = end;
     p_run(PK_SCAN2, 1, 1);
     p_expand_merge(0, 0);
     VkBufferCopy cs = {0, (VkDeviceSize)P_COUNTERS * 4, (VkDeviceSize)ns * sizeof(vgpu_slot_t)};
@@ -719,7 +721,6 @@ int vgpu_pipe_round(uint32_t round, int nrefill, const uint32_t *refill, int nwo
     if (cn[C_ERR]) { printf("Warning: GPU: a round with more than 2^32 expansion steps\n"); return 0; }
     /* the rest of the round in passes: from the pass's end, or from the first item that found no room for what came
        through (the merge took the items before it); a pass's first item always has room, so each gets on */
-    uint32_t end = p_items_per_pass;
     for (;;) {
         uint32_t T = cn[C_T], from = cn[C_FAIL] < end ? cn[C_FAIL] : end;
         if (from >= T) break;

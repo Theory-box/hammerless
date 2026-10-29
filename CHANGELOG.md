@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.20.29 (test release, 2026-10-28)
+
+- Fix intermittent missing map geometry caused by GPU visibility batch tuning skipping unfinished work. Preserve the dispatched endpoint when adjusting the next batch size.
+- Verified against saved failing and working maps: controlled reproduction matched the failed visibility exactly, and the corrected compiler restored the working visibility exactly. Confirmed with an in-game build test.
+
 ## 0.20.28 (test release, 2026-10-28)
 
 - Add a Model Browser panel with 5,501 packaged, unlit textured thumbnails, automatic framing, search, folder and feature filters, favourites, recent models, and models used in the map. Browsing does not render thumbnails.
