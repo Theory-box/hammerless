@@ -95,6 +95,15 @@ class HL_FloatSocket(bpy.types.NodeSocket):
         if self.is_output or self.is_linked or self.hide_value:
             layout.label(text=text)
         else:
+            group = getattr(node, "group", None)
+            if getattr(node, "kind", "") == "BA_ACTION" and group and group.get("hl_fear_light_score_version"):
+                from .fearlight import HELP
+                if self.identifier in HELP:
+                    row = layout.row(align=True)
+                    row.prop(self, "value", text=text)
+                    op = row.operator("hammerless.fear_light_help", text="", icon="INFO", emboss=False)
+                    op.field = self.identifier
+                    return
             layout.prop(self, "value", text=text)
 
     def draw_color(self, context, node):

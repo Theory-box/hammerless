@@ -36,3 +36,10 @@ output=os.environ.get('HL_FEAR_LIGHT_OUTPUT')
 if output:
     Path(output).write_text(script)
 print('FEAR_LIGHT_BLENDER_OK', output or '(no export requested)')
+
+from hammerless.blender.fearlight import HELP, PARAMETERS, HL_OT_fear_light_help
+assert action.group["hl_fear_light_score_version"] == 1
+assert len(HELP) == len(PARAMETERS)
+for uid, name, default in PARAMETERS:
+    assert HL_OT_fear_light_help.description(None, SimpleNamespace(field=uid)) == HELP[uid]
+    assert abs(action.inputs[name].value-default)<0.00001

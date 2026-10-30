@@ -451,7 +451,8 @@ def register():
     logic.HL_LogicTree.action_channels = StringProperty(name="Owned Channels", description="Comma-separated channels, such as Movement or Appearance")
     for cls in CLASSES:
         bpy.utils.register_class(cls)
-    from .fearlight import HL_OT_fear_light_example
+    from .fearlight import HL_OT_fear_light_example, HL_OT_fear_light_help
+    bpy.utils.register_class(HL_OT_fear_light_help)
     bpy.utils.register_class(HL_OT_fear_light_example)
     bpy.app.handlers.load_post.append(repair_common_examples)
     # Blender restricts bpy.data while enabling addons. Migrate only after
@@ -462,8 +463,9 @@ def register():
 
 def unregister():
     from . import logic
-    from .fearlight import HL_OT_fear_light_example
+    from .fearlight import HL_OT_fear_light_example, HL_OT_fear_light_help
     bpy.utils.unregister_class(HL_OT_fear_light_example)
+    bpy.utils.unregister_class(HL_OT_fear_light_help)
     if bpy.app.timers.is_registered(repair_common_examples):
         bpy.app.timers.unregister(repair_common_examples)
     if repair_common_examples in bpy.app.handlers.load_post:

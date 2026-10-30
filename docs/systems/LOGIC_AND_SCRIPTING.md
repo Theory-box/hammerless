@@ -200,7 +200,7 @@ Bot Actions > Fear Baked Light creates an editable action with four labeled stag
 sample current light, throttle candidate searches, score reachable darker areas, and request movement.
 It updates at 0.25 seconds, searches at most eight candidates by default every three seconds, uses
 separate enter/exit brightness thresholds, and releases its own command on shade, missing data,
-failed searches, or Stop. Thresholds are linear ambient values and must be tuned for the map.
+failed searches, or Stop. New examples use a readable brightness score (linear ambient luminance x 100,000), with starting values 0.8 / 0.4 / 0.1 for avoid / safe / minimum improvement. These are starting points derived from probe distributions in the test map, not universal thresholds. Each exposed setting has an info icon with hover help. Older saved examples retain their raw-light graph and must be replaced to use the new score.
 Game Time is a reusable value node for deadlines in any synchronous graph.
 
 **Verified on a common infected.** A direct MOVE covered about 318 units and stopped within 14 units;

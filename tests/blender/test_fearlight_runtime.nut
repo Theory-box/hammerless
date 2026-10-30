@@ -9,7 +9,7 @@ searches <- 0; moves <- 0; resets <- 0;
 function Time() { return now; }
 function HL_GetProp(a,b,c,d) { return Vector(0,0,0); }
 function HLWQ_Ambient(p) {
- return {available=p.x==0 ? available : candidateAvailable,brightness=p.x==0 ? brightness : 0.04};
+ return {available=p.x==0 ? available : candidateAvailable,brightness=(p.x==0 ? brightness : 0.04)/100000.0};
 }
 HLWQ <- {
  Nearest=function(a,b,c,d) { return {found=navFound,area=1}; },
