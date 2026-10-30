@@ -101,8 +101,7 @@ class HL_FloatSocket(bpy.types.NodeSocket):
                 if self.identifier in HELP:
                     row = layout.row(align=True)
                     row.prop(self, "value", text=text)
-                    op = row.operator("hammerless.fear_light_help", text="", icon="INFO", emboss=False)
-                    op.field = self.identifier
+                    row.operator("hammerless.fear_help_" + self.identifier, text="", icon="INFO", emboss=False)
                     return
             layout.prop(self, "value", text=text)
 

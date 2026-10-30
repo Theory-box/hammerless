@@ -43,3 +43,9 @@ assert len(HELP) == len(PARAMETERS)
 for uid, name, default in PARAMETERS:
     assert HL_OT_fear_light_help.description(None, SimpleNamespace(field=uid)) == HELP[uid]
     assert abs(action.inputs[name].value-default)<0.00001
+
+# Query registered RNA, not just the Python description callback.
+for uid, name, _ in PARAMETERS:
+    operator = getattr(bpy.ops.hammerless, 'fear_help_' + uid)
+    assert operator.get_rna_type().description == HELP[uid]
+    assert len(operator.get_rna_type().description) > len(name) + 30

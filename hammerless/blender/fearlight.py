@@ -14,7 +14,7 @@ PARAMETERS = (("enter", "Avoid Above Brightness", .8),
 HELP = {
     "enter": "Start seeking shade above this brightness score. Try 0.8 first; lower it if zombies never react. Score = baked ambient luminance x 100,000, not screen brightness or a percentage. No flashlight response.",
     "exit": "Release the movement command below this score. Try 0.4. Keep this LOWER than Avoid Above Brightness to prevent constant switching. Lower values require deeper shade.",
-    "improvement": "A destination must be at least this much darker than the current location. Try 0.1. Lower it if no destination is found; raise it to avoid tiny improvements.",
+    "improvement": "How much darker a new spot must be before the zombie moves there. At 0.1, a zombie standing at brightness 0.8 needs a spot below 0.7. Lower this to accept smaller improvements; raise it to demand deeper shade.",
     "radius": "How far around each zombie to look for shade, in Source units. Start at 768 (about 64 feet). Larger searches can find more shade but cost more. Maximum 4096.",
     "candidates": "Maximum nearby nav areas to consider per search. Start at 8; try 16 if nearby shade is missed. More candidates cost more, especially for a horde. Maximum 128.",
     "retry": "Seconds between destination searches, even when none succeeds. Start at 3. Brightness is still checked every 0.25 seconds. Lower values react to new destinations faster but cost more.",
@@ -237,6 +237,30 @@ class HL_OT_fear_light_help(bpy.types.Operator):
     def execute(self, context):
         self.report({"INFO"}, HELP.get(self.field, ""))
         return {"FINISHED"}
+
+
+def _setting_help_operator(uid, label):
+    # Static RNA descriptions also work when Blender does not resolve dynamic
+    # operator descriptions for an icon-only button in a custom node socket.
+    def execute(self, context):
+        import textwrap
+        lines = textwrap.wrap(HELP[uid], width=58)
+        def draw(menu, context):
+            for line in lines:
+                menu.layout.label(text=line)
+        context.window_manager.popup_menu(draw, title=label, icon='INFO')
+        return {'FINISHED'}
+    return type('HL_OT_fear_help_' + uid, (bpy.types.Operator,), {
+        '__module__': __name__,
+        'bl_idname': 'hammerless.fear_help_' + uid,
+        'bl_label': label,
+        'bl_description': HELP[uid],
+        'bl_options': {'INTERNAL'},
+        'execute': execute,
+    })
+
+
+HELP_OPERATORS = tuple(_setting_help_operator(uid, name) for uid, name, _ in PARAMETERS)
 
 
 class HL_OT_fear_light_example(bpy.types.Operator):
