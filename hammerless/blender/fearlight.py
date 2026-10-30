@@ -1,4 +1,4 @@
-"""Editable, bounded special-infected shade-seeking example built from ordinary nodes."""
+"""Editable, bounded common-infected shade-seeking example built from ordinary nodes."""
 import bpy
 from .botactions import new_action
 from .logicgroups import new_item, sync
@@ -14,7 +14,7 @@ PARAMETERS = (("enter", "Avoid Above Brightness", .15),
 
 def fear_light_action():
     tree = new_action("Fear Baked Light (experimental)")
-    tree.action_supports, tree.action_channels = "SPECIALS", "Movement"
+    tree.action_supports, tree.action_channels = "COMMONS", "Movement"
     entry = next(n for n in tree.nodes if n.kind == "BA_ENTRY")
     params = next(n for n in tree.nodes if n.bl_idname == "HL_NodeGroupInput")
     for uid, name, _ in PARAMETERS:
@@ -199,7 +199,7 @@ def fear_light_example(tree):
         ("HL_NodeMapStart", "HL_BAFind", "HL_BALoop", "HL_BAAction", "HL_BAApply")]
     for n, pos in zip((start, find, loop, action, apply), ((0, 200), (0, -80), (300, 200), (300, -180), (650, 200))):
         n.location = (offset + pos[0], pos[1]); n.width = 240; n.select = True
-    find.selection = "SPECIALS"
+    find.selection = "COMMONS"
     loop.inputs["Interval (seconds)"].value = .25
     action.group = fear_light_action()
     for _, name, default in PARAMETERS:
@@ -213,7 +213,7 @@ def fear_light_example(tree):
 
 class HL_OT_fear_light_example(bpy.types.Operator):
     bl_idname, bl_label = "hammerless.fear_light_example", "Fear Baked Light (experimental)"
-    bl_description = "Add editable special-infected shade seeking; uses baked ambient data, not flashlights. Movement requests are experimental and game AI may override them"
+    bl_description = "Add editable common-infected shade seeking; uses baked ambient data, not flashlights. Movement requests are experimental and game AI may override them"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):

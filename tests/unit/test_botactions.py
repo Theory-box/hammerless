@@ -85,6 +85,14 @@ HLBA.Command({bot=bot}, "RETREAT", target, null);
 if(sent.cmd!=2 || sent.target!=target || "pos" in sent)throw "Retreat must reference its target";
 HLBA.Command({bot=bot}, "MOVE", null, "position");
 if(sent.cmd!=1 || sent.pos!="position" || "target" in sent)throw "Move must reference its position";
+local common={GetClassname=function(){return "infected";}};
+HLBA.Command({bot=common}, "MOVE", null, "shade");
+if(sent.bot!=common || sent.pos!="shade")throw "Common movement must reach the engine";
+HLBA.Command({bot=common}, "RESET", null, null);
+if(sent.cmd!=3 || sent.bot!=common)throw "Common reset must reach the engine";
+local rejected=false;
+try { HLBA.Command({bot=common}, "RETREAT", target, null); } catch(e){rejected=true;}
+if(!rejected)throw "Unverified common retreat must not be advertised";
 ''')
 
     @unittest.skipUnless(squirrel is not None and hasattr(squirrel, "SQVM"), "optional Squirrel interpreter")

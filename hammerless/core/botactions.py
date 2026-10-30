@@ -45,8 +45,10 @@ HLBA.Find <- function(kind, origin, radius) {
     return out;
 };
 HLBA.Command <- function(ctx, command, target, destination) {
-    if (!IsBot(ctx.bot) || ctx.bot.GetClassname() != "player")
-        throw "Bot commands require a survivor or special-infected bot";
+    if (!IsBot(ctx.bot)) throw "Bot commands require a bot";
+    local classname=ctx.bot.GetClassname();
+    if (classname != "player" && !(classname == "infected" && (command == "MOVE" || command == "RESET")))
+        throw "Common infected support Move and Reset; Attack and Retreat require player bots";
     local ids={ ATTACK=0, MOVE=1, RETREAT=2, RESET=3 };
     if (!(command in ids)) throw "Unknown bot command";
     if ((command == "ATTACK" || command == "RETREAT") && (target == null || !target.IsValid()))

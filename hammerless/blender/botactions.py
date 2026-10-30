@@ -263,7 +263,8 @@ class HL_BACommand(_Inside, bpy.types.Node):
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "command")
-        layout.label(text="Player bots only; commands aren't undone")
+        layout.label(text="Commons support Move / Reset")
+        layout.label(text="Commands are not automatically undone")
 
 
 def new_action(name="Bot Action", preset=False, family="SPECIALS"):

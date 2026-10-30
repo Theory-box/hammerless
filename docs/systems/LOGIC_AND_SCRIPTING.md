@@ -192,7 +192,7 @@ it is a global lure and nearby survivors can take priority. In one five-common t
 the first target and one followed the retarget while survivors were nearby; moving survivors away
 allowed all five to reach the new target. Disabling the lure left them idling during the observation
 window, so reliable return to normal pursuit was not established. It is not exposed as a selected-bot
-Move action. Existing CommandABot actions remain restricted to survivor/special-infected player bots.
+Move action. Direct common-infected MOVE and RESET were subsequently verified in-game and are supported. ATTACK and RETREAT remain restricted to player bots pending validation.
 
 ### Experimental Fear Baked Light example
 
@@ -203,14 +203,15 @@ separate enter/exit brightness thresholds, and releases its own command on shade
 failed searches, or Stop. Thresholds are linear ambient values and must be tuned for the map.
 Game Time is a reusable value node for deadlines in any synchronous graph.
 
-**Not validated as a working infected behavior.** In stock-map tests, Hunter and Spitter accepted
-CommandABot MOVE with a true return value but continued normal movement instead. A Spitter failed
-to approach a confirmed nav-connected destination even with repeated commands, vision disabled,
-and survivor stopping disabled. The command was native, not a script override. These observations
-do not prove that infected control is impossible; they mean a successful return is insufficient
-evidence of movement. The prototype remains on the feature branch and was not installed as a
-working behavior. Its actual generated callbacks pass executable tests for hysteresis, cooldowns,
-missing data, unreachable candidates, and once-only RESET cleanup.
+**Verified on a common infected.** A direct MOVE covered about 318 units and stopped within 14 units;
+retargeting another 230 units stopped within 8 units. RESET followed by provocation resumed survivor
+pursuit. The full generated shade graph then selected a reachable lower-ambient area on a stock map,
+moved the common there, and cleared its movement-owned state after crossing the safe threshold,
+with no runtime errors. Test thresholds were calibrated to that map's actual ambient values.
+Close-range survivor melee can still interrupt movement. This is a one-common proof, not a horde
+performance benchmark. Specials did not reliably obey earlier movement tests and are not selected
+by this example. The generated callback tests cover hysteresis, cooldowns, missing data,
+unreachable candidates, and once-only RESET cleanup.
 
 ## Worked examples
 
