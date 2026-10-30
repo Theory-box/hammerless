@@ -3,18 +3,18 @@ import bpy
 from .botactions import new_action
 from .logicgroups import new_item, sync
 
-PARAMETERS = (("enter", "Avoid Above Brightness", .8),
-              ("exit", "Safe Below Brightness", .4),
-              ("improvement", "Minimum Improvement", .1),
+PARAMETERS = (("enter", "Avoid Above Brightness", .1),
+              ("exit", "Safe Below Brightness", .05),
+              ("improvement", "Minimum Improvement", .02),
               ("radius", "Shade Search Radius", 768.0),
               ("candidates", "Max Candidate Areas", 8.0),
               ("retry", "Search Cooldown (seconds)", 3.0),
               ("path", "Max Nav Path Distance", 2048.0))
 
 HELP = {
-    "enter": "Start seeking shade above this brightness score. Try 0.8 first; lower it if zombies never react. Score = baked ambient luminance x 100,000, not screen brightness or a percentage. No flashlight response.",
-    "exit": "Release the movement command below this score. Try 0.4. Keep this LOWER than Avoid Above Brightness to prevent constant switching. Lower values require deeper shade.",
-    "improvement": "How much darker a new spot must be before the zombie moves there. At 0.1, a zombie standing at brightness 0.8 needs a spot below 0.7. Lower this to accept smaller improvements; raise it to demand deeper shade.",
+    "enter": "Start seeking shade above this brightness score. Try 0.1 first; lower it if zombies never react. Score = baked ambient luminance x 100,000, not screen brightness or a percentage. No flashlight response.",
+    "exit": "Stop retreating and hold a shaded position below this score. Try 0.05. Keep this LOWER than Avoid Above Brightness to prevent constant switching. Lower values require deeper shade.",
+    "improvement": "How much darker a new spot must be before the zombie moves there. At 0.02, a zombie standing at brightness 0.1 needs a spot below 0.08. Lower this to accept smaller improvements; raise it to demand deeper shade.",
     "radius": "How far around each zombie to look for shade, in Source units. Start at 768 (about 64 feet). Larger searches can find more shade but cost more. Maximum 4096.",
     "candidates": "Maximum nearby nav areas to consider per search. Start at 8; try 16 if nearby shade is missed. More candidates cost more, especially for a horde. Maximum 128.",
     "retry": "Seconds between destination searches, even when none succeeds. Start at 3. Brightness is still checked every 0.25 seconds. Lower values react to new destinations faster but cost more.",
@@ -25,6 +25,7 @@ HELP = {
 def fear_light_action():
     tree = new_action("Fear Baked Light (experimental)")
     tree["hl_fear_light_score_version"] = 1
+    tree["hl_fear_light_hold_version"] = 1
     tree.action_supports, tree.action_channels = "COMMONS", "Movement"
     entry = next(n for n in tree.nodes if n.kind == "BA_ENTRY")
     params = next(n for n in tree.nodes if n.bl_idname == "HL_NodeGroupInput")
@@ -118,11 +119,31 @@ def fear_light_action():
     thresholds = both("Valid hysteresis thresholds", ordered, "result", nonnegative, "result")
     valid_settings = condition("Enter > Exit >= 0 required", thresholds, "result")
     wire(available, "true", valid_settings, "in")
-    wire(valid_settings, "true", flee, "in")
+    # Retain a safe position instead of handing control back to the chase.
+    holding = get("holding_shade")
+    hold_position = get("hold_position", "vec", (0, 0, 0))
+    hold_move = node("HL_BACommand", "Maintain shaded position", command="MOVE")
+    wire(hold_position, "value", hold_move, "destination")
+    already_holding = condition("Already holding shade", holding, "value")
+    wire(valid_settings, "true", already_holding, "in")
+    wire(already_holding, "true", hold_move, "run")
+    safe = compare("Reached safe brightness", "LESS_EQUAL", current_score, "value", params, "exit")
+    arrived = both("Our escape reached shade", owned, "value", safe, "result")
+    reached = condition("Remember safe position", arrived, "result")
+    wire(already_holding, "false", reached, "in")
+    wire(reached, "false", flee, "in")
+    save_hold = set_("hold_position", "vec", (0, 0, 0))
+    wire(origin, "value", save_hold, "value")
+    wire(reached, "true", save_hold, "run")
+    mark_hold = set_("holding_shade", val=True)
+    wire(save_hold, "next", mark_hold, "run")
+    wire(mark_hold, "next", hold_move, "run")
 
     release = condition("Only release our own command", owned, "value")
     reset = node("HL_BACommand", "Return to normal AI", command="RESET")
     clear_owned = set_("movement_owned")
+    clear_hold = set_("holding_shade")
+    wire(clear_owned, "next", clear_hold, "run")
     wire(available, "false", release, "in")
     wire(valid_settings, "false", release, "in")
     wire(flee, "false", release, "in")

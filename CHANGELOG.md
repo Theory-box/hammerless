@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.31 (test release, 2026-10-29)
+
+- Add reusable World Queries nodes for navigation areas, nearby areas, path checks, and baked ambient lighting, plus a Game Time node.
+- Add an **experimental Fear Baked Light example** for common infected, built from editable action nodes. It seeks darker reachable areas and holds a shaded position rather than immediately resuming the chase.
+- Improve example defaults and setting help, and fix baked-light queries failing across map-script and action scopes.
+- Experimental limitations: uses baked ambient probes, not flashlights or dynamic lights; holds position rather than finding a safe approach. Native AI can still interfere, and failed searches can release movement control.
+- Existing saved examples retain their nodes and settings. Replace the old example and its unused action group to use the updated behavior.
+
 ## 0.20.30 (test release, 2026-10-29)
 
 - Add reusable nodes for AI bot behavior: typed bot selections, update loops, socket-connected action groups, per-bot state, and editable Start/Update/Stop logic.
