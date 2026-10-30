@@ -194,6 +194,24 @@ allowed all five to reach the new target. Disabling the lure left them idling du
 window, so reliable return to normal pursuit was not established. It is not exposed as a selected-bot
 Move action. Existing CommandABot actions remain restricted to survivor/special-infected player bots.
 
+### Experimental Fear Baked Light example
+
+Bot Actions > Fear Baked Light creates an editable action with four labeled stages:
+sample current light, throttle candidate searches, score reachable darker areas, and request movement.
+It updates at 0.25 seconds, searches at most eight candidates by default every three seconds, uses
+separate enter/exit brightness thresholds, and releases its own command on shade, missing data,
+failed searches, or Stop. Thresholds are linear ambient values and must be tuned for the map.
+Game Time is a reusable value node for deadlines in any synchronous graph.
+
+**Not validated as a working infected behavior.** In stock-map tests, Hunter and Spitter accepted
+CommandABot MOVE with a true return value but continued normal movement instead. A Spitter failed
+to approach a confirmed nav-connected destination even with repeated commands, vision disabled,
+and survivor stopping disabled. The command was native, not a script override. These observations
+do not prove that infected control is impossible; they mean a successful return is insufficient
+evidence of movement. The prototype remains on the feature branch and was not installed as a
+working behavior. Its actual generated callbacks pass executable tests for hysteresis, cooldowns,
+missing data, unreachable candidates, and once-only RESET cleanup.
+
 ## Worked examples
 
 *Shift+A > Examples*, *Examples 2* and *Examples 3* add **62** ready-made graphs (`hammerless/blender/logic_examples.py`, `_2.py`, `_3.py`), from a hello message to Director tricks. Each comes with notes, numbered frames in the order things happen, and any objects it needs. Between them every node and every Override is used somewhere. The full list is in [Logic Nodes](../LOGIC_NODES.md#examples). A few of the more involved ones:

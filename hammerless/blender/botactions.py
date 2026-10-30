@@ -426,6 +426,7 @@ class HL_MT_bot_actions(bpy.types.Menu):
         if not inside:
             self.layout.separator()
             self.layout.operator("hammerless.bot_action_example", icon="HELP")
+            self.layout.operator("hammerless.fear_light_example", icon="HELP")
             self.layout.operator("hammerless.bot_action_new", text="New Editable Action")
             self.layout.operator("hammerless.bot_action_new", text="Freeze Common Infected").preset = True
             op = self.layout.operator("hammerless.bot_action_new", text="Freeze Special Infected (experimental)")
@@ -449,6 +450,8 @@ def register():
     logic.HL_LogicTree.action_channels = StringProperty(name="Owned Channels", description="Comma-separated channels, such as Movement or Appearance")
     for cls in CLASSES:
         bpy.utils.register_class(cls)
+    from .fearlight import HL_OT_fear_light_example
+    bpy.utils.register_class(HL_OT_fear_light_example)
     bpy.app.handlers.load_post.append(repair_common_examples)
     # Blender restricts bpy.data while enabling addons. Migrate only after
     # registration finishes (or after a file loads), never inside register().
@@ -458,6 +461,8 @@ def register():
 
 def unregister():
     from . import logic
+    from .fearlight import HL_OT_fear_light_example
+    bpy.utils.unregister_class(HL_OT_fear_light_example)
     if bpy.app.timers.is_registered(repair_common_examples):
         bpy.app.timers.unregister(repair_common_examples)
     if repair_common_examples in bpy.app.handlers.load_post:

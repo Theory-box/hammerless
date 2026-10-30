@@ -1169,6 +1169,15 @@ MATH_OPS = [("ADD", "Add", ""), ("SUBTRACT", "Subtract", ""), ("MULTIPLY", "Mult
             ("BIT_CLEAR", "Bits: A Without B", "A with B's bits cleared (whole numbers): turns flags off")]
 
 
+class HL_NodeTime(_Node, bpy.types.Node):
+    """Current game time in seconds; use with saved timestamps for synchronous cooldowns."""
+    bl_idname, bl_label, bl_icon = "HL_NodeTime", "Game Time", "TIME"
+    kind, category = "TIME", "Values"
+
+    def make_sockets(self):
+        self.num_out("value", "Seconds")
+
+
 class HL_NodeMath(_Node, bpy.types.Node):
     """Maths on numbers, like Blender's Math node"""
     bl_idname, bl_label, bl_icon = "HL_NodeMath", "Math", "LINENUMBERS_ON"
@@ -2845,7 +2854,7 @@ DIRECTOR_CLASSES = (HL_NodeDirectorOption, HL_NodeDirectorMood, HL_NodeHudText, 
 
 CATEGORIES = [
     ("Events", [HL_NodeMapStart, HL_NodeGameEvent, HL_NodeVolume, HL_NodeButton, HL_NodeTimer]),
-    ("Values", [HL_NodeProgress, HL_NodeRandomValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath,
+    ("Values", [HL_NodeProgress, HL_NodeRandomValue, HL_NodeTime, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath,
                 HL_NodeInfectedCount, HL_NodeValue, HL_NodeExposedSetting]),
     ("Scene", [HL_NodeObjectInfo, HL_NodeSelf, HL_NodeObject, HL_NodeCollision]),
     ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
@@ -2866,7 +2875,7 @@ MENU_LAYOUT = [
                 (SUB, "HL_MT_logic_game_events", "All Game Events", "LIGHT")]),
     ("Flow", [HL_NodeWhen, HL_NodeIf, HL_NodeSequence, HL_NodeDelay, HL_NodeOnce, HL_NodeGate, HL_NodeBranch,
               HL_NodeCounter, HL_NodeRandom, None, HL_NodeForEach]),
-    ("Values", [HL_NodeHumanIdentity, HL_NodeInventoryItem, HL_NodeHasInventory, HL_NodeResetKeyVariable, HL_NodeExposedSetting, HL_NodeValue, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath, HL_NodeRandomValue, HL_NodeProgress,
+    ("Values", [HL_NodeHumanIdentity, HL_NodeInventoryItem, HL_NodeHasInventory, HL_NodeResetKeyVariable, HL_NodeExposedSetting, HL_NodeValue, HL_NodeTime, HL_NodeMath, HL_NodeCompare, HL_NodeBoolMath, HL_NodeRandomValue, HL_NodeProgress,
                 HL_NodeInfectedCount, None, HL_NodeSetVariable, HL_NodeGetVariable, HL_NodeFormatText, HL_NodeTextCheck, HL_NodeSplitText,
                 HL_NodeCheck, HL_NodePickValue, None, HL_NodeMakeVector, HL_NodeBreakVector, HL_NodeVectorMath, None,
                 HL_NodeMakeTable, HL_NodeGetField]),
