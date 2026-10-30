@@ -1,7 +1,7 @@
 // HLWQ_REQUIRES_AMBIENT
 ::HL_AmbientData <- null;
 // __HL_AMBIENT_DATA__
-function HLWQ_Ambient(p) {
+::HLWQ_Ambient <- function(p) {
     local missing = {available=false,color=Vector(0,0,0),brightness=0.0,fallback=false};
     if (!("HL_AmbientData" in getroottable()) || HL_AmbientData == null || p == null) return missing;
     local d=HL_AmbientData, n=d.root, steps=0;
@@ -30,4 +30,4 @@ function HLWQ_Ambient(p) {
     if (total <= 0) return missing;
     color=color*(1.0/total);
     return {available=true,color=color,brightness=color.x*0.2126+color.y*0.7152+color.z*0.0722,fallback=fallback};
-}
+};

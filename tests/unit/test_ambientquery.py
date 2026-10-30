@@ -33,6 +33,20 @@ def bsp(*, hdr=True, fallback=False):
 
 class AmbientTests(unittest.TestCase):
     @unittest.skipUnless(squirrel is not None and hasattr(squirrel, 'SQVM'), 'optional squirrel-lang not installed')
+    def test_entity_scope_load_exports_helper_for_global_actions(self):
+        import json
+        runtime = (Path(__file__).resolve().parents[2] / 'hammerless/core/ambient_query_runtime.nut').read_text()
+        vm = squirrel.SQVM()
+        vm.execute('''
+class Vector { x=0;y=0;z=0; constructor(a,b,c){x=a;y=b;z=c;} }
+local entityScope = {};
+''' + 'compilestring(' + json.dumps(runtime) + ').bindenv(entityScope)();' + '''
+if (!("HLWQ_Ambient" in getroottable())) throw "helper missing outside logic_script scope";
+::testAction <- {updateFn=function(ctx){return HLWQ_Ambient(Vector(0,0,0));}};
+if (testAction.updateFn({}).available) throw "missing data should stay unavailable";
+''')
+
+    @unittest.skipUnless(squirrel is not None and hasattr(squirrel, 'SQVM'), 'optional squirrel-lang not installed')
     def test_runtime_leaf_separation_and_missing(self):
         from hammerless.core.ambientquery import squirrel_data
         runtime = (Path(__file__).resolve().parents[2] / 'hammerless/core/ambient_query_runtime.nut').read_text()

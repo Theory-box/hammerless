@@ -65,7 +65,7 @@ def run(bench,bsp_path):
     path.parent.mkdir(parents=True,exist_ok=True)
     path.write_text(script,encoding="utf-8")
     try:
-        loaded=bench.run('return IncludeScript('+json.dumps(name)+',getroottable());')
+        loaded=bench.run('::HL_WorldQueryTestScope <- {}; return IncludeScript('+json.dumps(name)+',HL_WorldQueryTestScope);')
         if loaded is False:
             raise AssertionError("Generated node script failed to load")
         normal=bench.run('HL_S_wqsmoke_near(); local n=HL_R.wqsmoke_near; local a=HL_R.wqsmoke_ambient; '
