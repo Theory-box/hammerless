@@ -213,6 +213,40 @@ performance benchmark. Specials did not reliably obey earlier movement tests and
 by this example. The generated callback tests cover hysteresis, cooldowns, missing data,
 unreachable candidates, and once-only RESET cleanup.
 
+### Reusable behavior building blocks
+
+**Add > List Tools** provides Count Valid Items, Item at Index, Closest Item, Random Item,
+and Filter Valid Items in Radius. Choose Bots or Nav Areas to preserve socket types.
+These are Run/Next snapshots: run the node before consuming its outputs. Inside an action,
+results are local to that bot's execution path; elsewhere they remain the last captured result.
+Find Bots can supply these queries in ordinary graphs or action groups. The Bot Action Loop
+still takes a direct Find Bots query, not a captured list; its selection refreshes each update.
+
+List queries inspect at most 256 entries. Filter returns at most 128 results. Truncated
+reports omitted entries/results; Count counts valid inspected entries, not an unlimited list.
+Invalid/dead bot handles and stale nav areas are skipped. Item at Index uses original input
+indices; it does not compact invalid slots. Closest uses straight-line distance, not route
+length. Filtering by radius does not establish visibility or reachability.
+
+Inside editable action groups, **Add > Bot Actions** also provides:
+
+- **Action Cooldown:** Run passes immediately, then blocks until the interval expires.
+  Passed and Blocked are separate event outputs; Remaining is the timer after this run.
+  Reset permits the current run again. Each node, action instance, and bot has its own timer.
+- **Action Value Changed:** compares against the previous Run. The first value establishes
+  a baseline unless First Run Counts as Change is enabled. Reset establishes a new baseline.
+  Supports numbers, booleans, text, vectors, and entities; numbers/vectors compare exactly.
+- **Observe Movement Goal:** measures Distance, Arrived, Progress Since Step, Stalled,
+  Timed Out, and Elapsed. Run repeatedly. Changing Goal or Reset restarts observation.
+  Zero disables stall/timeout checks. Progress Step is accumulated improvement in the
+  best straight-line distance, so necessary detours may appear stalled. Arrival uses
+  distance only and does not prove an unobstructed route. The node issues no commands.
+
+Utility state is private to the action instance and is discarded when that action ends.
+These outputs report observations, not native AI completion or pathfinding guarantees.
+Action priority, sequencing, shared signals and arbitrary predicate/scoring list groups
+remain future work; these nodes are their initial foundation.
+
 ## Worked examples
 
 *Shift+A > Examples*, *Examples 2* and *Examples 3* add **62** ready-made graphs (`hammerless/blender/logic_examples.py`, `_2.py`, `_3.py`), from a hello message to Director tricks. Each comes with notes, numbered frames in the order things happen, and any objects it needs. Between them every node and every Override is used somewhere. The full list is in [Logic Nodes](../LOGIC_NODES.md#examples). A few of the more involved ones:

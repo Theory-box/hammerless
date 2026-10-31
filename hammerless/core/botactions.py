@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 
 from . import vscript as vs
-from . import worldqueries
+from . import worldqueries, listtools, actionutilities
 
 
 class BotActionProblem(str):
@@ -18,9 +18,9 @@ class BotActionProblem(str):
 KINDS = {"COMMONS", "SPECIALS", "SURVIVORS", "ALL"}
 PURE = {"VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
         "BREAK_VECTOR", "VECTOR_MATH", "CHECK", "PICK", "TEXT_CHECK", "FORMAT_TEXT",
-        "GET_FIELD", "GET_PROP", "SEEN", "VIEW", "SELF", "TIME"}
+        "GET_FIELD", "GET_PROP", "SEEN", "VIEW", "SELF", "TIME", "BA_FIND"}
 BA = {"BA_LOOP", "BA_FIND", "BA_APPLY", "BA_ACTION", "BA_ENTRY", "BA_PARAM",
-      "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND"}
+      "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND"} | set(actionutilities.KINDS)
 
 HELPERS = r'''
 HLBA.Supports <- function(bot, kind) {
@@ -63,6 +63,14 @@ HLBA.Command <- function(ctx, command, target, destination) {
 
 def quote(value):
     return vs.literal(vs.TEXT, str(value))
+
+
+def find_expression(c, n):
+    kind = n.settings.get("kind", "SPECIALS")
+    if kind not in KINDS:
+        raise ValueError("Find Bots has an unsupported bot kind")
+    c.helper("HLBA_Runtime", Path(__file__).with_name("bot_actions_runtime.nut").read_text(encoding="utf-8") + HELPERS)
+    return f"HLBA.Find({quote(kind)}, {c.typed_in(n, 'origin', 'vec')}, {c.typed_in(n, 'radius', 'num')})"
 
 
 class ActionCompiler:
@@ -133,6 +141,13 @@ class ActionCompiler:
                 key = quote(n.settings.get("name", "state"))
                 fallback = c.typed_in(n, "default", n.settings.get("type", "num"))
                 return f"(({key} in ctx.state) ? ctx.state[{key}] : {fallback})"
+            if n.kind in listtools.KINDS or n.kind in actionutilities.KINDS:
+                if n.kind in actionutilities.KINDS and not self.lifecycle:
+                    self.fail("Action utilities belong inside an action lifecycle")
+                if n.id not in self.query_path:
+                    self.fail(f"'{n.id}': run the node earlier on this same synchronous path before reading it")
+                module = listtools if n.kind in listtools.KINDS else actionutilities
+                return module.output(n, socket, "HL_Q_" + c.key_of(n.id))
             if n.kind in worldqueries.KINDS:
                 if n.id not in self.query_path:
                     self.fail(f"'{n.id}': run the world query earlier on this same synchronous path before reading it")
@@ -226,6 +241,16 @@ class ActionCompiler:
                     params.append(f"[{quote(uid)}] = {value}")
                 enabled = self.c.expr_in(n, "enabled", True)
                 out.append(f"HLBA.Request(ctx, {quote(self.c.key_of(n.id))}, ctx.bot, {definition}, {enabled}, {{ {', '.join(params)} }});")
+            elif k in listtools.KINDS:
+                out.append(f"local HL_Q_{self.c.key_of(n.id)} = {listtools.call(self.c, n)};")
+            elif k in actionutilities.KINDS and self.lifecycle:
+                self.c.helper("HLBA_Runtime", Path(__file__).with_name("bot_actions_runtime.nut").read_text(encoding="utf-8") + HELPERS)
+                table = "HL_Q_" + self.c.key_of(n.id)
+                out.append(f"local {table} = {actionutilities.call(self.c, n)};")
+                if k in {"BA_COOLDOWN", "BA_CHANGED"}:
+                    yes, no = ("passed", "blocked") if k == "BA_COOLDOWN" else ("changed", "unchanged")
+                    out.append(f"if ({table}.{yes}) {{\n{self.chain(n.id, yes, tail)}\n}} else {{\n{self.chain(n.id, no, tail)}\n}}")
+                    continue
             elif k in worldqueries.KINDS:
                 out.append(f"local HL_WQ_{self.c.key_of(n.id)} = {worldqueries.call(self.c, n)};")
             elif k == "BA_OVERRIDE" and self.lifecycle:
@@ -343,7 +368,7 @@ class ActionCompiler:
         for n in self.nodes.values():
             if n.kind == "BA_APPLY" and n.id not in self.owned:
                 c.problems.append(f"'{n.id}': Apply Bot Action must run inside a Bot Action Loop")
-            if n.kind in {"BA_ENTRY", "BA_PARAM", "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND"}:
+            if n.kind in {"BA_ENTRY", "BA_PARAM", "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND"} | set(actionutilities.KINDS):
                 c.problems.append(f"'{n.id}': this action primitive belongs inside an editable Bot Action group")
         if any(n.kind == "BA_LOOP" for n in self.nodes.values()):
             c.helper("HLBA_Runtime", Path(__file__).with_name("bot_actions_runtime.nut").read_text(encoding="utf-8") + HELPERS)

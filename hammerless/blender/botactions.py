@@ -267,6 +267,58 @@ class HL_BACommand(_Inside, bpy.types.Node):
         layout.label(text="Commands are not automatically undone")
 
 
+class HL_BACooldown(_Inside, bpy.types.Node):
+    bl_idname, bl_label, kind = "HL_BACooldown", "Action Cooldown", "BA_COOLDOWN"
+    bl_description = "Pass immediately, then block repeated runs for this many seconds. Each bot and action keeps its own timer. Reset makes the current run pass again"
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("num", "seconds", "Cooldown (seconds)").value = 1
+        self.data_in("bool", "reset", "Reset")
+        self.ev_out("passed", "Passed")
+        self.ev_out("blocked", "Blocked")
+        self.data_out("num", "remaining", "Remaining (seconds)")
+
+
+class HL_BAChanged(_Inside, bpy.types.Node):
+    bl_idname, bl_label, kind = "HL_BAChanged", "Action Value Changed", "BA_CHANGED"
+    bl_description = "Compare with the value from this node's previous Run for this bot. Remembers a copy of vectors. Reset forgets the previous value; numbers compare exactly"
+    value_type: EnumProperty(name="Value Type", items=TYPES[:5], default="num", update=changed)
+    initial: BoolProperty(name="First Run Counts as Change", description="Also use Changed on the first Run or after Reset. Otherwise the first value only establishes a baseline")
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in(self.value_type, "value", "Value")
+        self.data_in("bool", "reset", "Reset")
+        self.ev_out("changed", "Changed")
+        self.ev_out("unchanged", "Unchanged")
+
+    def settings(self):
+        return {"type": self.value_type, "initial": self.initial}
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "value_type", text="")
+        layout.prop(self, "initial")
+
+
+class HL_BAMovement(_Inside, bpy.types.Node):
+    bl_idname, bl_label, kind = "HL_BAMovement", "Observe Movement Goal", "BA_MOVEMENT"
+    bl_description = "Measure progress toward a goal without commanding the bot. Run repeatedly. Uses straight-line distance: detours may look stalled. Changing the goal or Reset restarts timers. Zero disables stall or timeout checks"
+
+    def make_sockets(self):
+        self.ev_in("run", "Run")
+        self.data_in("vec", "goal", "Goal")
+        for ident, label, default in (("radius", "Arrival Radius", 32), ("min_progress", "Progress Step", 8),
+                                      ("stall_seconds", "Stall After (seconds)", 3), ("timeout", "Timeout (seconds)", 15)):
+            self.data_in("num", ident, label).value = default
+        self.data_in("bool", "reset", "Reset")
+        self.ev_out("next", "Next")
+        for kind, ident, label in (("num", "distance", "Distance"), ("bool", "arrived", "Arrived"),
+                                   ("num", "progress", "Progress Since Step"), ("bool", "stalled", "Stalled"),
+                                   ("bool", "timed_out", "Timed Out"), ("num", "elapsed", "Elapsed (seconds)")):
+            self.data_out(kind, ident, label)
+
+
 def new_action(name="Bot Action", preset=False, family="SPECIALS"):
     from .logicgroups import new_group_tree
     tree = new_group_tree(name)
@@ -438,7 +490,8 @@ class HL_MT_bot_actions(bpy.types.Menu):
 
 
 OUTSIDE = (HL_BAFind, HL_BALoop, HL_BAApply, HL_BAAction)
-INSIDE = (HL_BAEntry, HL_BAParam, HL_BAOverride, HL_BAStateGet, HL_BAStateSet, HL_BACommand)
+INSIDE = (HL_BAEntry, HL_BAParam, HL_BAOverride, HL_BAStateGet, HL_BAStateSet, HL_BACommand,
+          HL_BACooldown, HL_BAChanged, HL_BAMovement)
 CLASSES = (HL_BotSocket, HL_BotListSocket, HL_BotActionSocket) + OUTSIDE + INSIDE + (HL_OT_bot_action_new, HL_OT_bot_action_example, HL_MT_bot_actions)
 
 

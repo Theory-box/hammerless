@@ -2924,6 +2924,7 @@ def _add_menu(self, context):
     self.layout.menu("HL_MT_logic_groups", icon="NODETREE")
     self.layout.menu("HL_MT_bot_actions", icon="ARMATURE_DATA")
     self.layout.menu("HL_MT_world_queries", icon="WORLD")
+    self.layout.menu("HL_MT_list_tools", icon="LINENUMBERS_ON")
     if "HL_MT_logic_examples" in dir(bpy.types):
         self.layout.separator()
         self.layout.menu("HL_MT_logic_examples", icon="HELP")
@@ -3386,6 +3387,8 @@ def register():
     botactions.register()
     from . import worldqueries
     worldqueries.register()
+    from . import listtools
+    listtools.register()
     bpy.types.NODE_MT_add.append(_add_menu)
     bpy.app.handlers.load_post.append(_on_load)
     bpy.app.handlers.load_post.append(_migrate_on_load)
@@ -3405,6 +3408,8 @@ def unregister():
     from . import logicgroups
     from . import botactions
     from . import worldqueries
+    from . import listtools
+    listtools.unregister()
     worldqueries.unregister()
     botactions.unregister()
     logicgroups.unregister()
