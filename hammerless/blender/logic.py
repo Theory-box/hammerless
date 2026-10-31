@@ -2925,6 +2925,7 @@ def _add_menu(self, context):
     self.layout.menu("HL_MT_bot_actions", icon="ARMATURE_DATA")
     self.layout.menu("HL_MT_world_queries", icon="WORLD")
     self.layout.menu("HL_MT_list_tools", icon="LINENUMBERS_ON")
+    self.layout.menu("HL_MT_coordination", icon="LINKED")
     if "HL_MT_logic_examples" in dir(bpy.types):
         self.layout.separator()
         self.layout.menu("HL_MT_logic_examples", icon="HELP")
@@ -3389,6 +3390,8 @@ def register():
     actioncomposition.register()
     from . import actiontemplates
     actiontemplates.register()
+    from . import coordination
+    coordination.register()
     from . import worldqueries
     worldqueries.register()
     from . import listtools
@@ -3417,6 +3420,8 @@ def unregister():
     worldqueries.unregister()
     from . import actioncomposition
     from . import actiontemplates
+    from . import coordination
+    coordination.unregister()
     actiontemplates.unregister()
     actioncomposition.unregister()
     botactions.unregister()

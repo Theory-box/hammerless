@@ -244,7 +244,7 @@ Inside editable action groups, **Add > Bot Actions** also provides:
 
 Utility state is private to the action instance and is discarded when that action ends.
 These outputs report observations, not native AI completion or pathfinding guarantees.
-Shared signals and arbitrary predicate/scoring list groups remain future work.
+Arbitrary predicate/scoring list groups remain future work.
 
 ### Composing actions
 
@@ -275,6 +275,29 @@ Editable **Wait** and **Move to Position (experimental)** templates supply initi
 Wait completes after its duration. Move observes arrival, stall and timeout and resets its
 owned movement command on Stop. Its stall check is straight-line progress, so a valid detour
 may fail it; engine movement remains experimental and the template targets common infected.
+
+### Signals and destination claims
+
+**Add > Coordination** provides Publish Signal, Read Signal and Clear Signal. A channel
+holds the latest published position; publishing again replaces it and changes its Revision.
+Read is a captured Run/Next snapshot. Check Available before using Position. Age and Remaining
+are in seconds. Reading does not consume a signal. These are shared messages, not queued events,
+physical sounds, or automatic hearing: wire a sound/alarm event to Publish explicitly.
+
+Inside action groups, the same menu provides Claim Destination and Release Destination.
+Use a stable string key for a resource (for example a formatted nav-area ID). A claim belongs
+to the exact action instance, not merely the bot. Other actions must check Acquired before
+using the spot. Claiming again from the same action renews the lease; a different action cannot
+steal it. Expiry permits another claimant. Release cannot remove another action's reservation.
+Claims release automatically on completion, interruption, death/removal, or loop stop, including
+nested action children. Acquiring a new claim during Stop cleanup is rejected.
+
+Both stores are bounded to 128 active entries. Names must be nonempty and at most 128 characters.
+Invalid names, positions or lifetimes return a false result. Lifetimes/leases must be positive
+and are capped at 300 seconds. Signals and claims are runtime
+state, not saved across map loads. Check the result when publishing or claiming; expiry and
+capacity limits are part of the behavior. Claiming does not itself move a bot or prevent other
+game AI from standing at the destination.
 
 ## Worked examples
 

@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import vscript as vs
-from . import worldqueries, listtools
+from . import worldqueries, listtools, coordination
 from .entities import CRESCENDO, default_keyvalues
 from .gamefiles import sq_text
 from .ir import Brush, Entity, MapIR, Output
@@ -109,12 +109,12 @@ def _base(source: str) -> str:
 
 
 BLOCK_ACTIONS = ("EMERGENCY_KNIFE", "RESET_KEY_VAR", "GIVE_INVENTORY", "FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
-                 "CAMERA", "FIRE_INPUT", "SET_PROP", "TRACE", "DAMAGE", "PUSH", "AIM", "EXPLOSION", "BEAM", "PARTICLE") + worldqueries.KINDS + listtools.KINDS
+                 "CAMERA", "FIRE_INPUT", "SET_PROP", "TRACE", "DAMAGE", "PUSH", "AIM", "EXPLOSION", "BEAM", "PARTICLE") + worldqueries.KINDS + listtools.KINDS + coordination.KINDS
 CLIENT_COMMAND = "hl_clientcommand"     # the map's point_clientcommand: a console command run on one player
 BLOCK_VALUES = ("HUMAN_ID", "INVENTORY_ITEM", "HAS_INVENTORY", "SELF", "GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
                 "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE", "GET_PROP", "SEEN", "FIND_NEAR", "VIEW", "TIME", "BA_FIND")
 TRACE_MASKS = {"SHOTS": 1174421507, "SIGHT": 24705, "WORLD": 16395}   # MASK_SHOT, MASK_VISIBLE, MASK_SOLID_BRUSHONLY
-ACTION_RESULTS = ("EMERGENCY_KNIFE", "FOR_EACH", "SCRIPT_CODE", "TRACE", "BEAM", "PARTICLE") + worldqueries.KINDS + listtools.KINDS   # actions with data outputs
+ACTION_RESULTS = ("EMERGENCY_KNIFE", "FOR_EACH", "SCRIPT_CODE", "TRACE", "BEAM", "PARTICLE") + worldqueries.KINDS + listtools.KINDS + coordination.KINDS   # actions with data outputs
 VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
 
 
@@ -1523,6 +1523,9 @@ class _Compiler:
         elif k in listtools.KINDS:
             body = f'    ::HL_R["{slug}"] <- {listtools.call(self, n)};\n@@next@@'
             self.script_action(nid, fn, body, ["next"], take)
+        elif k in coordination.KINDS:
+            body = f'    ::HL_R["{slug}"] <- {coordination.call(self, n)};\n@@next@@'
+            self.script_action(nid, fn, body, ["next"], take)
         elif k in worldqueries.KINDS:
             body = f'    ::HL_R["{slug}"] <- {worldqueries.call(self, n)};\n@@next@@'
             self.script_action(nid, fn, body, ["next"], take)
@@ -1614,6 +1617,8 @@ class _Compiler:
             return f'(("{slug}" in ::HL_L) ? ::HL_L["{slug}"] : null)'
         if k == "SCRIPT_CODE":                # what its code left in result, the last time it ran
             return f'(("{slug}" in ::HL_R) ? ::HL_R["{slug}"] : null)'
+        if k in coordination.KINDS:
+            return coordination.stored_output(n, sock, slug)
         if k in worldqueries.KINDS:
             return worldqueries.stored_output(n, sock, slug)
         if k == "TRACE":                      # the last trace's answer

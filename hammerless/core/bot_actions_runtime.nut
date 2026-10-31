@@ -175,12 +175,14 @@
         instance.released <- true;
         local ctx=instance.ctx;
         if ("child" in ctx && ctx.child!=null) {Release(ctx.child);ctx.child=null;}
+        if ("HLCO" in getroottable()) ::HLCO.Cleanup(ctx);
         try { if (ctx.bot == null || !ctx.bot.IsValid()) return; } catch(e) { return; }
         local alive=Valid(ctx.bot);
         if (alive) {
             try { Call(instance.def,"stopFn",ctx); } catch(e) { Report("Action stop failed: " + e); }
             alive=Valid(ctx.bot); // Stop may itself kill or remove the entity.
         }
+        if ("HLCO" in getroottable()) ::HLCO.Cleanup(ctx);
         for (local i=ctx.overrides.len()-1; i>=0; --i) {
             local o=ctx.overrides[i];
             if (!alive && !("restoreOnDeath" in o && o.restoreOnDeath)) continue;

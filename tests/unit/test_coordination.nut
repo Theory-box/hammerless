@@ -1,0 +1,22 @@
+local a={},b={};
+assert(HLCO.Publish("bell",Vector(1,2,3),10).success);
+local r=HLCO.Read("bell"); assert(r.available && r.position.x==1 && r.age==0 && r.revision==1);
+r.position.x=999; assert(HLCO.Read("bell").position.x==1);
+assert(HLCO.Publish("bell",Vector(4,5,6),10).success); assert(HLCO.Read("bell").revision==2);
+now=10; assert(!HLCO.Read("bell").available);
+assert(!HLCO.Publish("",Vector(1,2,3),10).success);
+assert(!HLCO.Publish("x",Vector(1,2,3),0).success);
+assert(!HLCO.Publish("x",Vector(1,2,3),1e35).success);
+assert(HLCO.Publish("x",Vector(1,2,3),500).success); assert(HLCO.Read("x").remaining==300);
+assert(HLCO.Clear("x").success);assert(!HLCO.Clear("x").success);
+for(local i=0;i<128;i++) assert(HLCO.Publish("s"+i,Vector(0,0,0),1).success);
+assert(!HLCO.Publish("overflow",Vector(0,0,0),1).success);
+now=12;assert(HLCO.Publish("reuse",Vector(0,0,0),1).success);
+assert(HLCO.Claim(a,"spot",2).acquired);assert(!HLCO.Claim(b,"spot",2).acquired);
+assert(!HLCO.Release(b,"spot").released);
+now=13;assert(HLCO.Claim(a,"spot",2).acquired); // own renewal
+now=15;assert(HLCO.Claim(b,"spot",2).acquired);assert(!HLCO.Release(a,"spot").released);
+HLCO.Cleanup(a);assert(HLCO.claims.len()==1);
+HLCO.Cleanup(b);assert(HLCO.claims.len()==0);
+for(local i=0;i<128;i++) assert(HLCO.Claim(a,"c"+i,1).acquired);
+assert(!HLCO.Claim(a,"overflow",1).acquired);HLCO.Cleanup(a);assert(HLCO.claims.len()==0);
