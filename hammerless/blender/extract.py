@@ -1452,12 +1452,20 @@ def extract_scene(context, report, game_dir: str | None = None, content=None,
                                           source_angles(obj.matrix_world), object_keyvalues(obj), [], obj.name,
                                           object_outputs(obj)))
             elif role == "LIGHT":
-                ir.entities.append(light_entity(obj, scale))
+                if obj.data.type == "AREA":
+                    from .emission import area_lights
+                    ir.entities.extend(area_lights(obj, scale))
+                else:
+                    ir.entities.append(light_entity(obj, scale))
             elif role == "MODEL":
                 if obj.type != "MESH":
                     report.warnings.append(f"'{obj.name}' is a Custom Model but not a mesh: skipped")
                     continue
                 ir.entities.append(model_prop(obj, depsgraph, scale, materials, ir, content))
+            if role in ("BRUSH", "BRUSH_ENTITY", "TERRAIN", "MODEL") and obj.type == "MESH":
+                from .emission import mesh_lights
+                cache = ir.__dict__.setdefault('_emission_cache', {})
+                ir.entities.extend(mesh_lights(obj, depsgraph, scale, report, cache, content=content))
         except Exception as ex:
             report.errors.append(f"'{obj.name}': {ex}")
     _extract_instances(context, depsgraph, scale, ir, materials, report, content, inside)
@@ -1475,6 +1483,12 @@ def extract_scene(context, report, game_dir: str | None = None, content=None,
         report.warnings.append(f"{len(hidden)} hidden object(s) are left out of the map (Alt+H shows them; a "
                                f"missing wall can make the map leak): {', '.join(sorted(hidden)[:5])}"
                                + (", ..." if len(hidden) > 5 else ""))
+    emitted = sum(e.keyvalues.get('_hl_surface_sample') == '1' for e in ir.entities)
+    if emitted:
+        report.info.append(f"Surface emission: {emitted} bake samples from area lights and emissive materials")
+        if ir.settings.light_mixing:
+            report.info.append("Area lights and material emission require a rebake after editing; they are kept outside Live Light Mixing layers")
+    ir.__dict__.pop('_emission_cache', None)  # Blender node handles never reach the worker thread
     if not defer_textures:           # (deferred: the caller runs write_textures, e.g. on the export's other thread)
         write_textures(materials.texture_writes, report)
         fill_triangles(ir)
@@ -1551,8 +1565,15 @@ def _extract_instances(context, depsgraph, scale, ir, materials, report, content
                     later.append((src, matrix, label))
                 else:
                     ir.entities.append(model_prop(src, depsgraph, scale, materials, ir, content, matrix, label))
+            elif role == "LIGHT" and src.data.type == "AREA":
+                from .emission import area_lights
+                ir.entities.extend(area_lights(src, scale, matrix, label))
             elif role in ("TERRAIN", "LIGHT"):
                 skipped.add(f"{src.name} ({role.lower()})")
+            if role in ("BRUSH", "BRUSH_ENTITY", "MODEL") and src.type == "MESH":
+                from .emission import mesh_lights
+                ir.entities.extend(mesh_lights(src, depsgraph, scale, report,
+                    ir.__dict__.setdefault('_emission_cache', {}), matrix, label, geo, content))
         except Exception as ex:
             report.errors.append(f"'{label}': {ex}")
     for src, matrix, label in later:

@@ -8,8 +8,8 @@ import math
 import bpy
 from mathutils import Matrix
 
-LAMP_OF = {"light": "POINT", "light_spot": "SPOT", "light_environment": "SUN"}
-DEFAULT_LIGHT = {"POINT": "255 240 220 300", "SPOT": "255 240 220 600", "SUN": "255 245 225 400"}
+LAMP_OF = {"light": "POINT", "light_spot": "SPOT", "light_environment": "SUN", "hl_area_light": "AREA"}
+DEFAULT_LIGHT = {"POINT": "255 240 220 300", "SPOT": "255 240 220 600", "SUN": "255 245 225 400", "AREA": "255 240 220 300"}
 _SKIP_KEYS = {"_light", "_cone", "_inner_cone", "pitch"}
 
 
@@ -35,7 +35,7 @@ def _apply_light(lamp, text: str, upm: float) -> None:
 def add_lamp(context, kind: str) -> bpy.types.Object:
     """A Blender light of this kind ('POINT', 'SPOT', 'SUN') at the 3D cursor, selected."""
     upm = context.scene.hammerless.units_per_meter or 52.49
-    name = {"POINT": "Point Light", "SPOT": "Spot Light", "SUN": "Sun"}[kind]
+    name = {"POINT": "Point Light", "SPOT": "Spot Light", "SUN": "Sun", "AREA": "Area Light"}[kind]
     lamp = bpy.data.lights.new(name, kind)
     _apply_light(lamp, DEFAULT_LIGHT[kind], upm)
     if kind == "SPOT":

@@ -666,6 +666,14 @@ class HL_PT_obj_light(_Panel, bpy.types.Panel):
         obj = context.object
         hs = obj.hammerless
         col = self.layout.column()
+        if obj.data.type == "AREA":
+            col.prop(obj.data, "color")
+            col.prop(obj.data, "energy", text="Power")
+            col.prop(obj.data, "shape")
+            col.prop(obj.data, "size")
+            if obj.data.shape in ('RECTANGLE', 'ELLIPSE'):
+                col.prop(obj.data, "size_y")
+            col.label(text="Emits along local -Z; baked surface samples", icon="INFO")
         col.prop(hs, "light_pattern")
         if hs.light_pattern == "CUSTOM":
             col.prop(hs, "light_custom", text="Steps")

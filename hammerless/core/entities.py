@@ -56,7 +56,7 @@ LEGACY_VOLUMES = {NAV_CUT, NO_BAKE}   # (older volumes a Control Volume replaces
 CRESCENDO = "hammerless_crescendo"     # pseudo-entity, see gamefiles.py
 CLIMB = "hammerless_zombie_climb"      # pseudo-entity, see nav.py collect_climbs
 NAV_AREA = "hammerless_nav_area"       # pseudo-entity: one nav area of its own (navpredict.add_nav_areas)
-PSEUDO_ENTITIES = {NAV_REGION, NAV_CUT, NO_BAKE, CONTROL, CRESCENDO, CLIMB, NAV_AREA}  # never written to the map
+PSEUDO_ENTITIES = {NAV_REGION, NAV_CUT, NO_BAKE, CONTROL, CRESCENDO, CLIMB, NAV_AREA, "hl_area_light"}  # never written to the map
 # Tallest wall common infected climbed from a hand-made nav link in our tests (160 yes, 172 no)
 ZOMBIE_CLIMB_MAX = 160.0
 ZOMBIES_ONLY = ("2", "zombies", "zombie", "infected")   # func_ladder "team" values meaning zombies only
@@ -384,6 +384,10 @@ CATALOG: dict[str, EntityDef] = {d.classname: d for d in [
               "A Blender point light: its colour and Power, and in the Light panel its Pattern (flicker, pulse...), "
               "Switchable and Start Off.",
               (KeyDef("_light", "255 240 220 300", "Color + brightness"),), floor_origin=False),
+    EntityDef("hl_area_light", "Area Light", "Lights",
+              "A Blender area light. Shape, Size, Power and rotation control a sampled emitting surface in the bake. "
+              "Shines along local -Z; larger lights spread the same power and soften shadows.",
+              (), floor_origin=False),
     EntityDef("light_spot", "Spot Light", "Lights",
               "A Blender spot light, shining along its -Z: its colour, Power and cone (Spot Size, Blend), and in the "
               "Light panel its Pattern, Switchable and Start Off.",

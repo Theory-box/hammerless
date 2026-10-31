@@ -1001,7 +1001,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
                                                   "Hammerless light compiler only")
     light_bounces: IntProperty(name="Max Bounces", default=100, min=0, max=1000, soft_max=200, update=_q("on_light_setting"),
                                description="Maximum bounce rounds for patches or GPU GI; may stop early when lighting settles. 0: direct light only")
-    light_bounce_method: EnumProperty(name="Bounce Method", default="PATCHES", update=_q("on_light_setting"), items=[
+    light_bounce_method: EnumProperty(name="Bounce Method", default="GI", update=_q("on_light_setting"), items=[
         ("PATCHES", "vrad's Patches", "vrad's way: surfaces cut into patches that pass light to the patches they see"),
         ("GI", "Ray Traced (GPU)", "Every luxel sends rays and takes the light of what they hit (final gathering): "
                                    "bounced light in finer detail, no patch blotches or leaks. Hammerless light "

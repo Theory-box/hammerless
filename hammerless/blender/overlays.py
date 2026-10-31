@@ -222,7 +222,7 @@ def shader():
         info.push_constant("MAT4","mvp");info.push_constant("FLOAT","modulate");info.push_constant("FLOAT","alphaTest")
         info.sampler(0,"FLOAT_2D","image")
         info.vertex_source("void main(){texcoord=uv;gl_Position=mvp*vec4(pos,1.0);gl_Position.z-=0.00004*gl_Position.w;}")
-        info.fragment_source("void main(){vec4 c=texture(image,fract(vec2(texcoord.x,1.0-texcoord.y)));if(c.a<=alphaTest)discard;fragColor=modulate>0.5?vec4(c.rgb*2.0,1.0):c;}")
+        info.fragment_source("void main(){vec4 c=texture(image,fract(vec2(texcoord.x,1.0-texcoord.y)));if(c.a<=alphaTest)discard;if(modulate>0.5){vec3 m=clamp(c.rgb*2.0,0.0,1.0);float a=1.0-min(m.r,min(m.g,m.b));fragColor=vec4((m-vec3(1.0-a))/max(a,0.00001),a);}else{fragColor=c;}}")
         _shader=gpu.shader.create_from_info(info)
     return _shader
 
@@ -245,12 +245,16 @@ def texture(context,path):
     h,w=pixels.shape[:2]
     image=gpu.types.GPUTexture((w,h),format="RGBA16F",data=gpu.types.Buffer("FLOAT",pixels.size,pixels.ravel()))
     name=params.get("shader","");modulate=name.startswith("decalmodulate")
-    blend="MULTIPLY" if modulate else "ADDITIVE" if params.get("$additive","0")=="1" else "ALPHA"
+    # POST_VIEW draws into a transparent overlay framebuffer, not scene color.
+    # Multiplication there erases decals over geometry. Convert modulation to
+    # an alpha-compatible preview; the exported Source material stays unchanged.
+    blend="ADDITIVE" if not modulate and params.get("$additive","0")=="1" else "ALPHA"
     threshold=float(params.get("$alphatestreference","0.5")) if params.get("$alphatest","0")=="1" else 0.0
     warning=""
     if name not in ("decalmodulate","lightmappedgeneric","unlitgeneric"):
         warning="Preview approximates shader: "+name
-    elif not modulate and name!="unlitgeneric":warning="Projection matches export; preview lighting is approximate"
+    elif modulate:warning="Modulate color is approximate in the viewport"
+    elif name!="unlitgeneric":warning="Projection matches export; preview lighting is approximate"
     extras=[k for k in ("$basetexturetransform","$bumpmap","$detail","$color","$color2","$alpha") if k in params]
     if extras:warning="Preview does not yet reproduce "+", ".join(extras)
     value=(image,blend,modulate,threshold,warning)
@@ -312,6 +316,9 @@ def draw():
             _state["dirty"]=preview_signature(context)!=_state.get("preview_signature")
             _state["object_count"]=len(context.scene.objects)
         if _state["dirty"]:rebuild(context)
+        # Viewport/other add-ons may leave front-face culling enabled. Projection
+        # already selects outward receiver faces; do not inherit their raster state.
+        gpu.state.face_culling_set("NONE")
         gpu.state.depth_test_set("LESS_EQUAL");gpu.state.depth_mask_set(False)
         for batch,tex,blend,modulate,threshold in _state["batches"]:
             sh=shader();sh.bind();sh.uniform_float("mvp",context.region_data.perspective_matrix)

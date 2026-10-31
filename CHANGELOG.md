@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.32 (test release, 2026-10-31)
+
+- Expand reusable logic nodes with typed list tools, per-action cooldowns and change detection, and movement-goal observations.
+- Add socket-connected Choose Action, Priority Actions, Sequence Actions and Finish Action nodes, with editable Wait and experimental Move to Position templates.
+- Add shared position signals and action-owned destination claims, including expiry and automatic cleanup.
+- Fix blood and other modulate decal previews disappearing over solid surfaces. Verified in the affected saved scene; modulation color is approximated for Blender's transparent overlay buffer.
+- Add sampled area-light baking with shape, size, transform and power support, plus an Area Light entry in Add > Lights.
+- Automatically bake connected material emission from supported shader inputs and game self-illuminated materials. Includes evaluated mesh geometry and instances; no separate emission toggle is required.
+- Default new/unset scenes to Ray Traced (GPU) bounce lighting. Explicit saved bounce choices are preserved.
+- Surface-light limitations: complex unsupported procedural emission graphs report warnings; moving emitters bake at their starting position; area/material emission requires rebuilding and is outside Live Light Mixing. Sampling is bounded for bake cost.
+- The existing Fear Baked Light example remains experimental.
+
 ## 0.20.31 (test release, 2026-10-29)
 
 - Add reusable World Queries nodes for navigation areas, nearby areas, path checks, and baked ambient lighting, plus a Game Time node.

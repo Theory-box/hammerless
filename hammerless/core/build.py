@@ -512,7 +512,7 @@ def tag_light_layers(entities) -> int:
     light gets the next one ("_hllayersky"). Returns how many layers."""
     n = 0
     for e in entities:
-        if e.classname not in LAYER_LIGHTS:
+        if e.classname not in LAYER_LIGHTS or e.keyvalues.get("_hl_surface_sample") == "1":
             continue
         n += 1
         kv = {**e.keyvalues, "_hllayer": str(n), "_hlobject": e.source or "*sun"}
