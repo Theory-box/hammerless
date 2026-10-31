@@ -3385,6 +3385,10 @@ def register():
     logicgroups.register()
     from . import botactions
     botactions.register()
+    from . import actioncomposition
+    actioncomposition.register()
+    from . import actiontemplates
+    actiontemplates.register()
     from . import worldqueries
     worldqueries.register()
     from . import listtools
@@ -3411,6 +3415,10 @@ def unregister():
     from . import listtools
     listtools.unregister()
     worldqueries.unregister()
+    from . import actioncomposition
+    from . import actiontemplates
+    actiontemplates.unregister()
+    actioncomposition.unregister()
     botactions.unregister()
     logicgroups.unregister()
     for c in reversed(CLASSES):

@@ -20,8 +20,64 @@
     Call = function(def, name, ctx) {
         if (name in def && def[name] != null) def[name](ctx);
     },
+    Contexts = function(ctx, out) {
+        out.append(ctx);
+        if ("child" in ctx && ctx.child != null) Contexts(ctx.child.ctx,out);
+    },
+    Step = function(instance, fresh) {
+        if (instance.ctx.status != "RUNNING") return;
+        Call(instance.def, fresh ? "startFn" : "updateFn", instance.ctx);
+        if (instance.ctx.status != "RUNNING") Release(instance);
+    },
+    Compose = function(id, kind, defs) {
+        local channels=[], depth=1;
+        foreach(d in defs) if(d != null) {
+            if ("depth" in d && d.depth+1 > depth) depth=d.depth+1;
+            foreach(c in d.channels) if(channels.find(c)==null) channels.append(c);
+        }
+        if(depth>16) throw "Action composition nesting exceeds 16";
+        local run = function(ctx) { HLBA.CompositeStep(ctx,kind,defs); };
+        return {id=id,channels=channels,depth=depth,startFn=run,updateFn=run};
+    },
+    CompositeStep = function(ctx, kind, defs) {
+        if (!("child" in ctx)) { ctx.child <- null; ctx.slot <- -1; ctx.cursor <- 0; }
+        local slot=-1;
+        if(kind=="BA_CHOOSE") slot=ctx.params.choice ? 0 : 1;
+        else if(kind=="BA_PRIORITY") {
+            for(local i=0;i<defs.len();++i) if(defs[i]!=null && ctx.params.enabled[i]) {slot=i;break;}
+        } else {
+            while(ctx.cursor<defs.len() && defs[ctx.cursor]==null) ++ctx.cursor;
+            if(ctx.cursor>=defs.len()) {ctx.status="SUCCESS";return;}
+            slot=ctx.cursor;
+        }
+        if(slot>=0 && defs[slot]==null) slot=-1;
+        if(slot!=ctx.slot) {
+            if(ctx.child!=null) Release(ctx.child);
+            ctx.child=null;ctx.slot=slot;
+        }
+        if(slot<0) return;
+        local fresh=ctx.child==null;
+        if(fresh) {
+            local d=defs[slot];
+            local childctx={bot=ctx.bot,params=ctx.params.children[slot],state={},overrides=[],
+                loopid=ctx.loopid,applyid=ctx.applyid,status="RUNNING"};
+            ctx.child={bot=ctx.bot,applyid=ctx.applyid,def=d,ctx=childctx,released=false};
+            if("supportsFn" in d && !d.supportsFn(ctx.bot)) {childctx.status="FAILED";ctx.child.released=true;}
+        } else ctx.child.ctx.params=ctx.params.children[slot];
+        Step(ctx.child,fresh);
+        if(kind!="BA_SEQUENCE") ctx.status=ctx.child.ctx.status;
+        if(kind=="BA_SEQUENCE") {
+            if(ctx.child.ctx.status=="FAILED") ctx.status="FAILED";
+            else if(ctx.child.ctx.status=="SUCCESS") {
+                ctx.child=null;ctx.slot=-1;++ctx.cursor;
+                // At most one child activation per loop update.
+                while(ctx.cursor<defs.len() && defs[ctx.cursor]==null) ++ctx.cursor;
+                if(ctx.cursor>=defs.len()) ctx.status="SUCCESS";
+            }
+        }
+    },
     Snapshot = function(value, depth = 0) {
-        if (depth > 16) throw "Action parameter nesting is too deep or cyclic";
+        if (depth > 64) throw "Action parameter nesting is too deep or cyclic";
         local kind=typeof value;
         if (kind == "table") {
             local copy={}; foreach(k,v in value) copy[k] <- Snapshot(v,depth+1); return copy;
@@ -100,8 +156,10 @@
         // Defense in depth: custom definitions must not bypass ownership by
         // forgetting a property channel. Reject before reading/writing state.
         foreach (id,loop in loops) foreach (a in loop.active) {
-            if (a.ctx == ctx || a.bot != ctx.bot) continue;
-            foreach (o in a.ctx.overrides) if (o.key == key) throw "Property already owned: " + key;
+            if (a.bot != ctx.bot) continue;
+            local contexts=[]; Contexts(a.ctx,contexts);
+            foreach(other in contexts) if(other != ctx)
+                foreach(o in other.overrides) if(o.key==key) throw "Property already owned: " + key;
         }
         local current=Read(ctx.bot,key,kind), entry=null;
         foreach (o in ctx.overrides) if (o.key == key) { entry=o; break; }
@@ -113,7 +171,10 @@
         Write(ctx.bot,key,kind,result); entry.owned=result;
     },
     Release = function(instance) {
+        if ("released" in instance && instance.released) return;
+        instance.released <- true;
         local ctx=instance.ctx;
+        if ("child" in ctx && ctx.child!=null) {Release(ctx.child);ctx.child=null;}
         try { if (ctx.bot == null || !ctx.bot.IsValid()) return; } catch(e) { return; }
         local alive=Valid(ctx.bot);
         if (alive) {
@@ -133,6 +194,7 @@
                 } else if (Equal(current,o.owned,o.kind)) Write(ctx.bot,o.key,o.kind,o.original);
             } catch(e) { Report("Override cleanup failed: " + e); }
         }
+        ctx.overrides.clear();
     },
     ReleaseLoop = function(loop) {
         local old=loop.active; loop.active=[];
@@ -196,11 +258,11 @@
                 foreach (a in loop.active) if (Same(a,r)) { instance=a; break; }
                 local fresh=instance == null;
                 if (fresh) {
-                    local ctx={bot=r.bot,params=r.params,state={},overrides=[],loopid=loop.id,applyid=r.applyid};
-                    instance={bot=r.bot,applyid=r.applyid,def=r.def,ctx=ctx};
+                    local ctx={bot=r.bot,params=r.params,state={},overrides=[],loopid=loop.id,applyid=r.applyid,status="RUNNING"};
+                    instance={bot=r.bot,applyid=r.applyid,def=r.def,ctx=ctx,released=false};
                     loop.active.append(instance);
                 } else instance.ctx.params=r.params;
-                try { Call(r.def,fresh ? "startFn" : "updateFn",instance.ctx); }
+                try { Step(instance,fresh); }
                 catch(e) {
                     loop.stopped=true;
                     Report("Action callback failed: " + e);

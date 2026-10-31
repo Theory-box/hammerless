@@ -126,3 +126,56 @@ b.hp=100;b.props.speed=7;
 HLBA.Start("deleted",0.1,function(){return [b];},function(s){HLBA.Request(s,"a",b,a,true);});
 HLBA.TickAll(18);b.valid=false;HLBA.TickAll(18.2);
 check(b.props.speed==0 && deathStops==0,"deleted handle not restored");HLBA.StopAll();
+// Composition: cleanup before branch switch, bounded sequence, terminal latch.
+HLBA.StopAll();b=Bot();order=[];enabled=true;choose=true;
+a={id="leafA",channels=["Movement","property:speed"],startFn=function(ctx){order.append("A+");HLBA.Override(ctx,"speed","int",1);},stopFn=function(ctx){order.append("A-");}};
+z={id="leafZ",channels=["Movement","property:speed"],startFn=function(ctx){check(ctx.bot.props.speed==7,"child cleanup before switch");order.append("Z+");HLBA.Override(ctx,"speed","int",2);},stopFn=function(ctx){order.append("Z-");}};
+local composition=HLBA.Compose("choose","BA_CHOOSE",[a,z]);
+HLBA.Start("composition",0.1,function(){return[b];},function(s){HLBA.Request(s,"apply",b,composition,enabled,{children=[{},{}],choice=choose});});
+HLBA.TickAll(100);choose=false;HLBA.TickAll(100.2);
+check(order.len()==3 && order[1]=="A-" && order[2]=="Z+","nested switch ordering");
+HLBA.StopAll();check(b.props.speed==7 && order.len()==4,"nested shutdown restores");
+local activations=0, cleanups=0;
+a={id="done",channels=[],startFn=function(ctx){activations++;ctx.state.value<-1;ctx.status="SUCCESS";},updateFn=function(ctx){throw "terminal action updated";},stopFn=function(ctx){cleanups++;}};
+composition=HLBA.Compose("sequence","BA_SEQUENCE",[a,null,a]);
+HLBA.Start("seq",0.1,function(){return[b];},function(s){HLBA.Request(s,"apply",b,composition,enabled,{children=[{},{},{}]});});
+HLBA.TickAll(101);check(activations==1 && cleanups==1,"one child activation per tick");
+HLBA.TickAll(101.2);check(activations==2 && cleanups==2,"second slot separate activation");
+HLBA.TickAll(101.4);check(activations==2,"sequence completion latches");
+enabled=false;HLBA.TickAll(101.6);enabled=true;HLBA.TickAll(101.8);check(activations==3,"re-enable restarts sequence");
+HLBA.StopAll();check(cleanups==3,"completed child stop exactly once");
+// Nested Choose completion propagates so a surrounding sequence advances.
+activations=0;cleanups=0;
+local choiceDef=HLBA.Compose("nested-choice","BA_CHOOSE",[a,null]);
+composition=HLBA.Compose("nested-sequence","BA_SEQUENCE",[choiceDef,a]);
+HLBA.Start("nested",0.1,function(){return[b];},function(s){HLBA.Request(s,"apply",b,composition,true,{children=[{children=[{},{}],choice=true},{}]});});
+HLBA.TickAll(102);HLBA.TickAll(102.2);check(activations==2 && cleanups==2,"nested completion propagates");HLBA.StopAll();
+// Priority preemption and failure halt later sequence children.
+local firstEnabled=false;
+a={id="high",channels=[],startFn=function(ctx){order.append("high");}};
+z={id="low",channels=[],startFn=function(ctx){order.append("low");},stopFn=function(ctx){order.append("low-stop");}};
+order=[];composition=HLBA.Compose("priority","BA_PRIORITY",[a,z,null]);
+HLBA.Start("priority",0.1,function(){return[b];},function(s){HLBA.Request(s,"apply",b,composition,true,{children=[{},{},{}],enabled=[firstEnabled,true,true]});});
+HLBA.TickAll(103);firstEnabled=true;HLBA.TickAll(103.2);check(order.len()==3 && order[1]=="low-stop" && order[2]=="high","priority preempts safely");HLBA.StopAll();
+a={id="fail",channels=[],startFn=function(ctx){ctx.status="FAILED";}};
+z={id="unreached",channels=[],startFn=function(ctx){throw "failure continued sequence";}};
+composition=HLBA.Compose("failed-sequence","BA_SEQUENCE",[a,z]);
+HLBA.Start("failed-sequence",0.1,function(){return[b];},function(s){HLBA.Request(s,"apply",b,composition,true,{children=[{},{}]});});
+HLBA.TickAll(104);HLBA.TickAll(104.2);check(HLBA.loops["failed-sequence"].active[0].ctx.status=="FAILED","failure terminal");HLBA.StopAll();
+// Deep valid compositions fit parameter snapshot bounds and clean recursively.
+local deep={id="deep-leaf",channels=[],startFn=function(ctx){ctx.status="SUCCESS";}}, deepParams={};
+for(local i=0;i<15;++i) {deep=HLBA.Compose("deep"+i,"BA_SEQUENCE",[deep]);deepParams={children=[deepParams]};}
+HLBA.Start("deep",0.1,function(){return[b];},function(s){HLBA.Request(s,"apply",b,deep,true,deepParams);});
+HLBA.TickAll(105);check(HLBA.loops.deep.active[0].ctx.status=="SUCCESS","deep descriptors snapshot and complete");HLBA.StopAll();
+// Exceptions in nested callbacks unwind managed overrides exactly once.
+local thrownStops=0;
+a={id="throw-child",channels=["property:speed"],startFn=function(ctx){HLBA.Override(ctx,"speed","int",0);throw "nested intentional";},stopFn=function(ctx){thrownStops++;}};
+composition=HLBA.Compose("throw-parent","BA_SEQUENCE",[a]);
+HLBA.Start("nested-error",0.1,function(){return[b];},function(s){HLBA.Request(s,"apply",b,composition,true,{children=[{}]});});
+HLBA.TickAll(106);check(b.props.speed==7 && thrownStops==1 && !("nested-error" in HLBA.loops),"nested exception cleanup");
+// Unsupported inactive branch must not prevent a valid selection from running.
+a={id="unsupported",channels=[],supportsFn=function(bot){return false;},startFn=function(ctx){throw "unsupported executed";}};
+z={id="supported",channels=[],startFn=function(ctx){ctx.status="SUCCESS";}};
+composition=HLBA.Compose("support-choose","BA_CHOOSE",[a,z]);
+HLBA.Start("support",0.1,function(){return[b];},function(s){HLBA.Request(s,"apply",b,composition,true,{children=[{},{}],choice=false});});
+HLBA.TickAll(107);check(HLBA.loops.support.active[0].ctx.status=="SUCCESS","only selected support checked");HLBA.StopAll();

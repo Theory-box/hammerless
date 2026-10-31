@@ -20,7 +20,7 @@ PURE = {"VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
         "BREAK_VECTOR", "VECTOR_MATH", "CHECK", "PICK", "TEXT_CHECK", "FORMAT_TEXT",
         "GET_FIELD", "GET_PROP", "SEEN", "VIEW", "SELF", "TIME", "BA_FIND"}
 BA = {"BA_LOOP", "BA_FIND", "BA_APPLY", "BA_ACTION", "BA_ENTRY", "BA_PARAM",
-      "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND"} | set(actionutilities.KINDS)
+      "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT", "BA_CHOOSE", "BA_PRIORITY", "BA_SEQUENCE"} | set(actionutilities.KINDS)
 
 HELPERS = r'''
 HLBA.Supports <- function(bot, kind) {
@@ -215,7 +215,7 @@ class ActionCompiler:
                     self.fail(f"'{n.id}': Bot must come from this loop's Current Bot output")
                 src = self.source(n, "action")
                 action = self.nodes.get(src[0]) if src else None
-                if action is None or action.kind != "BA_ACTION":
+                if action is None or action.kind not in {"BA_ACTION", "BA_CHOOSE", "BA_PRIORITY", "BA_SEQUENCE"}:
                     self.fail(f"'{n.id}': plug an editable Bot Action group into Action")
                 if src[1] != "action":
                     self.fail(f"'{n.id}': Action needs the group's Action output")
@@ -231,16 +231,17 @@ class ActionCompiler:
                 if selected in KINDS and supported in KINDS and "ALL" not in (selected, supported) and selected != supported:
                     self.fail(f"'{n.id}': Find Bots selects {selected.title()}, but action '{action.id}' supports "
                               f"only {supported.title()}; choose a compatible action or bot selection")
-                definition = self.definition(action)
-                params = []
-                for uid, kind, default in action.settings["definition"].get("inputs", []):
-                    if (action.id, uid) not in self.c.data_links and uid not in action.consts:
-                        value = vs.literal(kind, default)
-                    else:
-                        value = self.c.typed_in(action, uid, kind)
-                    params.append(f"[{quote(uid)}] = {value}")
+                definition, params = self.descriptor(action)
                 enabled = self.c.expr_in(n, "enabled", True)
-                out.append(f"HLBA.Request(ctx, {quote(self.c.key_of(n.id))}, ctx.bot, {definition}, {enabled}, {{ {', '.join(params)} }});")
+                out.append(f"HLBA.Request(ctx, {quote(self.c.key_of(n.id))}, ctx.bot, {definition}, {enabled}, {params});")
+            elif k == "BA_RESULT" and self.lifecycle:
+                if getattr(self, "lifecycle_event", None) == "stop":
+                    self.fail("Action Result cannot run during Stop cleanup")
+                result = s.get("result", "SUCCESS")
+                if result not in {"SUCCESS", "FAILED"}:
+                    self.fail("Action Result must be Success or Failed")
+                out.append(f"ctx.status = {quote(result)}; return;")
+                continue
             elif k in listtools.KINDS:
                 out.append(f"local HL_Q_{self.c.key_of(n.id)} = {listtools.call(self.c, n)};")
             elif k in actionutilities.KINDS and self.lifecycle:
@@ -280,6 +281,38 @@ class ActionCompiler:
             out.append(self.chain(n.id, "next", tail))
         return "\n".join(out)
 
+    def descriptor(self, node, path=()):
+        if node.id in path or len(path) >= 16:
+            self.fail("Action composition must be acyclic and at most 16 levels deep")
+        if node.kind == "BA_ACTION":
+            definition = self.definition(node)
+            params = []
+            for uid, kind, default in node.settings["definition"].get("inputs", []):
+                value = (vs.literal(kind, default) if (node.id, uid) not in self.c.data_links and uid not in node.consts
+                         else self.c.typed_in(node, uid, kind))
+                params.append(f"[{quote(uid)}] = {value}")
+            return definition, "{ " + ", ".join(params) + " }"
+        if node.kind not in {"BA_CHOOSE", "BA_PRIORITY", "BA_SEQUENCE"}:
+            self.fail("Action sockets require an action group or action composition")
+        sockets = ("true_action", "false_action") if node.kind == "BA_CHOOSE" else ("action_1", "action_2", "action_3")
+        definitions, parameters = [], []
+        for socket in sockets:
+            src = self.source(node, socket)
+            if src is None:
+                definitions.append("null"); parameters.append("{}"); continue
+            if src[1] != "action" or src[0] not in self.nodes:
+                self.fail("Composition input requires an Action output")
+            definition, params = self.descriptor(self.nodes[src[0]], path + (node.id,))
+            definitions.append(definition); parameters.append(params)
+        if node.id not in self.definitions:
+            name = self.c.fn_name("HL_Compose_" + self.c.key_of(node.id))
+            self.c.functions.append(f"::{name} <- HLBA.Compose({quote(name)}, {quote(node.kind)}, [{', '.join(definitions)}]);")
+            self.definitions[node.id] = name
+        name = self.definitions[node.id]
+        enabled = [self.c.expr_in(node, "enabled_" + str(i), True) for i in range(1, 4)] if node.kind == "BA_PRIORITY" else []
+        choice = self.c.expr_in(node, "condition", False) if node.kind == "BA_CHOOSE" else "false"
+        return name, "{children=[" + ", ".join(parameters) + "], enabled=[" + ", ".join(enabled) + "], choice=" + choice + "}"
+
     def definition(self, node):
         if node.id in self.definitions:
             return self.definitions[node.id]
@@ -306,7 +339,11 @@ class ActionCompiler:
             self.fail(f"'{node.id}': invalid supported bot type")
         name = self.c.fn_name("HL_Action_" + self.c.key_of(node.id))
         with self.scope({n.id: n for n in nodes}, links, lifecycle=True):
-            bodies = {event: self.chain(entries[0].id, event) for event in ("start", "update", "stop")}
+            bodies = {}
+            for event in ("start", "update", "stop"):
+                self.lifecycle_event = event
+                bodies[event] = self.chain(entries[0].id, event)
+            self.lifecycle_event = None
         # Property ownership is never optional: even custom groups must not race
         # restoration against another group that changes the same property.
         owned_channels = list(d.get("channels", []))
@@ -368,7 +405,7 @@ class ActionCompiler:
         for n in self.nodes.values():
             if n.kind == "BA_APPLY" and n.id not in self.owned:
                 c.problems.append(f"'{n.id}': Apply Bot Action must run inside a Bot Action Loop")
-            if n.kind in {"BA_ENTRY", "BA_PARAM", "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND"} | set(actionutilities.KINDS):
+            if n.kind in {"BA_ENTRY", "BA_PARAM", "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT"} | set(actionutilities.KINDS):
                 c.problems.append(f"'{n.id}': this action primitive belongs inside an editable Bot Action group")
         if any(n.kind == "BA_LOOP" for n in self.nodes.values()):
             c.helper("HLBA_Runtime", Path(__file__).with_name("bot_actions_runtime.nut").read_text(encoding="utf-8") + HELPERS)

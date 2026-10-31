@@ -469,7 +469,8 @@ class HL_MT_bot_actions(bpy.types.Menu):
 
     def draw(self, context):
         inside = getattr(context.space_data.edit_tree, "is_group", False)
-        for cls in (INSIDE if inside else OUTSIDE):
+        from . import actioncomposition
+        for cls in ((INSIDE + actioncomposition.INSIDE) if inside else (OUTSIDE + actioncomposition.OUTSIDE)):
             if cls == HL_BAParam:
                 continue  # Normal Group Input supplies editable parameters.
             if cls == HL_BAEntry and not getattr(context.space_data.edit_tree, "bot_action", False):
@@ -477,6 +478,8 @@ class HL_MT_bot_actions(bpy.types.Menu):
             op = self.layout.operator("node.add_node", text=cls.bl_label)
             op.type, op.use_transform = cls.bl_idname, True
         if not inside:
+            from . import actiontemplates
+            actiontemplates.draw_menu(self.layout)
             self.layout.separator()
             self.layout.operator("hammerless.bot_action_example", icon="HELP")
             self.layout.operator("hammerless.fear_light_example", icon="HELP")

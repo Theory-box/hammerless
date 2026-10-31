@@ -329,3 +329,35 @@ if(HL_SeenBy(target,null,viewer,90,true)!=viewer)throw "Hitting the target itsel
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ActionCompositionCompilerTests(unittest.TestCase):
+    def test_composition_and_result(self):
+        nodes, links = fixture()
+        nodes[4].settings["definition"]["nodes"].append(N("result", "BA_RESULT", {"result": "SUCCESS"}))
+        nodes[4].settings["definition"]["links"].append(L("override", "next", "result", "run"))
+        nodes.append(N("sequence", "BA_SEQUENCE"))
+        links = [l for l in links if not (l.to_node == "apply" and l.to_socket == "action")]
+        links += [L("freeze", "action", "sequence", "action_1", True), L("sequence", "action", "apply", "action", True)]
+        errors, script, _ = compile_fixture(nodes, links)
+        self.assertFalse(errors, errors)
+        self.assertIn('HLBA.Compose(', script)
+        self.assertIn('ctx.status = "SUCCESS"; return;', script)
+        if squirrel is not None and hasattr(squirrel, "SQVM"):
+            squirrel.SQVM().execute(script)
+
+    def test_cycle_rejected(self):
+        nodes, links = fixture()
+        nodes.append(N("sequence", "BA_SEQUENCE"))
+        links = [l for l in links if not (l.to_node == "apply" and l.to_socket == "action")]
+        links += [L("sequence", "action", "sequence", "action_1", True), L("sequence", "action", "apply", "action", True)]
+        errors, _, _ = compile_fixture(nodes, links)
+        self.assertTrue(any("acyclic" in e for e in errors), errors)
+
+    def test_stop_cannot_complete(self):
+        nodes, links = fixture()
+        d = nodes[4].settings["definition"]
+        d["nodes"].append(N("result", "BA_RESULT"))
+        d["links"].append(L("entry", "stop", "result", "run"))
+        errors, _, _ = compile_fixture(nodes, links)
+        self.assertTrue(any("Stop cleanup" in e for e in errors), errors)

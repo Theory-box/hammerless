@@ -244,8 +244,37 @@ Inside editable action groups, **Add > Bot Actions** also provides:
 
 Utility state is private to the action instance and is discarded when that action ends.
 These outputs report observations, not native AI completion or pathfinding guarantees.
-Action priority, sequencing, shared signals and arbitrary predicate/scoring list groups
-remain future work; these nodes are their initial foundation.
+Shared signals and arbitrary predicate/scoring list groups remain future work.
+
+### Composing actions
+
+In the outer logic graph, connect Action sockets from editable groups into:
+
+- **Choose Action:** Condition selects True or False. While running, changing selection
+  cleans up the old child before the new child starts. An empty selected socket runs no child.
+- **Priority Actions:** the first connected enabled slot wins, top to bottom. While running,
+  a higher-priority eligible action interrupts the current child. Empty slots are skipped.
+- **Sequence Actions:** runs connected steps in order. Success advances; Failed ends the
+  sequence. At most one child is stepped per update; even instantly completed steps cannot
+  form an unbounded same-tick loop. Empty slots are skipped.
+
+Compositors can connect to other compositors. Cycles and excessive depth are rejected.
+Inside action groups, **Finish Action** reports Success or Failed and ends that callback.
+Existing actions without Finish Action continue running. Finish Action is not a Stop-cleanup
+operation. A sequence will wait indefinitely for a running action unless its graph has a
+completion or timeout path.
+
+All completed actions, including Choose/Priority, stay completed while continuously applied.
+To restart, remove their request (for example disable Apply for an update), then reapply.
+Choose/Priority propagate their selected child's result, so they also work as sequence steps.
+Every child has separate memory, timers and override ownership. Stop cleanup runs once on
+completion/interruption. A composition conservatively reserves the union of its children's
+channels, preventing another action from competing for a channel during a later switch.
+
+Editable **Wait** and **Move to Position (experimental)** templates supply initial actions.
+Wait completes after its duration. Move observes arrival, stall and timeout and resets its
+owned movement command on Stop. Its stall check is straight-line progress, so a valid detour
+may fail it; engine movement remains experimental and the template targets common infected.
 
 ## Worked examples
 
