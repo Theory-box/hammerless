@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 
 from . import vscript as vs
-from . import worldqueries, listtools, actionutilities, coordination, candidates
+from . import worldqueries, listtools, actionutilities, coordination, candidates, routes, diagnostics
 
 
 class BotActionProblem(str):
@@ -16,11 +16,11 @@ class BotActionProblem(str):
 
 
 KINDS = {"COMMONS", "SPECIALS", "SURVIVORS", "ALL"}
-PURE = {"VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
+PURE = {"ROUTE_DATA", "VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
         "BREAK_VECTOR", "VECTOR_MATH", "CHECK", "PICK", "TEXT_CHECK", "FORMAT_TEXT",
         "CAND_AMBIENT", "GET_FIELD", "GET_PROP", "SEEN", "VIEW", "SELF", "TIME", "BA_FIND"}
 BA = {"BA_LOOP", "BA_FIND", "BA_APPLY", "BA_ACTION", "BA_ENTRY", "BA_PARAM",
-      "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT", "BA_CHILD", "BA_CHOOSE", "BA_PRIORITY", "BA_SEQUENCE"} | set(actionutilities.KINDS) | set(coordination.CLAIMS)
+      "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT", "BA_CHILD", "BA_CHOOSE", "BA_PRIORITY", "BA_SEQUENCE"} | set(actionutilities.KINDS) | set(coordination.CLAIMS) | set(diagnostics.ACTION)
 
 HELPERS = r'''
 HLBA.Supports <- function(bot, kind) {
@@ -154,6 +154,13 @@ class ActionCompiler:
                 key = quote(n.settings.get("name", "state"))
                 fallback = c.typed_in(n, "default", n.settings.get("type", "num"))
                 return f"(({key} in ctx.state) ? ctx.state[{key}] : {fallback})"
+            if n.kind in routes.KINDS or n.kind in diagnostics.ALL:
+                if n.kind in diagnostics.ACTION and not self.lifecycle:
+                    self.fail("Action inspection belongs inside an action lifecycle")
+                if n.id not in self.query_path:
+                    self.fail("Run this node earlier on the same synchronous path before reading it")
+                module = routes if n.kind in routes.KINDS else diagnostics
+                return module.output(n, socket, "HL_Q_" + c.key_of(n.id))
             if n.kind in coordination.ALL:
                 if n.kind in coordination.CLAIMS and not self.lifecycle:
                     self.fail("Destination claims belong inside an action lifecycle")
@@ -277,6 +284,16 @@ class ActionCompiler:
                     self.fail("Action Result must be Success or Failed")
                 out.append(f"ctx.status = {quote(result)}; return;")
                 continue
+            elif k in routes.KINDS:
+                out.append(f"local HL_Q_{self.c.key_of(n.id)} = {routes.call(self.c, n)};")
+            elif k in diagnostics.ALL:
+                if k in diagnostics.ACTION and not self.lifecycle:
+                    self.fail("Action inspection belongs inside an action lifecycle")
+                table = "HL_Q_" + self.c.key_of(n.id)
+                out.append(f"local {table} = {diagnostics.call(self.c, n, context='ctx')};")
+                if k == "DBG_CHECK":
+                    out.append(f"if ({table}.passed) {{\n{self.chain(n.id, 'true', tail)}\n}} else {{\n{self.chain(n.id, 'false', tail)}\n}}")
+                    continue
             elif k in coordination.ALL:
                 if k in coordination.CLAIMS and not self.lifecycle:
                     self.fail("Destination claims belong inside an action lifecycle")
@@ -488,7 +505,7 @@ class ActionCompiler:
         for n in self.nodes.values():
             if n.kind == "BA_APPLY" and n.id not in self.owned:
                 c.problems.append(f"'{n.id}': Apply Bot Action must run inside a Bot Action Loop")
-            if n.kind in {"BA_ENTRY", "BA_PARAM", "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT", "BA_CHILD"} | set(actionutilities.KINDS) | set(coordination.CLAIMS):
+            if n.kind in {"BA_ENTRY", "BA_PARAM", "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT", "BA_CHILD"} | set(actionutilities.KINDS) | set(coordination.CLAIMS) | set(diagnostics.ACTION):
                 c.problems.append(f"'{n.id}': this action primitive belongs inside an editable Bot Action group")
         if any(n.kind == "BA_LOOP" for n in self.nodes.values()):
             c.helper("HLBA_Runtime", Path(__file__).with_name("bot_actions_runtime.nut").read_text(encoding="utf-8") + HELPERS)

@@ -1,0 +1,18 @@
+local points=[Vector(0,0,0),Vector(100,0,0),Vector(200,0,0)];
+local bot=Bot();
+local ctx={bot=bot,params={route=points,index=0,direction=1,nearest=false,radius=1,stall=5,timeout=30},state={},overrides=[],loopid="test",applyid="test",status="RUNNING"};
+local instance={ctx=ctx,bot=bot,def=HL_Action_bot_action_group,released=false};
+HLBA.Step(instance,true);check(moves==1&&ctx.state.route_index==0,"move toward first point");
+bot.p=points[0];clock=1;HLBA.Step(instance,false);check(ctx.state.route_index==1&&moves==1,"advance once per update");
+clock=2;HLBA.Step(instance,false);check(moves==2,"move second point");
+bot.p=points[1];clock=3;HLBA.Step(instance,false);check(ctx.state.route_index==2,"advance last point");
+bot.p=points[2];clock=4;HLBA.Step(instance,false);check(ctx.status=="SUCCESS"&&resets==1,"finish cleanup");
+HLBA.Step(instance,false);check(resets==1,"completion cleanup once");
+local noMove=Bot();noMove.p=points[2];
+local c2={bot=noMove,params={route=points,index=2,direction=1,nearest=false,radius=1,stall=5,timeout=30},state={},overrides=[],loopid="t2",applyid="t2",status="RUNNING"};
+HLBA.Step({ctx=c2,bot=noMove,def=HL_Action_bot_action_group,released=false},true);check(c2.status=="SUCCESS"&&resets==1,"resume endpoint without resetting unowned movement");
+local c3={bot=bot,params={route=points,index=1,direction=-1,nearest=false,radius=1,stall=1,timeout=30},state={},overrides=[],loopid="t3",applyid="t3",status="RUNNING"};
+local i3={ctx=c3,bot=bot,def=HL_Action_bot_action_group,released=false};
+clock=5;HLBA.Step(i3,true);clock=7;HLBA.Step(i3,false);check(c3.status=="FAILED"&&resets==2,"stall fails and releases");
+local c4={bot=bot,params={route=points,index=0,direction=-1,nearest=true,radius=1,stall=5,timeout=30},state={},overrides=[],loopid="t4",applyid="t4",status="RUNNING"};
+clock=8;bot.p=Vector(190,0,0);HLBA.Step({ctx=c4,bot=bot,def=HL_Action_bot_action_group,released=false},true);check(c4.state.route_index==2&&c4.state.route_direction== -1,"nearest join keeps reverse direction");

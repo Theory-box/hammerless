@@ -28,12 +28,13 @@ ITEM_KINDS = [("event", "Event", "An event wire (orange)"), ("num", "Number", ""
               ("any", "Anything", "Any value"), ("bot", "Bot", "Verified bot entity"),
               ("bots", "Bot List", "Bot selection"), ("action", "Bot Action", "Editable action definition"),
               ("candidate_rule", "Candidate Rule", "Editable scoring rule"), ("candidate_results", "Ranked Candidates", "Candidate evaluation snapshot"),
-              ("navarea", "Nav Area", "A navigation area, not an entity"), ("navareas", "Nav Area List", "Navigation areas")]
+              ("navarea", "Nav Area", "A navigation area, not an entity"), ("navareas", "Nav Area List", "Navigation areas"),
+              ("route", "Waypoint Route", "Ordered authored route positions")]
 KIND_OF_SOCKET = {"HL_EventSocket": "event", "HL_FloatSocket": "num", "HL_IntSocket": "num", "HL_BoolSocket": "bool",
                   "HL_TextSocket": "text", "HL_VectorSocket": "vec", "HL_ThingSocket": "thing", "HL_AnySocket": "any"}
 GROUP_COLOR = (0.20, 0.30, 0.22)
 KIND_OF_SOCKET.update(HL_BotSocket="bot", HL_BotListSocket="bots", HL_BotActionSocket="action")
-KIND_OF_SOCKET.update(HL_NavAreaSocket="navarea", HL_NavAreasSocket="navareas", HL_CandidateRuleSocket="candidate_rule", HL_CandidateResultsSocket="candidate_results")
+KIND_OF_SOCKET.update(HL_RouteSocket="route", HL_NavAreaSocket="navarea", HL_NavAreasSocket="navareas", HL_CandidateRuleSocket="candidate_rule", HL_CandidateResultsSocket="candidate_results")
 
 
 def _rename_sockets(self, context):
@@ -614,7 +615,7 @@ class HL_OT_logic_group_ungroup(_InLogic, bpy.types.Operator):
         return {"FINISHED"}
 
 
-ACTION_ITEM_KINDS = [item for item in ITEM_KINDS if item[0] in {"num", "bool", "text", "vec", "thing", "action", "bot", "navarea", "navareas", "candidate_results"}]
+ACTION_ITEM_KINDS = [item for item in ITEM_KINDS if item[0] in {"num", "bool", "text", "vec", "thing", "action", "bot", "navarea", "navareas", "candidate_results", "route"}]
 
 
 def _editable_item_kinds(self, context):
@@ -638,7 +639,7 @@ class HL_OT_logic_group_item(_InLogic, bpy.types.Operator):
             return {"CANCELLED"}
         coll = tree.group_items
         if getattr(tree, "bot_action", False) and (self.action == "ADD_OUT" or
-                (self.action in ("ADD_IN", "KIND") and self.kind not in {"num", "bool", "text", "vec", "thing", "action", "bot", "navarea", "navareas", "candidate_results"})):
+                (self.action in ("ADD_IN", "KIND") and self.kind not in {"num", "bool", "text", "vec", "thing", "action", "bot", "navarea", "navareas", "candidate_results", "route"})):
             self.report({"WARNING"}, "Action groups accept value inputs; lifecycle events come from Action Lifecycle")
             return {"CANCELLED"}
         if self.action in ("ADD_IN", "ADD_OUT"):
