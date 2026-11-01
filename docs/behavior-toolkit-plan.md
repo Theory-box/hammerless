@@ -58,8 +58,24 @@ backlog capabilities are not included in this first batch.
 
 These groups are in Behavior Utilities and Bot Actions respectively. State and
 decisions remain visible inside each group. See [stable selection](stable-selection.md)
-and [child actions](child-actions.md) for scope and lifecycle contracts. Route
-traversal, diagnostics, and performance scheduling remain future chunks.
+and [child actions](child-actions.md) for scope and lifecycle contracts.
+
+## Third implementation batch
+
+- Typed authored waypoint routes with public point, nearest-point, and cursor
+  advancement nodes.
+- Editable Follow Route actions with once, loop, and back-and-forth traversal;
+  explicit initial cursor/direction and optional nearest-point joining.
+- Disabled-by-default Debug Watch, Check Condition, and Inspect Own Action,
+  with bounded, rate-limited console logging and public result sockets.
+
+See [waypoint routes](waypoint-routes.md) and [behavior diagnostics](behavior-diagnostics.md).
+Both chunks passed independent review, generated Squirrel tests, and installed
+Blender registration/export checks. Follow Route remains experimental native-AI
+control. Diagnostics do not include a visual inspector or CPU profiler.
+
+Performance measurement is next; scheduling and caching are not implemented by
+these batches. The backlog below includes both completed and future capabilities.
 
 ## Candidate backlog
 

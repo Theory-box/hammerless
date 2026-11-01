@@ -87,6 +87,7 @@ class HL_OT_route_point(bpy.types.Operator):
         obj.location=context.scene.cursor.location;obj.empty_display_type='SPHERE';obj.empty_display_size=.15
         obj['hl_route_order']=max(orders,default=-1)+1
         obj.id_properties_ui('hl_route_order').update(description='Ascending route order; must be unique within the route collection')
+        context.view_layer.update()
         if obj.name in context.view_layer.objects:
             for selected in context.selected_objects:selected.select_set(False)
             obj.select_set(True);context.view_layer.objects.active=obj
