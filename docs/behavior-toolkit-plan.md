@@ -46,6 +46,21 @@ not a guarantee of live horde frame time; scheduling and performance measurement
 remain on the roadmap. Stable selection, retry/recovery, routes, and the other
 backlog capabilities are not included in this first batch.
 
+## Second implementation batch
+
+- Editable stable bot/nav-area selection groups with refreshed scores, minimum
+  hold, strict improvement margin, and missing/truncated snapshot diagnostics.
+- Public typed Find Ranked Candidate lookup and bot/nav-area variable types.
+- Public Step Child Action with status, attempt, error, reset and cancellation.
+- Action-valued group inputs bound at compile time, including channel inheritance
+  and recursive cleanup; no callable definitions stored in runtime parameters.
+- Editable Retry with Recovery accepting user-supplied Task and Recovery actions.
+
+These groups are in Behavior Utilities and Bot Actions respectively. State and
+decisions remain visible inside each group. See [stable selection](stable-selection.md)
+and [child actions](child-actions.md) for scope and lifecycle contracts. Route
+traversal, diagnostics, and performance scheduling remain future chunks.
+
 ## Candidate backlog
 
 | Capability | Intended form |

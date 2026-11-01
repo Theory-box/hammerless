@@ -164,11 +164,23 @@ def draw_menu(layout):
         layout.operator(HL_OT_behavior_template.bl_idname, text=title).template = key
 
 
+class HL_MT_behavior_utilities(bpy.types.Menu):
+    bl_idname, bl_label = 'HL_MT_behavior_utilities', 'Behavior Utilities'
+
+    def draw(self, context):
+        draw_menu(self.layout)
+        self.layout.separator()
+        from . import stabletemplates
+        stabletemplates.draw_menu(self.layout)
+
+
 def register():
     bpy.utils.register_class(HL_OT_behavior_template)
+    bpy.utils.register_class(HL_MT_behavior_utilities)
 
 
 def unregister():
+    bpy.utils.unregister_class(HL_MT_behavior_utilities)
     bpy.utils.unregister_class(HL_OT_behavior_template)
 
 

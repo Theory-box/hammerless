@@ -23,3 +23,14 @@ r=HLCE.Evaluate([a],"bots",bad,{},128); Check(r.errors==1,"invalid output type")
 r=HLCE.Evaluate(areas,"navareas",equalRule,{},128);
 Check(r.count==2 && HLCE.Item(r,1,"navareas").item==areas[1],"nav areas");
 Check(HLCE.Evaluate(null,"bots",equalRule,{},128).count==0,"null input");
+r=HLCE.Evaluate([a,b,a],"bots",compiledRule,{},128);
+read=HLCE.Find(r,a,"bots");
+Check(read.found && read.rank==0 && read.score==0 && read.index==0,"find highest duplicate");
+read=HLCE.Find(r,b,"bots"); Check(read.found && read.rank==1,"find ranked handle");
+Check(!HLCE.Find(r,areas[0],"navareas").found,"find mismatched type");
+b.valid=false; Check(!HLCE.Find(r,b,"bots").found,"find expired handle"); b.valid=true;
+r=HLCE.Evaluate([a,b],"bots",compiledRule,{},1);
+read=HLCE.Find(r,b,"bots"); Check(!read.found && read.truncated,"missing is not invalid: truncation exposed");
+r=HLCE.Evaluate(areas,"navareas",equalRule,{},128);
+Check(HLCE.Find(r,areas[1],"navareas").rank==1,"find nav area");
+Check(!HLCE.Find(null,a,"bots").found,"find missing snapshot");

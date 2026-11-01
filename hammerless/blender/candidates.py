@@ -128,6 +128,18 @@ class HL_RankedCandidate(_Typed,bpy.types.Node):
         self.result_sockets()
 
 
+class HL_FindRankedCandidate(_Typed,bpy.types.Node):
+    """Find a handle in an evaluated snapshot. Found means present and still valid, not that an absent item is invalid. Truncated warns that omitted items may still exist. The first/highest-ranked duplicate wins. Scores and positions are sampled, not recomputed."""
+    bl_idname,bl_label,kind="HL_FindRankedCandidate","Find Ranked Candidate","CAND_FIND"
+    def make_sockets(self):
+        self.ev_in("run","Run"); self.ev_out("next","Next")
+        self.data_in("candidate_results","results","Ranked Results")
+        self.data_in("bot" if self.list_type=="bots" else "navarea","item","Item")
+        self.result_sockets()
+        self.data_out("num","rank","Rank")
+        self.data_out("bool","truncated","Snapshot Truncated")
+
+
 class HL_CandidateAmbient(_Block,bpy.types.Node):
     """Read baked ambient probes at a position. Pure value query for candidate rules; Available must be checked before treating zero as darkness. Excludes flashlights, dynamic lights and exposure. Multiple outputs share one query per candidate."""
     bl_idname,bl_label,kind="HL_CandidateAmbient","Sample Baked Ambient Light","CAND_AMBIENT"
@@ -168,7 +180,7 @@ class HL_OT_candidate_rule_new(bpy.types.Operator):
         return {"FINISHED"}
 
 
-NODES=(HL_CandidateRule,HL_EvaluateCandidates,HL_RankedCandidate,HL_CandidateAmbient)
+NODES=(HL_CandidateRule,HL_EvaluateCandidates,HL_RankedCandidate,HL_FindRankedCandidate,HL_CandidateAmbient)
 class HL_MT_candidates(bpy.types.Menu):
     bl_idname,bl_label="HL_MT_candidates","Candidate Rules"
     def draw(self,context):

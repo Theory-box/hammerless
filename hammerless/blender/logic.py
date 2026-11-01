@@ -1631,7 +1631,9 @@ SCRIPT_MENUS = _script_menus()
 # ---------------------------------------------------------------- Script blocks: loops, variables, tables, text, vectors
 
 VALUE_KIND_ITEMS = [("num", "Number", ""), ("bool", "True/False", ""), ("text", "Text", ""), ("vec", "Vector", ""),
-                    ("thing", "Entity / Player", ""), ("any", "Anything", "")]
+                    ("thing", "Entity / Player", ""), ("any", "Anything", ""),
+                    ("bot", "Bot", "A runtime bot handle; recheck validity before using"),
+                    ("navarea", "Nav Area", "A navigation-area handle for this map")]
 
 
 @_keeps_links
@@ -2926,8 +2928,7 @@ def _add_menu(self, context):
     self.layout.menu("HL_MT_world_queries", icon="WORLD")
     self.layout.menu("HL_MT_list_tools", icon="LINENUMBERS_ON")
     self.layout.menu("HL_MT_candidates", icon="SORTSIZE")
-    from . import behaviortemplates
-    behaviortemplates.draw_menu(self.layout)
+    self.layout.menu("HL_MT_behavior_utilities", icon="NODETREE")
     self.layout.menu("HL_MT_coordination", icon="LINKED")
     if "HL_MT_logic_examples" in dir(bpy.types):
         self.layout.separator()
@@ -3399,9 +3400,11 @@ def register():
     worldqueries.register()
     from . import listtools
     listtools.register()
-    from . import candidates, behaviortemplates
+    from . import candidates, behaviortemplates, stabletemplates, childactions
     candidates.register()
     behaviortemplates.register()
+    stabletemplates.register()
+    childactions.register()
     bpy.types.NODE_MT_add.append(_add_menu)
     bpy.app.handlers.load_post.append(_on_load)
     bpy.app.handlers.load_post.append(_migrate_on_load)
@@ -3422,7 +3425,9 @@ def unregister():
     from . import botactions
     from . import worldqueries
     from . import listtools
-    from . import candidates, behaviortemplates
+    from . import candidates, behaviortemplates, stabletemplates, childactions
+    childactions.unregister()
+    stabletemplates.unregister()
     behaviortemplates.unregister()
     candidates.unregister()
     listtools.unregister()

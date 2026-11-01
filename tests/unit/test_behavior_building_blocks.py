@@ -18,7 +18,7 @@ class BuildingBlockIntegration(unittest.TestCase):
   e,s=action([N('cool','BA_COOLDOWN',consts={'seconds':2}),N('save','BA_STATE_SET',{'name':'remaining','type':'num'})],
    [L('entry','update','cool','run'),L('cool','passed','save','run'),L('cool','remaining','save','value',True)])
   self.assertFalse(e,e);self.assertEqual(s.count('HLBAU.Cooldown(ctx,'),1)
-  self.assertIn('.passed)',s);self.assertIn('HL_Q_cool.remaining',s)
+  self.assertIn('.passed)',s);self.assertIn('HL_Q_action_cool.remaining',s)
  def test_utilities_require_action_context(self):
   e,s=compile_nodes([N('cool','BA_COOLDOWN')],[])
   self.assertTrue(any('belongs inside' in x for x in e),e)
@@ -36,6 +36,6 @@ class BuildingBlockIntegration(unittest.TestCase):
   e,s=compile_nodes([N('start','MAP_START')]+nodes,[L('start','start','count','run'),data])
   self.assertFalse(e,e);self.assertIn('HLLT.Query(HLBA.Find(',s)
   e,s=action(nodes,[L('entry','update','count','run'),data])
-  self.assertFalse(e,e);self.assertIn('local HL_Q_count',s)
+  self.assertFalse(e,e);self.assertIn('local HL_Q_action_count',s)
 
 if __name__=='__main__':unittest.main()

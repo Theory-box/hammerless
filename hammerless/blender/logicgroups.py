@@ -614,7 +614,7 @@ class HL_OT_logic_group_ungroup(_InLogic, bpy.types.Operator):
         return {"FINISHED"}
 
 
-ACTION_ITEM_KINDS = [item for item in ITEM_KINDS if item[0] in {"num", "bool", "text", "vec", "thing"}]
+ACTION_ITEM_KINDS = [item for item in ITEM_KINDS if item[0] in {"num", "bool", "text", "vec", "thing", "action", "bot", "navarea", "navareas", "candidate_results"}]
 
 
 def _editable_item_kinds(self, context):
@@ -638,7 +638,7 @@ class HL_OT_logic_group_item(_InLogic, bpy.types.Operator):
             return {"CANCELLED"}
         coll = tree.group_items
         if getattr(tree, "bot_action", False) and (self.action == "ADD_OUT" or
-                (self.action in ("ADD_IN", "KIND") and self.kind not in {"num", "bool", "text", "vec", "thing"})):
+                (self.action in ("ADD_IN", "KIND") and self.kind not in {"num", "bool", "text", "vec", "thing", "action", "bot", "navarea", "navareas", "candidate_results"})):
             self.report({"WARNING"}, "Action groups accept value inputs; lifecycle events come from Action Lifecycle")
             return {"CANCELLED"}
         if self.action in ("ADD_IN", "ADD_OUT"):

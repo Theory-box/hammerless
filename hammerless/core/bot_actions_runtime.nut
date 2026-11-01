@@ -23,11 +23,64 @@
     Contexts = function(ctx, out) {
         out.append(ctx);
         if ("child" in ctx && ctx.child != null) Contexts(ctx.child.ctx,out);
+        if ("children" in ctx) foreach(slot in ctx.children) if(slot.instance!=null) Contexts(slot.instance.ctx,out);
     },
     Step = function(instance, fresh) {
         if (instance.ctx.status != "RUNNING") return;
+        instance.ctx._stepSerial <- ("_stepSerial" in instance.ctx ? instance.ctx._stepSerial : 0) + 1;
         Call(instance.def, fresh ? "startFn" : "updateFn", instance.ctx);
         if (instance.ctx.status != "RUNNING") Release(instance);
+    },
+    InheritChannels = function(def, children) {
+        local depth=1;
+        foreach(child in children) {
+            foreach(channel in child.channels) if(def.channels.find(channel)==null) def.channels.append(channel);
+            local next=("depth" in child ? child.depth : 1)+1;
+            if(next>depth) depth=next;
+        }
+        if(depth>16) throw "Action nesting exceeds 16";
+        def.depth <- depth;
+    },
+    ChildResult = function(slot) {
+        local status=slot.instance==null ? "IDLE" : slot.instance.ctx.status;
+        return {idle=status=="IDLE",running=status=="RUNNING",success=status=="SUCCESS",failed=status=="FAILED",
+            error=slot.error,attempt=slot.attempt};
+    },
+    ChildStep = function(ctx, key, def, params, reset=false, enabled=true) {
+        if ("_releasing" in ctx && ctx._releasing) throw "Cannot step children during cleanup";
+        if (!("children" in ctx)) ctx.children <- {};
+        if (!(key in ctx.children)) ctx.children[key] <- {instance=null,serial=-1,attempt=0,error=""};
+        local slot=ctx.children[key], serial=("_stepSerial" in ctx ? ctx._stepSerial : 0);
+        // Fan-out and Reset cannot make one child execute twice in one callback.
+        if(slot.serial==serial) return ChildResult(slot);
+        slot.serial=serial;
+        if(!enabled) {
+            if(slot.instance!=null) Release(slot.instance);
+            slot.instance=null;slot.error="";
+            return ChildResult(slot);
+        }
+        if(reset && slot.instance!=null) {Release(slot.instance);slot.instance=null;}
+        if(slot.instance!=null && slot.instance.def!=def) throw "Child Action binding changed";
+        local fresh=slot.instance==null;
+        if(fresh) {
+            slot.attempt++;slot.error="";
+            local childctx={bot=ctx.bot,params=Snapshot(params),state={},overrides=[],
+                loopid=ctx.loopid,applyid=ctx.applyid,status="RUNNING"};
+            slot.instance={bot=ctx.bot,applyid=ctx.applyid,def=def,ctx=childctx,released=false};
+            if("supportsFn" in def && !def.supportsFn(ctx.bot)) {
+                childctx.status="FAILED";slot.instance.released=true;slot.error="Unsupported bot";
+            }
+            foreach(otherKey,other in ctx.children) if(otherKey!=key && other.instance!=null &&
+                other.instance.ctx.status=="RUNNING" && Clashes(slot.instance,other.instance)) {
+                childctx.status="FAILED";slot.instance.released=true;slot.error="Child action channels conflict";
+            }
+        } else slot.instance.ctx.params=Snapshot(params);
+        try { Step(slot.instance,fresh); }
+        catch(e) {
+            slot.error=e.tostring();slot.instance.ctx.status="FAILED";Release(slot.instance);
+            Report("Child action failed: " + slot.error);
+        }
+        return ChildResult(slot);
     },
     Compose = function(id, kind, defs) {
         local channels=[], depth=1;
@@ -174,7 +227,9 @@
         if ("released" in instance && instance.released) return;
         instance.released <- true;
         local ctx=instance.ctx;
+        ctx._releasing <- true;
         if ("child" in ctx && ctx.child!=null) {Release(ctx.child);ctx.child=null;}
+        if ("children" in ctx) foreach(slot in ctx.children) if(slot.instance!=null) Release(slot.instance);
         if ("HLCO" in getroottable()) ::HLCO.Cleanup(ctx);
         try { if (ctx.bot == null || !ctx.bot.IsValid()) return; } catch(e) { return; }
         local alive=Valid(ctx.bot);

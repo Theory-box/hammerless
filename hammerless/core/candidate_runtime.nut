@@ -2,7 +2,7 @@
 ::HLCE <- {};
 HLCE.Empty <- function() {
     return {found=false, count=0, examined=0, rejected=0, errors=0, truncated=false,
-            item=null, items=[], score=0.0, index=-1, position=Vector(0,0,0), rows=[], kind="", error=""};
+            item=null, items=[], score=0.0, index=-1, rank=-1, position=Vector(0,0,0), rows=[], kind="", error=""};
 };
 HLCE.Evaluate <- function(items, kind, rule, params, limit) {
     local r=Empty(); r.kind=kind;
@@ -45,5 +45,21 @@ HLCE.Item <- function(result,index,kind) {
     local v=result.rows[index.tointeger()];
     if(HLLT.Position(v.item,kind)==null) return r;
     r.found=true; r.item=v.item; r.score=v.score; r.position=v.position; r.index=v.index;
+    return r;
+};
+// Absence means absent from this snapshot, not necessarily invalid in the world.
+HLCE.Find <- function(result,item,kind) {
+    local r=Empty();
+    if(typeof result!="table" || !("kind" in result) || result.kind!=kind ||
+       !("rows" in result) || typeof result.rows!="array") return r;
+    r.truncated=("truncated" in result) && result.truncated;
+    if(HLLT.Position(item,kind)==null) return r;
+    local count=result.rows.len()<128 ? result.rows.len() : 128;
+    for(local i=0;i<count;++i) {
+        local row=result.rows[i];
+        if(row.item!=item) continue;
+        r.found=true; r.item=item; r.score=row.score; r.index=row.index;
+        r.position=row.position; r.rank=i; return r;
+    }
     return r;
 };

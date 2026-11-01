@@ -24,6 +24,22 @@ def rule():
 
 
 class CandidateTests(unittest.TestCase):
+    def test_find_compiles_in_both_execution_contexts(self):
+        from hammerless.core.botactions import ActionCompiler
+        for typ in ('bots', 'navareas'):
+            nodes = [N('start', 'MAP_START'), N('find', 'CAND_FIND', {'list_type':typ}),
+                     N('save', 'SET_VAR', {'name':'rank','kind':'num'})]
+            links = [L('start','start','find','run'), L('find','next','save','run'),
+                     L('find','rank','save','value',True)]
+            ir=MapIR(); self.assertEqual(compile_graph(nodes,links,ir),[])
+            self.assertIn('HLCE.Find', '\n'.join(ir.extra_scripts.values()))
+            nodes[-1]=N('save','BA_STATE_SET',{'name':'rank','type':'num'})
+            c=_Compiler(MapIR(),[]); ac=ActionCompiler(c,nodes,links)
+            with ac.scope({n.id:n for n in nodes},links,lifecycle=True):
+                body=ac.chain('start','start')
+            self.assertIn('HLCE.Find',body)
+            self.assertIn('HL_Q_find.rank',body)
+
     def test_rule_bounds_cycles_side_effects_and_types(self):
         for change,match in [
             (lambda d:d.update(list_type='navareas'),'type must match'),

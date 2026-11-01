@@ -2,13 +2,13 @@
 from pathlib import Path
 from . import vscript as vs, worldqueries
 
-KINDS = ("CAND_EVALUATE", "CAND_ITEM")
+KINDS = ("CAND_EVALUATE", "CAND_ITEM", "CAND_FIND")
 PURE = {"VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
         "BREAK_VECTOR", "VECTOR_MATH", "CHECK", "PICK", "TEXT_CHECK", "FORMAT_TEXT",
         "GET_FIELD", "GET_PROP", "CAND_PARAM", "CAND_AMBIENT"}
 FIELDS = {"found": "false", "count": "0", "examined": "0", "rejected": "0", "errors": "0",
           "truncated": "false", "item": "null", "items": "[]", "score": "0.0", "index": "-1",
-          "position": "Vector(0,0,0)", "results": "null", "error": '""'}
+          "rank": "-1", "position": "Vector(0,0,0)", "results": "null", "error": '""'}
 
 
 def compile_rule(c, node, expected):
@@ -117,6 +117,8 @@ def call(c, n):
     kind = n.settings.get("list_type", "bots")
     if kind not in {"bots", "navareas"}:
         raise ValueError("Candidate list type must be Bots or Nav Areas")
+    if n.kind == "CAND_FIND":
+        return f"HLCE.Find({c.typed_in(n,'results','any')}, {c.typed_in(n,'item','any')}, {vs.literal('text',kind)})"
     if n.kind == "CAND_ITEM":
         return f"HLCE.Item({c.typed_in(n,'results','any')}, {c.typed_in(n,'index','num')}, {vs.literal('text',kind)})"
     src = c.data_links.get((n.id, "rule"))

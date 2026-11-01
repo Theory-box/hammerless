@@ -20,7 +20,7 @@ PURE = {"VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
         "BREAK_VECTOR", "VECTOR_MATH", "CHECK", "PICK", "TEXT_CHECK", "FORMAT_TEXT",
         "CAND_AMBIENT", "GET_FIELD", "GET_PROP", "SEEN", "VIEW", "SELF", "TIME", "BA_FIND"}
 BA = {"BA_LOOP", "BA_FIND", "BA_APPLY", "BA_ACTION", "BA_ENTRY", "BA_PARAM",
-      "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT", "BA_CHOOSE", "BA_PRIORITY", "BA_SEQUENCE"} | set(actionutilities.KINDS) | set(coordination.CLAIMS)
+      "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT", "BA_CHILD", "BA_CHOOSE", "BA_PRIORITY", "BA_SEQUENCE"} | set(actionutilities.KINDS) | set(coordination.CLAIMS)
 
 HELPERS = r'''
 HLBA.Supports <- function(bot, kind) {
@@ -85,6 +85,11 @@ class ActionCompiler:
         self.visiting = set()
         self.query_path = ()
         self.iteration_path = ()
+        self.action_bindings = {}
+        self.definition_stack = []
+        self.definition_channels = {}
+        self.definition_depths = {}
+        self.child_descriptors = {}
 
     def fail(self, message):
         raise ValueError(message)
@@ -134,7 +139,15 @@ class ActionCompiler:
             if n.kind == "BA_PARAM":
                 if not self.lifecycle:
                     self.fail("Action Parameter is only valid inside an action group")
+                if n.settings.get("type") == "action":
+                    self.fail("Action inputs can only connect to child Action sockets")
                 return "ctx.params[" + quote(n.settings.get("uid", "")) + "]"
+            if n.kind == "BA_CHILD":
+                if not self.lifecycle or n.id not in self.query_path:
+                    self.fail("Step Child Action must run earlier on the same lifecycle path")
+                if socket not in {"idle", "running", "success", "failed", "error", "attempt"}:
+                    self.fail("Unknown child action output")
+                return "HL_Q_" + c.key_of(n.id) + "." + socket
             if n.kind == "BA_STATE_GET":
                 if not self.lifecycle:
                     self.fail("Action State is only valid inside an action group")
@@ -175,6 +188,14 @@ class ActionCompiler:
 
     def source(self, n, socket):
         return self.c.data_links.get((n.id, socket))
+
+    def action_source(self, node, socket):
+        source = self.source(node, socket)
+        target = self.nodes.get(source[0]) if source else None
+        expected = "value" if target is not None and target.kind == "BA_PARAM" else "action"
+        if target is None or source[1] != expected:
+            self.fail(f"'{node.id}': connect a valid Action output to '{socket}'")
+        return target
 
     def chain(self, nid, socket, path=()):
         out = []
@@ -240,6 +261,14 @@ class ActionCompiler:
                 definition, params = self.descriptor(action)
                 enabled = self.c.expr_in(n, "enabled", True)
                 out.append(f"HLBA.Request(ctx, {quote(self.c.key_of(n.id))}, ctx.bot, {definition}, {enabled}, {params});")
+            elif k == "BA_CHILD" and self.lifecycle:
+                if getattr(self, "lifecycle_event", None) == "stop":
+                    self.fail("Cannot step child actions during Stop cleanup")
+                definition, parameters = self.descriptor(self.action_source(n, "action"))
+                self.child_descriptors.setdefault(self.definition_stack[-1], set()).add(definition)
+                reset = self.c.typed_in(n, "reset", "bool")
+                enabled = self.c.expr_in(n, "enabled", True)
+                out.append(f"local HL_Q_{self.c.key_of(n.id)} = HLBA.ChildStep(ctx, {quote(n.id)}, {definition}, {parameters}, {reset}, {enabled});")
             elif k == "BA_RESULT" and self.lifecycle:
                 if getattr(self, "lifecycle_event", None) == "stop":
                     self.fail("Action Result cannot run during Stop cleanup")
@@ -298,13 +327,23 @@ class ActionCompiler:
     def descriptor(self, node, path=()):
         if node.id in path or len(path) >= 16:
             self.fail("Action composition must be acyclic and at most 16 levels deep")
+        if node.kind == "BA_PARAM" and node.settings.get("type") == "action":
+            uid = node.settings.get("uid")
+            if uid not in self.action_bindings:
+                self.fail("Action input has no compile-time binding")
+            return self.action_bindings[uid], "ctx.params[" + quote(uid) + "]"
         if node.kind == "BA_ACTION":
-            definition = self.definition(node)
-            params = []
+            params, bindings = [], {}
             for uid, kind, default in node.settings["definition"].get("inputs", []):
+                if kind == "action":
+                    child, value = self.descriptor(self.action_source(node, uid), path + (node.id,))
+                    bindings[uid] = child
+                    params.append(f"[{quote(uid)}] = {value}")
+                    continue
                 value = (vs.literal(kind, default) if (node.id, uid) not in self.c.data_links and uid not in node.consts
                          else self.c.typed_in(node, uid, kind))
                 params.append(f"[{quote(uid)}] = {value}")
+            definition = self.definition(node, bindings)
             return definition, "{ " + ", ".join(params) + " }"
         if node.kind not in {"BA_CHOOSE", "BA_PRIORITY", "BA_SEQUENCE"}:
             self.fail("Action sockets require an action group or action composition")
@@ -314,22 +353,27 @@ class ActionCompiler:
             src = self.source(node, socket)
             if src is None:
                 definitions.append("null"); parameters.append("{}"); continue
-            if src[1] != "action" or src[0] not in self.nodes:
-                self.fail("Composition input requires an Action output")
-            definition, params = self.descriptor(self.nodes[src[0]], path + (node.id,))
+            definition, params = self.descriptor(self.action_source(node, socket), path + (node.id,))
             definitions.append(definition); parameters.append(params)
+        depth = 1 + max((self.definition_depths.get(d, 0) for d in definitions), default=0)
+        if depth > 16:
+            self.fail("Action composition nesting exceeds 16")
         if node.id not in self.definitions:
             name = self.c.fn_name("HL_Compose_" + self.c.key_of(node.id))
             self.c.functions.append(f"::{name} <- HLBA.Compose({quote(name)}, {quote(node.kind)}, [{', '.join(definitions)}]);")
             self.definitions[node.id] = name
         name = self.definitions[node.id]
+        self.definition_depths[name] = depth
+        self.definition_channels[name] = set().union(*(self.definition_channels.get(d, set()) for d in definitions))
         enabled = [self.c.expr_in(node, "enabled_" + str(i), True) for i in range(1, 4)] if node.kind == "BA_PRIORITY" else []
         choice = self.c.expr_in(node, "condition", False) if node.kind == "BA_CHOOSE" else "false"
         return name, "{children=[" + ", ".join(parameters) + "], enabled=[" + ", ".join(enabled) + "], choice=" + choice + "}"
 
-    def definition(self, node):
+    def definition(self, node, bindings=None):
         if node.id in self.definitions:
             return self.definitions[node.id]
+        if node.id in self.definition_stack or len(self.definition_stack) >= 16:
+            self.fail("Nested action definitions must be acyclic and at most 16 levels deep")
         from .logic import LNode, LLink
         d = node.settings.get("definition")
         if not isinstance(d, dict):
@@ -352,21 +396,46 @@ class ActionCompiler:
         if d.get("supports", "ALL") not in KINDS:
             self.fail(f"'{node.id}': invalid supported bot type")
         name = self.c.fn_name("HL_Action_" + self.c.key_of(node.id))
-        with self.scope({n.id: n for n in nodes}, links, lifecycle=True):
-            bodies = {}
-            for event in ("start", "update", "stop"):
-                self.lifecycle_event = event
-                bodies[event] = self.chain(entries[0].id, event)
-            self.lifecycle_event = None
+        # Definition-local IDs are namespaced per caller, preventing nested copies
+        # from sharing function definitions or state slots.
+        prefix = node.id + "/"
+        from dataclasses import replace
+        nodes = [replace(n, id=prefix + n.id) for n in nodes]
+        links = [LLink(prefix + l.from_node, l.from_socket, prefix + l.to_node, l.to_socket, l.data) for l in links]
+        previous_bindings, previous_event = self.action_bindings, getattr(self, "lifecycle_event", None)
+        self.action_bindings = bindings or {}
+        self.definition_stack.append(node.id)
+        try:
+            with self.scope({n.id: n for n in nodes}, links, lifecycle=True):
+                bodies = {}
+                for event in ("start", "update", "stop"):
+                    self.lifecycle_event = event
+                    bodies[event] = self.chain(prefix + entries[0].id, event)
+        finally:
+            self.definition_stack.pop()
+            self.action_bindings, self.lifecycle_event = previous_bindings, previous_event
         # Property ownership is never optional: even custom groups must not race
         # restoration against another group that changes the same property.
         owned_channels = list(d.get("channels", []))
         owned_channels += ["property:" + str(n.settings.get("property", "")) for n in nodes if n.kind == "BA_OVERRIDE"]
         if any(n.kind == "BA_COMMAND" for n in nodes):
             owned_channels.append("Movement")
+        child_definitions = set((bindings or {}).values()) | self.child_descriptors.get(node.id, set())
+        depth = 1 + max((self.definition_depths.get(d, 1) for d in child_definitions), default=0)
+        if depth > 16:
+            self.fail("Action composition nesting exceeds 16")
+        self.definition_depths[name] = depth
+        inherited = set().union(*(self.definition_channels.get(d, set()) for d in child_definitions))
+        if any(n.kind == "BA_COMMAND" for n in nodes) and "Movement" in inherited:
+            self.fail("An action cannot issue its own bot commands while owning a child Movement action; put commands in separate child actions")
+        if any("property:" + str(n.settings.get("property", "")) in inherited for n in nodes if n.kind == "BA_OVERRIDE"):
+            self.fail("An action cannot override a property also owned by a child action; move the override into a separate child action")
+        self.definition_channels[name] = set(owned_channels) | inherited
         channels = ", ".join(quote(x) for x in dict.fromkeys(owned_channels))
         code = f"::{name} <- {{ id = {quote(name)}, channels = [{channels}], supportsFn = function(bot) {{ return HLBA.Supports(bot, {quote(d.get('supports', 'ALL'))}); }},\n"
         code += ",\n".join(event + "Fn = function(ctx) {\n" + body + "\n}" for event, body in bodies.items()) + "\n};"
+        if child_definitions:
+            code += "\nHLBA.InheritChannels(" + name + ", [" + ", ".join(sorted(child_definitions)) + "] );"
         self.c.functions.append(code)
         self.definitions[node.id] = name
         return name
@@ -419,7 +488,7 @@ class ActionCompiler:
         for n in self.nodes.values():
             if n.kind == "BA_APPLY" and n.id not in self.owned:
                 c.problems.append(f"'{n.id}': Apply Bot Action must run inside a Bot Action Loop")
-            if n.kind in {"BA_ENTRY", "BA_PARAM", "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT"} | set(actionutilities.KINDS) | set(coordination.CLAIMS):
+            if n.kind in {"BA_ENTRY", "BA_PARAM", "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT", "BA_CHILD"} | set(actionutilities.KINDS) | set(coordination.CLAIMS):
                 c.problems.append(f"'{n.id}': this action primitive belongs inside an editable Bot Action group")
         if any(n.kind == "BA_LOOP" for n in self.nodes.values()):
             c.helper("HLBA_Runtime", Path(__file__).with_name("bot_actions_runtime.nut").read_text(encoding="utf-8") + HELPERS)

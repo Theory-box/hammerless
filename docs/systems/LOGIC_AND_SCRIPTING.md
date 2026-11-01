@@ -248,6 +248,9 @@ Editable, stateless candidate rules can filter and rank bot/nav-area lists; see
 [Candidate rules](../candidate-rules.md). Read-only baked-light samples are
 available inside rules. Event-driven/stateful rule callbacks are not supported.
 For fully editable timing/state utilities, see [Temporal groups](../temporal-groups.md).
+The **Behavior Utilities** menu also provides editable stable bot/nav-area selection
+groups. They refresh the retained candidate's score from each supplied snapshot,
+then apply hold time and improvement margin. See [Stable selection](../stable-selection.md).
 
 **Combine Lists**, **List Intersection**, **Subtract List**, and **Unique Valid Items**
 operate on typed bot or nav-area lists. They remove duplicate handles and invalid
@@ -285,6 +288,10 @@ completion/interruption. A composition conservatively reserves the union of its 
 channels, preventing another action from competing for a channel during a later switch.
 
 Editable **Wait** and **Move to Position (experimental)** templates supply initial actions.
+**Retry with Recovery** accepts Task and Recovery Action sockets. Its editable
+group uses the public **Step Child Action** primitive, whose status, attempt and
+error outputs are available to custom groups too. Children inherit ownership and
+cleanup from their parent; see [Child actions and retry](../child-actions.md).
 Wait completes after its duration. Move observes arrival, stall and timeout and resets its
 owned movement command on Stop. Its stall check is straight-line progress, so a valid detour
 may fail it; engine movement remains experimental and the template targets common infected.

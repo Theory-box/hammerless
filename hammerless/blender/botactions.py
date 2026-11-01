@@ -6,8 +6,9 @@ from .logic import _Block, _rebuild, TREE
 KINDS = [(k, label, "") for k, label in (("SPECIALS", "Special Infected Bots"),
          ("SURVIVORS", "Survivor Bots"), ("COMMONS", "Common Infected"), ("ALL", "All Bots"))]
 TYPES = [(k, label, "") for k, label in (("num", "Number"), ("bool", "Boolean"),
-         ("text", "Text"), ("vec", "Vector"), ("thing", "Entity"),
+         ("text", "Text"), ("vec", "Vector"), ("thing", "Entity"), ("bot", "Bot"),
          ("navarea", "Nav Area"), ("navareas", "Nav Area List"))]
+INPUT_TYPES = TYPES + [("action", "Action", "Compile-time bound child action"), ("candidate_results", "Scored Candidates", "Ranked candidate snapshot")]
 
 
 class _Wire:
@@ -89,7 +90,7 @@ class HL_BAAction(_Block, bpy.types.Node):
     def make_sockets(self):
         if self.group:
             for it in self.group.group_items:
-                if not it.is_output and it.kind in {x[0] for x in TYPES}:
+                if not it.is_output and it.kind in {x[0] for x in INPUT_TYPES}:
                     self.data_in(it.kind, it.uid, it.name)
         self.data_out("action", "action", "Action")
 
@@ -124,7 +125,7 @@ class HL_BAAction(_Block, bpy.types.Node):
         if report.warnings:
             raise ValueError("; ".join(report.warnings))
         for it in self.group.group_items:
-            if it.is_output or it.kind not in {x[0] for x in TYPES}:
+            if it.is_output or it.kind not in {x[0] for x in INPUT_TYPES}:
                 raise ValueError("Action groups expose value inputs only; use Action Lifecycle for Start, Update and Stop")
             targets = flat.ins.get(it.uid, [])
             if targets:
@@ -136,7 +137,7 @@ class HL_BAAction(_Block, bpy.types.Node):
                     flat.links.append(LLink(nid, "value", name, socket, data=True))
         result = super().to_lnode(context)
         defaults = {"num": 0.0, "bool": False, "text": "", "vec": (0, 0, 0), "thing": "",
-                    "navarea": None, "navareas": None}
+                    "navarea": None, "navareas": None, "bot": None, "action": None, "candidate_results": None}
         result.settings["definition"] = {
             "nodes": flat.nodes, "links": flat.links,
             "inputs": [(it.uid, it.kind, defaults[it.kind]) for it in self.group.group_items
@@ -204,7 +205,7 @@ class HL_BAParam(_Inside, bpy.types.Node):
         self.data_out(item.kind if item else self.value_type, "value", item.name if item else "Value")
 
     def parameter(self):
-        return next((it for it in self.id_data.group_items if not it.is_output and it.kind in {x[0] for x in TYPES}
+        return next((it for it in self.id_data.group_items if not it.is_output and it.kind in {x[0] for x in INPUT_TYPES}
                      and self.uid in (it.uid, it.name)), None)
 
     def settings(self):
@@ -472,8 +473,8 @@ class HL_MT_bot_actions(bpy.types.Menu):
 
     def draw(self, context):
         inside = getattr(context.space_data.edit_tree, "is_group", False)
-        from . import actioncomposition
-        for cls in ((INSIDE + actioncomposition.INSIDE) if inside else (OUTSIDE + actioncomposition.OUTSIDE)):
+        from . import actioncomposition, childactions
+        for cls in ((INSIDE + actioncomposition.INSIDE + (childactions.HL_BAChild,)) if inside else (OUTSIDE + actioncomposition.OUTSIDE)):
             if cls == HL_BAParam:
                 continue  # Normal Group Input supplies editable parameters.
             if cls == HL_BAEntry and not getattr(context.space_data.edit_tree, "bot_action", False):
@@ -483,6 +484,7 @@ class HL_MT_bot_actions(bpy.types.Menu):
         if not inside:
             from . import actiontemplates
             actiontemplates.draw_menu(self.layout)
+            self.layout.operator("hammerless.retry_action", text="Retry with Recovery")
             self.layout.separator()
             self.layout.operator("hammerless.bot_action_example", icon="HELP")
             self.layout.operator("hammerless.fear_light_example", icon="HELP")
