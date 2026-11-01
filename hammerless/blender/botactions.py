@@ -220,13 +220,16 @@ class HL_BAParam(_Inside, bpy.types.Node):
 class _State(_Inside):
     state_name: StringProperty(name="State Name", default="state")
     value_type: EnumProperty(name="Type", items=TYPES, update=changed)
+    group_local: BoolProperty(name="This Group Copy", default=False,
+        description="Give each enclosing group copy its own state, still isolated per bot and action. Match this on Get and Set")
 
     def settings(self):
-        return {"name": self.state_name, "type": self.value_type}
+        return {"name": self.state_name, "type": self.value_type, "group_local": self.group_local}
 
     def draw_buttons(self, context, layout):
         layout.prop(self, "state_name")
         layout.prop(self, "value_type")
+        layout.prop(self, "group_local")
 
 
 class HL_BAStateGet(_State, bpy.types.Node):

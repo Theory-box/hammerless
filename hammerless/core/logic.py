@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import vscript as vs
-from . import worldqueries, listtools, coordination
+from . import worldqueries, listtools, coordination, candidates
 from .entities import CRESCENDO, default_keyvalues
 from .gamefiles import sq_text
 from .ir import Brush, Entity, MapIR, Output
@@ -109,12 +109,12 @@ def _base(source: str) -> str:
 
 
 BLOCK_ACTIONS = ("EMERGENCY_KNIFE", "RESET_KEY_VAR", "GIVE_INVENTORY", "FOR_EACH", "SET_VAR", "SCRIPT_CODE", "DIRECTOR_OPTION", "HUD_TEXT", "HUD_HIDE", "OVERRIDE_ANSWER",
-                 "CAMERA", "FIRE_INPUT", "SET_PROP", "TRACE", "DAMAGE", "PUSH", "AIM", "EXPLOSION", "BEAM", "PARTICLE") + worldqueries.KINDS + listtools.KINDS + coordination.KINDS
+                 "CAMERA", "FIRE_INPUT", "SET_PROP", "TRACE", "DAMAGE", "PUSH", "AIM", "EXPLOSION", "BEAM", "PARTICLE") + worldqueries.KINDS + listtools.KINDS + coordination.KINDS + candidates.KINDS
 CLIENT_COMMAND = "hl_clientcommand"     # the map's point_clientcommand: a console command run on one player
 BLOCK_VALUES = ("HUMAN_ID", "INVENTORY_ITEM", "HAS_INVENTORY", "SELF", "GET_VAR", "MAKE_TABLE", "GET_FIELD", "FORMAT_TEXT", "MAKE_VECTOR", "BREAK_VECTOR", "VECTOR_MATH",
-                "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE", "GET_PROP", "SEEN", "FIND_NEAR", "VIEW", "TIME", "BA_FIND")
+                "CHECK", "PICK", "TEXT_CHECK", "SPLIT_TEXT", "SCRIPT_VALUE", "GET_PROP", "SEEN", "FIND_NEAR", "VIEW", "TIME", "BA_FIND", "CAND_AMBIENT", "CAND_RULE")
 TRACE_MASKS = {"SHOTS": 1174421507, "SIGHT": 24705, "WORLD": 16395}   # MASK_SHOT, MASK_VISIBLE, MASK_SOLID_BRUSHONLY
-ACTION_RESULTS = ("EMERGENCY_KNIFE", "FOR_EACH", "SCRIPT_CODE", "TRACE", "BEAM", "PARTICLE") + worldqueries.KINDS + listtools.KINDS + coordination.KINDS   # actions with data outputs
+ACTION_RESULTS = ("EMERGENCY_KNIFE", "FOR_EACH", "SCRIPT_CODE", "TRACE", "BEAM", "PARTICLE") + worldqueries.KINDS + listtools.KINDS + coordination.KINDS + candidates.KINDS   # actions with data outputs
 VALUE_KINDS = ("num", "int", "bool", "text", "vec", "thing", "any")
 
 
@@ -1520,6 +1520,9 @@ class _Compiler:
             body = (f"    local hl_e = {ent};\n"
                     f'    if (hl_e != null && hl_e.IsValid()) DoEntFire("!self", {args}, hl_e);\n@@then@@')
             self.script_action(nid, fn, body, ["then"], take)
+        elif k in candidates.KINDS:
+            body = f'    ::HL_R["{slug}"] <- {candidates.call(self, n)};\n@@next@@'
+            self.script_action(nid, fn, body, ["next"], take)
         elif k in listtools.KINDS:
             body = f'    ::HL_R["{slug}"] <- {listtools.call(self, n)};\n@@next@@'
             self.script_action(nid, fn, body, ["next"], take)
@@ -1607,6 +1610,10 @@ class _Compiler:
         if k == "BA_FIND":
             from .botactions import find_expression
             return find_expression(self, n)
+        if k in candidates.KINDS:
+            return candidates.stored_output(n, sock, slug)
+        if k == "CAND_AMBIENT":
+            return candidates.ambient_expression(self,n,sock)
         if k in listtools.KINDS:
             return listtools.stored_output(n, sock, slug)
         if k == "TIME":

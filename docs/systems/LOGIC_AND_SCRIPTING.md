@@ -244,7 +244,20 @@ Inside editable action groups, **Add > Bot Actions** also provides:
 
 Utility state is private to the action instance and is discarded when that action ends.
 These outputs report observations, not native AI completion or pathfinding guarantees.
-Arbitrary predicate/scoring list groups remain future work.
+Editable, stateless candidate rules can filter and rank bot/nav-area lists; see
+[Candidate rules](../candidate-rules.md). Read-only baked-light samples are
+available inside rules. Event-driven/stateful rule callbacks are not supported.
+For fully editable timing/state utilities, see [Temporal groups](../temporal-groups.md).
+
+**Combine Lists**, **List Intersection**, **Subtract List**, and **Unique Valid Items**
+operate on typed bot or nav-area lists. They remove duplicate handles and invalid
+items, preserving first appearance in A (then B for Combine). These are captured
+Run/Next results, usable in ordinary graphs and bot action callbacks. They examine
+at most 256 entries per input and return at most 128 results; Max Results can lower
+that cap. Count is the returned count. Truncated reports either unexamined input
+or omitted matching results. In particular, a truncated B means Intersection or
+Subtract cannot know about membership beyond B's examined prefix. A missing list
+is treated as empty. Inputs are not modified.
 
 ### Composing actions
 

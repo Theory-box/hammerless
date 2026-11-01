@@ -44,3 +44,30 @@ HLLT.Query <- function(items, kind, mode, origin, radius, limit, index) {
     r.found = mode == "COUNT" || mode == "FILTER" ? r.count > 0 : r.item != null;
     return r;
 };
+
+// Set operations preserve handle identity and first-seen order, never mutate inputs.
+// Membership covers only the examined prefix; Truncated explicitly reports that limit.
+HLLT.SetQuery <- function(items, other, kind, mode, limit) {
+    local r = {found=false, count=0, item=null, items=[], position=Vector(0,0,0), truncated=false};
+    if (kind != "bots" && kind != "navareas") return r;
+    if (mode != "UNION" && mode != "INTERSECTION" && mode != "DIFFERENCE" && mode != "UNIQUE") return r;
+    if (typeof items != "array") items=[];
+    if (typeof other != "array" || mode == "UNIQUE") other=[];
+    local na=items.len()<256 ? items.len() : 256;
+    local nb=other.len()<256 ? other.len() : 256;
+    r.truncated=items.len()>na || other.len()>nb;
+    limit=Number(limit,0,128).tointeger();
+    local bset={}, seen={};
+    for(local i=0;i<nb;++i) if(Position(other[i],kind)!=null) bset[other[i]] <- true;
+    local n=mode=="UNION" ? na+nb : na;
+    for(local i=0;i<n;++i) {
+        local item=i<na ? items[i] : other[i-na];
+        if(Position(item,kind)==null || item in seen) continue;
+        seen[item] <- true;
+        if(mode=="INTERSECTION" && !(item in bset)) continue;
+        if(mode=="DIFFERENCE" && item in bset) continue;
+        if(r.items.len()<limit) r.items.append(item); else r.truncated=true;
+    }
+    r.count=r.items.len(); r.found=r.count>0;
+    return r;
+};

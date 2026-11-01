@@ -64,7 +64,45 @@ class HL_ListFilter(_ListQuery, bpy.types.Node):
     bl_idname, bl_label, kind = "HL_ListFilter", "Filter Valid Items in Radius", "LIST_FILTER"
 
 
-NODES = (HL_ListCount, HL_ListItem, HL_ListClosest, HL_ListRandom, HL_ListFilter)
+class _ListSetQuery(_ListQuery):
+    def make_sockets(self):
+        self.ev_in("run", "Run"); self.ev_out("next", "Next")
+        self.data_in(self.list_type, "items", "Items" if self.kind == "LIST_UNIQUE" else "List A")
+        if self.kind != "LIST_UNIQUE":
+            self.data_in(self.list_type, "other", "List B")
+        self.data_in("num", "limit", "Max Results").value = 128
+        self.data_out(self.list_type, "items", "Items")
+        self.data_out("num", "count", "Count")
+        self.data_out("bool", "found", "Found")
+        self.data_out("bool", "truncated", "Truncated")
+
+    def draw_buttons(self, context, layout):
+        layout.prop(self, "list_type", text="")
+        layout.label(text="First 256 per list; up to 128 results")
+
+
+class HL_ListUnion(_ListSetQuery, bpy.types.Node):
+    """Combine valid items from A then B, keeping each handle once in first-seen order. Examines at most 256 entries per list and returns at most 128. Run captures a snapshot; Truncated means input or matching results were omitted."""
+    bl_idname, bl_label, kind = "HL_ListUnion", "Combine Lists", "LIST_UNION"
+
+
+class HL_ListIntersection(_ListSetQuery, bpy.types.Node):
+    """Keep valid items present in both lists, once each in A's order. Only the first 256 entries of each list are examined; matches later in B are unknown when Truncated is true. At most 128 results."""
+    bl_idname, bl_label, kind = "HL_ListIntersection", "List Intersection", "LIST_INTERSECTION"
+
+
+class HL_ListDifference(_ListSetQuery, bpy.types.Node):
+    """Keep valid items in A that are absent from the examined part of B, once each in A's order. Truncated means the answer may be incomplete: entries beyond B's first 256 are not checked. At most 128 results."""
+    bl_idname, bl_label, kind = "HL_ListDifference", "Subtract List", "LIST_DIFFERENCE"
+
+
+class HL_ListUnique(_ListSetQuery, bpy.types.Node):
+    """Remove duplicate, dead or invalid handles, preserving first-seen order. Examines the first 256 entries and returns up to Max Results (capped at 128). Run refreshes the snapshot."""
+    bl_idname, bl_label, kind = "HL_ListUnique", "Unique Valid Items", "LIST_UNIQUE"
+
+
+NODES = (HL_ListCount, HL_ListItem, HL_ListClosest, HL_ListRandom, HL_ListFilter,
+         HL_ListUnion, HL_ListIntersection, HL_ListDifference, HL_ListUnique)
 
 
 class HL_MT_list_tools(bpy.types.Menu):

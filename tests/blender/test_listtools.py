@@ -15,6 +15,10 @@ for cls in listtools.NODES:
     assert next(s for s in node.inputs if s.identifier=='items').bl_idname=='HL_BotListSocket'
     node.list_type='navareas'
     assert next(s for s in node.inputs if s.identifier=='items').bl_idname=='HL_NavAreasSocket'
-    if cls.kind not in ('LIST_COUNT','LIST_FILTER'):
+    if cls.kind in ('LIST_UNION','LIST_INTERSECTION','LIST_DIFFERENCE','LIST_UNIQUE'):
+        assert next(s for s in node.outputs if s.identifier=='items').bl_idname=='HL_NavAreasSocket'
+        if cls.kind != 'LIST_UNIQUE':
+            assert next(s for s in node.inputs if s.identifier=='other').bl_idname=='HL_NavAreasSocket'
+    elif cls.kind not in ('LIST_COUNT','LIST_FILTER'):
         assert next(s for s in node.outputs if s.identifier=='item').bl_idname=='HL_NavAreaSocket'
 print('LIST_TOOLS_BLENDER_OK')

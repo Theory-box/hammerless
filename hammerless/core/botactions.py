@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 
 from . import vscript as vs
-from . import worldqueries, listtools, actionutilities, coordination
+from . import worldqueries, listtools, actionutilities, coordination, candidates
 
 
 class BotActionProblem(str):
@@ -18,7 +18,7 @@ class BotActionProblem(str):
 KINDS = {"COMMONS", "SPECIALS", "SURVIVORS", "ALL"}
 PURE = {"VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
         "BREAK_VECTOR", "VECTOR_MATH", "CHECK", "PICK", "TEXT_CHECK", "FORMAT_TEXT",
-        "GET_FIELD", "GET_PROP", "SEEN", "VIEW", "SELF", "TIME", "BA_FIND"}
+        "CAND_AMBIENT", "GET_FIELD", "GET_PROP", "SEEN", "VIEW", "SELF", "TIME", "BA_FIND"}
 BA = {"BA_LOOP", "BA_FIND", "BA_APPLY", "BA_ACTION", "BA_ENTRY", "BA_PARAM",
       "BA_OVERRIDE", "BA_STATE_GET", "BA_STATE_SET", "BA_COMMAND", "BA_RESULT", "BA_CHOOSE", "BA_PRIORITY", "BA_SEQUENCE"} | set(actionutilities.KINDS) | set(coordination.CLAIMS)
 
@@ -147,12 +147,12 @@ class ActionCompiler:
                 if n.id not in self.query_path:
                     self.fail("Run the coordination node earlier on this same synchronous path before reading it")
                 return coordination.output(n, socket, "HL_Q_" + c.key_of(n.id))
-            if n.kind in listtools.KINDS or n.kind in actionutilities.KINDS:
+            if n.kind in candidates.KINDS or n.kind in listtools.KINDS or n.kind in actionutilities.KINDS:
                 if n.kind in actionutilities.KINDS and not self.lifecycle:
                     self.fail("Action utilities belong inside an action lifecycle")
                 if n.id not in self.query_path:
                     self.fail(f"'{n.id}': run the node earlier on this same synchronous path before reading it")
-                module = listtools if n.kind in listtools.KINDS else actionutilities
+                module = candidates if n.kind in candidates.KINDS else (listtools if n.kind in listtools.KINDS else actionutilities)
                 return module.output(n, socket, "HL_Q_" + c.key_of(n.id))
             if n.kind in worldqueries.KINDS:
                 if n.id not in self.query_path:
@@ -254,6 +254,8 @@ class ActionCompiler:
                 if k == "BA_CLAIM" and getattr(self, "lifecycle_event", None) == "stop":
                     self.fail("Cannot acquire a destination claim during Stop cleanup")
                 out.append(f"local HL_Q_{self.c.key_of(n.id)} = {coordination.call(self.c, n)};")
+            elif k in candidates.KINDS:
+                out.append(f"local HL_Q_{self.c.key_of(n.id)} = {candidates.call(self.c, n)};")
             elif k in listtools.KINDS:
                 out.append(f"local HL_Q_{self.c.key_of(n.id)} = {listtools.call(self.c, n)};")
             elif k in actionutilities.KINDS and self.lifecycle:

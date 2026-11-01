@@ -1,7 +1,8 @@
 """Captured, bounded operations on typed bot and nav-area lists."""
 from pathlib import Path
 
-KINDS = ("LIST_COUNT", "LIST_ITEM", "LIST_CLOSEST", "LIST_RANDOM", "LIST_FILTER")
+SET_KINDS = ("LIST_UNION", "LIST_INTERSECTION", "LIST_DIFFERENCE", "LIST_UNIQUE")
+KINDS = ("LIST_COUNT", "LIST_ITEM", "LIST_CLOSEST", "LIST_RANDOM", "LIST_FILTER") + SET_KINDS
 FIELDS = {"found": "false", "count": "0", "item": "null", "items": "[]",
           "position": "Vector(0,0,0)", "truncated": "false"}
 
@@ -12,6 +13,10 @@ def call(c, n):
         raise ValueError("List type must be Bots or Nav Areas")
     c.helper("HLLT", Path(__file__).with_name("list_tools_runtime.nut").read_text(encoding="utf-8"))
     val = lambda key, typ: c.typed_in(n, key, typ)
+    if n.kind in SET_KINDS:
+        other = val("other", "any") if n.kind != "LIST_UNIQUE" else "[]"
+        return (f'HLLT.SetQuery({val("items", "any")}, {other}, "{kind}", '
+                f'"{n.kind.removeprefix("LIST_")}", {val("limit", "num")})')
     args = [val("items", "any"), '"' + kind + '"', '"' + n.kind.removeprefix("LIST_") + '"']
     args += [val("origin", "vec") if n.kind in ("LIST_CLOSEST", "LIST_FILTER") else "Vector(0,0,0)",
              val("radius", "num") if n.kind == "LIST_FILTER" else "0",

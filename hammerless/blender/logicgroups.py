@@ -27,12 +27,13 @@ ITEM_KINDS = [("event", "Event", "An event wire (orange)"), ("num", "Number", ""
               ("text", "Text", ""), ("vec", "Vector", ""), ("thing", "Entity / Player", ""),
               ("any", "Anything", "Any value"), ("bot", "Bot", "Verified bot entity"),
               ("bots", "Bot List", "Bot selection"), ("action", "Bot Action", "Editable action definition"),
+              ("candidate_rule", "Candidate Rule", "Editable scoring rule"), ("candidate_results", "Ranked Candidates", "Candidate evaluation snapshot"),
               ("navarea", "Nav Area", "A navigation area, not an entity"), ("navareas", "Nav Area List", "Navigation areas")]
 KIND_OF_SOCKET = {"HL_EventSocket": "event", "HL_FloatSocket": "num", "HL_IntSocket": "num", "HL_BoolSocket": "bool",
                   "HL_TextSocket": "text", "HL_VectorSocket": "vec", "HL_ThingSocket": "thing", "HL_AnySocket": "any"}
 GROUP_COLOR = (0.20, 0.30, 0.22)
 KIND_OF_SOCKET.update(HL_BotSocket="bot", HL_BotListSocket="bots", HL_BotActionSocket="action")
-KIND_OF_SOCKET.update(HL_NavAreaSocket="navarea", HL_NavAreasSocket="navareas")
+KIND_OF_SOCKET.update(HL_NavAreaSocket="navarea", HL_NavAreasSocket="navareas", HL_CandidateRuleSocket="candidate_rule", HL_CandidateResultsSocket="candidate_results")
 
 
 def _rename_sockets(self, context):
@@ -73,7 +74,7 @@ def _users_and_io(tree):
     out = [n for n in tree.nodes if n.bl_idname in ("HL_NodeGroupInput", "HL_NodeGroupOutput")]
     for t in bpy.data.node_groups:
         if t.bl_idname == "HL_LogicTree":
-            out += [n for n in t.nodes if n.bl_idname in ("HL_NodeGroup", "HL_BAAction") and n.group == tree]
+            out += [n for n in t.nodes if n.bl_idname in ("HL_NodeGroup", "HL_BAAction", "HL_CandidateRule") and n.group == tree]
     return out
 
 
@@ -111,7 +112,7 @@ def _ancestors_ok(tree, group) -> bool:
 
 
 def _poll_group(self, tree):
-    return is_group(tree) and not getattr(tree, "bot_action", False) and _ancestors_ok(self.id_data, tree)
+    return is_group(tree) and not getattr(tree, "bot_action", False) and not tree.get("hl_candidate_rule") and _ancestors_ok(self.id_data, tree)
 
 
 def _group_changed(self, context):
@@ -227,6 +228,8 @@ def flatten(context, tree, report, prefix: str = "", stack: tuple = (), checked:
     by_id = {}
     for n in nodes.values():
         if n.kind == "GROUP":
+            if n.group is not None and n.group.get("hl_candidate_rule"):
+                raise ValueError("Use a Candidate Rule Group node to reference a candidate rule")
             if n.group is not None and getattr(n.group, "bot_action", False):
                 raise ValueError("Use a Bot Action Group node to reference an action asset")
             if n.group is None:
@@ -238,6 +241,8 @@ def flatten(context, tree, report, prefix: str = "", stack: tuple = (), checked:
         elif n.kind not in ("GROUP_IN", "GROUP_OUT"):
             ln = n.to_lnode(context)
             ln.id = prefix + ln.id
+            if ln.kind in ("BA_STATE_GET", "BA_STATE_SET") and ln.settings.get("group_local"):
+                ln.settings = dict(ln.settings, name=prefix + (ln.settings.get("name") or "state"))
             if ln.kind in ("SET_VAR", "GET_VAR") and ln.settings.get("scope") == "GROUP":
                 ln.settings = dict(ln.settings, name=prefix + (ln.settings.get("name") or "value"), scope="MAP")
             elif ln.kind in ("SET_VAR", "GET_VAR") and ln.settings.get("scope") == "PLAYER" and self_isolated():
@@ -354,7 +359,7 @@ def used_groups() -> set:
     while todo:
         t = todo.pop()
         for n in t.nodes:
-            g = getattr(n, "group", None) if n.bl_idname in ("HL_NodeGroup", "HL_BAAction") else None
+            g = getattr(n, "group", None) if n.bl_idname in ("HL_NodeGroup", "HL_BAAction", "HL_CandidateRule") else None
             if g is not None and g.name not in used:
                 used.add(g.name)
                 todo.append(g)
@@ -430,7 +435,7 @@ class HL_OT_logic_group_edit(_InLogic, bpy.types.Operator):
         space = context.space_data
         tree = space.edit_tree
         node = tree.nodes.get(self.node_name) if self.node_name else tree.nodes.active
-        if node is not None and node.bl_idname in ("HL_NodeGroup", "HL_BAAction") and node.group is not None and (
+        if node is not None and node.bl_idname in ("HL_NodeGroup", "HL_BAAction", "HL_CandidateRule") and node.group is not None and (
                 self.node_name or node.select):
             space.path.append(node.group, node=node)
             return {"FINISHED"}
