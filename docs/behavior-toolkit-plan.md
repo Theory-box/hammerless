@@ -103,8 +103,17 @@ Public sockets expose waiting, allocated entries, remaining credits, and errors.
 See [shared work budgets](work-budgets.md) for wiring and fairness semantics.
 
 This limits candidate entries per scheduler cycle, not frame time or all game
-AI work. Shared query caches and automatic refresh policies remain future work.
+AI work. Automatic refresh policies remain future work.
 The backlog below includes both completed and future capabilities.
+
+## Shared query caching
+
+Exact nearby-nav and baked ambient queries can now share bounded caches with
+per-reader maximum age, forced refresh, explicit invalidation and round resets.
+Cache hit, sample age and error outputs remain available to user graphs.
+The editable Shared Shade Scan example combines caches with shared work grants
+and candidate rules without taking control of bot movement. See
+[query caching](query-caching.md) for limitations and example setup.
 
 ## Candidate backlog
 

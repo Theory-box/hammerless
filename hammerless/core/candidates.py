@@ -1,11 +1,11 @@
 """Bounded candidate evaluation with user-authored, stateless value groups."""
 from pathlib import Path
-from . import vscript as vs, worldqueries
+from . import vscript as vs, worldqueries, querycache
 
 KINDS = ("CAND_EVALUATE", "CAND_ITEM", "CAND_FIND", "CAND_STEP")
 PURE = {"VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
         "BREAK_VECTOR", "VECTOR_MATH", "CHECK", "PICK", "TEXT_CHECK", "FORMAT_TEXT",
-        "GET_FIELD", "GET_PROP", "CAND_PARAM", "CAND_AMBIENT"}
+        "GET_FIELD", "GET_PROP", "CAND_PARAM", "CAND_AMBIENT", "CAND_CACHED_AMBIENT"}
 FIELDS = {"found": "false", "count": "0", "examined": "0", "rejected": "0", "errors": "0",
           "truncated": "false", "item": "null", "items": "[]", "score": "0.0", "index": "-1",
           "rank": "-1", "position": "Vector(0,0,0)", "results": "null", "error": '""'}
@@ -73,12 +73,13 @@ def compile_rule(c, node, expected):
             value = {"candidate": "candidate", "position": "position", "index": "index"}.get(uid)
             if value is None:
                 value = "params[" + vs.literal("text", uid) + "]"
-        elif n.kind == "CAND_AMBIENT":
+        elif n.kind in {"CAND_AMBIENT", "CAND_CACHED_AMBIENT"}:
+            cached = n.kind == "CAND_CACHED_AMBIENT"
             if nid not in ambient:
                 old = n.kind
                 try:
-                    n.kind = "WQ_AMBIENT"
-                    value = worldqueries.call(sub, n)
+                    n.kind = "QC_AMBIENT" if cached else "WQ_AMBIENT"
+                    value = querycache.call(sub, n) if cached else worldqueries.call(sub, n)
                 finally:
                     n.kind = old
                 index = len(ambient)
@@ -86,7 +87,9 @@ def compile_rule(c, node, expected):
                 body.append(f"{local} <- function() {{ if (!({index} in samples)) "
                             f"samples[{index}] <- {value}; return samples[{index}]; }};")
                 ambient[nid] = local
-            if socket not in {"available", "brightness", "color", "fallback"}:
+            allowed = {"available", "brightness", "color", "fallback"}
+            if cached: allowed |= {"cache_hit", "refreshed", "age", "error"}
+            if socket not in allowed:
                 raise ValueError("Unknown ambient-light output")
             value = ambient[nid] + "()." + socket
         else:

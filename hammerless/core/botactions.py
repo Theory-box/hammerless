@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 
 from . import vscript as vs
-from . import worldqueries, listtools, actionutilities, coordination, candidates, routes, diagnostics, workbudgets
+from . import worldqueries, listtools, actionutilities, coordination, candidates, routes, diagnostics, workbudgets, querycache
 
 
 class BotActionProblem(str):
@@ -16,7 +16,7 @@ class BotActionProblem(str):
 
 
 KINDS = {"COMMONS", "SPECIALS", "SURVIVORS", "ALL"}
-PURE = {"WB_POOL", "ROUTE_DATA", "VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
+PURE = {"QC_POOL", "WB_POOL", "ROUTE_DATA", "VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
         "BREAK_VECTOR", "VECTOR_MATH", "CHECK", "PICK", "TEXT_CHECK", "FORMAT_TEXT",
         "CAND_AMBIENT", "GET_FIELD", "GET_PROP", "SEEN", "VIEW", "SELF", "TIME", "BA_FIND"}
 BA = {"BA_LOOP", "BA_FIND", "BA_APPLY", "BA_ACTION", "BA_ENTRY", "BA_PARAM",
@@ -154,6 +154,10 @@ class ActionCompiler:
                 key = quote(n.settings.get("name", "state"))
                 fallback = c.typed_in(n, "default", n.settings.get("type", "num"))
                 return f"(({key} in ctx.state) ? ctx.state[{key}] : {fallback})"
+            if n.kind in querycache.KINDS:
+                if n.id not in self.query_path:
+                    self.fail("Run the cached query earlier on this same synchronous path before reading it")
+                return querycache.output(n, socket, "HL_Q_" + c.key_of(n.id))
             if n.kind in workbudgets.ACTION:
                 if not self.lifecycle:
                     self.fail("Work grants belong inside an action lifecycle")
@@ -290,6 +294,8 @@ class ActionCompiler:
                     self.fail("Action Result must be Success or Failed")
                 out.append(f"ctx.status = {quote(result)}; return;")
                 continue
+            elif k in querycache.KINDS:
+                out.append(f"local HL_Q_{self.c.key_of(n.id)} = {querycache.call(self.c, n)};")
             elif k in workbudgets.ACTION:
                 if not self.lifecycle:
                     self.fail("Work grants belong inside an action lifecycle")

@@ -67,8 +67,8 @@ class HL_CandidateRule(_Block, bpy.types.Node):
         outs={it.uid:it.kind for it in self.group.group_items if it.is_output}
         if any(ins.get(uid)!=typ for uid,typ in required.items()) or outs!={"keep":"bool","score":"num"}:
             raise ValueError("Rule interface requires Candidate, Position, Index inputs and Keep/Score outputs")
-        if any(typ not in {"num","bool","vec","text","bot","navarea","thing"} for typ in ins.values()):
-            raise ValueError("Rule parameters must be scalar values, positions or handles")
+        if any(typ not in {"num","bool","vec","text","bot","navarea","thing","query_cache"} for typ in ins.values()):
+            raise ValueError("Rule parameters must be scalar values, positions, handles or a Query Cache")
         outputs={}
         for uid,typ in ins.items():
             nid="__candidate_parameter_"+uid
