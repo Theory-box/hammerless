@@ -2,13 +2,15 @@
 from pathlib import Path
 from . import vscript as vs, worldqueries
 
-KINDS = ("CAND_EVALUATE", "CAND_ITEM", "CAND_FIND")
+KINDS = ("CAND_EVALUATE", "CAND_ITEM", "CAND_FIND", "CAND_STEP")
 PURE = {"VALUE", "EXPOSED_VALUE", "MATH", "COMPARE", "BOOL_MATH", "MAKE_VECTOR",
         "BREAK_VECTOR", "VECTOR_MATH", "CHECK", "PICK", "TEXT_CHECK", "FORMAT_TEXT",
         "GET_FIELD", "GET_PROP", "CAND_PARAM", "CAND_AMBIENT"}
 FIELDS = {"found": "false", "count": "0", "examined": "0", "rejected": "0", "errors": "0",
           "truncated": "false", "item": "null", "items": "[]", "score": "0.0", "index": "-1",
           "rank": "-1", "position": "Vector(0,0,0)", "results": "null", "error": '""'}
+STEP_FIELDS = {"status":'"IDLE"', "busy":"false", "complete":"false", "cancelled":"false",
+               "failed":"false", "processed":"0", "total":"0", "progress":"0.0", "age":"0.0"}
 
 
 def compile_rule(c, node, expected):
@@ -111,7 +113,7 @@ def compile_rule(c, node, expected):
     return fn, "{" + ",".join(params) + "}"
 
 
-def call(c, n):
+def call(c, n, context=None):
     c.helper("HLLT", Path(__file__).with_name("list_tools_runtime.nut").read_text())
     c.helper("HLCE", Path(__file__).with_name("candidate_runtime.nut").read_text())
     kind = n.settings.get("list_type", "bots")
@@ -126,17 +128,26 @@ def call(c, n):
     if rule is None or rule.kind != "CAND_RULE" or src[1] != "rule":
         raise ValueError("Evaluate Candidates needs a Candidate Rule group connected to Rule")
     fn, params = compile_rule(c, rule, kind)
+    if n.kind == "CAND_STEP":
+        if context is None:
+            raise ValueError("Evaluate Candidates in Steps belongs inside an action lifecycle")
+        # Keep input evaluation inside the factory: resumed/disabled jobs do not
+        # re-read their input list, captured rule parameters or result limit.
+        factory = f"function() {{ return {{items={c.typed_in(n,'items','any')},kind={vs.literal('text',kind)},rule={fn},params={params},limit={c.typed_in(n,'limit','num')}}}; }}"
+        return f"HLCE.Step({context}, {vs.literal('text',n.id)}, {factory}, {c.typed_in(n,'budget','num')}, {c.typed_in(n,'reset','bool')}, {c.typed_in(n,'enabled','bool')})"
     return f"HLCE.Evaluate({c.typed_in(n,'items','any')}, {vs.literal('text',kind)}, {fn}, {params}, {c.typed_in(n,'limit','num')})"
 
 
 def output(n, socket, table):
-    if socket not in FIELDS:
+    if socket not in FIELDS and not (n.kind == "CAND_STEP" and socket in STEP_FIELDS):
         raise ValueError("Unknown candidate result output")
+    if n.kind == "CAND_STEP": return table + "." + socket
     return table if socket == "results" else table + "." + socket
 
 
 def stored_output(n, socket, key):
-    return f'(("{key}" in ::HL_R) ? {output(n,socket,"::HL_R[" + chr(34) + key + chr(34) + "]")} : {FIELDS[socket]})'
+    defaults = dict(FIELDS, **STEP_FIELDS) if n.kind == "CAND_STEP" else FIELDS
+    return f'(("{key}" in ::HL_R) ? {output(n,socket,"::HL_R[" + chr(34) + key + chr(34) + "]")} : {defaults[socket]})'
 
 
 def ambient_expression(c, n, socket):

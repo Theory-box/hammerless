@@ -128,6 +128,21 @@ class HL_RankedCandidate(_Typed,bpy.types.Node):
         self.result_sockets()
 
 
+class HL_StepCandidates(_Typed,bpy.types.Node):
+    """Inside an action, examine up to Budget entries per Start/Update call (default 8). Invalid entries consume budget too. First call in an update wins; fanout cannot advance twice. Items, rule parameters and Max Results are captured when starting or Reset=true; hold Reset=false to continue. Disabled cancels. Completed results persist until reset; no partial ranked results are exposed. World values are sampled over several updates, not one instant. This is an entry-count budget per bot, not a frame-time or global limit; finishing also sorts up to 256 rows. At most 32 jobs per action."""
+    bl_idname,bl_label,kind="HL_StepCandidates","Evaluate Candidates in Steps","CAND_STEP"
+    def make_sockets(self):
+        HL_EvaluateCandidates.make_sockets(self)
+        self.data_in("bool","enabled","Enabled").value=True
+        self.data_in("bool","reset","Reset").value=False
+        self.data_in("num","budget","Entries Per Update").value=8
+        self.data_out("text","status","Status")
+        for key,label in (("busy","Busy"),("complete","Complete"),("cancelled","Cancelled"),("failed","Job Failed")):
+            self.data_out("bool",key,label)
+        for key,label in (("processed","Processed"),("total","Total"),("progress","Progress (0–1)"),("age","Age (s)")):
+            self.data_out("num",key,label)
+
+
 class HL_FindRankedCandidate(_Typed,bpy.types.Node):
     """Find a handle in an evaluated snapshot. Found means present and still valid, not that an absent item is invalid. Truncated warns that omitted items may still exist. The first/highest-ranked duplicate wins. Scores and positions are sampled, not recomputed."""
     bl_idname,bl_label,kind="HL_FindRankedCandidate","Find Ranked Candidate","CAND_FIND"
@@ -180,7 +195,7 @@ class HL_OT_candidate_rule_new(bpy.types.Operator):
         return {"FINISHED"}
 
 
-NODES=(HL_CandidateRule,HL_EvaluateCandidates,HL_RankedCandidate,HL_FindRankedCandidate,HL_CandidateAmbient)
+NODES=(HL_CandidateRule,HL_EvaluateCandidates,HL_StepCandidates,HL_RankedCandidate,HL_FindRankedCandidate,HL_CandidateAmbient)
 class HL_MT_candidates(bpy.types.Menu):
     bl_idname,bl_label="HL_MT_candidates","Candidate Rules"
     def draw(self,context):

@@ -1531,6 +1531,10 @@ class _Compiler:
             else:
                 self.script_action(nid, fn, body + '@@next@@', ["next"], take)
         elif k in candidates.KINDS:
+            if k == "CAND_STEP":
+                from .botactions import BotActionProblem
+                self.problems.append(BotActionProblem("Evaluate Candidates in Steps belongs inside an action lifecycle"))
+                return
             body = f'    ::HL_R["{slug}"] <- {candidates.call(self, n)};\n@@next@@'
             self.script_action(nid, fn, body, ["next"], take)
         elif k in listtools.KINDS:

@@ -232,6 +232,7 @@
         if ("children" in ctx) foreach(slot in ctx.children) if(slot.instance!=null) Release(slot.instance);
         if ("HLCO" in getroottable()) ::HLCO.Cleanup(ctx);
         if ("_diagnostics" in ctx) delete ctx._diagnostics;
+        if ("_candidateJobs" in ctx) delete ctx._candidateJobs;
         try { if (ctx.bot == null || !ctx.bot.IsValid()) return; } catch(e) { return; }
         local alive=Valid(ctx.bot);
         if (alive) {
@@ -240,6 +241,7 @@
         }
         if ("HLCO" in getroottable()) ::HLCO.Cleanup(ctx);
         if ("_diagnostics" in ctx) delete ctx._diagnostics;
+        if ("_candidateJobs" in ctx) delete ctx._candidateJobs;
         for (local i=ctx.overrides.len()-1; i>=0; --i) {
             local o=ctx.overrides[i];
             if (!alive && !("restoreOnDeath" in o && o.restoreOnDeath)) continue;

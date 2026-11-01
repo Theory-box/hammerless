@@ -301,7 +301,12 @@ class ActionCompiler:
                     self.fail("Cannot acquire a destination claim during Stop cleanup")
                 out.append(f"local HL_Q_{self.c.key_of(n.id)} = {coordination.call(self.c, n)};")
             elif k in candidates.KINDS:
-                out.append(f"local HL_Q_{self.c.key_of(n.id)} = {candidates.call(self.c, n)};")
+                if k == "CAND_STEP":
+                    if not self.lifecycle:
+                        self.fail("Evaluate Candidates in Steps belongs inside an action lifecycle")
+                    if getattr(self, "lifecycle_event", None) == "stop":
+                        self.fail("Cannot step candidate evaluation during Stop cleanup")
+                out.append(f"local HL_Q_{self.c.key_of(n.id)} = {candidates.call(self.c, n, context='ctx' if self.lifecycle else None)};")
             elif k in listtools.KINDS:
                 out.append(f"local HL_Q_{self.c.key_of(n.id)} = {listtools.call(self.c, n)};")
             elif k in actionutilities.KINDS and self.lifecycle:

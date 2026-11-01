@@ -83,8 +83,20 @@ counts, and batch timing samples. See [performance methodology](behavior-perform
 
 This establishes a repeatable script-cost baseline, not live game frame times.
 Native engine queries and movement costs still need separate measurement.
-Scheduling and caching are not implemented by these batches. The backlog below
-includes both completed and future capabilities.
+Action conflict checks now use a per-bot index, preserving ownership and ordered
+diagnostics while eliminating cross-bot comparisons.
+
+## Incremental candidate evaluation
+
+Evaluate Candidates in Steps is a public action-lifecycle primitive. It captures
+inputs once and processes a configurable number of entries per action update,
+with progress, age, status, cancellation/reset, and completed ranked results.
+See [stepped candidate evaluation](stepped-candidate-evaluation.md). The existing
+immediate evaluator is unchanged.
+
+This is per-action entry budgeting, not fair global scheduling. Global budgeting,
+shared query caches, and automatic refresh policies remain future work. The
+backlog below includes both completed and future capabilities.
 
 ## Candidate backlog
 
