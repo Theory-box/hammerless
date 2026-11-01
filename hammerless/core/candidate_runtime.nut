@@ -95,10 +95,10 @@ HLCE.Find <- function(result,item,kind) {
 
 HLCE.Job <- function(serial,now,status) {
     return {serial=serial,start=now,status=status,inputs=[],params=null,rule=null,
-            kind="",limit=0,total=0,processed=0,result=Empty()};
+            kind="",limit=0,total=0,processed=0,result=Empty(),waiting=false,pendingCapture=true};
 };
 HLCE.JobError <- function(job,message) {
-    job.status="ERROR";job.inputs=[];job.params=null;job.rule=null;
+    job.status="ERROR";job.inputs=[];job.params=null;job.rule=null;job.waiting=false;job.pendingCapture=false;
     job.result=Empty();job.result.errors=1;job.result.error=message;
 };
 HLCE.CopyResults <- function(source) {
@@ -121,12 +121,13 @@ HLCE.JobSnapshot <- function(job,now) {
     r.results <- complete?CopyResults(job.result):null;
     r.status <- job.status;r.busy <- job.status=="RUNNING";r.complete <- complete;
     r.cancelled <- job.status=="CANCELLED";r.failed <- job.status=="ERROR";
+    r.waiting <- job.waiting;
     r.processed <- job.processed;r.total <- job.total;
     r.progress <- job.total>0?job.processed.tofloat()/job.total:(complete?1.0:0.0);
     r.age <- now>=job.start?now-job.start:0.0;
     return r;
 };
-HLCE.Step <- function(ctx,key,capture,budget,reset,enabled) {
+HLCE.Step <- function(ctx,key,capture,budget,reset,enabled,grant=null,useGrant=false) {
     local now=Time(),serial=ctx._stepSerial;
     if("_releasing" in ctx && ctx._releasing) {
         local denied=Job(serial,now,"ERROR");JobError(denied,"Cannot step candidates during action cleanup");
@@ -155,6 +156,17 @@ HLCE.Step <- function(ctx,key,capture,budget,reset,enabled) {
     }
     if(job==null || reset || job.status=="CANCELLED") {
         job=Job(serial,now,"RUNNING");store[key] <- job;
+    }
+    job.serial=serial;job.waiting=false;
+    if(useGrant) {
+        if(!("HLWB" in getroottable())) {
+            JobError(job,"Shared work grant runtime is unavailable");return JobSnapshot(job,now);
+        }
+        local credit=HLWB.Inspect(ctx,grant);
+        if(!credit.valid){JobError(job,credit.error);return JobSnapshot(job,now);}
+        if(credit.remaining==0){job.waiting=true;return JobSnapshot(job,now);}
+    }
+    if(job.pendingCapture) {
         try {
             local source=capture();
             if(typeof source.items!="array")throw "Items must be a Bot/Nav Area list";
@@ -165,14 +177,20 @@ HLCE.Step <- function(ctx,key,capture,budget,reset,enabled) {
             job.total=source.items.len()<256?source.items.len():256;
             for(local i=0;i<job.total;++i)job.inputs.append(source.items[i]);
             job.result.kind=job.kind;job.result.truncated=source.items.len()>256;
+            job.pendingCapture=false;
         } catch(e) {
             local message=e.tostring();JobError(job,message.len()>256?message.slice(0,256):message);
             return JobSnapshot(job,now);
         }
     }
-    job.serial=serial;
     if(job.status!="RUNNING")return JobSnapshot(job,now);
     budget=budget<1?1:(budget>256?256:budget.tointeger());
+    if(useGrant) {
+        local wanted=job.total-job.processed;if(wanted>budget)wanted=budget;
+        local credit=HLWB.Take(ctx,grant,wanted);
+        if(!credit.valid){JobError(job,credit.error);return JobSnapshot(job,now);}
+        budget=credit.taken;
+    }
     local end=job.processed+budget;if(end>job.total)end=job.total;
     while(job.processed<end) {
         Examine(job.result,job.inputs,job.kind,job.rule,job.params,job.processed);

@@ -2931,6 +2931,7 @@ def _add_menu(self, context):
     self.layout.menu("HL_MT_behavior_utilities", icon="NODETREE")
     self.layout.menu("HL_MT_routes", icon="CURVE_PATH")
     self.layout.menu("HL_MT_diagnostics", icon="INFO")
+    self.layout.menu("HL_MT_workbudgets", icon="TIME")
     self.layout.menu("HL_MT_coordination", icon="LINKED")
     if "HL_MT_logic_examples" in dir(bpy.types):
         self.layout.separator()
@@ -2990,7 +2991,7 @@ def _compiled_links(tree, report):
                 if not isinstance(src, _Node):
                     continue
                 numbers = {out.bl_idname, inp.bl_idname} <= {"HL_FloatSocket", "HL_IntSocket"}   # (a number into a
-                strict = {"HL_BotSocket", "HL_BotListSocket", "HL_BotActionSocket", "HL_NavAreaSocket", "HL_NavAreasSocket", "HL_CandidateRuleSocket", "HL_CandidateResultsSocket", "HL_RouteSocket"}
+                strict = {"HL_BotSocket", "HL_BotListSocket", "HL_BotActionSocket", "HL_NavAreaSocket", "HL_NavAreasSocket", "HL_CandidateRuleSocket", "HL_CandidateResultsSocket", "HL_RouteSocket", "HL_WorkBudgetSocket", "HL_WorkGrantSocket"}
                 bot_entity = out.bl_idname == "HL_BotSocket" and inp.bl_idname == "HL_ThingSocket"
                 if (out.bl_idname in strict or inp.bl_idname in strict) and out.bl_idname != inp.bl_idname and not bot_entity:
                     raise ValueError(f"{tree.name}: '{node_title(src)}' cannot connect {out.bl_label} to {inp.bl_label} on '{node_title(node)}'")
@@ -3402,7 +3403,8 @@ def register():
     worldqueries.register()
     from . import listtools
     listtools.register()
-    from . import candidates, behaviortemplates, stabletemplates, childactions, routes, diagnostics
+    from . import candidates, behaviortemplates, stabletemplates, childactions, routes, diagnostics, workbudgets
+    workbudgets.register()
     candidates.register()
     behaviortemplates.register()
     stabletemplates.register()
@@ -3429,13 +3431,14 @@ def unregister():
     from . import botactions
     from . import worldqueries
     from . import listtools
-    from . import candidates, behaviortemplates, stabletemplates, childactions, routes, diagnostics
+    from . import candidates, behaviortemplates, stabletemplates, childactions, routes, diagnostics, workbudgets
     diagnostics.unregister()
     routes.unregister()
     childactions.unregister()
     stabletemplates.unregister()
     behaviortemplates.unregister()
     candidates.unregister()
+    workbudgets.unregister()
     listtools.unregister()
     worldqueries.unregister()
     from . import actioncomposition

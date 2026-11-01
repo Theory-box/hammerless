@@ -233,6 +233,7 @@
         if ("HLCO" in getroottable()) ::HLCO.Cleanup(ctx);
         if ("_diagnostics" in ctx) delete ctx._diagnostics;
         if ("_candidateJobs" in ctx) delete ctx._candidateJobs;
+        if ("HLWB" in getroottable()) ::HLWB.Cleanup(ctx);
         try { if (ctx.bot == null || !ctx.bot.IsValid()) return; } catch(e) { return; }
         local alive=Valid(ctx.bot);
         if (alive) {
@@ -242,6 +243,7 @@
         if ("HLCO" in getroottable()) ::HLCO.Cleanup(ctx);
         if ("_diagnostics" in ctx) delete ctx._diagnostics;
         if ("_candidateJobs" in ctx) delete ctx._candidateJobs;
+        if ("HLWB" in getroottable()) ::HLWB.Cleanup(ctx);
         for (local i=ctx.overrides.len()-1; i>=0; --i) {
             local o=ctx.overrides[i];
             if (!alive && !("restoreOnDeath" in o && o.restoreOnDeath)) continue;
@@ -318,6 +320,7 @@
             }
             loop.active=retained;
         }
+        if ("HLWB" in getroottable()) ::HLWB.Begin(due,now);
         foreach (loop in due) {
             if (loop.stopped) continue;
             foreach (r in loop.requests) {
@@ -347,6 +350,7 @@
         local removed=[];
         foreach (loop in snapshot) if (loop.stopped) { ReleaseLoop(loop); removed.append(loop.id); }
         foreach (id in removed) delete loops[id];
+        if ("HLWB" in getroottable()) ::HLWB.End();
         collecting=null; ticking=false;
     }
 };

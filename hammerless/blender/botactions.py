@@ -8,7 +8,7 @@ KINDS = [(k, label, "") for k, label in (("SPECIALS", "Special Infected Bots"),
 TYPES = [(k, label, "") for k, label in (("num", "Number"), ("bool", "Boolean"),
          ("text", "Text"), ("vec", "Vector"), ("thing", "Entity"), ("bot", "Bot"),
          ("navarea", "Nav Area"), ("navareas", "Nav Area List"))]
-INPUT_TYPES = TYPES + [("action", "Action", "Compile-time bound child action"), ("candidate_results", "Scored Candidates", "Ranked candidate snapshot"), ("route", "Waypoint Route", "Ordered route positions")]
+INPUT_TYPES = TYPES + [("action", "Action", "Compile-time bound child action"), ("candidate_results", "Scored Candidates", "Ranked candidate snapshot"), ("route", "Waypoint Route", "Ordered route positions"), ("work_budget", "Work Budget Pool", "Shared candidate-entry budget")]
 
 
 class _Wire:
@@ -137,7 +137,7 @@ class HL_BAAction(_Block, bpy.types.Node):
                     flat.links.append(LLink(nid, "value", name, socket, data=True))
         result = super().to_lnode(context)
         defaults = {"num": 0.0, "bool": False, "text": "", "vec": (0, 0, 0), "thing": "",
-                    "navarea": None, "navareas": None, "bot": None, "action": None, "candidate_results": None, "route": None}
+                    "navarea": None, "navareas": None, "bot": None, "action": None, "candidate_results": None, "route": None, "work_budget": None}
         result.settings["definition"] = {
             "nodes": flat.nodes, "links": flat.links,
             "inputs": [(it.uid, it.kind, defaults[it.kind]) for it in self.group.group_items

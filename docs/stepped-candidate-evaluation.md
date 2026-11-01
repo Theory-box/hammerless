@@ -5,6 +5,11 @@ editable bot-action groups. It performs a limited number of candidate
 evaluations per action update. Use ordinary Evaluate Candidates when all results
 are needed immediately.
 
+An optional Shared Work Grant input adds a centrally enforced shared budget;
+see [shared work budgets](work-budgets.md). Waiting for Grant reports pauses
+when no credit is available. The captured-input timing below describes an
+unshared job; a newly queued shared job captures only after receiving credit.
+
 Connect both Start and Update to Run. Connect a Bot or Nav Area list and an
 editable Candidate Rule. Enabled defaults on, Reset off, Entries Per Update to
 8, and Max Results to 32. A list of 32 entries normally takes four calls at this

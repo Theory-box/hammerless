@@ -94,9 +94,17 @@ with progress, age, status, cancellation/reset, and completed ranked results.
 See [stepped candidate evaluation](stepped-candidate-evaluation.md). The existing
 immediate evaluator is unchanged.
 
-This is per-action entry budgeting, not fair global scheduling. Global budgeting,
-shared query caches, and automatic refresh policies remain future work. The
-backlog below includes both completed and future capabilities.
+## Shared candidate work budgets
+
+Work Budget Pool and Request Work Grant now provide opt-in shared entry limits
+across actions and loops. Prior demand receives credits in rotating order;
+typed, expiring grants enforce combined spending by connected stepped evaluators.
+Public sockets expose waiting, allocated entries, remaining credits, and errors.
+See [shared work budgets](work-budgets.md) for wiring and fairness semantics.
+
+This limits candidate entries per scheduler cycle, not frame time or all game
+AI work. Shared query caches and automatic refresh policies remain future work.
+The backlog below includes both completed and future capabilities.
 
 ## Candidate backlog
 

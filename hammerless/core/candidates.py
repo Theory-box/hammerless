@@ -10,7 +10,7 @@ FIELDS = {"found": "false", "count": "0", "examined": "0", "rejected": "0", "err
           "truncated": "false", "item": "null", "items": "[]", "score": "0.0", "index": "-1",
           "rank": "-1", "position": "Vector(0,0,0)", "results": "null", "error": '""'}
 STEP_FIELDS = {"status":'"IDLE"', "busy":"false", "complete":"false", "cancelled":"false",
-               "failed":"false", "processed":"0", "total":"0", "progress":"0.0", "age":"0.0"}
+               "failed":"false", "processed":"0", "total":"0", "progress":"0.0", "age":"0.0", "waiting":"false"}
 
 
 def compile_rule(c, node, expected):
@@ -134,7 +134,10 @@ def call(c, n, context=None):
         # Keep input evaluation inside the factory: resumed/disabled jobs do not
         # re-read their input list, captured rule parameters or result limit.
         factory = f"function() {{ return {{items={c.typed_in(n,'items','any')},kind={vs.literal('text',kind)},rule={fn},params={params},limit={c.typed_in(n,'limit','num')}}}; }}"
-        return f"HLCE.Step({context}, {vs.literal('text',n.id)}, {factory}, {c.typed_in(n,'budget','num')}, {c.typed_in(n,'reset','bool')}, {c.typed_in(n,'enabled','bool')})"
+        shared = (n.id, 'grant') in c.data_links
+        if shared:
+            c.helper("HLWB", Path(__file__).with_name("work_budget_runtime.nut").read_text(encoding="utf-8"))
+        return f"HLCE.Step({context}, {vs.literal('text',n.id)}, {factory}, {c.typed_in(n,'budget','num')}, {c.typed_in(n,'reset','bool')}, {c.typed_in(n,'enabled','bool')}, {c.typed_in(n,'grant','any') if shared else 'null'}, {'true' if shared else 'false'})"
     return f"HLCE.Evaluate({c.typed_in(n,'items','any')}, {vs.literal('text',kind)}, {fn}, {params}, {c.typed_in(n,'limit','num')})"
 
 

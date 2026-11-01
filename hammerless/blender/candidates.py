@@ -136,6 +136,8 @@ class HL_StepCandidates(_Typed,bpy.types.Node):
         self.data_in("bool","enabled","Enabled").value=True
         self.data_in("bool","reset","Reset").value=False
         self.data_in("num","budget","Entries Per Update").value=8
+        self.data_in("work_grant","grant","Shared Work Grant (optional)")
+        self.data_out("bool","waiting","Waiting for Grant")
         self.data_out("text","status","Status")
         for key,label in (("busy","Busy"),("complete","Complete"),("cancelled","Cancelled"),("failed","Job Failed")):
             self.data_out("bool",key,label)
