@@ -65,7 +65,9 @@ function IsPlayerABot(bot){return true;}
         HLBA.Clashes=function(a,b){++count;return original(a,b);};
         now+=0.1;HLBA.TickAll(now);
         HLBA.Clashes=original;
-        if(count!=botCount*(botCount-1)/2) throw "Unexpected action-pair count";
+        // Permit both the original all-pairs and indexed implementations so
+        // this same workload can measure either revision without alteration.
+        if(count<0 || count>botCount*(botCount-1)/2) throw "Unexpected action-pair count";
         local seen={}, active=0;
         foreach(loop in HLBA.loops) foreach(instance in loop.active) {
             if(instance.bot in seen) throw "Action loops selected the same bot twice";

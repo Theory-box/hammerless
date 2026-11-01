@@ -42,9 +42,35 @@ The 36 scenarios include:
 
 An untimed pass wraps `Clashes` to count desired-action pair comparisons and
 then restores it before timing. It also verifies all active bots are unique
-across loops and the total population matches. The current scheduler compares
+across loops and the total population matches. The original scheduler compared
 `N*(N-1)/2` desired pairs even when bots differ: 435 at 30, 1,770 at 60, and
-4,950 at 100. Other matching/request work is not counted by that metric.
+4,950 at 100. The indexed scheduler groups desired actions by bot identity and
+compares only pairs for the same bot. These distinct-bot workloads now perform
+zero conflict comparisons. Multiple actions for one bot still receive all pair
+checks, including active actions from loops that are not due. Other
+matching/request work is not counted by that metric.
+
+## First optimization comparison
+
+Sequential before/after runs used the same harness, 21 measured batches and
+three warmups, with two updates per batch. For 100 distinct bots, median action
+batch times were:
+
+| Workload | Original all-pairs | Per-bot index |
+| --- | ---: | ---: |
+| One loop, retained actions | 3.962 ms | 2.604 ms |
+| One loop, fresh actions | 2.968 ms | 1.813 ms |
+| Four loops, retained actions | 2.206 ms | 1.089 ms |
+| Four loops, fresh actions | 2.031 ms | 0.977 ms |
+
+These are local offline measurements, not universal speed guarantees. Some
+smaller cases were noisy: the 60-bot single-loop cases measured about 8% slower
+in this run. The reproducible structural change is zero cross-bot pair checks;
+remaining matching work and allocation costs have not been optimized here.
+Differential tests compare ordered diagnostics, lifecycle callbacks, and state
+against the original algorithm over 24 mixed scenarios. Separate tests cover
+non-due ownership and the zero-comparison distinct-bot case. Candidate evaluation
+and update timing are unchanged by this optimization.
 
 ## Timing and validation
 

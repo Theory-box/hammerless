@@ -282,14 +282,21 @@
             collecting=null; scope=null;
         }
         // Build a global desired set, including still-active non-due loops.
-        local desired=[];
+        local desired=[], byBot={};
         foreach (loop in snapshot) {
             if (loop.stopped) continue;
             local isDue=due.find(loop) != null;
-            foreach (r in (isDue ? loop.requests : loop.active)) desired.append({loop=loop,r=r,due=isDue});
+            foreach (r in (isDue ? loop.requests : loop.active)) {
+                if (!(r.bot in byBot)) byBot[r.bot] <- [];
+                local bucket=byBot[r.bot];
+                local entry={loop=loop,r=r,due=isDue,offset=bucket.len()};
+                desired.append(entry); bucket.append(entry);
+            }
         }
-        for (local i=0;i<desired.len();++i) for(local j=i+1;j<desired.len();++j) {
-            local a=desired[i],b=desired[j];
+        // Only one bot's actions can conflict. Keep global outer order and
+        // per-bot suffix order so rejection and diagnostic ordering stay intact.
+        foreach (a in desired) for(local j=a.offset+1;j<byBot[a.r.bot].len();++j) {
+            local b=byBot[a.r.bot][j];
             if (Clashes(a.r,b.r)) {
                 if (a.due) a.r.rejected=true;
                 if (b.due) b.r.rejected=true;
