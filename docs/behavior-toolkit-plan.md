@@ -74,8 +74,17 @@ Both chunks passed independent review, generated Squirrel tests, and installed
 Blender registration/export checks. Follow Route remains experimental native-AI
 control. Diagnostics do not include a visual inspector or CPU profiler.
 
-Performance measurement is next; scheduling and caching are not implemented by
-these batches. The backlog below includes both completed and future capabilities.
+## Performance baseline
+
+The offline benchmark runs actual candidate evaluation and action-loop Squirrel
+code, including a compiler-generated candidate rule. It measures representative
+30/60/100-bot workloads and records runtime/source fingerprints, checked work
+counts, and batch timing samples. See [performance methodology](behavior-performance.md).
+
+This establishes a repeatable script-cost baseline, not live game frame times.
+Native engine queries and movement costs still need separate measurement.
+Scheduling and caching are not implemented by these batches. The backlog below
+includes both completed and future capabilities.
 
 ## Candidate backlog
 
