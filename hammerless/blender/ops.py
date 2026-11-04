@@ -1515,6 +1515,15 @@ class HL_OT_build(bpy.types.Operator):
     def _after_export(self, context, path, root, rep):
         """execute()'s part after the export (run by modal() once the export's thread is done)."""
         import time
+        mods = getattr(context.scene, 'hl_material_mods', None)
+        if path and not self.bake and mods and (mods.uid or len(mods.entries)):
+            try:
+                from .texturemods import build as build_material_mod
+                result = build_material_mod(context, install=True)
+                rep.warnings.extend(result.get('warnings', []))
+            except Exception as error:
+                self.report({'ERROR'}, f'Material mod build failed: {error}')
+                return {'CANCELLED'}
         self._pending_scripts = getattr(rep, "pending_scripts", None)
         self._export_s = time.time() - self._t0
         if path and self.play and not self.bake:

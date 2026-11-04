@@ -422,10 +422,18 @@ def import_game_mesh(context, arm, body: int = 0):
     for mi in sorted(mat_slots, key=lambda m: mat_slots[m]):
         mpath = _material_path(content, mesh_data.materials[mi], mesh_data.cdmaterials)
         label = mpath.split("/")[-1]
-        mat = bpy.data.materials.get(label) or bpy.data.materials.new(label)
+        mat = next((m for m in bpy.data.materials if
+                    m.get("hl_source_material", "") == mpath or
+                    m.hammerless.source_material == mpath), None)
+        if mat is None:
+            mat = bpy.data.materials.new(label)
         mat.hammerless.source_material = mpath
+        mat["hl_source_material"] = mpath
         me.materials.append(mat)
+    me["hl_source_model"] = path
+    me["hl_source_materials"] = [m.get("hl_source_material", "") if m else "" for m in me.materials]
     obj = bpy.data.objects.new(name, me)
+    obj["hl_source_model"] = path
     (arm.users_collection[0] if arm.users_collection else context.scene.collection).objects.link(obj)
     obj.parent = arm
     groups = {}                              # (only bones something is weighted to get a group)

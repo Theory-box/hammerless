@@ -46,6 +46,8 @@ def register():
     texturing.register()
     from .blender import modelbrowser
     modelbrowser.register()
+    from .blender import texturemods
+    texturemods.register()
     gameskeleton.register()
     placedchar.register()
     collisiontool.register()
@@ -78,6 +80,8 @@ def unregister():
     gameskeleton.unregister()
     from .blender import modelbrowser
     modelbrowser.unregister()
+    from .blender import texturemods
+    texturemods.unregister()
     texturing.unregister()
     mapcollection.unregister()
     vmfimport.unregister()

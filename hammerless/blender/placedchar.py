@@ -78,6 +78,7 @@ def posed_mesh(context, model_path: str, body: int, animation: str, frame: int):
     mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))
     mesh.update()
     mesh["hl_model"] = model_path
+    mesh["hl_source_materials"] = [m.get("hl_source_material", "") if m else "" for m in mesh.materials]
     return mesh
 
 

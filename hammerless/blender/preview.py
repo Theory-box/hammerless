@@ -150,8 +150,10 @@ def _model_material(material_path: str, content, game_dir):
     name = cache_name("HL_mdl_", material_path)
     mat = bpy.data.materials.get(name)
     if mat is not None:
+        mat["hl_source_material"] = material_path.replace("\\", "/").lower()
         return mat
     mat = bpy.data.materials.new(name)
+    mat["hl_source_material"] = material_path.replace("\\", "/").lower()
     mat.use_nodes = True
     texture = base_texture(content, material_path, game_dir)
     if texture:
@@ -275,4 +277,5 @@ def model_mesh(model_path: str, content, game_dir, units_per_meter: float):
     mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))
     mesh.update()
     mesh["hl_model"] = model_path
+    mesh["hl_source_materials"] = [m.get("hl_source_material", "") if m else "" for m in mesh.materials]
     return mesh
