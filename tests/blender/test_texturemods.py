@@ -32,10 +32,26 @@ with tempfile.TemporaryDirectory() as temp:
     ops.game_root=lambda context:temp;ops.game_content=lambda root:Content()
     bpy.ops.wm.save_as_mainfile(filepath=str(Path(temp)/'test.blend'))
     tm.build(bpy.context,False)
-    p=Path(temp)/'hammerless_mods'/('hammerless_materials_'+s.uid+'.vpk')
+    p=Path(temp)/'hammerless_mods'/tm.package_name(s.uid)
     assert 'materials/models/test/original.vmt' in VPK(str(p)).entries
+    import shutil
+    from unittest.mock import patch
+    addons=Path(temp)/'left4dead2'/'addons';addons.mkdir(parents=True)
+    legacy=addons/('hammerless_materials_'+s.uid+'.vpk')
+    shutil.copyfile(p,legacy)
+    with patch.object(tm.os,'replace',side_effect=OSError('test failure')):
+        try:tm.install_package(p,temp,s.uid)
+        except OSError:pass
+        else:raise AssertionError('Expected install failure')
+    assert legacy.exists(),'Failed install removed the previous addon'
+    tm.install_package(p,temp,s.uid)
+    assert not legacy.exists() and (addons/tm.package_name(s.uid)).exists()
+    try:tm.install_package(p,str(Path(temp)/('x'*128)),s.uid)
+    except ValueError as e:assert 'too long' in str(e)
+    else:raise AssertionError('Oversize engine path was accepted')
     assert bpy.ops.hammerless.material_mod_remove()=={'FINISHED'}
     tm.build(bpy.context,False)
     assert not any(k.startswith('materials/') for k in VPK(str(p)).entries)
     hammerless.unregister();hammerless.register();hammerless.unregister()
 print('TEXTURE_MOD_BLENDER_OK')
+

@@ -35,6 +35,33 @@ def identity(settings):
     return settings.uid
 
 
+def package_name(uid):
+    return 'hlm_'+uid+'.vpk'
+
+
+def install_package(output,root,uid):
+    from ..core.vpk import VPK
+    dest=Path(root)/'left4dead2'/'addons'/package_name(uid)
+    # L4D2 truncates addon metadata paths at 127 bytes; such packages can mount
+    # below stock content even though addonlist says they are enabled.
+    if len(str(dest.resolve()).encode('utf-8'))>=128:
+        raise ValueError('L4D2 addon path is too long (128-byte engine limit). Use a shorter game installation path.')
+    legacy=dest.parent/('hammerless_materials_'+uid+'.vpk')
+    if legacy.exists():
+        archive=VPK(str(legacy));info=archive.read('addoninfo.txt').decode('utf-8')
+        from ..core.vmf import parse
+        blocks=parse(info)
+        if not blocks or blocks[0].get('addonAuthor')!='Hammerless':
+            raise ValueError('Old package is not a recognized Hammerless mod: '+str(legacy))
+    dest.parent.mkdir(exist_ok=True)
+    tmp=dest.with_suffix('.vpk.tmp')
+    try:
+        shutil.copyfile(output,tmp);os.replace(tmp,dest)
+        if legacy.exists():legacy.unlink()
+    finally:
+        if tmp.exists():tmp.unlink()
+
+
 def image_input(material,socket_name):
     if not material or not material.use_nodes: raise ValueError('Replacement must use a Principled material with image textures')
     outputs=[n for n in material.node_tree.nodes if n.type=='OUTPUT_MATERIAL' and n.is_active_output]
@@ -98,15 +125,10 @@ def build(context,install=False):
             if shader.inputs[sock].is_linked: payload[key]=True
         replacements[path]=payload
     folder=Path(bpy.data.filepath).parent/'hammerless_mods';folder.mkdir(exist_ok=True)
-    output=folder/('hammerless_materials_'+uid+'.vpk')
+    output=folder/package_name(uid)
     report=texturemods.build_package(game_content(root),replacements,str(output),uid)
     if install:
-        dest=Path(root)/'left4dead2'/'addons'/output.name;dest.parent.mkdir(exist_ok=True)
-        tmp=dest.with_suffix('.vpk.tmp')
-        try:
-            shutil.copyfile(output,tmp);os.replace(tmp,dest)
-        finally:
-            if tmp.exists():tmp.unlink()
+        install_package(output,root,uid)
     settings.status=('Installed' if install else 'Built')+': '+str(len(replacements))+' replacements. Restart the game to reload.'
     warnings=report.get('warnings',[])
     text=bpy.data.texts.get('Hammerless Material Mod Report') or bpy.data.texts.new('Hammerless Material Mod Report')
