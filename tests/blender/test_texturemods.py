@@ -46,6 +46,23 @@ with tempfile.TemporaryDirectory() as temp:
     assert legacy.exists(),'Failed install removed the previous addon'
     tm.install_package(p,temp,s.uid)
     assert not legacy.exists() and (addons/tm.package_name(s.uid)).exists()
+    assert tm.refresh_installed(bpy.context)==1
+    rows=bpy.context.window_manager.hl_installed_material_mods
+    assert rows[0].source_blend==bpy.data.filepath
+    other_uid='1'*32
+    tm.texturemods.build_package(Content(),{'models/test/original':{'basecolor':np.full((4,4,4),255,np.uint8)}},
+        addons/tm.package_name(other_uid),other_uid,title='Other blend',source_blend='C:/other.blend')
+    try:tm.build(bpy.context,True)
+    except ValueError as e:assert 'already replaced' in str(e)
+    else:raise AssertionError('Conflicting mod install was accepted')
+    other_scene=bpy.data.scenes.new('Different blend context')
+    with bpy.context.temp_override(scene=other_scene):
+        assert bpy.ops.hammerless.material_mod_refresh()=={'FINISHED'}
+        assert len(rows)==2
+        assert bpy.ops.hammerless.material_mod_uninstall(filename=tm.package_name(other_uid))=={'FINISHED'}
+        assert len(rows)==1
+    assert not (addons/tm.package_name(other_uid)).exists()
+    assert len(s.entries)==1,'Global uninstall changed authored scene entries'
     try:tm.install_package(p,str(Path(temp)/('x'*128)),s.uid)
     except ValueError as e:assert 'too long' in str(e)
     else:raise AssertionError('Oversize engine path was accepted')

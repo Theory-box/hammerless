@@ -29,6 +29,28 @@ class HL_MaterialMods(bpy.types.PropertyGroup):
     status: StringProperty()
 
 
+class HL_InstalledMaterialMod(bpy.types.PropertyGroup):
+    uid: StringProperty()
+    filename: StringProperty()
+    source_blend: StringProperty()
+    title: StringProperty()
+    count: IntProperty()
+
+
+def refresh_installed(context):
+    from .ops import game_root
+    from ..core.modregistry import scan
+    rows=context.window_manager.hl_installed_material_mods
+    rows.clear()
+    root=game_root(context)
+    if root:
+        for mod in scan(root):
+            row=rows.add()
+            for key in ('uid','filename','source_blend','title'):setattr(row,key,mod[key])
+            row.count=len(mod['targets'])
+    return len(rows)
+
+
 def identity(settings):
     if not settings.uid: settings.uid=uuid.uuid4().hex
     if not re.fullmatch('[0-9a-f]{32}',settings.uid): raise ValueError('Invalid material-mod identity')
@@ -56,7 +78,9 @@ def install_package(output,root,uid):
     dest.parent.mkdir(exist_ok=True)
     tmp=dest.with_suffix('.vpk.tmp')
     try:
-        shutil.copyfile(output,tmp);os.replace(tmp,dest)
+        shutil.copyfile(output,tmp)
+        try:os.replace(tmp,dest)
+        except PermissionError as e:raise PermissionError('Close L4D2 before installing: the game is holding this mod package open.') from e
         if legacy.exists():legacy.unlink()
     finally:
         if tmp.exists():tmp.unlink()
@@ -126,9 +150,15 @@ def build(context,install=False):
         replacements[path]=payload
     folder=Path(bpy.data.filepath).parent/'hammerless_mods';folder.mkdir(exist_ok=True)
     output=folder/package_name(uid)
-    report=texturemods.build_package(game_content(root),replacements,str(output),uid)
+    report=texturemods.build_package(game_content(root),replacements,str(output),uid,
+        title=Path(bpy.data.filepath).stem+' - Material Mods',source_blend=str(Path(bpy.data.filepath).resolve()))
     if install:
+        from ..core.modregistry import scan
+        for mod in scan(root):
+            if mod['uid']!=uid and set(mod['targets']).intersection(replacements):
+                raise ValueError('Materials already replaced by '+mod['title']+'. Uninstall that package in Installed Mods first.')
         install_package(output,root,uid)
+        refresh_installed(context)
     settings.status=('Installed' if install else 'Built')+': '+str(len(replacements))+' replacements. Restart the game to reload.'
     warnings=report.get('warnings',[])
     text=bpy.data.texts.get('Hammerless Material Mod Report') or bpy.data.texts.new('Hammerless Material Mod Report')
@@ -189,6 +219,31 @@ class HL_UL_material_mods(bpy.types.UIList):
         layout.prop(item,'enabled',text='');layout.label(text=item.material.name if item.material else 'Missing material')
 
 
+class HL_OT_material_mod_refresh(bpy.types.Operator):
+    bl_idname='hammerless.material_mod_refresh';bl_label='Refresh Installed Mods'
+    def execute(self,context):
+        try:refresh_installed(context)
+        except Exception as e:self.report({'ERROR'},str(e));return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class HL_OT_material_mod_uninstall(bpy.types.Operator):
+    bl_idname='hammerless.material_mod_uninstall';bl_label='Uninstall Mod'
+    bl_description='Remove this installed Hammerless package, even if another blend created it. Keeps a backup outside addons. Restart the game afterward'
+    filename: StringProperty()
+    def execute(self,context):
+        from .ops import game_root
+        from ..core.modregistry import uninstall
+        try:
+            backup=uninstall(game_root(context),self.filename)
+            refresh_installed(context)
+            context.scene.hl_material_mods.status='Uninstalled. Restart game. Building its source blend installs it again.'
+            self.report({'INFO'},'Uninstalled; backup: '+str(backup))
+        except PermissionError:self.report({'ERROR'},'Close L4D2 before uninstalling this mod.');return {'CANCELLED'}
+        except Exception as e:self.report({'ERROR'},str(e));return {'CANCELLED'}
+        return {'FINISHED'}
+
+
 class HL_PT_material_mods(bpy.types.Panel):
     bl_space_type='VIEW_3D';bl_region_type='UI';bl_category='Hammerless';bl_label='Material Mods';bl_options={'DEFAULT_CLOSED'}
     def draw(self,context):
@@ -208,13 +263,27 @@ class HL_PT_material_mods(bpy.types.Panel):
         l.label(text='Shader limits: see Material Mod Report')
         l.label(text='Roughness / metallic maps: not converted yet')
         if s.status:l.label(text=s.status)
+        box=l.box();box.label(text='Installed Mods (all blends)')
+        box.operator('hammerless.material_mod_refresh',icon='FILE_REFRESH')
+        for mod in context.window_manager.hl_installed_material_mods:
+            item=box.box();item.label(text=mod.title)
+            item.label(text=str(mod.count)+' material replacements'+(' - this blend' if mod.uid==s.uid else ''))
+            if mod.source_blend:
+                item.label(text='Source: '+Path(mod.source_blend).name)
+                row=item.row();row.enabled=False;row.prop(mod,'source_blend',text='Full Path')
+            else:item.label(text='Source: Unknown (older package)')
+            item.label(text=mod.filename)
+            op=item.operator('hammerless.material_mod_uninstall',icon='TRASH');op.filename=mod.filename
+        box.label(text='Uninstall here; rebuild source blend to reinstall.')
 
 
-CLASSES=(HL_MaterialMod,HL_MaterialMods,HL_OT_material_mod_add,HL_OT_material_mod_remove,HL_OT_material_mod_build,HL_UL_material_mods,HL_PT_material_mods)
+CLASSES=(HL_MaterialMod,HL_MaterialMods,HL_InstalledMaterialMod,HL_OT_material_mod_add,HL_OT_material_mod_remove,HL_OT_material_mod_build,HL_UL_material_mods,HL_OT_material_mod_refresh,HL_OT_material_mod_uninstall,HL_PT_material_mods)
 def register():
     for c in CLASSES:bpy.utils.register_class(c)
     bpy.types.Scene.hl_material_mods=PointerProperty(type=HL_MaterialMods)
+    bpy.types.WindowManager.hl_installed_material_mods=CollectionProperty(type=HL_InstalledMaterialMod)
     bpy.types.Material.hl_mod_target=StringProperty(name='Original Game Material',get=_get_target,set=_set_target,description='Stored game path, independent of this material’s Blender name. Example: models/infected/common/common_male_lower_01')
 def unregister():
+    del bpy.types.WindowManager.hl_installed_material_mods
     del bpy.types.Material.hl_mod_target;del bpy.types.Scene.hl_material_mods
     for c in reversed(CLASSES):bpy.utils.unregister_class(c)

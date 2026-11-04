@@ -30,7 +30,12 @@ class TextureModsTest(unittest.TestCase):
         self.assertEqual(root.name,'Infected');self.assertEqual(root.get('$woundcutouttexture'),'wound');self.assertEqual(len(root.blocks('Proxies')),1)
         _,_,im=read_vtf(v.read('materials/'+root.get('$basetexture')+'.vtf'))
         np.testing.assert_array_equal(im,self.old)
-        build_package(self.content,{},out,'test');self.assertEqual(set(VPK(str(out)).entries),{'addoninfo.txt'})
+        build_package(self.content,{},out,'test',source_blend='C:/project/source.blend')
+        self.assertEqual(set(VPK(str(out)).entries),{'addoninfo.txt','hammerless_material_mod.json'})
+        import json
+        manifest=json.loads(VPK(str(out)).read('hammerless_material_mod.json'))
+        self.assertEqual(manifest['source_blend'],'C:/project/source.blend')
+        self.assertEqual(manifest['targets'],[])
     def test_path_validation_and_duplicate_targets(self):
         self.assertEqual(material_path('Materials/Models\\ZOMBIE.vmt'),'models/zombie')
         for value in ('../x','x/../y','/absolute','c:/x','x//y','x\nfoo','x"foo',''):
@@ -44,7 +49,7 @@ class TextureModsTest(unittest.TestCase):
         self.content.files['materials/shared.vmt']=b'VertexLitGeneric { "$basetexture" "old" }'
         out=self.path/'mod.vpk';build_package(self.content,{'models/zombie':{'basecolor':self.rgba,'normal':self.rgba}},out,'test')
         v=VPK(str(out));root=parse(v.read('materials/models/zombie.vmt').decode())[0]
-        self.assertIsNotNone(root.get('$bumpmap'));self.assertEqual(len(v.entries),4)
+        self.assertIsNotNone(root.get('$bumpmap'));self.assertEqual(len(v.entries),5)
     def test_missing_alpha_source_and_patch_cycle_fail(self):
         del self.content.files['materials/old.vtf']
         with self.assertRaisesRegex(ValueError,'alpha'):build_package(self.content,{'models/zombie':{'basecolor':self.rgba}},self.path/'x.vpk','test')

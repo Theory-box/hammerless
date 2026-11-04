@@ -94,7 +94,7 @@ def _original_alpha(content,root,rgba,target,key='$basetexture'):
     rgba[:,:,3]=old[yy[:,None],xx[None,:],3]
 
 
-def build_package(content,replacements,output_path,uid,title='Hammerless Material Mods'):
+def build_package(content,replacements,output_path,uid,title='Hammerless Material Mods',source_blend=''):
     """Rebuild an entire VPK atomically from enabled replacements only.
 
     replacements: material path -> {basecolor: RGBA, normal: optional RGBA}.
@@ -139,6 +139,8 @@ def build_package(content,replacements,output_path,uid,title='Hammerless Materia
                 if maps.get(key) is not None:warnings.append(target+': '+key+' is not a direct Source input and was not exported')
             lines=[];root.write(lines)
             files['materials/'+target+'.vmt']=''.join(lines).encode('utf-8')
+        import json
+        files['hammerless_material_mod.json']=json.dumps({'version':1,'uid':uid,'title':title,'source_blend':source_blend,'targets':sorted(seen)},ensure_ascii=False).encode('utf-8')
         info=Block('AddonInfo').kv('addonSteamAppID','550').kv('addonTitle',title).kv('addonVersion','1').kv('addonAuthor','Hammerless').kv('addonDescription','Global material replacements. Disable or remove entries and rebuild to restore stock materials.').kv('addonContent_Skin','1')
         lines=[];info.write(lines);files['addoninfo.txt']=''.join(lines).encode('utf-8')
         destination=Path(output_path);destination.parent.mkdir(parents=True,exist_ok=True)
