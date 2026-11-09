@@ -2,7 +2,7 @@
 import copy
 from types import SimpleNamespace
 import bpy
-from .extract import MaterialResolver,mesh_to_brushes,game_path,effective_role,texture_size
+from .extract import MaterialResolver,mesh_to_brushes,game_path,effective_role,texture_size,_base_color_image
 from . import vmfimport
 from ..core import vmfimport as vi
 from ..core.ir import Polygon
@@ -11,9 +11,20 @@ from ..core.surfacecharts import chart_from_side
 from ..core.lightmap import NON_RENDERING_MATERIALS
 
 class ChartMaterials(MaterialResolver):
+    def __init__(self,*args):
+        super().__init__(*args)
+        self.bindings={}
+
     def _resolve_path(self,mat):
         # Chart construction needs density/axes, not generated VMT/VTF files.
-        return game_path(mat) or self.settings.default_material
+        path=game_path(mat)
+        if not path and _base_color_image(mat) is not None:
+            # Distinct custom materials must not collapse onto the scene default.
+            # This identifier exists only in the read-only preview snapshot.
+            path=f'hammerless_preview/{mat.as_pointer()}'
+        path=path or self.settings.default_material
+        self.bindings[path]=mat
+        return path
 
 class ChartSnapshot:
     def __init__(self,context):

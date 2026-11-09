@@ -6,6 +6,18 @@ from hammerless.core.ir import Polygon
 from hammerless.core.vmf import VMFWriter
 from hammerless.core.surfacecharts import chart_from_side
 class SurfaceChartsTests(unittest.TestCase):
+ def test_texture_axes_are_independent_of_lighting_density(self):
+  vertices=[(0,0,0),(128,0,0),(128,128,0),(0,128,0)]
+  axes=(((1,0,0),17,.25),((0,-1,0),-31,.5))
+  uv=[]
+  for scale in (4,32):
+   chart=chart_from_side(VMFWriter().side(Polygon(vertices,'custom/test',tex_axes=axes,lightmap_scale=scale)),vertices)
+   self.assertEqual(chart.material_path,'custom/test')
+   actual=chart.texture_uv((256,128));uv.append(actual)
+   np.testing.assert_allclose(actual[:,0],(chart.positions[:,0]*4+17)/256)
+   np.testing.assert_allclose(actual[:,1],1-(-chart.positions[:,1]*2-31)/128)
+   with self.assertRaises(ValueError):chart.texture_uv((0,128))
+  np.testing.assert_array_equal(uv[0],uv[1])
  def test_density_uses_exported_scale(self):
   vertices=[(0,0,0),(128,0,0),(128,128,0),(0,128,0)]
   counts=[]

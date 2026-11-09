@@ -67,10 +67,40 @@ def run():
    image=bpy.data.images.new('Surface light cache diagnostic',1280,720,float_buffer=True)
    image.pixels.foreach_set(pixels.ravel());image.file_format='PNG'
    image.filepath_raw=str(OUT/'surface-cache-display.png');image.save();bpy.data.images.remove(image)
+   scaled=SurfaceCacheDisplay(cache,faces,charts,units_per_meter=64)
+   fb.clear(color=(0,0,0,1),depth=1)
+   scaled.draw(matrix@Matrix.Diagonal((64,64,64,1)))
+   scaled_pixels=np.asarray(fb.read_color(0,0,1280,720,4,0,'FLOAT').to_list())
+   unit_error=float(np.max(abs(scaled_pixels-pixels)))
+   assert unit_error<1e-6,unit_error
+  texture=bpy.data.images.new('Cache texture detail test',256,8,float_buffer=True)
+  texels=np.zeros((8,256,4),dtype=np.float32);texels[:,:,3]=1;texels[:,::2,0]=1
+  texture.pixels.foreach_set(texels.ravel())
+  textured=SurfaceCacheDisplay(cache,faces,charts,lambda face:(texture,np.asarray(face.positions)[:,:2]/128,True))
+  with off.bind():
+   gpu.state.viewport_set(0,0,1280,720);fb=gpu.state.active_framebuffer_get();fb.clear(color=(0,0,0,1),depth=1)
+   textured.draw(matrix)
+   stripe=np.asarray(fb.read_color(0,360,1280,1,4,0,'FLOAT').to_list())[0]
+   assert np.max(abs(stripe[:,1:3]))<1e-6,'Material color was not applied separately'
+   sharp_edges=int(np.count_nonzero(np.diff(stripe[:,0]>.7)))
+   assert sharp_edges>200,(sharp_edges,float(stripe[:,0].min()),float(stripe[:,0].max()))
+  texels[:,:,:3]=0;texels[:,:,0]=.5;texture.pixels.foreach_set(texels.ravel());texture.update()
+  multiplied=SurfaceCacheDisplay(cache,faces,charts,lambda face:(texture,np.asarray(face.positions)[:,:2]/128,False))
+  with off.bind():
+   gpu.state.viewport_set(0,0,1280,720);fb=gpu.state.active_framebuffer_get();fb.clear(color=(0,0,0,1),depth=1)
+   multiplied.draw(matrix)
+   actual=np.asarray(fb.read_color(0,360,1280,1,4,0,'FLOAT').to_list())[0]
+   reference=pixels[360,:,0]
+   linear=np.where(reference<=.04045,reference/12.92,((reference+.055)/1.055)**2.4)*.5
+   expected=np.where(linear<=.0031308,linear*12.92,1.055*linear**(1/2.4)-.055)
+   multiply_error=float(np.max(abs(actual[:,0]-expected)))
+   assert multiply_error<.0001,multiply_error
+   assert np.max(abs(actual[:,1:3]))<1e-6
+  bpy.data.images.remove(texture)
   assert cache.evaluations==evaluations,'Camera changes evaluated lighting'
  finally:off.free()
  assert cache.refine(scene,'light-edited',max_frames=72,rays=8,bounces=2) and cache.frames==1
- return {'ok':True,'samples':len(p),'charts':len(charts),'texture_size':cache.size,'direct_max_error':error,'direct_ms_including_readback':direct_ms,'72_frame_gi_ms_including_readback':gi_ms,'unchanged_reused':True,'camera_draw_median_ms':float(np.median(timings[1:])),'camera_moves_without_lighting':30,'data_export':'surface-cache-samples.npz','scope':'Compiled floor grids, two-bounce room; actual lightmap scale and camera-independent reusable lighting data. No live mesh atlas or final BSP export yet.'}
+ return {'ok':True,'samples':len(p),'charts':len(charts),'texture_size':cache.size,'direct_max_error':error,'direct_ms_including_readback':direct_ms,'72_frame_gi_ms_including_readback':gi_ms,'unchanged_reused':True,'camera_draw_median_ms':float(np.median(timings[1:])),'camera_moves_without_lighting':30,'texture_transitions_across_row':sharp_edges,'texture_light_multiply_error':multiply_error,'data_export':'surface-cache-samples.npz','scope':'Compiled floor grids, two-bounce room; actual lightmap scale and camera-independent reusable lighting data. No live mesh atlas or final BSP export yet.'}
 try:r=run()
 except Exception:r={'ok':False,'traceback':traceback.format_exc()}
 (OUT/'surface-cache-check.json').write_text(json.dumps(r,indent=2));print(json.dumps(r),flush=True)

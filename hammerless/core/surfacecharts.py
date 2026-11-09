@@ -21,6 +21,17 @@ class SurfaceChart:
     basis: np.ndarray
     polygon: np.ndarray
     lightmap_scale: float
+    material_path: str
+    texture_vectors: np.ndarray
+
+    def texture_uv(self, size):
+        """Exported pixel axes to Blender image UVs (Source V points down)."""
+        size=np.asarray(size,dtype=float)
+        if size.shape!=(2,) or not np.isfinite(size).all() or np.any(size<=0):
+            raise ValueError('Texture dimensions must be positive and finite')
+        uv=(self.positions@self.texture_vectors[:,:3].T+self.texture_vectors[:,3])/size
+        uv[:,1]=1-uv[:,1]
+        return uv
 
     def to_luxel(self,points):
         return np.asarray(points)@self.lvecs[:,:3].T+self.lvecs[:,3]-self.mins
@@ -59,7 +70,9 @@ def chart_from_side(side,vertices,index=0,max_samples=1048576):
         if np.min(np.cross(b-a,p-a)@normal)<-1e-5:
             raise ValueError('Surface chart requires a convex exported face')
     scale=float(side.get('lightmapscale') or 16)
-    rows=lightmap_vectors([parse_axis(side.get(k)) for k in ('uaxis','vaxis')],scale)
+    axes=[parse_axis(side.get(k)) for k in ('uaxis','vaxis')]
+    rows=lightmap_vectors(axes,scale)
+    texture_vectors=np.array([(* (np.asarray(axis)/step),shift) for axis,shift,step in axes])
     uv=p@rows[:,:3].T+rows[:,3]
     mins=np.floor(uv.min(axis=0)+1e-6).astype(int)
     sizes=np.ceil(uv.max(axis=0)-1e-6).astype(int)-mins+1
@@ -69,4 +82,5 @@ def chart_from_side(side,vertices,index=0,max_samples=1048576):
     inverse=np.linalg.inv(matrix)
     origin=inverse@np.r_[mins-rows[:,3],np.dot(p[0],normal)]
     triangles=np.array([v for i in range(1,len(p)-1) for v in (p[0],p[i],p[i+1])],np.float32)
-    return SurfaceChart(index,triangles,normal,rows,mins,int(sizes[0]),int(sizes[1]),origin,inverse[:,:2],p,scale)
+    return SurfaceChart(index,triangles,normal,rows,mins,int(sizes[0]),int(sizes[1]),origin,inverse[:,:2],p,scale,
+                        side.get('material','').lower().replace('\\','/'),texture_vectors)
