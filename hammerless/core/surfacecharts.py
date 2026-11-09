@@ -55,6 +55,9 @@ def chart_from_side(side,vertices,index=0,max_samples=1048576):
     if length<1e-9:raise ValueError('Degenerate surface polygon')
     normal/=length
     if np.max(abs((p-p[0])@normal))>1e-4:raise ValueError('Surface chart must be planar')
+    for a,b in zip(p,np.roll(p,-1,axis=0)):
+        if np.min(np.cross(b-a,p-a)@normal)<-1e-5:
+            raise ValueError('Surface chart requires a convex exported face')
     scale=float(side.get('lightmapscale') or 16)
     rows=lightmap_vectors([parse_axis(side.get(k)) for k in ('uaxis','vaxis')],scale)
     uv=p@rows[:,:3].T+rows[:,3]

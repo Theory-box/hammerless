@@ -230,3 +230,13 @@ A 128-unit cube produces 6,534 / 1,734 / 486 / 150 samples respectively.
 This pre-BSP path is not enabled in the normal renderer yet. Imported per-face
 scale handling, adaptive scale changes, non-brush models and cache invalidation
 still require integration. Reports: live-surface-scales.json.
+
+Imported chart extraction reuses solid_block/_faces and the same opt-in scale
+policy as VMF rebuild, using a copied original block to avoid mutating shared
+source state. Tests cover preserved per-face scales, material and scene override,
+restoration when toggled off, moved originals, duplicates and unchanged source
+text. Per-object layout cache tests cover no-change reuse, scale/transform/
+geometry invalidation and deleted-object eviction. Geometry and imported-text
+revision tokens are caller obligations; these are not yet wired into view_update.
+Displacements/models reject chart extraction rather than pretending they are
+planar brush faces. The live engine remains unchanged pending integration.
