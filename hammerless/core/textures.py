@@ -34,6 +34,12 @@ def build_mips(rgba: np.ndarray) -> list[np.ndarray]:
     return mips
 
 
+def texture_reflectivity(rgba: np.ndarray) -> tuple[float, float, float]:
+    """Reflectivity written into our VTF header, in VRAD's linear color space."""
+    lin = (rgba[..., :3].astype(np.float32) / 255.0) ** 2.2
+    return tuple(float(c) for c in lin.reshape(-1, 3).mean(axis=0))
+
+
 def write_vtf(path: str, rgba: np.ndarray, normal_map: bool = False) -> None:
     """rgba: HxWx4 uint8, top row first. Width and height must be powers of two."""
     h, w = rgba.shape[:2]
@@ -43,8 +49,7 @@ def write_vtf(path: str, rgba: np.ndarray, normal_map: bool = False) -> None:
     fmt = FMT_BGRA8888 if has_alpha else FMT_BGR888
     flags = (FLAG_EIGHTBITALPHA if has_alpha else 0) | (FLAG_NORMAL if normal_map else 0)
     mips = build_mips(rgba)
-    lin = (rgba[..., :3].astype(np.float32) / 255.0) ** 2.2
-    reflectivity = tuple(float(c) for c in lin.reshape(-1, 3).mean(axis=0))
+    reflectivity = texture_reflectivity(rgba)
 
     header = struct.pack(
         "<4s2IIHHIHH4x3f4xfIBIBBH",

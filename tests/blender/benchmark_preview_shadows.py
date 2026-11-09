@@ -17,9 +17,11 @@ def run():
     cache = SceneCache()
     cache.unit_scale = 1
     cache.lights = [((0,0,-20),(10000,10000,10000),(0,0,1))]
+    if '--sky' in sys.argv:
+        cache.sky_color = (51.,51.,51.)
     cache.geometry = {1:Geometry(pos,normal)}
     shader = diagnostic_shader(lit=True,shadows=True)
-    result = {'gpu':gpu.platform.renderer_get(),'scope':'Synthetic repeated cubes, opaque point shadows; synchronous draw plus 1-pixel readback, no materials/GI', 'runs':[]}
+    result = {'gpu':gpu.platform.renderer_get(),'sky_enabled':'--sky' in sys.argv,'scope':'Synthetic repeated cubes, opaque point shadows; synchronous draw plus 1-pixel readback, no materials/GI', 'runs':[]}
     for count in (16,64,256):
         side = int(count**0.5)
         cache.instances = [(1,Matrix.Translation(((i%side-side/2)*2.5,(i//side-side/2)*2.5,0))) for i in range(count)]
@@ -50,6 +52,6 @@ try:
     result=run()
 except Exception:
     result={'error':traceback.format_exc()}
-(Path(tempfile.gettempdir())/'hammerless_preview_shadows.json').write_text(json.dumps(result,indent=2))
+(Path(tempfile.gettempdir())/('hammerless_preview_sky.json' if '--sky' in sys.argv else 'hammerless_preview_shadows.json')).write_text(json.dumps(result,indent=2))
 print(json.dumps(result),flush=True)
 bpy.ops.wm.quit_blender()

@@ -103,3 +103,41 @@ def vrad_light_direction(angles, keys):
         xy = (math.cos(math.radians(yaw)),math.sin(math.radians(yaw)))
     p = math.radians(pitch)
     return (xy[0]*math.cos(p),xy[1]*math.cos(p),math.sin(p))
+
+
+def sky_directions(count=162):
+    """Halton sphere directions used by native direct.c SkyDirectionCompute.
+
+    Python computes in double precision; upload converts to float32. Numerical
+    agreement is tested with bakes, not claimed bit-identical to C's rounding.
+    """
+    def halton(seed, base):
+        value, step = 0.0, 1.0/base
+        while seed:
+            value += (seed % base)*step
+            seed //= base
+            step /= base
+        return value
+    result = []
+    for i in range(count):
+        z = 2*halton(i+2,2)-1
+        theta = 2*math.pi*halton(i+2,3)
+        radius = math.sqrt(max(0.,1-z*z))
+        result.append((math.cos(theta)*radius,math.sin(theta)*radius,z))
+    return result
+
+
+def sky_intensity(keys, sun_intensity):
+    """Flat ambient HDR selection and fallback from ParseLightEnvironment."""
+    for name in ('_ambientHDR','_ambient'):
+        try:
+            value = light_intensity(keys.get(name,''))
+            break
+        except ValueError:
+            value = None
+    if value is None:
+        value = tuple(x*0.5 for x in sun_intensity)
+    scale = float(keys.get('_AmbientScaleHDR',1))
+    if not math.isfinite(scale) or scale<0:
+        raise ValueError('Sky HDR intensity scale must be finite and nonnegative')
+    return tuple(x*scale for x in value)

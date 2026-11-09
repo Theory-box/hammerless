@@ -97,6 +97,11 @@ def check():
                 preview.draw_geometry(cache, lit_shader, Matrix.Scale(0.5, 4), lit=True)
                 sample = fb.read_color(32, 32, 1, 1, 4, 0, 'FLOAT').to_list()[0][0]
                 assert all(abs(v - 200/255) < 0.01 for v in sample[:3]), sample
+                display_shader = preview.diagnostic_shader(lit=True,display=True)
+                fb.clear(color=(0,0,0,1),depth=1)
+                preview.draw_geometry(cache,display_shader,Matrix.Scale(0.5,4),lit=True,display=True,exposure=-1)
+                display_sample = fb.read_color(32,32,1,1,4,0,'FLOAT').to_list()[0][0][0]
+                assert abs(display_sample-(1.055*(100/255)**(1/2.4)-.055))<0.001, display_sample
                 from hammerless.core.previewlighting import spot_parameters
                 cone = spot_parameters({'_inner_cone':'20','_cone':'45','_exponent':'2'})
                 for direction, expected in (((0,0,1),200/255),((0,0,-1),0)):
@@ -156,11 +161,43 @@ def check():
                     preview.draw_geometry(cache,shadow_shader,Matrix.Scale(0.5,4),lit=True,textured=True,shadows=True)
                     return fb.read_color(32,32,1,1,4,0,'FLOAT').to_list()[0][0][0]
                 assert abs(shadow_pixel()-200/255)<0.001, 'Self shadowing on receiver'
+                distractors = []
+                for x in range(12):
+                    bpy.ops.mesh.primitive_cube_add(location=(20+x*3,0,-10))
+                    distractors.append(bpy.context.object)
                 bpy.ops.mesh.primitive_cube_add(location=(0,0,-10))
                 blocker = bpy.context.object
                 depsgraph.update()
                 cache.update(depsgraph)
                 assert shadow_pixel()<1e-6, 'Occluder did not cast shadow'
+                tool = bpy.data.materials.new('Shadow tool')
+                tool.hammerless.source_material = 'tools/toolsnodraw'
+                blocker.data.materials.append(tool)
+                depsgraph.update();cache.update(depsgraph)
+                assert shadow_pixel()<1e-6, 'Nodraw lost its shadow'
+                tool.hammerless.source_material = 'tools/toolsplayerclip'
+                depsgraph.update();cache.update(depsgraph)
+                assert abs(shadow_pixel()-200/255)<0.001, 'Player clip cast a shadow'
+                tool.hammerless.source_material = 'tools/toolsnodraw'
+                depsgraph.update();cache.update(depsgraph)
+                assert shadow_pixel()<1e-6, 'Changed material did not restore shadow'
+                blocker.hammerless.role = 'IGNORE'
+                depsgraph.update();cache.update(depsgraph)
+                assert abs(shadow_pixel()-200/255)<0.001, 'Ignored object cast a shadow'
+                blocker.hammerless.role = 'AUTO'
+                depsgraph.update();cache.update(depsgraph)
+                assert shadow_pixel()<1e-6, 'Unignored object missing'
+                blocker.hammerless.classname = 'info_survivor_position'
+                depsgraph.update();cache.update(depsgraph)
+                assert abs(shadow_pixel()-200/255)<0.001, 'Spawn marker cast a shadow'
+                blocker.hammerless.classname = 'prop_static'
+                blocker.data['hl_model'] = 'models/test.mdl'
+                depsgraph.update();cache.update(depsgraph)
+                assert shadow_pixel()<1e-6, 'Actual model mesh excluded as a point marker'
+                del blocker.data['hl_model']
+                blocker.hammerless.classname = ''
+                depsgraph.update();cache.update(depsgraph)
+                assert shadow_pixel()<1e-6, 'Restored brush lost its shadow'
                 builds = cache.trace.builds
                 blocker.location.x = 10
                 depsgraph.update()
@@ -171,6 +208,24 @@ def check():
                 depsgraph.update()
                 cache.update(depsgraph)
                 assert abs(shadow_pixel()-200/255)<0.001, 'Deleted blocker retained'
+                for obj in distractors:
+                    bpy.data.objects.remove(obj,do_unlink=True)
+                depsgraph.update()
+                cache.update(depsgraph)
+                cache.lights = []
+                cache.light_texture = None
+                cache.sky_color = (51.,51.,51.)
+                assert abs(shadow_pixel()-0.2)<0.001, 'Open sky normalization incorrect'
+                bpy.ops.mesh.primitive_cube_add(size=20)
+                enclosure = bpy.context.object
+                depsgraph.update()
+                cache.update(depsgraph)
+                assert shadow_pixel()<1e-6, 'Sky leaked into closed enclosure'
+                bpy.data.objects.remove(enclosure,do_unlink=True)
+                depsgraph.update()
+                cache.update(depsgraph)
+                assert abs(shadow_pixel()-0.2)<0.001, 'Sky did not recover after enclosure removal'
+                cache.sky_color = (0.,0.,0.)
         finally:
             offscreen.free()
     bpy.data.objects.remove(cube, do_unlink=True)
@@ -181,7 +236,7 @@ def check():
     bpy.context.scene.render.engine = 'BLENDER_WORKBENCH'
     preview.unregister()
     props.unregister()
-    return {'ok': True, 'gpu': not bpy.app.background, 'checks': ['registration', 'triangles', 'transform reuse', 'mesh edit', 'deletion'], 'point_irradiance': sample[:3] if not bpy.app.background else None, 'gpu_checks': ['point brightness', 'base color', 'painted UV quadrants', 'world-aligned downward face quadrants', 'spotlight direction', 'textured opaque shadow', 'no receiver self-shadow', 'transform preserves BVH', 'deleted blocker removed'] if not bpy.app.background else []}
+    return {'ok': True, 'gpu': not bpy.app.background, 'checks': ['registration', 'triangles', 'transform reuse', 'mesh edit', 'deletion'], 'point_irradiance': sample[:3] if not bpy.app.background else None, 'gpu_checks': ['point brightness', 'base color', 'painted UV quadrants', 'world-aligned downward face quadrants', 'spotlight direction', 'sRGB exposure', 'nodraw shadow', 'clip does not shadow', 'ignore role', 'open and enclosed sky', 'textured opaque shadow', 'no receiver self-shadow', 'transform preserves BVH', 'deleted blocker removed'] if not bpy.app.background else []}
 
 
 try:
@@ -191,11 +246,6 @@ except Exception:
 OUT.write_text(json.dumps(result, indent=2))
 print(json.dumps(result), flush=True)
 if not bpy.app.background:
-    bpy.ops.wm.quit_blender()
-
-
-
-
-
-
-
+    # This isolated factory-startup test owns no user document.
+    bpy.context.preferences.view.use_save_prompt = False
+    bpy.app.timers.register(lambda:bpy.ops.wm.quit_blender() and None,first_interval=.1)

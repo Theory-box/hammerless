@@ -21,7 +21,7 @@ from hammerless.core.compile import find_game_root
 from hammerless.core.lightbake import read_faces
 from hammerless.core.lightmap import decode_luxels
 from hammerless.core.bspdecompile import Bsp
-from hammerless.core.previewlighting import PointLight, spot_parameters, spot_factor, vrad_light_direction
+from hammerless.core.previewlighting import PointLight, spot_parameters, spot_factor, vrad_light_direction, sky_intensity
 
 out = Path(sys.argv[sys.argv.index('--')+1]).resolve()
 out.mkdir(parents=True, exist_ok=True)
@@ -51,12 +51,15 @@ if '--finest' in sys.argv:
         face.lightmap_scale = 1
 keys = {'_light':'255 180 90 200', '_constant_attn':'0', '_linear_attn':'0', '_quadratic_attn':'1'}
 spot = '--spot' in sys.argv
-sun = '--sun' in sys.argv
+sky = '--sky' in sys.argv
+sun = '--sun' in sys.argv or sky
 angles = (-90.,0.,0.) if spot or sun else (0.,0.,0.)
 if spot:
     keys.update(_inner_cone='20',_cone='60',_exponent='2.3')
 if sun:
     keys.update(_constant_attn='1',_quadratic_attn='0',_ambient='0 0 0 0',SunSpreadAngle='0')
+if sky:
+    keys.update(_ambient=keys['_light'],_light='0 0 0 0')
 origin = np.array([0.,0.,128.])
 ir.entities.append(Entity('light_environment' if sun else 'light_spot' if spot else 'light', tuple(origin), angles=angles, keyvalues=keys))
 text, report = build_vmf(ir)
@@ -94,7 +97,9 @@ for mode in ('cpu','gpu'):
                 distance = np.linalg.norm(delta)
                 actual.append(values[y,x])
                 factor = spot_factor(float(-delta@np.array(vrad_light_direction(angles,keys))/distance),spot_parameters(keys)) if spot else 1.0
-                if sun:
+                if sky:
+                    expected.append(np.array(sky_intensity(keys,light.intensity))/255)
+                elif sun:
                     expected.append(np.array(light.intensity)*max(0.,-float(face.normal@np.array(vrad_light_direction(angles,keys))))/255)
                 else:
                     expected.append(np.array(light.irradiance(distance,float(delta@face.normal/distance)))*factor/255)
