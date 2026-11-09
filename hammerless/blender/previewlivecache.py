@@ -86,11 +86,11 @@ class LiveSurfaceCache:
             nonlocal snapshot
             if snapshot is None:snapshot=ChartSnapshot(context)
             return snapshot
-        prepared=[];warnings=[]
+        prepared=[];warnings=[];material_signatures={}
         for obj in candidates:
             key=obj.as_pointer()
             try:
-                charts=self.layouts.get(context,obj,depsgraph,id(scene.geometry[key]),source,get_snapshot,allow_partial=True)
+                charts=self.layouts.get(context,obj,depsgraph,id(scene.geometry[key]),source,get_snapshot,allow_partial=True,material_signatures=material_signatures)
                 rejected=self.layouts.warnings.get(key,[])
                 if rejected:warnings.append(f'{obj.name}: {len(rejected)} face(s) retain per-pixel lighting ({rejected[0]})')
                 prepared.append((key,charts))

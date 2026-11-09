@@ -59,6 +59,8 @@ class TraceCache:
         self.instance_signature = None
         self.ranges = {}
         self.builds = 0
+        self.instance_entries = {}
+        self.instance_entry_builds = 0
 
     def update(self, scene):
         signature = tuple((key,id(g),g.shadow_revision) for key,g in scene.geometry.items())
@@ -88,22 +90,37 @@ class TraceCache:
             self.triangles = texture(np.concatenate(tris) if tris else np.zeros((0,4)))
             self.signature = signature
             self.instance_signature = None
+            # Mesh/range changes invalidate packed offsets and local bounds.
+            # Transform-only updates keep entries for unchanged instances.
+            self.instance_entries = {}
         inst_signature = tuple((key,tuple(v for row in matrix for v in row)) for key,matrix in scene.instances)
         if inst_signature != self.instance_signature:
             instances = []
-            for key,matrix in scene.instances:
-                if key not in self.ranges or abs(matrix.determinant())<1e-15:
-                    continue
-                root = self.meshes[key][1][0]
-                low,high = root[0,:3],root[1,:3]
-                corners = np.array([[x,y,z,1] for x in (low[0],high[0])
-                                    for y in (low[1],high[1]) for z in (low[2],high[2])])
-                world = corners @ np.array(matrix).T
-                entry = np.zeros((6,4),np.float32)
-                entry[:3] = np.array(matrix.inverted())[:3]
-                entry[3,:2] = self.ranges[key]
-                entry[4,:3], entry[5,:3] = world[:,:3].min(axis=0),world[:,:3].max(axis=0)
-                instances.append(entry)
+            retained = {}
+            for (key,matrix),token in zip(scene.instances,inst_signature):
+                if token in retained:
+                    entry = retained[token]
+                elif token in self.instance_entries:
+                    entry = self.instance_entries[token]
+                elif key not in self.ranges or abs(matrix.determinant())<1e-15:
+                    entry = None
+                else:
+                    root = self.meshes[key][1][0]
+                    low,high = root[0,:3],root[1,:3]
+                    corners = np.array([[x,y,z,1] for x in (low[0],high[0])
+                                        for y in (low[1],high[1]) for z in (low[2],high[2])])
+                    world = corners @ np.array(matrix).T
+                    entry = np.zeros((6,4),np.float32)
+                    entry[:3] = np.array(matrix.inverted())[:3]
+                    entry[3,:2] = self.ranges[key]
+                    entry[4,:3], entry[5,:3] = world[:,:3].min(axis=0),world[:,:3].max(axis=0)
+                    self.instance_entry_builds += 1
+                retained[token] = entry
+                if entry is not None:instances.append(entry)
+            # Retain only current transforms, not a history of a dragged object.
+            # Equal mesh/transform instances share data but still appear once
+            # per instance in the hierarchy, preserving traversal ordering.
+            self.instance_entries = retained
             self.instance_count = len(instances)
             if instances:
                 entries = np.array(instances)

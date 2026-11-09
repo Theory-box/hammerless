@@ -418,3 +418,23 @@ The new edit-reuse fixture passed twelve checks including repeated edits before
 draw, material refresh, changed density and atlas offsets, budget eviction,
 deletions, and empty-cache cleanup. Fresh versus reused lighting matched within
 1e-7 and displayed pixels matched exactly (maximum difference 0.0).
+
+### Follow-up: unchanged instance transforms and shared materials
+
+TraceCache now retains only current (mesh, complete transform) instance records.
+Unchanged inverse matrices and world bounds survive a brush move. Duplicate
+instances remain separate hierarchy entries; singular transforms remain omitted.
+Any geometry/shadow/range change clears the entry cache. The top-level hierarchy
+still rebuilds conservatively. Material chart metadata is memoized only within
+one update, so shared materials avoid repeated node traversal while edits are
+observed on the next update.
+
+Same two-light/two-brush hotel profile (`edit-profile-transform.json`): chart
+checks after light movement 145–146 ms (previous 267–268); brush chart preparation
+405–407 ms (previous 525–530); first brush refinement 148–197 ms (previous
+294–349). Combined measured stages: light about 0.30 s, brush 0.69–0.73 s.
+Profiling overhead is included; these are still not interactive viewport FPS.
+The trace regression compares uploaded instance and top-level arrays exactly
+against the previous full packing path, including duplicate instances, mirrors,
+nonuniform scale, singular recovery, relocated mesh ranges, and deletion.
+Independent review found no blocking issue.

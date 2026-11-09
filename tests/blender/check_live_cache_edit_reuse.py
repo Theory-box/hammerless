@@ -38,6 +38,23 @@ def run():
   cache.update(deps);live.update(bpy.context,deps,cache,revision)
   return deps
  deps=update();assert len(live.faces)==10
+ # Shared material metadata is evaluated once per update, never cached across
+ # updates: direct material setting edits must invalidate both brushes.
+ from hammerless.blender import previewsurfacecharts as chart_module
+ original_size=chart_module.texture_size;calls=[]
+ def counted_size(mat):
+  calls.append(mat.as_pointer());return original_size(mat)
+ chart_module.texture_size=counted_size
+ try:
+  deps=update()
+  assert calls and len(calls)==len(set(calls)),calls
+ finally:chart_module.texture_size=original_size
+ shared=a.material_slots[0].material
+ assert shared is b.material_slots[0].material
+ before=live.layouts.builds;old_scale=shared.hammerless.texture_scale
+ shared.hammerless.texture_scale=old_scale*2;deps=update()
+ assert live.layouts.builds==before+2
+ shared.hammerless.texture_scale=old_scale;deps=update()
  class Resolver:
   def resolve(self,mat):return BounceMaterial((.5,.5,.5),True,True,'test')
  cache.trace=TraceCache();cache.trace.update_bounce_materials(cache,Resolver())

@@ -86,11 +86,20 @@ class CachedObjectCharts:
     def __init__(self):
         self.entries={};self.bindings={};self.warnings={};self.builds=0
 
-    def get(self,context,obj,depsgraph,geometry_token,source_revision=0,snapshot=None,allow_partial=False):
+    def get(self,context,obj,depsgraph,geometry_token,source_revision=0,snapshot=None,allow_partial=False,material_signatures=None):
         s=context.scene.hammerless
-        materials=tuple((slot.material.as_pointer(),slot.material.hammerless.lightmap_scale,
-                         slot.material.hammerless.texture_scale,game_path(slot.material),texture_size(slot.material))
-                        if slot.material else None for slot in obj.material_slots)
+        def material_signature(mat):
+            if mat is None:return None
+            key=mat.as_pointer()
+            if material_signatures is not None and key in material_signatures:
+                return material_signatures[key]
+            value=(key,mat.hammerless.lightmap_scale,mat.hammerless.texture_scale,game_path(mat),texture_size(mat))
+            if material_signatures is not None:material_signatures[key]=value
+            return value
+        # The caller may share this dictionary only within one update. Material
+        # and image edits must be observed on the next update, without relying
+        # on Blender issuing a particular dependency-graph notification.
+        materials=tuple(material_signature(slot.material) for slot in obj.material_slots)
         signature=(geometry_token,source_revision,allow_partial,tuple(v for row in obj.matrix_world for v in row),
                    s.units_per_meter,s.lightmap_scale,s.lightmap_scale_imported,s.default_material,
                    materials,obj.name,obj.get(vmfimport.ID),obj.get(vmfimport.KIND),
