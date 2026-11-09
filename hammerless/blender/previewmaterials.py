@@ -68,6 +68,14 @@ class SurfaceMaterials:
             if path not in self.paths:
                 vmt = read_vmt(self.content,path,self.game_dir) if self.content else {}
                 self.path_unlit[path] = str(vmt.get('shader','')).startswith('unlitgeneric')
+                unsupported=[]
+                for parameter,label in (('$alphatest','alpha cutout'),('$translucent','transparency'),('$selfillum','self-illumination')):
+                    try:enabled=float(vmt.get(parameter,0))!=0
+                    except (TypeError,ValueError):enabled=False
+                    if enabled:unsupported.append(label)
+                if unsupported:
+                    self.warnings.append(f"{path}: preview does not yet reproduce {', '.join(unsupported)}")
+
                 texture = base_texture(self.content, path, self.game_dir) if self.content else None
                 image, w, h = _image_for_texture(texture, self.content, self.game_dir, cache_scope=self.cache_scope, verify_content=True) if texture else (None, 0, 0)
                 if image is None:

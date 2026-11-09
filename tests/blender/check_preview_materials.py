@@ -103,3 +103,12 @@ r=SurfaceMaterials(content,None,'wall');r.resolve(renamed)
 assert r.unlit[renamed.as_pointer()], 'Explicit Source path lost precedence over model provenance'
 assert BounceMaterials(content,None,'wall').resolve(legacy).verified
 print('PASS: legacy model paths, renamed provenance, explicit override')
+
+# Unsupported shader features must not silently appear fully validated.
+from unittest.mock import patch
+with patch('hammerless.core.gamematerials.read_vmt',return_value={'shader':'lightmappedgeneric','$alphatest':'1','$selfillum':'1'}):
+    diagnostic=SurfaceMaterials(content,None,'unsupported')
+    diagnostic.resolve(None)
+    assert any('alpha cutout' in w and 'self-illumination' in w for w in diagnostic.warnings)
+print('PASS: unsupported material diagnostics',flush=True)
+bpy.app.timers.register(lambda:bpy.ops.wm.quit_blender() and None,first_interval=.1)
