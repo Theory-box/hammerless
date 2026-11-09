@@ -61,9 +61,13 @@ def register():
     ladderview.register()
     from .blender import overlays
     overlays.register()
+    from .blender import l4d2preview
+    l4d2preview.register()
 
 
 def unregister():
+    from .blender import l4d2preview
+    l4d2preview.unregister()
     from .blender import overlays
     overlays.unregister()
     from .blender import ladderview

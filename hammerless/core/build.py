@@ -506,6 +506,18 @@ def seal_brushes(ir: MapIR, extra_points=()):
 LAYER_LIGHTS = ("light", "light_spot", "light_environment", "light_directional")
 
 
+def default_light_environment(settings):
+    """The environment used by export and preview when no explicit sun exists."""
+    s = settings
+    if not (s.auto_light_environment or s.ambient_brightness > 0):
+        return None
+    sun = s.sun_brightness if s.auto_light_environment else 0
+    kv = {"_light": "{} {} {} {}".format(*s.sun_color, sun),
+          "_ambient": "{} {} {} {}".format(*s.ambient_color, s.ambient_brightness),
+          "pitch": f"{s.sun_pitch:g}"}
+    return Entity("light_environment", (0, 0, 0), (s.sun_pitch, s.sun_yaw, 0), kv)
+
+
 def tag_light_layers(entities) -> int:
     """Live Light Mixing: each light entity gets a layer of its own (hlvrad -layers ... keys): "_hllayer" n, and the
     object it came from, "_hlobject" (the sun added from the Lighting settings: "*sun"); a light_environment's sky
@@ -665,11 +677,7 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
         report.info.append("Added info_director.")
     if "light_environment" not in classes and (s.auto_light_environment or s.ambient_brightness > 0):
         # (the sky light is part of the sun's entity in Source: without Add Sun, the sky light alone, sun at 0)
-        sun = s.sun_brightness if s.auto_light_environment else 0
-        kv = {"_light": "{} {} {} {}".format(*s.sun_color, sun),
-              "_ambient": "{} {} {} {}".format(*s.ambient_color, s.ambient_brightness),
-              "pitch": f"{s.sun_pitch:g}"}
-        entities.append(Entity("light_environment", (0, 0, 0), (s.sun_pitch, s.sun_yaw, 0), kv))
+        entities.append(default_light_environment(s))
         report.info.append("No sun in the scene. Added one from the Lighting settings." if s.auto_light_environment
                            else "No sun in the scene: added the sky light only (Add Sun if Missing is off).")
     if s.light_mixing:
