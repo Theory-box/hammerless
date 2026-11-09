@@ -200,7 +200,8 @@ class SceneCache:
         return self.sky_texture
 
     def update(self, depsgraph):
-        from .previewscene import included_instance, material_path, NON_SHADOW_TOOLS
+        from .previewscene import included_instance, material_path, NON_SHADOW_TOOLS, collection_role_snapshot
+        self.role_lookup = collection_role_snapshot()
         dirty = set()
         dirty_meshes = set()
         for update in depsgraph.updates:
@@ -217,7 +218,7 @@ class SceneCache:
             if obj.type != 'MESH' or not instance.show_self:
                 continue
             original = obj.original
-            if not included_instance(instance,depsgraph.view_layer):
+            if not included_instance(instance,depsgraph.view_layer,self.role_lookup):
                 continue
             key = original.as_pointer()
             if key not in used and (key not in self.geometry or key in dirty or

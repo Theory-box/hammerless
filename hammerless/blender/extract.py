@@ -87,11 +87,11 @@ def _world_brushes(obj, *args, **kw) -> list:
     return brushes
 
 
-def effective_role(obj) -> str:
+def effective_role(obj, collection_roles=None) -> str:
     role = obj.hammerless.role
     if role != "AUTO":
         return role
-    crole = collection_role(obj)
+    crole = collection_role(obj) if collection_roles is None else collection_roles.get(obj.as_pointer(), "NONE")
     if crole == "IGNORE":
         return "IGNORE"
     if obj.type == "LIGHT":

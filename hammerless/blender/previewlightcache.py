@@ -31,7 +31,7 @@ def accumulation_shader():
     return shader,batch_for_shader(shader,'TRIS',{'position':[(-1,-1),(3,-1),(-1,3)]})
 
 class SurfaceLightCache:
-    def __init__(self,positions,normals,*,sample_counts=None):
+    def __init__(self,positions,normals,*,sample_counts=None,reuse=None):
         self.positions=np.asarray(positions,dtype=np.float32).reshape(-1,3)
         self.normals=np.asarray(normals,dtype=np.float32).reshape(-1,3)
         if self.positions.shape!=self.normals.shape or not len(self.positions):
@@ -51,7 +51,7 @@ class SurfaceLightCache:
         self.size=(width,height)
         ids=np.arange(self.count)
         clips=np.column_stack(((ids%width+.5)/width*2-1,(ids//width+.5)/height*2-1)).astype(np.float32)
-        self.shader=diagnostic_shader(lit=True,shadows=True,bounce=True,surface_samples=True)
+        self.shader=reuse.shader if reuse is not None else diagnostic_shader(lit=True,shadows=True,bounce=True,surface_samples=True)
         # Share the immutable vertex buffer across changing point-index subsets.
         fmt=gpu.types.GPUVertFormat()
         for name,size in (('position',3),('normal',3),('faceNormal',3),('sampleClip',2)):
@@ -61,14 +61,19 @@ class SurfaceLightCache:
             self.vbo.attr_fill(name,data)
         self.batch=gpu.types.GPUBatch(type='POINTS',buf=self.vbo)
         self.selected_key=None;self.selected_batch=None;self.batch_builds=0
-        self.sample=gpu.types.GPUTexture(self.size,format='RGBA32F')
-        self.texture=gpu.types.GPUTexture(self.size,format='RGBA32F')
-        self.spare_texture=gpu.types.GPUTexture(self.size,format='RGBA32F')
-        self.depth=gpu.types.GPUTexture(self.size,format='DEPTH_COMPONENT32F')
-        self.sample_fb=gpu.types.GPUFrameBuffer(color_slots=self.sample,depth_slot=self.depth)
-        self.result_fb=gpu.types.GPUFrameBuffer(color_slots=self.texture)
-        self.spare_fb=gpu.types.GPUFrameBuffer(color_slots=self.spare_texture)
-        self.average_shader,self.average_batch=accumulation_shader()
+        if reuse is not None and reuse.size==self.size:
+            for name in ('sample','texture','spare_texture','depth','sample_fb','result_fb','spare_fb'):
+                setattr(self,name,getattr(reuse,name))
+        else:
+            self.sample=gpu.types.GPUTexture(self.size,format='RGBA32F')
+            self.texture=gpu.types.GPUTexture(self.size,format='RGBA32F')
+            self.spare_texture=gpu.types.GPUTexture(self.size,format='RGBA32F')
+            self.depth=gpu.types.GPUTexture(self.size,format='DEPTH_COMPONENT32F')
+            self.sample_fb=gpu.types.GPUFrameBuffer(color_slots=self.sample,depth_slot=self.depth)
+            self.result_fb=gpu.types.GPUFrameBuffer(color_slots=self.texture)
+            self.spare_fb=gpu.types.GPUFrameBuffer(color_slots=self.spare_texture)
+        if reuse is not None:self.average_shader,self.average_batch=reuse.average_shader,reuse.average_batch
+        else:self.average_shader,self.average_batch=accumulation_shader()
         self.signature=None;self.frames=0;self.evaluations=0
         self.last_samples=0
 
@@ -131,7 +136,7 @@ class SurfaceLightCache:
 
 class SurfaceCacheDisplay:
     """Full-resolution raster lookup of compiled charts; no lighting rays."""
-    def __init__(self,cache,faces,charts,material_binding=None,*,units_per_meter=1):
+    def __init__(self,cache,faces,charts,material_binding=None,*,units_per_meter=1,reuse=None,face_tokens=None):
         if not math.isfinite(units_per_meter) or units_per_meter<=0:
             raise ValueError('Surface display units must be positive and finite')
         self.cache=cache
@@ -142,9 +147,37 @@ class SurfaceCacheDisplay:
             p=np.asarray(face.positions,dtype=np.float32)
             image,uv,unlit=material_binding(face) if material_binding else (None,np.zeros((len(p),2)),False)
             key=(image.as_pointer() if image else 0,bool(unlit))
-            group=groups.setdefault(key,{'image':image,'unlit':unlit,'positions':[],'coords':[],'metadata':[],'uv':[]})
-            group['positions'].extend(p/units_per_meter);group['coords'].extend(face.to_luxel(p));group['uv'].extend(uv)
-            group['metadata'].extend([(chart['start'],chart['width'],chart['height'])]*len(p))
+            group=groups.setdefault(key,{'image':image,'unlit':unlit,'faces':[],'signature':[]})
+            group['faces'].append((face,chart,p,uv))
+            token=face_tokens[face.index] if face_tokens is not None else id(face)
+            group['signature'].append((token,chart['start'],chart['width'],chart['height']))
+        # Only the most recent display is eligible for reuse. Offsets belong in
+        # each group signature: an earlier chart resizing can shift later ones.
+        reusable=getattr(reuse,'by_material',{}) if reuse is not None and reuse.units==units_per_meter and face_tokens is not None else {}
+        self.units=units_per_meter
+        self.shader=reuse.shader if reuse is not None else self._shader()
+        self.depth_shader=reuse.depth_shader if reuse is not None else None
+        self.groups=[];self.by_material={};self.reused_groups=0
+        for key,group in groups.items():
+            signature=tuple(group['signature'])
+            old=reusable.get(key)
+            if old is not None and old['signature']==signature:
+                self.groups.append(old);self.by_material[key]=old;self.reused_groups+=1
+                continue
+            positions=[];coords=[];metadata=[];uvs=[]
+            for face,chart,p,uv in group.pop('faces'):
+                positions.append(p/units_per_meter);coords.append(face.to_luxel(p));uvs.append(uv)
+                metadata.append(np.tile((chart['start'],chart['width'],chart['height']),(len(p),1)))
+            group['signature']=signature
+            group['batch']=batch_for_shader(self.shader,'TRIS',{
+                'position':np.concatenate(positions).astype(np.float32),
+                'luxel':np.concatenate(coords).astype(np.float32),
+                'chart':np.concatenate(metadata).astype(np.float32),
+                'baseUV':np.concatenate(uvs).astype(np.float32)})
+            self.groups.append(group);self.by_material[key]=group
+
+    @staticmethod
+    def _shader():
         info=gpu.types.GPUShaderCreateInfo()
         info.vertex_in(0,'VEC3','position');info.vertex_in(1,'VEC2','luxel');info.vertex_in(2,'VEC3','chart');info.vertex_in(3,'VEC2','baseUV')
         interface=gpu.types.GPUStageInterfaceInfo('surface_cache_chart')
@@ -167,16 +200,7 @@ class SurfaceCacheDisplay:
             c=mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-.055,greaterThan(c,vec3(.0031308)));
             color=vec4(c,1);
         }''')
-        self.shader=gpu.shader.create_from_info(info)
-        self.depth_shader=None
-        self.groups=[]
-        for group in groups.values():
-            group['batch']=batch_for_shader(self.shader,'TRIS',{
-                'position':np.asarray(group['positions'],dtype=np.float32),
-                'luxel':np.asarray(group['coords'],dtype=np.float32),
-                'chart':np.asarray(group['metadata'],dtype=np.float32),
-                'baseUV':np.asarray(group['uv'],dtype=np.float32)})
-            self.groups.append(group)
+        return gpu.shader.create_from_info(info)
 
     def draw_depth(self,view_projection):
         """Use exactly the displayed chart vertices to hide occluded prop work."""

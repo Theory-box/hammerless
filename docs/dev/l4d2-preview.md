@@ -375,3 +375,46 @@ in its isolated package-smoke directory. Hotel image comparison against the
 pre-scheduling version: overview pixel-identical; interior differed at only two
 pixels, each by one 8-bit channel level. Raw PNG hashes differed, so pixel data
 was compared directly using Pillow/NumPy rather than inferring visual changes.
+
+## Measured light/brush edit preparation (2026-11-09)
+
+A saved hotel-map profiler (`tests/blender/profile_preview_edits.py`) moves a
+light and an imported brush twice each. It separately times dependency-graph
+update, scene extraction/filtering, light update, chart preparation, and the first
+synchronized GPU refinement after each edit. It uses 4,784 instances, roughly
+one million cached samples, an interior camera, and synthetic single-point
+lighting with eight rays/one bounce. It never saves the test map. These are
+component timings, not interactive viewport FPS; chart preparation includes
+cProfile overhead, and the after-run additionally profiles first refinement.
+
+Before -> after ranges, milliseconds:
+- Scene scan: 1,085–1,104 -> 67–69.
+- Light-edit chart check: 877–883 -> 267–268.
+- Brush-edit chart preparation: 4,820–4,860 -> 525–530.
+- Brush first refinement/resource preparation: 5,422–5,465 -> 294–349.
+- Combined measured stages: light about 2.1 s -> 0.4 s; brush about
+  11.4 s -> 1.0 s. Two samples per edit type, not a statistical benchmark.
+
+Collection roles are resolved from a fresh inverted membership snapshot once
+per scene update, preserving exporter precedence including scene master
+collections. Unchanged objects retain matched charts, samples, normals, UVs,
+bounds and fallback geometry. Only the immediately preceding GPU generation is
+eligible for reuse: shaders, compatible atlas textures/framebuffers, and
+unchanged material batches. Batches remain grouped by material to avoid extra
+draw calls. Atlas offsets and monotonic object generations participate in batch
+signatures. Edits still reset lighting globally; this does not attempt unsafe
+local lighting invalidation. Empty caches release retained GPU resources.
+
+Initial layout remains roughly eight seconds on this map, and dragging is still
+not smooth. Remaining costs include chart-signature scanning/imported source
+hashing and transform acceleration updates. Reports are edit-profile-before.json
+and edit-profile-after.json under outputs/l4d2-preview.
+
+Validation: the independent review caught master-collection precedence and
+resource-retention/identity edge cases; these were fixed. Blender tests passed
+collection-role parity across ten mutation cases, partial charts, the existing
+surface irradiance/visibility suite, and real mixed prop/brush viewport updates.
+The new edit-reuse fixture passed twelve checks including repeated edits before
+draw, material refresh, changed density and atlas offsets, budget eviction,
+deletions, and empty-cache cleanup. Fresh versus reused lighting matched within
+1e-7 and displayed pixels matched exactly (maximum difference 0.0).
