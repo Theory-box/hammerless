@@ -14,17 +14,26 @@ PREVIEW_SIZE = 512          # largest mip decoded for previews
 NODE_TAG = "hammerless_preview"
 
 
-def _image_for_texture(texture: str, content, game_dir):
-    """Blender image for a game texture (cached by name). Returns (image, full_width, full_height)."""
+def _image_for_texture(texture: str, content, game_dir, *, cache_scope="", verify_content=False):
+    """Return (image, full_width, full_height), optionally scoped and revalidated.
+
+    verify_content reads bytes before reuse; call during snapshot preparation,
+    never per draw. Default callers retain the existing material-preview cache.
+    """
     from .ops import cache_name
-    name = cache_name("HL_tex_", texture)
+    import hashlib
+    name = cache_name("HL_tex_", cache_scope + ":" + texture if cache_scope else texture)
     img = bpy.data.images.get(name)
-    if img is not None and "hl_full_size" in img:
+    if not verify_content and img is not None and "hl_full_size" in img:
         w, h = img["hl_full_size"]
         return img, w, h
     data = read_texture_bytes(content, texture, game_dir)
     if not data:
         return None, 0, 0
+    digest = hashlib.sha256(data).hexdigest() if verify_content else None
+    if digest and img is not None and img.get('hl_content_digest') == digest and 'hl_full_size' in img:
+        w, h = img['hl_full_size']
+        return img, w, h
     w, h, rgba = read_vtf(data, PREVIEW_SIZE)
     ih, iw = rgba.shape[:2]
     if img is None:
@@ -35,6 +44,8 @@ def _image_for_texture(texture: str, content, game_dir):
     img.pixels.foreach_set(px)
     img.pack()
     img["hl_full_size"] = (w, h)
+    if digest:
+        img["hl_content_digest"] = digest
     img["hl_average"] = [float(c) for c in rgba[..., :3].reshape(-1, 3).mean(axis=0) / 255.0]
     return img, w, h
 

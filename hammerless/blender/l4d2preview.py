@@ -11,6 +11,8 @@ import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
 
+_material_refresh_revision = 0
+
 
 @dataclass
 class Geometry:
@@ -78,9 +80,11 @@ class SceneCache:
         self.trace = None
         self.sky_color = (0.,0.,0.)
         self.sky_texture = None
+        self.surface_materials = None
 
     def update_lights(self, depsgraph):
-        from .extract import light_entity, scene_settings_to_ir
+        from .extract import light_entity, scene_settings_to_ir, effective_role
+        from .previewscene import included_instance
         from ..core.build import ATTENUATION_KEYS, default_light_environment
         from ..core.previewlighting import PointLight, spot_parameters, vrad_light_direction, sky_intensity
         scale = depsgraph.scene.hammerless.units_per_meter
@@ -90,6 +94,14 @@ class SceneCache:
         for instance in depsgraph.object_instances:
             obj = instance.object
             if obj.type != 'LIGHT' or not instance.show_self:
+                continue
+            if effective_role(obj.original) != 'LIGHT' or not included_instance(instance,depsgraph.view_layer):
+                continue
+            # The exporter does not export instanced point/spot/sun lights.
+            # Check before SUN handling so an instanced sun cannot replace the
+            # map's real environment (AREA instances have a separate exporter).
+            if instance.is_instance and obj.data.type != 'AREA':
+                warnings.append(f'{obj.name}: Instanced lights are not exported by the current build path')
                 continue
             if obj.data.type not in ('POINT', 'SPOT', 'SUN'):
                 warnings.append(f'{obj.name}: {obj.data.type} light not supported yet')
@@ -109,8 +121,6 @@ class SceneCache:
                 cone = spot_parameters(keys) if obj.data.type == 'SPOT' else (0.,0.,0.,0.)
                 if keys.get('target', '').strip():
                     raise NotImplementedError('Target-aimed light not supported yet')
-                if instance.is_instance:
-                    raise NotImplementedError('Instanced lights are not exported by the current build path')
                 direction = vrad_light_direction(entity.angles, keys)
             except (ValueError, NotImplementedError) as exc:
                 warnings.append(f'{obj.name}: {exc}')
@@ -159,7 +169,7 @@ class SceneCache:
         return self.sky_texture
 
     def update(self, depsgraph):
-        from .previewscene import included_object, material_path, NON_SHADOW_TOOLS
+        from .previewscene import included_instance, material_path, NON_SHADOW_TOOLS
         dirty = set()
         dirty_meshes = set()
         for update in depsgraph.updates:
@@ -176,7 +186,7 @@ class SceneCache:
             if obj.type != 'MESH' or not instance.show_self:
                 continue
             original = obj.original
-            if not instance.is_instance and not included_object(original,depsgraph.view_layer):
+            if not included_instance(instance,depsgraph.view_layer):
                 continue
             key = original.as_pointer()
             if key not in used and (key not in self.geometry or key in dirty or
@@ -231,6 +241,7 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
         info_world += 'surfaceUV=texcoord;paintedUV=painted;'
         info.sampler(1, 'FLOAT_2D', 'baseTexture')
         info.push_constant('INT', 'hasTexture')
+        info.push_constant('INT', 'surfaceUnlit')
         info.push_constant('INT', 'useUV')
         info.push_constant('VEC3', 'baseColor')
         info.push_constant('VEC3', 'textureSizeScale')
@@ -243,12 +254,15 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
         info.sampler(0, 'FLOAT_2D', 'lights')
         info.sampler(5, 'FLOAT_2D', 'skyDirections')
         info.push_constant('VEC3', 'skyColor')
+        info.push_constant('INT', 'primarySkyIndex')
+        info.push_constant('INT', 'primarySkyCount')
     info.fragment_out(0, 'VEC4', 'color')
     if bounce:
         info.sampler(7, 'FLOAT_2D', 'traceSurfaces')
         info.push_constant('INT', 'bounceSamples')
         info.push_constant('INT', 'bounceSkySampled')
         info.push_constant('INT', 'bounceSeed')
+        info.push_constant('INT', 'bounceDepth')
     if display:
         info.push_constant('FLOAT', 'displayExposure')
     if shadows:
@@ -292,9 +306,9 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
                 float facing=dot(n,skyDirection);
                 if(facing<=0.001) continue;
                 weight+=facing;
-                if(skyIndex>=0 && j!=skyIndex)continue;
+                if(skyIndex>=0 && ((j-skyIndex+162)%162)>=skyCount)continue;
                 float visibility=1.0; // SKY_VISIBILITY
-                visibleWeight+=facing*visibility*(skyIndex>=0?162.0:1.0);
+                visibleWeight+=facing*visibility*(skyIndex>=0?162.0/float(skyCount):1.0);
             }
             if(weight>0.0) sum+=skyColor*(visibleWeight/weight);
         }
@@ -302,21 +316,21 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
     }''' if lit else 'void main() { color=vec4(normalize(worldNormal)*0.5+0.5,1.0); }'
     if lit:
         direct = fragment.split('color=vec4(sum/255.0,1.0);')[0]
-        direct = direct.replace('void main() {', 'vec3 previewDirect(vec3 samplePosition, vec3 n, int skyIndex) {')
+        direct = direct.replace('void main() {', 'vec3 previewDirect(vec3 samplePosition, vec3 n, int skyIndex, int skyCount) {')
         direct = direct.replace('vec3 sum=vec3(0.0), n=normalize(worldNormal);', 'vec3 sum=vec3(0.0);')
         direct = direct.replace('vec3 samplePosition=worldPosition+normalize(surfaceNormal)*(receiverOffset/unitScale);', '')
         fragment = direct + '''return sum;}
         void main() {
             vec3 n=normalize(worldNormal);
             vec3 samplePosition=worldPosition+normalize(surfaceNormal)*(receiverOffset/unitScale);
-            vec3 sum=previewDirect(samplePosition,n,-1);
+            vec3 sum=previewDirect(samplePosition,n,primarySkyIndex,primarySkyCount);
             color=vec4(sum/255.0,1.0);
         }'''
         if bounce:
             from .previewbounce import GLSL as BOUNCE_GLSL
             fragment = fragment.replace('void main()', BOUNCE_GLSL+'\nvoid main()')
-            fragment = fragment.replace('vec3 sum=previewDirect(samplePosition,n,-1);',
-                'vec3 sum=previewDirect(samplePosition,n,-1)+previewBounce(samplePosition,n);')
+            fragment = fragment.replace('vec3 sum=previewDirect(samplePosition,n,primarySkyIndex,primarySkyCount);',
+                'vec3 sum=previewDirect(samplePosition,n,primarySkyIndex,primarySkyCount)+previewBounce(samplePosition,n);')
     if textured:
         fragment = fragment.replace('color=vec4(sum/255.0,1.0);', '''
         vec2 coords=surfaceUV;
@@ -329,7 +343,7 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
         }
         vec3 albedo=baseColor;
         if(hasTexture!=0) albedo=texture(baseTexture,fract(coords)).rgb;
-        color=vec4(albedo*sum/255.0,1.0);''')
+        color=vec4(albedo*(surfaceUnlit!=0?vec3(1.0):sum/255.0),1.0);''')
     if display:
         fragment = fragment.rsplit('}',1)[0] + '''
         vec3 linearColor=max(color.rgb*displayExposure,vec3(0.0));
@@ -349,7 +363,7 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
     return gpu.shader.create_from_info(info)
 
 
-def draw_geometry(cache, shader, view_projection, lit=False, textured=False, shadows=False, display=False, exposure=0.0, bounce_samples=None, sampled_bounce_sky=False, bounce_seed=0):
+def draw_geometry(cache, shader, view_projection, lit=False, textured=False, shadows=False, display=False, exposure=0.0, bounce_samples=None, sampled_bounce_sky=False, bounce_seed=0, bounce_depth=1, primary_sky_index=-1, primary_sky_count=162):
     """Draw to the bound framebuffer; caller owns clearing and viewport setup."""
     old_depth = gpu.state.depth_test_get()
     old_mask = gpu.state.depth_mask_get()
@@ -371,12 +385,15 @@ def draw_geometry(cache, shader, view_projection, lit=False, textured=False, sha
             shader.uniform_int('bounceSamples',max(0,int(bounce_samples)))
             shader.uniform_int('bounceSkySampled',int(sampled_bounce_sky))
             shader.uniform_int('bounceSeed',int(bounce_seed))
+            shader.uniform_int('bounceDepth',max(1,min(8,int(bounce_depth))))
             shader.uniform_sampler('traceSurfaces',cache.trace.surfaces)
         if lit:
             shader.uniform_sampler('lights', cache.upload_lights())
             shader.uniform_int('lightCount', len(cache.lights))
             shader.uniform_float('unitScale', cache.unit_scale)
             shader.uniform_float('skyColor', cache.sky_color)
+            shader.uniform_int('primarySkyIndex',int(primary_sky_index)%162 if primary_sky_index>=0 else -1)
+            shader.uniform_int('primarySkyCount',max(1,min(162,int(primary_sky_count))))
             shader.uniform_sampler('skyDirections', cache.upload_sky())
         for key, matrix in cache.instances:
             geometry = cache.geometry[key]
@@ -405,18 +422,25 @@ def draw_geometry(cache, shader, view_projection, lit=False, textured=False, sha
                             'position': geometry.positions[mask], 'normal': geometry.normals[mask],
                             'texcoord': geometry.uvs[mask], 'faceNormal': geometry.face_normals[mask],
                             'painted': geometry.painted[mask]})
-                    img = _base_color_image(mat) if mat else None
-                    color = (1.0, 1.0, 1.0)
-                    if mat:
-                        color = mat.diffuse_color[:3]
-                        if mat.use_nodes:
-                            bsdf = next((n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
-                            if bsdf and not bsdf.inputs['Base Color'].is_linked:
-                                color = bsdf.inputs['Base Color'].default_value[:3]
+                    if cache.surface_materials is not None:
+                        img, (w, h) = cache.surface_materials.materials.get(mat.as_pointer() if mat else 0, (None,(512,512)))
+                        # The prepared export-facing snapshot owns image/size.
+                        # Avoid scanning material nodes again on every redraw.
+                        color = (1.0,1.0,1.0)
+                    else:
+                        img = _base_color_image(mat) if mat else None
+                        color = (1.0, 1.0, 1.0)
+                        if mat:
+                            color = mat.diffuse_color[:3]
+                            if mat.use_nodes:
+                                bsdf = next((n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+                                if bsdf and not bsdf.inputs['Base Color'].is_linked:
+                                    color = bsdf.inputs['Base Color'].default_value[:3]
+                        w, h = texture_size(mat)
+                    shader.uniform_int('surfaceUnlit',int(cache.surface_materials.unlit.get(mat.as_pointer() if mat else 0,False)) if cache.surface_materials else 0)
                     shader.uniform_float('baseColor', color)
                     shader.uniform_int('hasTexture', int(img is not None))
                     shader.uniform_int('useUV', int(geometry.use_uv))
-                    w, h = texture_size(mat)
                     scale = mat.hammerless.texture_scale if mat else 0.25
                     shader.uniform_float('textureSizeScale', (w, h, max(scale, 1e-6)))
                     # Bind a valid sampler even for untextured materials.
@@ -472,8 +496,10 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         self.history = None
         self.history_depth_shader = None
         self.material_revision = 0
+        self.refresh_revision = _material_refresh_revision
         self.scene_signature = None
         self.error = ''
+        self.surface_signature = None
 
     def view_update(self, context, depsgraph):
         try:
@@ -481,9 +507,23 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             self.cache.update_lights(depsgraph)
             material_change = any(isinstance(u.id, (bpy.types.Material,bpy.types.Image,bpy.types.ShaderNodeTree))
                                   for u in depsgraph.updates)
-            if material_change:
+            if material_change or self.refresh_revision != _material_refresh_revision:
+                self.refresh_revision = _material_refresh_revision
                 self.bounce_materials = None
                 self.material_revision+=1
+            from .previewmaterials import SurfaceMaterials
+            from .ops import game_root,game_content
+            import os
+            settings=context.scene.hammerless
+            surface_signature=(settings.game_root,settings.default_material,self.material_revision,
+                tuple(sorted({m.as_pointer() if m else 0 for g in self.cache.geometry.values() for m in g.materials or (None,)})))
+            if self.cache.surface_materials is None or surface_signature!=self.surface_signature:
+                root=game_root(context)
+                resolver=SurfaceMaterials(game_content(root),os.path.join(root,'left4dead2') if root else None,settings.default_material)
+                for g in self.cache.geometry.values():
+                    for mat in g.materials or (None,):resolver.resolve(mat)
+                self.cache.surface_materials=resolver
+                self.surface_signature=surface_signature
             if context.scene.hl_preview_bounce_samples>0:
                 from .previewmaterials import BounceMaterials
                 from .ops import game_root,game_content
@@ -504,7 +544,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                         for mat in g.materials or (None,):self.bounce_materials.resolve(mat)
                     self.bounce_signature=signature
                     self.bounce_pending=True
-            self.scene_signature=(self.material_revision,self.cache.light_signature,self.cache.sky_color,
+            self.scene_signature=(self.surface_signature,self.material_revision,self.cache.light_signature,self.cache.sky_color,
                 tuple((key,id(g),g.shadow_revision,g.use_uv) for key,g in self.cache.geometry.items()),
                 tuple((key,tuple(v for row in matrix for v in row)) for key,matrix in self.cache.instances))
             self.error = ''
@@ -522,9 +562,11 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         try:
             samples=context.scene.hl_preview_bounce_samples
             bounce=samples>0
-            if self.shader is None or self.shader_bounce!=bounce:
-                self.shader = diagnostic_shader(lit=True, textured=True, shadows=True, display=not bounce,bounce=bounce)
-                self.shader_bounce=bounce
+            progressive=bounce or any(c>0 for c in self.cache.sky_color)
+            shader_mode=(bounce,progressive)
+            if self.shader is None or self.shader_bounce!=shader_mode:
+                self.shader = diagnostic_shader(lit=True, textured=True, shadows=True, display=not progressive,bounce=bounce)
+                self.shader_bounce=shader_mode
             if bounce and self.bounce_pending:
                 from .previewtrace import TraceCache
                 if self.cache.trace is None:self.cache.trace=TraceCache()
@@ -532,14 +574,15 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                 self.bounce_pending=False
                 self.bounce_uploads+=1
             matrix=context.region_data.perspective_matrix.copy()
-            if bounce:
+            if progressive:
                 from .previewhistory import FrameHistory
                 if self.history is None:self.history=FrameHistory()
                 if self.history_depth_shader is None:self.history_depth_shader=depth_shader()
-                signature=(self.scene_signature,samples,self.bounce_uploads,tuple(v for row in matrix for v in row))
+                signature=(self.scene_signature,samples,context.scene.hl_preview_max_bounces,self.bounce_uploads,tuple(v for row in matrix for v in row))
                 def sample(frame):
                     draw_geometry(self.cache,self.shader,matrix,lit=True,textured=True,shadows=True,
-                                  bounce_samples=samples,sampled_bounce_sky=True,bounce_seed=frame)
+                                  bounce_samples=samples if bounce else None,sampled_bounce_sky=True,bounce_seed=frame,bounce_depth=context.scene.hl_preview_max_bounces,
+                                  primary_sky_index=(frame*9)%162,primary_sky_count=9)
                 frames=self.history.render(signature,sample,lambda:draw_depth(self.cache,self.history_depth_shader,matrix),
                                            exposure=context.scene.hl_preview_exposure,max_frames=context.scene.hl_preview_refine_frames)
                 if frames<context.scene.hl_preview_refine_frames:self.tag_redraw()
@@ -551,15 +594,34 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             self.error=str(exc)
             self.update_stats('L4D2 Preview GPU error', str(exc))
             return
-        warning = '; '.join(self.cache.warnings+(self.bounce_materials.warnings if bounce and self.bounce_materials else []))
-        self.update_stats('L4D2 Preview', warning or ('Experimental first bounce' if bounce else 'Direct light and opaque shadows'))
+        warning = '; '.join(self.cache.warnings+(self.cache.surface_materials.warnings if self.cache.surface_materials else [])+(self.bounce_materials.warnings if bounce and self.bounce_materials else []))
+        self.update_stats('L4D2 Preview', warning or ('Experimental bounced light' if bounce else 'Direct light and opaque shadows'))
 
     def render(self, depsgraph):
         self.report({'ERROR'}, 'L4D2 Preview is a viewport prototype; final rendering is not implemented.')
 
 
+class HAMMERLESS_OT_refresh_preview_materials(bpy.types.Operator):
+    bl_idname = 'hammerless.refresh_preview_materials'
+    bl_label = 'Refresh Game Materials'
+    bl_description = 'Reread game textures and materials, then restart preview lighting. Does not reload or overwrite your Blender image edits'
+
+    def execute(self, context):
+        global _material_refresh_revision
+        from . import ops
+        root = ops.game_root(context)
+        ops._content_cache.pop(root, None)
+        _material_refresh_revision += 1
+        context.scene.update_tag()
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+        return {'FINISHED'}
+
+
 class HAMMERLESS_PT_l4d2_preview(bpy.types.Panel):
-    bl_label = 'L4D2 Preview — Experimental'
+    bl_label = 'L4D2 Preview - Experimental'
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = 'render'
@@ -572,25 +634,30 @@ class HAMMERLESS_PT_l4d2_preview(bpy.types.Panel):
         col = self.layout.column()
         col.label(text='Point/spot/sun with opaque GPU shadows', icon='INFO')
         col.label(text='Base textures; linear irradiance / 255.')
+        col.operator('hammerless.refresh_preview_materials', icon='FILE_REFRESH')
         col.prop(context.scene,'hl_preview_exposure')
         col.prop(context.scene,'hl_preview_bounce_samples')
+        col.prop(context.scene,'hl_preview_max_bounces')
         col.prop(context.scene,'hl_preview_refine_frames')
-        col.label(text='One bounce; more rays reduce banding but cost time.')
+        col.label(text='More rays and bounces cost time.')
         col.label(text='Fixed sRGB display; game auto-exposure not simulated.')
         col.label(text='Flat sky ambient uses 162 visibility directions.')
-        col.label(text='HDRI, alpha, advanced shaders and further bounces pending.')
+        col.label(text='HDRI, alpha and advanced shaders pending.')
 
 
-CLASSES = (HAMMERLESS_L4D2Preview, HAMMERLESS_PT_l4d2_preview)
+CLASSES = (HAMMERLESS_L4D2Preview, HAMMERLESS_OT_refresh_preview_materials, HAMMERLESS_PT_l4d2_preview)
 
 
 def register():
+    bpy.types.Scene.hl_preview_max_bounces = bpy.props.IntProperty(
+        name='Max Bounces',default=1,min=1,max=8,
+        description='Maximum diffuse reflections per preview ray. Higher values add light carried around more corners, but cost more time. Does not change bake settings')
     bpy.types.Scene.hl_preview_refine_frames = bpy.props.IntProperty(
-        name='Refinement Frames',default=64,min=1,max=512,
-        description='Average fresh bounce samples while the view is still. Stops at this many frames; moving the camera or changing the scene restarts refinement')
+        name='Refinement Frames',default=72,min=1,max=512,
+        description='Average fresh bounce and sky samples while still. Multiples of 18 complete all sky directions; other counts leave a partial sky estimate. Camera or scene changes restart refinement')
     bpy.types.Scene.hl_preview_bounce_samples = bpy.props.IntProperty(
-        name='First Bounce Rays',default=0,min=0,max=128,
-        description='Experimental indirect light: 0 disables it. Try 8 or 16 rays per frame; larger values slow interaction. Samples accumulate while still. One bounce, no denoising')
+        name='Bounce Rays',default=0,min=0,max=128,
+        description='Experimental indirect light: 0 disables it. Try 8 or 16 paths per frame; larger values slow interaction. Samples accumulate while still. No denoising')
     bpy.types.Scene.hl_preview_exposure = bpy.props.FloatProperty(
         name='Preview Exposure',default=0.,min=-10.,max=10.,
         description='Display-only exposure in stops: +1 doubles brightness. Does not change exported lights or simulate game auto-exposure')
@@ -599,6 +666,7 @@ def register():
 
 
 def unregister():
+    del bpy.types.Scene.hl_preview_max_bounces
     del bpy.types.Scene.hl_preview_refine_frames
     del bpy.types.Scene.hl_preview_bounce_samples
     del bpy.types.Scene.hl_preview_exposure

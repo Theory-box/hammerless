@@ -9,6 +9,9 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 from hammerless.blender import props,l4d2preview as preview
 OUT=ROOT.parents[1]/('outputs/l4d2-preview/viewport-bounce-check.json' if '--bounce' in sys.argv else 'outputs/l4d2-preview/viewport-check.json')
+PROGRESSIVE='--bounce' in sys.argv or '--sky' in sys.argv
+TARGET_FRAMES=18 if '--sky' in sys.argv else 3
+if '--sky' in sys.argv:OUT=OUT.with_name('viewport-sky-check.json')
 state={'frames':0,'updates':0,'done':False,'stage':0,'samples':[],'await_update':0}
 original_draw=preview.HAMMERLESS_L4D2Preview.view_draw
 original_update=preview.HAMMERLESS_L4D2Preview.view_update
@@ -38,34 +41,37 @@ def draw(self,context,depsgraph):
         x,y,w,h=gpu.state.viewport_get()
         pixel=fb.read_color(x+w//2,y+h//2,1,1,4,0,'FLOAT').to_list()[0][0]
         brightness=200 if state['stage']==0 else 50
-        if state['stage']==4:brightness*=2
+        if '--sky' in sys.argv:brightness+=self.cache.sky_color[0]
+        if state['stage']>=4:brightness*=2
         expected=1.055*(brightness/255)**(1/2.4)-.055
         assert not self.error,self.error
         assert len(self.cache.geometry)==1, len(self.cache.geometry)
-        assert max(abs(v-expected) for v in pixel[:3])<.015,(pixel,expected)
-        if '--bounce' in sys.argv:
+        if PROGRESSIVE:
             visited=state.setdefault('history_stages',{})
             stage=str(state['stage'])
             if stage not in visited:
-                wanted=3 if state['stage']==4 else 1
+                wanted=TARGET_FRAMES if state['stage']==4 else 1
                 assert self.history.frames==wanted,('Wrong history count after edit',state['stage'],self.history.frames)
                 visited[stage]=True
-            if self.history.frames<3:return
+            if self.history.frames<TARGET_FRAMES:return
             depth=fb.read_depth(x+w//2,y+h//2,1,1).to_list()[0][0]
             assert 0<depth<1,('Viewport depth missing',depth)
+        assert max(abs(v-expected) for v in pixel[:3])<.015,(pixel,expected)
+        if '--sky' in sys.argv:
+            assert self.bounce_materials is None and self.bounce_uploads==0, 'Sky-only preview prepared bounce data'
         if state['stage']>0:
             assert self.cache.extractions==state['initial_extractions'],'Transform/light edit re-extracted geometry'
             if '--bounce' in sys.argv:
-                assert self.bounce_uploads==state['initial_bounce_uploads'],'Transform/light edit rebuilt bounce materials'
+                assert self.bounce_uploads==state['initial_bounce_uploads']+(1 if state['stage']==5 else 0),'Unexpected bounce material rebuild count'
         state['samples'].append({'stage':state['stage'],'pixel':pixel,'expected_srgb':expected,
                                 'history_frames':self.history.frames if self.history else 0})
-        if state['stage']==(4 if '--bounce' in sys.argv else 2):
+        if state['stage']==(5 if PROGRESSIVE else 2):
             finish({'ok':True,**state,'geometry':len(self.cache.geometry)})
         else:
             state['initial_extractions']=self.cache.extractions
             state['initial_bounce_uploads']=self.bounce_uploads
             state['stage']+=1
-            state['await_update']=state['updates']+(1 if state['stage']<3 else 0)
+            state['await_update']=state['updates']+(1 if state['stage']<3 or state['stage']==5 else 0)
             state['pending_edit']=True
             def edit():
                 if state['stage']==1:
@@ -76,8 +82,10 @@ def draw(self,context,depsgraph):
                 elif state['stage']==3:
                     for area in bpy.context.screen.areas:
                         if area.type=='VIEW_3D':area.spaces.active.region_3d.view_location.x=.1
-                else:
+                elif state['stage']==4:
                     scene.hl_preview_exposure=1
+                else:
+                    assert bpy.ops.hammerless.refresh_preview_materials()=={'FINISHED'}
                 state['pending_edit']=False
                 for area in bpy.context.screen.areas:area.tag_redraw()
                 return None
@@ -94,13 +102,23 @@ try:
     preview.register()
     scene=bpy.context.scene
     scene.hammerless.auto_sun=False
-    scene.hammerless.ambient_brightness=0
+    scene.hammerless.ambient_brightness=30 if '--sky' in sys.argv else 0
+    scene.hammerless.ambient_color=(1,1,1)
+    scene.hammerless.sky_light='FLAT'
     scene.hammerless.units_per_meter=1
     scene.hl_preview_bounce_samples=4 if '--bounce' in sys.argv else 0
-    scene.hl_preview_refine_frames=3
+    scene.hl_preview_refine_frames=TARGET_FRAMES
     bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False)
     bpy.ops.mesh.primitive_cube_add()
     cube=bpy.context.object
+    # Explicit exported white texture isolates lighting from scene-default material.
+    image=bpy.data.images.new('White lighting reference',1,1,float_buffer=True)
+    image.pixels[:]=[1.,1.,1.,1.]
+    mat=bpy.data.materials.new('White lighting reference');mat.use_nodes=True
+    texture=mat.node_tree.nodes.new('ShaderNodeTexImage');texture.image=image
+    bsdf=next(n for n in mat.node_tree.nodes if n.type=='BSDF_PRINCIPLED')
+    mat.node_tree.links.new(texture.outputs['Color'],bsdf.inputs['Base Color'])
+    cube.data.materials.append(mat)
     bpy.ops.object.light_add(type='POINT',location=(0,0,102))
     lamp=bpy.context.object
     for key,value in {'_light':'255 255 255 200','_quadratic_attn':'1'}.items():
@@ -118,9 +136,9 @@ try:
                 space.shading.type='RENDERED'
                 area.tag_redraw()
     def timeout():
-        if not state['done']:finish({'ok':False,'reason':'No successful viewport callback within 20 seconds',**state})
+        if not state['done']:finish({'ok':False,'reason':'No successful viewport callback within 60 seconds',**state})
         return None
-    bpy.app.timers.register(timeout,first_interval=20)
+    bpy.app.timers.register(timeout,first_interval=60)
     def force_redraw():
         if state['done']:return None
         state['windows']=[[(a.type, a.spaces.active.shading.type if a.type=='VIEW_3D' else '') for a in w.screen.areas] for w in bpy.context.window_manager.windows]

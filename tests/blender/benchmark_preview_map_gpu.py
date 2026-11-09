@@ -11,6 +11,8 @@ OUT=ROOT.parents[1]/'outputs/l4d2-preview'
 
 def run():
     bounce='--bounce' in sys.argv
+    progressive='--progressive' in sys.argv
+    bounce_depth=int(sys.argv[sys.argv.index('--bounces')+1]) if '--bounces' in sys.argv else 1
     props.register()
     path=Path(sys.argv[sys.argv.index('--')+1]).resolve()
     bpy.ops.wm.open_mainfile(filepath=str(path),load_ui=False,use_scripts=False)
@@ -37,6 +39,16 @@ def run():
         cameras.append(('center',eye,center))
     data=bpy.data.cameras.new('Benchmark camera');cam=bpy.data.objects.new('Benchmark camera',data)
     scene.collection.objects.link(cam);data.lens=28;data.clip_end=max(1000,extent*4)
+    import os
+    from hammerless.core.compile import find_game_root
+    from hammerless.blender.ops import game_content
+    from hammerless.blender.previewmaterials import SurfaceMaterials
+    root=find_game_root()
+    assert root, 'Installed game not found'
+    cache.surface_materials=SurfaceMaterials(game_content(root),os.path.join(root,'left4dead2'),scene.hammerless.default_material)
+    for geometry in cache.geometry.values():
+        for material in geometry.materials or (None,):cache.surface_materials.resolve(material)
+    # Preserve missing-material diagnostics; both timed modes use the same snapshot.
     if bounce:
         import os
         from hammerless.core.compile import find_game_root
@@ -53,10 +65,15 @@ def run():
         assert not resolver.warnings,resolver.warnings
     shader=preview.diagnostic_shader(lit=True,textured=True,shadows=True,bounce=bounce)
     width,height=720,480
+    if '--resolution' in sys.argv:width,height=map(int,sys.argv[sys.argv.index('--resolution')+1].split('x'))
+    if progressive:
+        from hammerless.blender.previewhistory import FrameHistory
+        history=FrameHistory();depth_shader=preview.depth_shader()
     off=gpu.types.GPUOffScreen(width,height,format='RGBA32F')
     result={'file':str(path),'gpu':gpu.platform.renderer_get(),'unit_scale':scale,'triangles':sum(len(g.positions)//3 for g in cache.geometry.values()),'instances':len(cache.instances),'resolution':[width,height],
-            'bounce_rays':8 if bounce else 0,'material_warnings':resolver.warnings if bounce else [],
-            'game_root':root if bounce else None,'stored_game_root':stored_root if bounce else None,
+            'bounce_rays':8 if bounce else 0,'material_warnings':cache.surface_materials.warnings+(resolver.warnings if bounce else []),
+            'bounces':bounce_depth,'primary_sky_directions_per_frame':9 if progressive else 162,'progressive':progressive,
+            'game_root':root,'stored_game_root':stored_root if bounce else None,
             'scope':'Saved map geometry; synthetic camera point light and optional flat sky. Not a bake parity test. Synchronous draw plus pixel readback, excludes scene preparation.','runs':[]}
     try:
         for name,eye,target in cameras:
@@ -73,13 +90,23 @@ def run():
                 with off.bind():
                     gpu.state.viewport_set(0,0,width,height)
                     fb=gpu.state.active_framebuffer_get()
-                    for frame in range(4):
+                    for frame in range(20 if progressive else 10):
                         start=time.perf_counter()
                         fb.clear(color=(.025,.025,.025,1),depth=1)
-                        preview.draw_geometry(cache,shader,projection,lit=True,textured=True,shadows=True,bounce_samples=8 if bounce else None,sampled_bounce_sky='--sample-sky' in sys.argv)
+                        def sample(seed):
+                            preview.draw_geometry(cache,shader,projection,lit=True,textured=True,shadows=True,
+                                bounce_samples=8 if bounce else None,sampled_bounce_sky='--sample-sky' in sys.argv,
+                                bounce_seed=seed,bounce_depth=bounce_depth,
+                                primary_sky_index=(seed*9)%162 if progressive else -1,primary_sky_count=9 if progressive else 162)
+                        if progressive:
+                            history.render((name,sky),sample,lambda:preview.draw_depth(cache,depth_shader,projection),max_frames=18)
+                        else:sample(0)
                         fb.read_color(width//2,height//2,1,1,4,0,'FLOAT')
                         timings.append((time.perf_counter()-start)*1000)
-                    pixels=np.asarray(fb.read_color(0,0,width,height,4,0,'FLOAT').to_list(),dtype=np.float32)
+                    if progressive:
+                        with history.history_fb.bind():pixels=np.asarray(history.history_fb.read_color(0,0,width,height,4,0,'FLOAT').to_list(),dtype=np.float32)
+                        pixels[:,:,3]=1
+                    else:pixels=np.asarray(fb.read_color(0,0,width,height,4,0,'FLOAT').to_list(),dtype=np.float32)
                     assert np.isfinite(pixels).all()
                     depth=np.asarray(fb.read_depth(0,0,width,height).to_list())
                     coverage=float(np.mean(depth<.999999))
@@ -91,7 +118,9 @@ def run():
                 result['runs'].append({'view':name,'sky':sky,'first_frame_ms':timings[0],
                     'eye':list(eye),'first_hit':ray[4].name if ray[0] else None,'hit_distance':(ray[1]-eye).length if ray[0] else None,
                     'linear_range':[float(pixels[:,:,:3].min()),float(pixels[:,:,:3].max())],
-                    'median_ms':statistics.median(timings[1:]),'max_ms':max(timings[1:]),'coverage':coverage,
+                    'median_ms':statistics.median(timings[1:18] if progressive else timings[1:]),
+                    'settled_ms':statistics.median(timings[18:]) if progressive else None,
+                    'max_ms':max(timings[1:]),'coverage':coverage,
                     'mesh_bvh_builds':cache.trace.builds})
     finally:
         off.free()
@@ -103,7 +132,7 @@ def run():
 OUT.mkdir(parents=True,exist_ok=True)
 try:result=run()
 except Exception:result={'error':traceback.format_exc()}
-(OUT/('map-gpu-bounce-sampled.json' if '--sample-sky' in sys.argv else 'map-gpu-bounce.json' if '--bounce' in sys.argv else 'map-gpu.json')).write_text(json.dumps(result,indent=2))
+(OUT/(sys.argv[sys.argv.index('--report-name')+1] if '--report-name' in sys.argv else 'map-gpu-progressive.json' if '--progressive' in sys.argv else 'map-gpu-bounce-sampled.json' if '--sample-sky' in sys.argv else 'map-gpu-bounce.json' if '--bounce' in sys.argv else 'map-gpu.json')).write_text(json.dumps(result,indent=2))
 print(json.dumps(result),flush=True)
 # Opening a blend during startup replaces the window context. Quit after the
 # event loop starts, rather than scheduling exit against that stale context.

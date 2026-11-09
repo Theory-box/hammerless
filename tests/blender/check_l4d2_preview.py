@@ -155,6 +155,22 @@ def check():
                     preview.draw_geometry(cache, material_shader, Matrix.Scale(0.5, 4), lit=True, textured=True)
                     pixel = fb.read_color(32, 32, 1, 1, 4, 0, 'FLOAT').to_list()[0][0]
                     assert abs(pixel[0]-200/255)<0.01 and max(pixel[1:3])<0.01, (use_painted,pixel)
+                # Classification is tested against VMTs separately; exercise the
+                # GPU output with a prepared unlit material snapshot and no lights.
+                from types import SimpleNamespace
+                material_key=next(iter(cache.geometry.values())).materials[0].as_pointer()
+                cache.surface_materials=SimpleNamespace(materials={material_key:(image,(2,2))},unlit={material_key:True})
+                saved_lights=cache.lights
+                cache.lights=[];cache.light_texture=None
+                fb.clear(color=(0,0,0,1),depth=1)
+                from unittest.mock import patch
+                with patch('hammerless.blender.extract._base_color_image', side_effect=AssertionError('Draw rescanned material nodes')), \
+                     patch('hammerless.blender.extract.texture_size', side_effect=AssertionError('Draw recomputed prepared size')):
+                    preview.draw_geometry(cache,material_shader,Matrix.Scale(.5,4),lit=True,textured=True)
+                unlit_pixel=fb.read_color(32,32,1,1,4,0,'FLOAT').to_list()[0][0]
+                assert abs(unlit_pixel[0]-1)<.001 and max(unlit_pixel[1:3])<.001,unlit_pixel
+                cache.surface_materials=None
+                cache.lights=saved_lights;cache.light_texture=None
                 shadow_shader = preview.diagnostic_shader(lit=True, textured=True, shadows=True)
                 def shadow_pixel():
                     fb.clear(color=(0,0,0,1),depth=1)

@@ -20,7 +20,8 @@ from hammerless.core.previewlighting import PointLight
 from hammerless.blender.l4d2preview import SceneCache,Geometry,diagnostic_shader,draw_geometry
 from hammerless.blender.previewtrace import TraceCache
 from hammerless.blender.previewmaterials import BounceMaterial
-OUT=ROOT.parents[1]/'outputs/l4d2-preview/bounce-reference'
+DEPTH=2 if '--two-bounces' in sys.argv else 1
+OUT=ROOT.parents[1]/('outputs/l4d2-preview/two-bounce-reference' if DEPTH==2 else 'outputs/l4d2-preview/bounce-reference')
 OUT.mkdir(parents=True,exist_ok=True)
 
 
@@ -49,13 +50,13 @@ def run():
     command([root/'bin/vbsp.exe','-game',game,vmf],'vbsp')
     command([root/'bin/vvis.exe','-fast','-game',game,vmf.with_suffix('.bsp')],'vvis')
     base=vmf.with_suffix('.bsp').read_bytes()
-    for bounce in (0,1):
+    for bounce in (0,DEPTH):
         path=OUT/f'bounce{bounce}.bsp';path.write_bytes(base)
         args=[ROOT/'hammerless/core/hlvrad.exe','-gpu','-noextra','-bounce','0']
-        if bounce:args+=['-gi','1','-girays','4096']
+        if bounce:args+=['-gi',str(DEPTH),'-girays','4096']
         command(args+['-game',game,path],f'bounce{bounce}')
         assert 'Lighting on the GPU:' in (OUT/f'bounce{bounce}.log').read_text()
-    direct_data=(OUT/'bounce0.bsp').read_bytes();bounced_data=(OUT/'bounce1.bsp').read_bytes()
+    direct_data=(OUT/'bounce0.bsp').read_bytes();bounced_data=(OUT/f'bounce{DEPTH}.bsp').read_bytes()
     faces,lump=read_faces(direct_data);bounced_faces,bounced_lump=read_faces(bounced_data)
     reference={f.index:f for f in bounced_faces}
     cache=SceneCache();cache.unit_scale=1
@@ -89,7 +90,7 @@ def run():
                         samples=[]
                         for rays in (0,4096):
                             fb.clear(color=(0,0,0,1),depth=1)
-                            draw_geometry(cache,shader,matrix,lit=True,shadows=True,bounce_samples=rays)
+                            draw_geometry(cache,shader,matrix,lit=True,shadows=True,bounce_samples=rays,bounce_depth=DEPTH)
                             samples.append(np.array(fb.read_color(0,0,1,1,4,0,'FLOAT').to_list()[0][0][:3]))
                         rows.append({'position':p.tolist(),'preview_direct':samples[0].tolist(),
                             'bake_direct':direct[y,x].tolist(),'preview_indirect':(samples[1]-samples[0]).tolist(),
@@ -100,7 +101,7 @@ def run():
     return {'samples':rows,'indirect_mean_absolute_error':float(abs(a-b).mean()),
             'indirect_max_absolute_error':float(abs(a-b).max()),
             'indirect_mean_relative_error':float((abs(a-b)/np.maximum(b,1e-5)).mean()),
-            'scope':'One closed room; compiled geometry and reflectivity, 4096 rays, one bounce; descriptive comparison, no universal parity claim'}
+            'bounces':DEPTH,'scope':'One closed room; compiled geometry and reflectivity, 4096 rays; descriptive comparison, no universal parity claim'}
 
 try:result=run()
 except Exception:result={'error':traceback.format_exc()}

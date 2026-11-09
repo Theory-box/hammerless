@@ -44,3 +44,62 @@ assert not resolver.source('missing').verified and resolver.warnings
 result={'ok':True,'reflectivity':header,'checks':['custom VTF header parity','game VTF header','patch material','unlit exclusion','export default','cached reads','missing material warning']}
 out=ROOT.parents[1]/'outputs/l4d2-preview/bounce-materials.json';out.write_text(json.dumps(result,indent=2))
 print(json.dumps(result),flush=True)
+
+from hammerless.blender.previewmaterials import SurfaceMaterials
+surfaces=SurfaceMaterials(content,None,'wall')
+default_image, dimensions=surfaces.resolve(None)
+assert default_image is not None and dimensions==(2,2),(default_image,dimensions)
+assert surfaces.resolve(plain)[0] is default_image, 'Plain Blender color overrode exported default'
+assert surfaces.resolve(mat)[0] is image, 'Custom image lost'
+mat.hammerless.source_material='wall'
+surfaces=SurfaceMaterials(content,None,'wall')
+assert surfaces.resolve(mat)[0] is default_image, 'Blender image overrode explicit Source material'
+reads=content.reads
+surfaces.resolve(mat)
+assert content.reads==reads, 'Surface snapshot reread content'
+assert not surfaces.warnings,surfaces.warnings
+print('PASS: exported surface texture choice, default fallback, custom image, Source precedence, cache')
+
+unlit=bpy.data.materials.new('Unlit source');unlit.hammerless.source_material='unlit'
+surfaces.resolve(unlit)
+assert surfaces.unlit[unlit.as_pointer()]
+assert not surfaces.unlit[mat.as_pointer()]
+print('PASS: Source UnlitGeneric surface classification')
+
+# Renderer snapshots must not inherit a texture from another game root, or an
+# older byte stream at the same path. Existing material-preview images stay intact.
+from hammerless.blender.preview import _image_for_texture
+from unittest.mock import patch
+with tempfile.TemporaryDirectory() as tmp:
+    replacement=Path(tmp)/'replacement.vtf'
+    write_vtf(str(replacement),np.full((2,2,4),[0,255,0,255],dtype=np.uint8))
+    changed=replacement.read_bytes()
+with patch('hammerless.blender.preview.read_texture_bytes',return_value=data):
+    a,_,_=_image_for_texture('test',content,None,cache_scope='test-root-a',verify_content=True)
+    b,_,_=_image_for_texture('test',content,None,cache_scope='test-root-b',verify_content=True)
+    assert a is not b, 'Different roots shared an image'
+    old_digest=a['hl_content_digest']
+    again,_,_=_image_for_texture('test',content,None,cache_scope='test-root-a',verify_content=True)
+    assert again is a
+with patch('hammerless.blender.preview.read_texture_bytes',return_value=changed):
+    updated,_,_=_image_for_texture('test',content,None,cache_scope='test-root-a',verify_content=True)
+    assert updated is a and a['hl_content_digest']!=old_digest
+    assert b['hl_content_digest']==old_digest, 'Reload changed another root'
+    assert np.allclose(np.asarray(a.pixels[:]).reshape(-1,4)[:,:3],[0,1,0],atol=.001)
+with patch('hammerless.blender.preview.read_texture_bytes',return_value=None):
+    missing,_,_=_image_for_texture('test',content,None,cache_scope='test-root-a',verify_content=True)
+    assert missing is None, 'Missing source silently reused stale image'
+print('PASS: source-root isolation, same-path reload, missing-source rejection')
+
+legacy=bpy.data.materials.new('HL_mdl_wall')
+legacy_resolver=SurfaceMaterials(content,None,'wall')
+assert legacy_resolver.resolve(legacy)[0] is default_image
+assert not legacy_resolver.warnings
+renamed=bpy.data.materials.new('Renamed model material')
+renamed['hl_source_material']='wall'
+assert SurfaceMaterials(content,None,'wall').resolve(renamed)[0] is default_image
+renamed.hammerless.source_material='unlit'
+r=SurfaceMaterials(content,None,'wall');r.resolve(renamed)
+assert r.unlit[renamed.as_pointer()], 'Explicit Source path lost precedence over model provenance'
+assert BounceMaterials(content,None,'wall').resolve(legacy).verified
+print('PASS: legacy model paths, renamed provenance, explicit override')

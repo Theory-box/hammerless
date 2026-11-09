@@ -25,15 +25,19 @@ def run():
     resolver=Resolver();cache.trace.update_bounce_materials(cache,resolver)
     shader=diagnostic_shader(lit=True,shadows=True,bounce=True)
     off=gpu.types.GPUOffScreen(1,1,format='RGBA32F')
-    def draw(samples,sampled_sky=False):
+    def draw(samples,sampled_sky=False,depth=1,sky_index=-1,sky_count=162):
         with off.bind():
             gpu.state.viewport_set(0,0,1,1)
             fb=gpu.state.active_framebuffer_get();fb.clear(color=(0,0,0,1),depth=1)
-            draw_geometry(cache,shader,Matrix.Scale(.5,4),lit=True,shadows=True,bounce_samples=samples,sampled_bounce_sky=sampled_sky)
+            draw_geometry(cache,shader,Matrix.Scale(.5,4),lit=True,shadows=True,bounce_samples=samples,sampled_bounce_sky=sampled_sky,bounce_depth=depth,primary_sky_index=sky_index,primary_sky_count=sky_count)
             return np.array(fb.read_color(0,0,1,1,4,0,'FLOAT').to_list()[0][0][:3])
     try:
         direct=draw(0);full=draw(128);indirect=full-direct
         assert indirect[0]>.01 and np.max(abs(indirect[1:]))<1e-6,(direct,full)
+        second=draw(128,depth=2)-direct
+        fourth=draw(128,depth=4)-direct
+        assert second[0]>indirect[0] and fourth[0]>second[0],(indirect,second,fourth)
+        assert np.max(abs(fourth[1:]))<1e-6,fourth
         resolver.color=(.3,0,0);cache.trace.update_bounce_materials(cache,resolver)
         half=draw(128)-draw(0)
         assert np.allclose(half,indirect*.5,atol=1e-5),(half,indirect)
@@ -41,6 +45,10 @@ def run():
         doubled=draw(128)-draw(0)
         assert np.allclose(doubled,half*2,atol=1e-5)
         cache.lights=[];cache.light_texture=None;cache.sky_color=(51.,)*3
+        primary_full=draw(0)
+        primary_cycle=np.mean([draw(0,sky_index=i*9,sky_count=9) for i in range(18)],axis=0)
+        assert primary_full[0]>0,primary_full
+        assert np.allclose(primary_cycle,primary_full,rtol=1e-5,atol=1e-7),(primary_cycle,primary_full)
         sky_full=draw(8192)-draw(0)
         sky_sampled=draw(8192,True)-draw(0)
         assert sky_full[0]>.001,sky_full
@@ -56,9 +64,11 @@ def run():
         cache.trace.update_bounce_materials(cache,resolver)
         assert np.allclose(draw(128),draw(0),atol=1e-6),'Empty hemisphere returned light'
         return {'ok':True,'direct':direct.tolist(),'first_bounce':indirect.tolist(),
+            'two_bounces':second.tolist(),'four_bounces':fourth.tolist(),
+            'primary_sky_full':primary_full.tolist(),'primary_sky_cycle':primary_cycle.tolist(),
             'sky_full':sky_full.tolist(),'sky_sampled':sky_sampled.tolist(),
-            'checks':['red color transfer','reflectivity linearity','light intensity linearity','back-face rejection','misses return zero'],
-            'scope':'Controlled first-bounce transport, 128 rays; not bake parity or realtime performance'}
+            'checks':['red color transfer','reflectivity linearity','light intensity linearity','back-face rejection','misses return zero','18-frame direct sky matches all 162 directions'],
+            'scope':'Controlled one/two/four-bounce transport and direct-sky cycle equivalence; not broad bake parity or realtime performance'}
     finally:off.free()
 
 try:result=run()
