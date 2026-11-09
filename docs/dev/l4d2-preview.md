@@ -438,3 +438,23 @@ The trace regression compares uploaded instance and top-level arrays exactly
 against the previous full packing path, including duplicate instances, mirrors,
 nonuniform scale, singular recovery, relocated mesh ranges, and deletion.
 Independent review found no blocking issue.
+
+### Imported document ID bookkeeping
+
+Brush transforms were spending ~138 ms walking every imported block to obtain
+maximum ID for a fresh preview writer. Live preview now retains one strong
+Document reference and its maximum. Each chart snapshot still gets a fresh
+writer/material resolver and rechecks imported-object membership. Existing
+source parsing remains authoritative: text and imported-scale option changes
+replace the Document and refresh the maximum. Shared lightmap-scale mutations
+do not change IDs. Import removal releases the retained reference.
+
+Independent review checked all parser consumers for ID mutation. The focused
+Blender test covers repeated snapshots, fresh writer resets, shared scale
+mutation, adding a higher ID to the same Text, option toggling, standalone
+compatibility, and import removal. All passed. Same hotel edit profile:
+brush chart preparation 271–282 ms vs 405–407 ms; combined measured stages
+about 0.62–0.64 s including dependency graph update. Light edits essentially
+unchanged. These are two samples each with profiling overhead, not UI FPS.
+Report: edit-profile-document.json. Remaining chart work includes full source
+hashing, candidate/signature scans and atlas metadata assembly.

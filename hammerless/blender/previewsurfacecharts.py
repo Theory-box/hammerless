@@ -29,7 +29,7 @@ class ChartMaterials(MaterialResolver):
         return path
 
 class ChartSnapshot:
-    def __init__(self,context):
+    def __init__(self,context,document_ids=None):
         self.scene=context.scene
         self.settings=context.scene.hammerless
         self.report=SimpleNamespace(warnings=[])
@@ -40,7 +40,18 @@ class ChartSnapshot:
         if vmfimport.imported(self.scene):
             self.document=vmfimport._document(bpy.data.texts[self.scene[vmfimport.SOURCE_KEY]],self.settings.lightmap_scale_imported)
             self.originals=vmfimport.written_back(self.scene.objects)
-            self.writer._next_id=self.document.max_id()+1
+            # Imported document IDs do not change during rebuild; scale overrides
+            # may mutate values, but source/option changes replace the Document.
+            # Keep a strong reference so Python cannot recycle an identity token.
+            if document_ids is not None and document_ids.get('document') is self.document:
+                maximum=document_ids['maximum']
+            else:
+                maximum=self.document.max_id()
+                if document_ids is not None:
+                    document_ids.clear();document_ids.update(document=self.document,maximum=maximum)
+            self.writer._next_id=maximum+1
+        elif document_ids is not None:
+            document_ids.clear()
 
     def object_charts(self,obj,depsgraph,index_start=0,allow_partial=False):
         self.rejections=[]

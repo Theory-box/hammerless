@@ -56,7 +56,7 @@ class LiveSurfaceCache:
     SAMPLE_BUDGET=1_000_000
 
     def __init__(self):
-        self.layouts=CachedObjectCharts()
+        self.layouts=CachedObjectCharts();self.document_ids={}
         self.signature=None;self.generation=0
         self.geometry_refs={}
         self.object_data={};self.display_tokens={};self.object_generation=0
@@ -66,6 +66,7 @@ class LiveSurfaceCache:
 
     def update(self,context,depsgraph,scene,material_revision):
         settings=context.scene.hammerless
+        if not vmfimport.imported(context.scene):self.document_ids.clear()
         text=bpy.data.texts.get(context.scene.get(vmfimport.SOURCE_KEY,''))
         source=hashlib.sha256(text.as_string().encode()).digest() if text else None
         counts=Counter(key for key,_ in scene.instances)
@@ -84,7 +85,7 @@ class LiveSurfaceCache:
         snapshot=None
         def get_snapshot():
             nonlocal snapshot
-            if snapshot is None:snapshot=ChartSnapshot(context)
+            if snapshot is None:snapshot=ChartSnapshot(context,self.document_ids)
             return snapshot
         prepared=[];warnings=[];material_signatures={}
         for obj in candidates:
