@@ -24,17 +24,32 @@ def fullscreen(display):
     return shader,batch_for_shader(shader,'TRIS',{'position':[(-1,-1),(3,-1),(-1,3)]})
 
 
+def cached_depth_display():
+    """OpenGL compatibility path for Blender 4.4's missing depth_write binding."""
+    if gpu.platform.backend_type_get() != 'OPENGL':
+        return None
+    shader=gpu.types.GPUShader(
+        'in vec2 position; out vec2 uv; void main(){uv=position*.5+.5;gl_Position=vec4(position,0,1);}',
+        'uniform sampler2D image; uniform sampler2D sceneDepth; uniform float exposure;\nin vec2 uv; out vec4 color;\nvoid main(){vec3 c=max(texture(image,uv).rgb*exposure,vec3(0));\nc=mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-.055,greaterThan(c,vec3(.0031308)));\ncolor=vec4(c,1);gl_FragDepth=texture(sceneDepth,uv).r;}')
+    return shader,batch_for_shader(shader,'TRIS',{'position':[(-1,-1),(3,-1),(-1,3)]})
+
+
 class FrameHistory:
     def __init__(self):
         self.size=None;self.signature=None;self.frames=0
         self.average_shader,self.average_batch=fullscreen(False)
         self.display_shader,self.display_batch=fullscreen(True)
+        try:
+            self.cached_display=cached_depth_display()
+        except (AttributeError, TypeError, RuntimeError):
+            # Legacy GLSL construction is absent on some newer/back-end builds.
+            self.cached_display=None
 
     def render(self,signature,draw_sample,draw_depth,exposure=0.,max_frames=64):
         """draw_sample(frame_index) writes linear RGB and depth to the bound target.
 
-        draw_depth restores geometry depth without color outputs (Blender 4.4
-        cannot declare arbitrary fragment depth writes through CreateInfo).
+        OpenGL restores cached depth with a full-screen shader. Other backends
+        use draw_depth to restore geometry depth without color outputs.
         Always displays into the caller's framebuffer. No CPU readbacks. Stops
         tracing at max_frames until signature or dimensions change.
         """
@@ -68,13 +83,20 @@ class FrameHistory:
                 self.frames+=1
             gpu.state.viewport_set(*viewport)
             gpu.state.depth_test_set('NONE');gpu.state.depth_mask_set(False);gpu.state.blend_set('NONE')
-            shader=self.display_shader;shader.bind()
+            if self.cached_display is not None:
+                gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
+                gpu.state.active_framebuffer_get().clear(depth=1)
+                shader,batch=self.cached_display;shader.bind()
+                shader.uniform_sampler('sceneDepth',self.depth)
+            else:
+                shader,batch=self.display_shader,self.display_batch;shader.bind()
             shader.uniform_sampler('image',self.history)
             shader.uniform_float('exposure',2.0**exposure)
-            self.display_batch.draw(shader)
-            gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
-            gpu.state.active_framebuffer_get().clear(depth=1)
-            draw_depth()
+            batch.draw(shader)
+            if self.cached_display is None:
+                gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
+                gpu.state.active_framebuffer_get().clear(depth=1)
+                draw_depth()
         finally:
             gpu.state.viewport_set(*viewport);gpu.state.depth_test_set(old_depth)
             gpu.state.depth_mask_set(old_mask);gpu.state.blend_set(old_blend)

@@ -11,11 +11,12 @@ OUT=ROOT.parents[1]/'outputs/l4d2-preview/history-check.json'
 def run():
     history=FrameHistory();calls=[]
     info=gpu.types.GPUShaderCreateInfo();info.vertex_in(0,'VEC2','position')
-    info.vertex_source('void main(){gl_Position=vec4(position,-.4,1);}')
+    info.push_constant('FLOAT','slope')
+    info.vertex_source('void main(){gl_Position=vec4(position,-.4+position.x*slope,1);}')
     info.fragment_source('void main(){}')
     depth_shader=gpu.shader.create_from_info(info)
     depth_batch=batch_for_shader(depth_shader,'TRIS',{'position':[(-1,-1),(3,-1),(-1,3)]})
-    def draw_depth():depth_shader.bind();depth_batch.draw(depth_shader)
+    def draw_depth():depth_shader.bind();depth_shader.uniform_float('slope',0);depth_batch.draw(depth_shader)
     def sample(frame):
         calls.append(frame)
         c=.2 if frame%2==0 else .6
@@ -43,6 +44,20 @@ def run():
             gpu.state.viewport_set(0,0,4,4)
             history.render('scene2',sample,draw_depth,max_frames=2)
             assert history.frames==1 and calls[-1]==0
+            if history.cached_display is not None:
+                def sloped(frame):
+                    gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
+                    depth_shader.bind();depth_shader.uniform_float('slope',.2);depth_batch.draw(depth_shader)
+                def forbidden_depth():raise AssertionError('Cached display redrew geometry')
+                gpu.state.viewport_set(0,0,8,8)
+                history.render('sloped',sloped,forbidden_depth,max_frames=1)
+                with history.sample_fb.bind():
+                    expected_depth=np.array(history.sample_fb.read_depth(0,0,8,8).to_list())
+                actual_depth=np.array(fb.read_depth(0,0,8,8).to_list())
+                assert np.ptp(expected_depth)>.1
+                assert np.allclose(actual_depth,expected_depth,atol=1e-6)
+                history.render('sloped',sloped,forbidden_depth,max_frames=1)
+                assert np.allclose(np.array(fb.read_depth(0,0,8,8).to_list()),expected_depth,atol=1e-6)
         return {'ok':True,'checks':['linear average before display conversion','frame limit','depth preserved','exposure without retracing','scene reset','resize reset']}
     finally:off.free()
 

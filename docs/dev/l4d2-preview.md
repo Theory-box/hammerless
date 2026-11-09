@@ -164,3 +164,14 @@ this scene. The smaller map's 29-50 ms result cannot be generalized. Both
 results exclude preparation and use synthetic benchmark illumination.
 Large-scene drawing/submission and traversal require profiling before further
 performance promises; no hardware-ray-tracing acceleration is implemented.
+
+
+Cached-depth display optimization: Blender 4.4 runtime confirms CreateInfo has
+no depth_write method (4.5 docs do). On OpenGL, a legacy GLSL display shader
+copies the sample depth while displaying accumulated color, avoiding a second
+geometry submission. Other backends retain the geometry-depth pass. Spatial
+8x8 depth equality, settled reuse, resize, exposure and real viewport reset tests
+pass. Hotel rerun: settled 0.08-0.17 ms versus previous 192-204 ms; refining
+387-841 ms remains too slow. These synchronous measurements are not end-to-end
+UI FPS. See hotel-cached-depth.json and history-check.json. Documentation:
+https://docs.blender.org/api/4.5/gpu.types.html#gpu.types.GPUShaderCreateInfo.depth_write
