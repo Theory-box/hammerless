@@ -175,3 +175,13 @@ pass. Hotel rerun: settled 0.08-0.17 ms versus previous 192-204 ms; refining
 387-841 ms remains too slow. These synchronous measurements are not end-to-end
 UI FPS. See hotel-cached-depth.json and history-check.json. Documentation:
 https://docs.blender.org/api/4.5/gpu.types.html#gpu.types.GPUShaderCreateInfo.depth_write
+
+Camera-only raster culling: conservative transformed bounds tested against
+clip planes, straddling bounds, invalid inputs and randomized perspective
+interior points. Bounds cache retains owner references to avoid recycled-ID
+collisions. Full geometry remains in TraceCache. Controlled bounce tests and
+actual emission viewport tests pass with culling enabled. Hotel spawn view
+submits 64 / 4,784 instances: sampled-sky refining median 103.49 ms versus
+397.01 ms before camera culling. Overview retains all 4,784 and costs 820 ms.
+No VVIS dependency. See hotel-cull.json. This remains too slow for a smooth
+large-map interactive preview; settled cached drawing stays below 1 ms here.

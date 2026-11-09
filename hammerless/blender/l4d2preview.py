@@ -442,7 +442,8 @@ def draw_geometry(cache, shader, view_projection, lit=False, textured=False, sha
             shader.uniform_int('primaryAreaPhase',int(primary_area_phase)%8 if primary_area_phase>=0 else -1)
             shader.uniform_int('primarySkyCount',max(1,min(162,int(primary_sky_count))))
             shader.uniform_sampler('skyDirections', cache.upload_sky())
-        for key, matrix in cache.instances:
+        from .previewcull import raster_instances
+        for key, matrix in raster_instances(cache,view_projection):
             geometry = cache.geometry[key]
             if not len(geometry.positions):
                 continue

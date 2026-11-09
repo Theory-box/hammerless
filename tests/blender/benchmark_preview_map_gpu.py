@@ -141,7 +141,7 @@ def run():
                     'median_ms':statistics.median(timings[1:refinement_frames] if progressive else timings[1:]),
                     'settled_ms':statistics.median(timings[refinement_frames:]) if progressive else None,
                     'max_ms':max(timings[1:]),'coverage':coverage,
-                    'mesh_bvh_builds':cache.trace.builds,
+                    'mesh_bvh_builds':cache.trace.builds,'raster_visible':getattr(cache,'raster_visible_count',None),
                     'convergence_72_to_final': ({'mean_absolute_linear':float(np.abs(checkpoint[:,:,:3]-pixels[:,:,:3]).mean()),
                         'p95_absolute_linear':float(np.percentile(np.abs(checkpoint[:,:,:3]-pixels[:,:,:3]),95))}
                         if checkpoint is not None else None)})
