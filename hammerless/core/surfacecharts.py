@@ -8,6 +8,26 @@ import numpy as np
 from .previewgrid import lightmap_vectors
 from .vmfimport import parse_axis
 
+def chart_triangle_mask(chart,triangles,normals,tolerance=.005):
+    """Conservative whole-triangle containment in Source units, not screen space.
+
+    Caller supplies inverse-transpose transformed normals, independent of winding.
+    Geometry crossing a chart boundary remains on the per-pixel path.
+    """
+    triangles=np.asarray(triangles,dtype=np.float64).reshape(-1,3,3)
+    normals=np.asarray(normals,dtype=np.float64).reshape(-1,3)
+    origin=chart.polygon[0]
+    local=triangles-origin
+    length=np.linalg.norm(normals,axis=1)
+    facing=np.divide(normals@chart.normal,length,out=np.zeros_like(length),where=length>1e-12)
+    keep=(facing>.9999)&np.all(abs(local@chart.normal)<=tolerance,axis=1)
+    for a,b in zip(chart.polygon,np.roll(chart.polygon,-1,axis=0)):
+        edge=b-a;edge_length=np.linalg.norm(edge)
+        if edge_length<=1e-12:return np.zeros(len(triangles),dtype=bool)
+        keep &= np.all(np.cross(edge/edge_length,local-(a-origin))@chart.normal>=-tolerance,axis=1)
+    keep &= np.isfinite(triangles).all(axis=(1,2))&np.isfinite(normals).all(axis=1)
+    return keep
+
 @dataclass
 class SurfaceChart:
     index: int

@@ -79,7 +79,7 @@ def run():
         history=FrameHistory();depth_shader=preview.depth_shader()
     off=gpu.types.GPUOffScreen(width,height,format='RGBA32F')
     result={'file':str(path),'gpu':gpu.platform.renderer_get(),'unit_scale':scale,'triangles':sum(len(g.positions)//3 for g in cache.geometry.values()),'instances':len(cache.instances),'resolution':[width,height],
-            'surface_cache':({'layout_ms':layout_ms,'cached_objects':len(live.keys),'charts':len(live.faces),'samples':len(live.positions) if live.positions is not None else 0,'warnings':live.warnings} if live else None),
+            'surface_cache':({'layout_ms':layout_ms,'cached_objects':len(live.keys)+len(live.remaining),'partial_objects':len(live.remaining),'charts':len(live.faces),'samples':len(live.positions) if live.positions is not None else 0,'warnings':live.warnings} if live else None),
             'bounce_rays':8 if bounce else 0,'material_warnings':cache.surface_materials.warnings+(resolver.warnings if bounce else []),
             'bounces':bounce_depth,'primary_sky_directions_per_frame':9 if progressive else 162,'progressive':progressive,'refinement_frames':refinement_frames,'sampled_bounce_area':'--sample-area' in sys.argv,
             'game_root':root,'stored_game_root':stored_root if bounce else None,
@@ -119,18 +119,19 @@ def run():
                         start=time.perf_counter()
                         fb.clear(color=(.025,.025,.025,1),depth=1)
                         excluded=live.keys if live else ()
+                        remaining=live.remaining if live else None
                         if live:live.refine(cache,(name,sky),frames=refinement_frames,rays=8,bounces=bounce_depth)
                         def sample(seed):
                             if live:live.draw_depth(projection)
                             if '--prepass' in sys.argv:
                                 gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
-                                preview.draw_depth(cache,depth_shader,projection,exclude_keys=excluded)
+                                preview.draw_depth(cache,depth_shader,projection,exclude_keys=excluded,raster_geometry=remaining)
                             preview.draw_geometry(cache,shader,projection,lit=True,textured=True,shadows=True,
                                 bounce_samples=8 if bounce else None,sampled_bounce_area='--sample-area' in sys.argv,sampled_bounce_sky='--sample-sky' in sys.argv,
                                 bounce_seed=seed,bounce_depth=bounce_depth,
-                                primary_sky_index=(seed*9)%162 if progressive else -1,primary_sky_count=9 if progressive else 162,primary_area_phase=seed%8 if progressive and '--area-size' in sys.argv else -1,exclude_keys=excluded)
+                                primary_sky_index=(seed*9)%162 if progressive else -1,primary_sky_count=9 if progressive else 162,primary_area_phase=seed%8 if progressive and '--area-size' in sys.argv else -1,exclude_keys=excluded,raster_geometry=remaining)
                         if progressive:
-                            history.render((name,sky),sample,lambda:preview.draw_depth(cache,depth_shader,projection,exclude_keys=excluded),max_frames=refinement_frames)
+                            history.render((name,sky),sample,lambda:preview.draw_depth(cache,depth_shader,projection,exclude_keys=excluded,raster_geometry=remaining),max_frames=refinement_frames)
                         else:sample(0)
                         if live:live.draw(projection,0)
                         fb.read_color(width//2,height//2,1,1,4,0,'FLOAT')
@@ -163,7 +164,7 @@ def run():
                             start=time.perf_counter();fb.clear(color=(.025,.025,.025,1),depth=1)
                             if live:live.refine(cache,(name,sky),frames=refinement_frames,rays=8,bounces=bounce_depth)
                             history.render((name,sky,'navigation',step),sample,
-                                lambda:preview.draw_depth(cache,depth_shader,projection,exclude_keys=excluded),max_frames=refinement_frames)
+                                lambda:preview.draw_depth(cache,depth_shader,projection,exclude_keys=excluded,raster_geometry=remaining),max_frames=refinement_frames)
                             if live:live.draw(projection,0)
                             fb.read_color(width//2,height//2,1,1,4,0,'FLOAT')
                             navigation.append((time.perf_counter()-start)*1000)

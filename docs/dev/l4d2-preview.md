@@ -292,3 +292,41 @@ Remaining validation: large hotel map, interactive editing cost, boundary
 sampling/seams, image comparison against VRAD and game, and package deployment.
 Adaptive compile-time scale changes, BSP face splitting, exact boundary filtering
 and advanced material parity are not implemented by this cache.
+
+## Large-map rejection audit and partial brush caching
+
+Hotel baseline with surface caching: 639 objects, 2,376 charts, 438,428 samples;
+CPU layout 5.15 seconds. Interior navigation was 45.3–52.8 ms, while refinement
+was 125–150 ms. Many whole brushes were rejected by a single singular face.
+Read-only diagnostics captured vertical faces whose U/V directions both lie
+in the horizontal plane. These directions genuinely cannot parameterize that
+vertical face; this is not fixed by inventing alternate preview axes. Valve's
+published `TexinfoForBrushTexture` uses the supplied VMF directions directly:
+https://github.com/ValveSoftware/source-sdk-2013/blob/master/src/utils/vbsp/textures.cpp
+The published code confirms the conversion formula, not all L4D2 compiler
+handling of invalid faces. No broader engine-parity claim follows.
+
+Partial caching keeps valid charts and matches original raster triangles using
+material identity, inverse-transpose normals, coplanarity and full containment
+in normalized edge half-spaces. Ambiguous or crossing triangles stay per-pixel.
+Cached display uses those original triangles rather than reconstructed polygon
+coverage. One current fallback Geometry owns its color/depth batches; full ray
+geometry is untouched. Custom materials use original-ID provenance because
+evaluated material IDs differ in real viewport callbacks.
+
+Tests passed: five valid faces plus one singular face, all twelve original cube
+triangles accounted for, mirrored/nonuniform transform, ambiguous matches,
+unchanged-update reuse, persistent budget warning and source VMF preservation.
+Core tests cover crossing, off-plane and opposite-facing triangles. Actual
+mixed cached/uncached RenderEngine callbacks pass after the original-ID fix.
+Independent static review verified drawing, matching, lifetime and identity
+handling; no reviewer-run Blender claim.
+
+Hotel rerun: 967 cached objects (954 partial), 3,066 charts, 999,998 samples,
+CPU layout 8.30 seconds. Interior navigation improved to 28.8–31.9 ms;
+overview to 231–274 ms. However refinement worsened to 192–241 ms indoors,
+396–488 ms overview because every cached sample is evaluated. This is NOT a
+general realtime result. Next bounded investigation: visibility-driven primary
+chart refinement while preserving all ray occluders and bounce contributors.
+Reports: hotel-surface-cache.json, hotel-partial-cache.json,
+chart-rejections.json, partial-surface-cache.json in outputs/l4d2-preview.

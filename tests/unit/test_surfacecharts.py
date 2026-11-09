@@ -4,8 +4,19 @@ import numpy as np
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 from hammerless.core.ir import Polygon
 from hammerless.core.vmf import VMFWriter
-from hammerless.core.surfacecharts import chart_from_side
+from hammerless.core.surfacecharts import chart_from_side,chart_triangle_mask
 class SurfaceChartsTests(unittest.TestCase):
+ def test_matching_requires_whole_same_facing_triangle(self):
+  vertices=[(0,0,0),(128,0,0),(128,128,0),(0,128,0)]
+  chart=chart_from_side(VMFWriter().side(Polygon(vertices)),vertices)
+  triangles=np.array([[(0,0,0),(128,0,0),(0,128,0)],
+                      [(0,0,0),(129,0,0),(0,128,0)],
+                      [(0,0,1),(128,0,1),(0,128,1)],
+                      [(0,0,0),(128,0,0),(0,128,0)]])
+  normals=np.array([(0,0,1)]*3+[(0,0,-1)])
+  np.testing.assert_array_equal(chart_triangle_mask(chart,triangles,normals),[True,False,False,False])
+  offset=np.array([20000,-10000,8000]);chart.polygon+=offset
+  np.testing.assert_array_equal(chart_triangle_mask(chart,triangles+offset,normals),[True,False,False,False])
  def test_texture_axes_are_independent_of_lighting_density(self):
   vertices=[(0,0,0),(128,0,0),(128,128,0),(0,128,0)]
   axes=(((1,0,0),17,.25),((0,-1,0),-31,.5))

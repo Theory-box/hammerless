@@ -10,6 +10,13 @@ from ..core.vmf import VMFWriter
 from ..core.surfacecharts import chart_from_side
 from ..core.lightmap import NON_RENDERING_MATERIALS
 
+def chart_material_path(mat,default_material):
+    path=game_path(mat) if mat else ''
+    if not path and mat and _base_color_image(mat) is not None:
+        # Evaluated material IDs differ from the source object's slots.
+        path=f'hammerless_preview/{mat.original.as_pointer()}'
+    return (path or default_material).lower().replace('\\','/')
+
 class ChartMaterials(MaterialResolver):
     def __init__(self,*args):
         super().__init__(*args)
@@ -17,12 +24,7 @@ class ChartMaterials(MaterialResolver):
 
     def _resolve_path(self,mat):
         # Chart construction needs density/axes, not generated VMT/VTF files.
-        path=game_path(mat)
-        if not path and _base_color_image(mat) is not None:
-            # Distinct custom materials must not collapse onto the scene default.
-            # This identifier exists only in the read-only preview snapshot.
-            path=f'hammerless_preview/{mat.as_pointer()}'
-        path=path or self.settings.default_material
+        path=chart_material_path(mat,self.settings.default_material)
         self.bindings[path]=mat
         return path
 
@@ -34,12 +36,14 @@ class ChartSnapshot:
         self.materials=ChartMaterials(self.settings,None,self.report)
         self.writer=VMFWriter()
         self.document=None;self.originals=set()
+        self.rejections=[]
         if vmfimport.imported(self.scene):
             self.document=vmfimport._document(bpy.data.texts[self.scene[vmfimport.SOURCE_KEY]],self.settings.lightmap_scale_imported)
             self.originals=vmfimport.written_back(self.scene.objects)
             self.writer._next_id=self.document.max_id()+1
 
-    def object_charts(self,obj,depsgraph,index_start=0):
+    def object_charts(self,obj,depsgraph,index_start=0,allow_partial=False):
+        self.rejections=[]
         if obj.type!='MESH' or effective_role(obj)=='MODEL' or obj.data.get('hl_model'):
             raise ValueError('Surface lightmap charts currently require brush geometry')
         if obj.get(vmfimport.KIND)=='disp':
@@ -67,7 +71,10 @@ class ChartSnapshot:
         for side,vertices in pairs:
             path=side.get('material','').lower().replace('\\','/')
             if path in NON_RENDERING_MATERIALS:continue
-            charts.append(chart_from_side(side,vertices,index_start+len(charts)))
+            try:charts.append(chart_from_side(side,vertices,index_start+len(charts)))
+            except ValueError as exc:
+                if not allow_partial:raise
+                self.rejections.append(f'{path}: {exc}')
         return charts
 
 class CachedObjectCharts:
@@ -77,14 +84,14 @@ class CachedObjectCharts:
     must change after evaluated topology/UV edits, as SceneCache already does.
     """
     def __init__(self):
-        self.entries={};self.bindings={};self.builds=0
+        self.entries={};self.bindings={};self.warnings={};self.builds=0
 
-    def get(self,context,obj,depsgraph,geometry_token,source_revision=0,snapshot=None):
+    def get(self,context,obj,depsgraph,geometry_token,source_revision=0,snapshot=None,allow_partial=False):
         s=context.scene.hammerless
         materials=tuple((slot.material.as_pointer(),slot.material.hammerless.lightmap_scale,
                          slot.material.hammerless.texture_scale,game_path(slot.material),texture_size(slot.material))
                         if slot.material else None for slot in obj.material_slots)
-        signature=(geometry_token,source_revision,tuple(v for row in obj.matrix_world for v in row),
+        signature=(geometry_token,source_revision,allow_partial,tuple(v for row in obj.matrix_world for v in row),
                    s.units_per_meter,s.lightmap_scale,s.lightmap_scale_imported,s.default_material,
                    materials,obj.name,obj.get(vmfimport.ID),obj.get(vmfimport.KIND),
                    obj.hammerless.use_convex_hull)
@@ -93,7 +100,8 @@ class CachedObjectCharts:
         if entry is None or entry[0]!=signature:
             snapshot=snapshot or ChartSnapshot(context)
             if callable(snapshot):snapshot=snapshot()
-            charts=snapshot.object_charts(obj,depsgraph)
+            charts=snapshot.object_charts(obj,depsgraph,allow_partial=allow_partial)
+            self.warnings[key]=list(snapshot.rejections)
             self.bindings[key]={c.material_path:snapshot.materials.bindings[c.material_path]
                                 for c in charts if c.material_path in snapshot.materials.bindings}
             self.entries[key]=(signature,charts);self.builds+=1
@@ -103,3 +111,4 @@ class CachedObjectCharts:
         keep={obj.as_pointer() for obj in objects}
         self.entries={key:entry for key,entry in self.entries.items() if key in keep}
         self.bindings={key:value for key,value in self.bindings.items() if key in keep}
+        self.warnings={key:value for key,value in self.warnings.items() if key in keep}
