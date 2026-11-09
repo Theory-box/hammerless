@@ -152,3 +152,15 @@ transform and material revision. Native VMT selfillum/texlights and visible
 self-emission are NOT covered by this integration. Alpha-cutout/translucent
 shadows remain opaque, and game exposure/advanced shader matching is pending.
 This is an experimental test package, not completion of the renderer goal.
+
+## Large-map limitation confirmed
+
+`c1m1_hotel_with_transition.blend`, 2,716,156 triangles / 4,784 instances,
+RTX 4090 at 1280x720, one bounce / eight paths, sampled sky and 256-sample
+synthetic area: refining medians 570-785 ms; settled drawing 192-204 ms.
+First overview frame 2.27 seconds. Complete isolated job exited in 72.4 seconds.
+Report: `outputs/l4d2-preview/hotel-gpu.json`. This is NOT usable realtime on
+this scene. The smaller map's 29-50 ms result cannot be generalized. Both
+results exclude preparation and use synthetic benchmark illumination.
+Large-scene drawing/submission and traversal require profiling before further
+performance promises; no hardware-ray-tracing acceleration is implemented.
