@@ -14,6 +14,7 @@ TARGET_FRAMES=18 if '--sky' in sys.argv else 8 if any(v in sys.argv for v in ('-
 if '--sky' in sys.argv:OUT=OUT.with_name('viewport-sky-check.json')
 if any(v in sys.argv for v in ('--area','--emission')):OUT=OUT.with_name('viewport-area-check.json')
 if '--emission' in sys.argv:OUT=OUT.with_name('viewport-emission-check.json')
+if '--prepass' in sys.argv:OUT=OUT.with_name('viewport-prepass-check.json')
 state={'frames':0,'updates':0,'done':False,'stage':0,'samples':[],'await_update':0}
 original_draw=preview.HAMMERLESS_L4D2Preview.view_draw
 original_update=preview.HAMMERLESS_L4D2Preview.view_update
@@ -50,7 +51,7 @@ def draw(self,context,depsgraph):
         if state['stage']>=4:brightness*=2
         expected=1.055*(brightness/255)**(1/2.4)-.055
         assert not self.error,self.error
-        assert len(self.cache.geometry)==(2 if '--emission' in sys.argv else 1), len(self.cache.geometry)
+        assert len(self.cache.geometry)==(2 if '--emission' in sys.argv else 1)+(256 if '--prepass' in sys.argv else 0), len(self.cache.geometry)
         if PROGRESSIVE:
             visited=state.setdefault('history_stages',{})
             stage=str(state['stage'])
@@ -141,6 +142,11 @@ try:
         output=next(n for n in emitting.node_tree.nodes if n.type=='OUTPUT_MATERIAL')
         emitting.node_tree.links.new(emission.outputs[0],output.inputs['Surface'])
         emitter.data.materials.append(emitting)
+    if '--prepass' in sys.argv:
+        for index in range(256):
+            extra=cube.copy();extra.data=cube.data.copy()
+            scene.collection.objects.link(extra)
+            extra.location=(10000+index*4,10000,0)
     scene.render.engine=preview.HAMMERLESS_L4D2Preview.bl_idname
     for screen in bpy.data.screens:
         for area in screen.areas:
