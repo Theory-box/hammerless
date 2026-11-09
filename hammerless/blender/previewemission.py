@@ -21,7 +21,7 @@ class EmissionCache:
         scale = depsgraph.scene.hammerless.units_per_meter
         for instance in depsgraph.object_instances:
             obj = instance.object
-            if obj.type != 'MESH' or not instance.show_self or not included_instance(instance, depsgraph.view_layer):
+            if obj.type != 'MESH' or not instance.show_self:
                 continue
             geometry = scene_cache.geometry.get(obj.original.as_pointer())
             if geometry is None:
@@ -40,7 +40,7 @@ class EmissionCache:
                         warnings.append(f'{mat.name}: preview emission unavailable: {exc}')
                 emitter = self.materials[key]
                 active |= emitter is not None and emitter.enabled
-            if not active:
+            if not active or not included_instance(instance, depsgraph.view_layer):
                 continue
             key = (obj.original.as_pointer(), id(geometry), scale,
                    tuple(v for row in instance.matrix_world for v in row),
