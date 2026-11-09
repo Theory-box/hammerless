@@ -220,3 +220,13 @@ plus original imported per-face scales unless Imported Brushes Too is enabled.
 Adaptive lightmaps can further alter final scales. Do not replace these policies
 with a separate preview density. Props require a separate lighting strategy;
 the compiled brush chart experiment does not establish model lightmap support.
+
+Surface chart construction now consumes VMF side axes and lightmapscale before
+BSP compilation. Planar/slanted and shifted-axis tests pass, rectangular margin
+samples clamp to the convex surface boundary, and oversized charts fail rather
+than silently coarsening. New Blender brush export tests confirm material
+scales 4/8/16 and inherited scene scale 32 propagate into chart density exactly.
+A 128-unit cube produces 6,534 / 1,734 / 486 / 150 samples respectively.
+This pre-BSP path is not enabled in the normal renderer yet. Imported per-face
+scale handling, adaptive scale changes, non-brush models and cache invalidation
+still require integration. Reports: live-surface-scales.json.
