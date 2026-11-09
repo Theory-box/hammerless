@@ -246,7 +246,7 @@ class SceneCache:
         self.instances = instances
 
 
-def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, bounce=False):
+def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, bounce=False, surface_samples=False):
     if bounce and not (lit and shadows):
         raise ValueError('Bounced lighting requires lit geometry and ray tracing')
     interface = gpu.types.GPUStageInterfaceInfo('hl_preview_normal')
@@ -305,7 +305,9 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
         info.sampler(6, 'FLOAT_2D', 'traceTop')
         info.push_constant('INT', 'traceInstanceCount')
         info.push_constant('INT', 'traceTopCount')
-    info.vertex_source('void main() { gl_Position=mvp*vec4(position,1.0); worldNormal=normalMatrix*normal; '+info_world+' }')
+    if surface_samples:info.vertex_in(5,'VEC2','sampleClip')
+    clip='vec4(sampleClip,0,1)' if surface_samples else 'mvp*vec4(position,1.0)'
+    info.vertex_source('void main() { gl_Position='+clip+'; worldNormal=normalMatrix*normal; '+info_world+' }')
     fragment = '''void main() {
         vec3 sum=vec3(0.0), n=normalize(worldNormal);
         vec3 samplePosition=worldPosition+normalize(surfaceNormal)*(receiverOffset/unitScale);
@@ -408,7 +410,7 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
     return gpu.shader.create_from_info(info)
 
 
-def draw_geometry(cache, shader, view_projection, lit=False, textured=False, shadows=False, display=False, exposure=0.0, bounce_samples=None, sampled_bounce_sky=False, bounce_seed=0, bounce_depth=1, primary_sky_index=-1, primary_sky_count=162, primary_area_phase=-1, sampled_bounce_area=False):
+def draw_geometry(cache, shader, view_projection, lit=False, textured=False, shadows=False, display=False, exposure=0.0, bounce_samples=None, sampled_bounce_sky=False, bounce_seed=0, bounce_depth=1, primary_sky_index=-1, primary_sky_count=162, primary_area_phase=-1, sampled_bounce_area=False, lighting_samples=None):
     """Draw to the bound framebuffer; caller owns clearing and viewport setup."""
     old_depth = gpu.state.depth_test_get()
     old_mask = gpu.state.depth_mask_get()
@@ -442,6 +444,14 @@ def draw_geometry(cache, shader, view_projection, lit=False, textured=False, sha
             shader.uniform_int('primaryAreaPhase',int(primary_area_phase)%8 if primary_area_phase>=0 else -1)
             shader.uniform_int('primarySkyCount',max(1,min(162,int(primary_sky_count))))
             shader.uniform_sampler('skyDirections', cache.upload_sky())
+        if lighting_samples is not None:
+            from mathutils import Matrix
+            shader.uniform_float('model',Matrix.Identity(4))
+            shader.uniform_float('normalMatrix',Matrix.Identity(3))
+            shader.uniform_float('receiverOffset',1.0)
+            gpu.state.point_size_set(1.0)
+            lighting_samples.draw(shader)
+            return
         from .previewcull import raster_instances
         for key, matrix in raster_instances(cache,view_projection):
             geometry = cache.geometry[key]

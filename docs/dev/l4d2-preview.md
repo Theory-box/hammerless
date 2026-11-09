@@ -193,3 +193,30 @@ PNGs were byte-identical before/after. Enabled for progressive previews above
 256 instances; this threshold is a heuristic, not a measured universal optimum.
 The prepass uses the same raster culling and leaves ray geometry unchanged.
 Report: hotel-prepass.json. Large-scene refinement still needs substantial work.
+
+## Surface lighting cache experiment
+
+The new `previewlightcache.py` prototype evaluates irradiance at supplied surface
+samples into a GPU texture, independently of the camera. It is NOT connected to
+the normal viewport engine yet. Its explicit readback produces numeric lighting
+and sample coordinates for later bake/export work; no BSP-writing claim.
+
+Compiled two-bounce fixture: four floor charts, 4,356 samples (66x66 storage),
+using compiled lightmap vectors and extents. Independent point-light maximum
+linear RGB error 1.62e-7 on interior samples. 72 refinement passes with eight
+paths / two bounces took 54.6 ms including final readback in this small test.
+Direct cold setup/readback varied 3.7-17.7 ms across runs; not a stable throughput
+measurement. Full-resolution 1280x720 chart display median 0.924 ms across 30
+camera moves, with exactly zero additional lighting evaluations. View inspected:
+smooth point-light gradient, no obvious chart seam. No detailed textures in this
+fixture. Real map memory, throughput, scheduling and image quality remain unproven.
+
+Artifacts: surface-cache-check.json, surface-cache-charts.json,
+surface-cache-samples.npz, surface-cache-display.png. The prototype invalidates
+on caller-provided scene signatures; identifying affected regions is not solved.
+
+Next integration must preserve export policy: material scale or scene default,
+plus original imported per-face scales unless Imported Brushes Too is enabled.
+Adaptive lightmaps can further alter final scales. Do not replace these policies
+with a separate preview density. Props require a separate lighting strategy;
+the compiled brush chart experiment does not establish model lightmap support.
