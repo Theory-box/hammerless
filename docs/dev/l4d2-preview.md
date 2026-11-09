@@ -185,3 +185,11 @@ submits 64 / 4,784 instances: sampled-sky refining median 103.49 ms versus
 397.01 ms before camera culling. Overview retains all 4,784 and costs 820 ms.
 No VVIS dependency. See hotel-cull.json. This remains too slow for a smooth
 large-map interactive preview; settled cached drawing stays below 1 ms here.
+
+
+Depth prepass benchmark: hotel interior sky refining 77.93 ms versus 103.49 ms
+without prepass; overview 765.43 ms versus 820.03 ms. Both saved sky comparison
+PNGs were byte-identical before/after. Enabled for progressive previews above
+256 instances; this threshold is a heuristic, not a measured universal optimum.
+The prepass uses the same raster culling and leaves ray geometry unchanged.
+Report: hotel-prepass.json. Large-scene refinement still needs substantial work.

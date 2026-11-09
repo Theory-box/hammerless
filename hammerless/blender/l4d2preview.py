@@ -513,7 +513,8 @@ def depth_shader():
 def draw_depth(cache,shader,view_projection):
     from .previewscene import draws_material
     shader.bind()
-    for key,matrix in cache.instances:
+    from .previewcull import raster_instances
+    for key,matrix in raster_instances(cache,view_projection):
         g=cache.geometry[key]
         shader.uniform_float('mvp',view_projection@matrix)
         ids=g.material_ids if g.material_ids is not None else np.zeros(len(g.positions)//3,dtype=int)
@@ -629,6 +630,9 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                 if self.history_depth_shader is None:self.history_depth_shader=depth_shader()
                 signature=(self.scene_signature,samples,context.scene.hl_preview_max_bounces,self.bounce_uploads,tuple(v for row in matrix for v in row))
                 def sample(frame):
+                    if len(self.cache.instances)>256:
+                        gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
+                        draw_depth(self.cache,self.history_depth_shader,matrix)
                     draw_geometry(self.cache,self.shader,matrix,lit=True,textured=True,shadows=True,
                                   bounce_samples=samples if bounce else None,sampled_bounce_sky=True,sampled_bounce_area=True,bounce_seed=frame,bounce_depth=context.scene.hl_preview_max_bounces,
                                   primary_sky_index=(frame*9)%162,primary_sky_count=9,primary_area_phase=frame%8 if area_batches else -1)

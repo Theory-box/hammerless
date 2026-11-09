@@ -111,6 +111,9 @@ def run():
                         start=time.perf_counter()
                         fb.clear(color=(.025,.025,.025,1),depth=1)
                         def sample(seed):
+                            if '--prepass' in sys.argv:
+                                gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
+                                preview.draw_depth(cache,depth_shader,projection)
                             preview.draw_geometry(cache,shader,projection,lit=True,textured=True,shadows=True,
                                 bounce_samples=8 if bounce else None,sampled_bounce_area='--sample-area' in sys.argv,sampled_bounce_sky='--sample-sky' in sys.argv,
                                 bounce_seed=seed,bounce_depth=bounce_depth,
