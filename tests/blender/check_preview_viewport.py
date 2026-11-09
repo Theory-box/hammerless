@@ -15,6 +15,8 @@ if '--sky' in sys.argv:OUT=OUT.with_name('viewport-sky-check.json')
 if any(v in sys.argv for v in ('--area','--emission')):OUT=OUT.with_name('viewport-area-check.json')
 if '--emission' in sys.argv:OUT=OUT.with_name('viewport-emission-check.json')
 if '--prepass' in sys.argv:OUT=OUT.with_name('viewport-prepass-check.json')
+if '--surface-cache' in sys.argv:OUT=OUT.with_name('viewport-surface-cache-check.json')
+if '--mixed-cache' in sys.argv:OUT=OUT.with_name('viewport-mixed-cache-check.json')
 state={'frames':0,'updates':0,'done':False,'stage':0,'samples':[],'await_update':0}
 original_draw=preview.HAMMERLESS_L4D2Preview.view_draw
 original_update=preview.HAMMERLESS_L4D2Preview.view_update
@@ -44,6 +46,7 @@ def draw(self,context,depsgraph):
         x,y,w,h=gpu.state.viewport_get()
         pixel=fb.read_color(x+w//2,y+h//2,1,1,4,0,'FLOAT').to_list()[0][0]
         brightness=200 if state['stage']==0 else 50
+        if '--mixed-cache' in sys.argv and state['stage']<2:brightness*=(100/98)**2
         if '--sky' in sys.argv:brightness+=self.cache.sky_color[0]
         if any(v in sys.argv for v in ('--area','--emission')):
             # Analytic flat receiver: source and receiver cosine / distance squared.
@@ -51,7 +54,12 @@ def draw(self,context,depsgraph):
         if state['stage']>=4:brightness*=2
         expected=1.055*(brightness/255)**(1/2.4)-.055
         assert not self.error,self.error
-        assert len(self.cache.geometry)==(2 if '--emission' in sys.argv else 1)+(256 if '--prepass' in sys.argv else 0), len(self.cache.geometry)
+        if '--surface-cache' in sys.argv:
+            live=self.surface_cache
+            assert live and live.cache and len(live.keys)==1,(live.warnings if live else 'Missing cache')
+            if state['stage'] in (3,4):
+                assert live.cache.evaluations==state['cached_evaluations'],'Camera/exposure retraced brush lighting'
+        assert len(self.cache.geometry)==(2 if '--emission' in sys.argv else 1)+(256 if '--prepass' in sys.argv else 0)+int('--mixed-cache' in sys.argv), len(self.cache.geometry)
         if PROGRESSIVE:
             visited=state.setdefault('history_stages',{})
             stage=str(state['stage'])
@@ -71,6 +79,7 @@ def draw(self,context,depsgraph):
                 assert self.bounce_uploads==state['initial_bounce_uploads']+(1 if state['stage']==5 else 0),'Unexpected bounce material rebuild count'
         state['samples'].append({'stage':state['stage'],'pixel':pixel,'expected_srgb':expected,
                                 'history_frames':self.history.frames if self.history else 0})
+        if '--surface-cache' in sys.argv:state['cached_evaluations']=self.surface_cache.cache.evaluations
         if state['stage']==(5 if PROGRESSIVE else 2):
             finish({'ok':True,**state,'geometry':len(self.cache.geometry)})
         else:
@@ -87,6 +96,7 @@ def draw(self,context,depsgraph):
                     if '--emission' in sys.argv:emission.inputs['Strength'].default_value=.25
                 elif state['stage']==2:
                     cube.location.x=.1
+                    if '--mixed-cache' in sys.argv:prop.location.z=-3
                 elif state['stage']==3:
                     for area in bpy.context.screen.areas:
                         if area.type=='VIEW_3D':area.spaces.active.region_3d.view_location.x=.1
@@ -109,6 +119,7 @@ try:
     preview.HAMMERLESS_L4D2Preview.view_update=update
     preview.register()
     scene=bpy.context.scene
+    scene.hl_preview_surface_cache='--surface-cache' in sys.argv
     scene.hammerless.auto_sun=False
     scene.hammerless.ambient_brightness=30 if '--sky' in sys.argv else 0
     scene.hammerless.ambient_color=(1,1,1)
@@ -127,6 +138,9 @@ try:
     bsdf=next(n for n in mat.node_tree.nodes if n.type=='BSDF_PRINCIPLED')
     mat.node_tree.links.new(texture.outputs['Color'],bsdf.inputs['Base Color'])
     cube.data.materials.append(mat)
+    if '--mixed-cache' in sys.argv:
+        prop=cube.copy();prop.data=cube.data.copy();scene.collection.objects.link(prop)
+        prop.hammerless.role='MODEL';prop.location.z=3
     bpy.ops.object.light_add(type='AREA' if any(v in sys.argv for v in ('--area','--emission')) else 'POINT',location=(0,0,102))
     lamp=bpy.context.object
     if any(v in sys.argv for v in ('--area','--emission')):lamp.data.size=64;lamp.data.energy=10000

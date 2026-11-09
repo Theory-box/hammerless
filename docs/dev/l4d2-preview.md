@@ -196,9 +196,9 @@ Report: hotel-prepass.json. Large-scene refinement still needs substantial work.
 
 ## Surface lighting cache experiment
 
-The new `previewlightcache.py` prototype evaluates irradiance at supplied surface
-samples into a GPU texture, independently of the camera. It is NOT connected to
-the normal viewport engine yet. Its explicit readback produces numeric lighting
+The `previewlightcache.py` prototype evaluates irradiance at supplied surface
+samples into a GPU texture, independently of the camera. The initial standalone
+checks below preceded live integration (see the next section). Its readback produces numeric lighting
 and sample coordinates for later bake/export work; no BSP-writing claim.
 
 Compiled two-bounce fixture: four floor charts, 4,356 samples (66x66 storage),
@@ -239,4 +239,56 @@ text. Per-object layout cache tests cover no-change reuse, scale/transform/
 geometry invalidation and deleted-object eviction. Geometry and imported-text
 revision tokens are caller obligations; these are not yet wired into view_update.
 Displacements/models reject chart extraction rather than pretending they are
-planar brush faces. The live engine remains unchanged pending integration.
+planar brush faces. These checks preceded the live integration below.
+
+## Live surface cache integration (opt-in, not installed yet)
+
+`hl_preview_surface_cache` enables the first live brush-cache path. Default is
+false while broad validation remains incomplete. `view_update` builds/reuses
+export-policy charts and material bindings; `view_draw` refines GPU irradiance
+and displays full-resolution textures multiplied by the cached light. Surface
+samples use scene/material/imported-face lightmap scales. Source texture axes
+and Source-to-Blender unit conversion are independent of this lighting density.
+
+Successful brush charts skip per-pixel lighting, but all geometry remains in
+the ray scene. Props, instanced objects, terrain, displacements, hull-converted
+objects and rejected charts retain the prior renderer. A one-million-sample
+budget falls back with a warning rather than silently reducing density.
+Edits conservatively restart irradiance; camera and exposure changes do not.
+This is not incremental regional relighting or final BSP lightmap export.
+
+Actual RenderEngine callback tests passed light changes, object transforms,
+camera changes, exposure, explicit material refresh and cached/uncached depth
+composition. A prop moved from in front of a cached brush to behind it. Camera
+and exposure changes made no additional cached-light evaluations. Baseline
+renderer tests with the switch disabled also passed. Independent static review
+caught and verified fixes for hull/terrain eligibility, accumulated material
+binding dictionaries, eager snapshot construction and disappearing budget
+warnings. Blender test processes exited normally under the owned job runner.
+
+Saved `deadline_roundtrip/roundtrip.blend` benchmark: RTX 4090, 1280x720,
+256 instances / 68,207 triangles, eight bounce rays, one bounce, eighteen
+refinement frames, synthetic point illumination with/without flat sky.
+164 objects / 725 charts / 40,472 samples cached. Initial CPU layout preparation
+was approximately 0.44 seconds in the first run. First GPU setup can still stall
+for seconds (shader/resource preparation); this is not hidden by steady-state
+numbers. Camera-navigation timings include GPU draw and synchronous pixel
+readback, exclude scene update work, and are not whole-application FPS:
+
+| View | Sky | Per-pixel baseline | Surface cache + depth pass |
+|---|---|---:|---:|
+| Overview | Off | 10.44 ms | 4.17 ms |
+| Overview | On | 13.98 ms | 4.20 ms |
+| Spawn | Off | 13.60 ms | 4.23 ms |
+| Spawn | On | 21.42 ms | 5.26 ms |
+
+Cache refinement medians were 9.1–12.6 ms in that run. A cached-geometry depth
+pass is necessary to avoid shading hidden props before walls cover them. Sky
+comparison PNGs were byte-identical with/without this pass. Raw reports:
+`map-baseline-navigation.json`, `map-cache-navigation.json`, and
+`map-cache-depth-navigation.json` under the workspace's outputs/l4d2-preview.
+
+Remaining validation: large hotel map, interactive editing cost, boundary
+sampling/seams, image comparison against VRAD and game, and package deployment.
+Adaptive compile-time scale changes, BSP face splitting, exact boundary filtering
+and advanced material parity are not implemented by this cache.

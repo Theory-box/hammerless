@@ -110,6 +110,7 @@ class SurfaceCacheDisplay:
             color=vec4(c,1);
         }''')
         self.shader=gpu.shader.create_from_info(info)
+        self.depth_shader=None
         self.groups=[]
         for group in groups.values():
             group['batch']=batch_for_shader(self.shader,'TRIS',{
@@ -118,6 +119,18 @@ class SurfaceCacheDisplay:
                 'chart':np.asarray(group['metadata'],dtype=np.float32),
                 'baseUV':np.asarray(group['uv'],dtype=np.float32)})
             self.groups.append(group)
+
+    def draw_depth(self,view_projection):
+        """Use exactly the displayed chart vertices to hide occluded prop work."""
+        from .l4d2preview import depth_shader
+        if self.depth_shader is None:self.depth_shader=depth_shader()
+        old_depth=gpu.state.depth_test_get();old_mask=gpu.state.depth_mask_get()
+        try:
+            gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
+            self.depth_shader.bind();self.depth_shader.uniform_float('mvp',view_projection)
+            for group in self.groups:group['batch'].draw(self.depth_shader)
+        finally:
+            gpu.state.depth_test_set(old_depth);gpu.state.depth_mask_set(old_mask)
 
     def draw(self,view_projection,exposure=0):
         old_depth=gpu.state.depth_test_get();old_mask=gpu.state.depth_mask_get();old_blend=gpu.state.blend_get()

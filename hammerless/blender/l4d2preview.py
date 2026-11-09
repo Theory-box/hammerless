@@ -410,7 +410,7 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
     return gpu.shader.create_from_info(info)
 
 
-def draw_geometry(cache, shader, view_projection, lit=False, textured=False, shadows=False, display=False, exposure=0.0, bounce_samples=None, sampled_bounce_sky=False, bounce_seed=0, bounce_depth=1, primary_sky_index=-1, primary_sky_count=162, primary_area_phase=-1, sampled_bounce_area=False, lighting_samples=None):
+def draw_geometry(cache, shader, view_projection, lit=False, textured=False, shadows=False, display=False, exposure=0.0, bounce_samples=None, sampled_bounce_sky=False, bounce_seed=0, bounce_depth=1, primary_sky_index=-1, primary_sky_count=162, primary_area_phase=-1, sampled_bounce_area=False, lighting_samples=None, exclude_keys=()):
     """Draw to the bound framebuffer; caller owns clearing and viewport setup."""
     old_depth = gpu.state.depth_test_get()
     old_mask = gpu.state.depth_mask_get()
@@ -454,6 +454,7 @@ def draw_geometry(cache, shader, view_projection, lit=False, textured=False, sha
             return
         from .previewcull import raster_instances
         for key, matrix in raster_instances(cache,view_projection):
+            if key in exclude_keys:continue
             geometry = cache.geometry[key]
             if not len(geometry.positions):
                 continue
@@ -520,11 +521,12 @@ def depth_shader():
     return gpu.shader.create_from_info(info)
 
 
-def draw_depth(cache,shader,view_projection):
+def draw_depth(cache,shader,view_projection,exclude_keys=()):
     from .previewscene import draws_material
     shader.bind()
     from .previewcull import raster_instances
     for key,matrix in raster_instances(cache,view_projection):
+        if key in exclude_keys:continue
         g=cache.geometry[key]
         shader.uniform_float('mvp',view_projection@matrix)
         ids=g.material_ids if g.material_ids is not None else np.zeros(len(g.positions)//3,dtype=int)
@@ -559,6 +561,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         self.scene_signature = None
         self.error = ''
         self.surface_signature = None
+        self.surface_cache = None
 
     def view_update(self, context, depsgraph):
         try:
@@ -583,7 +586,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                     for mat in g.materials or (None,):resolver.resolve(mat)
                 self.cache.surface_materials=resolver
                 self.surface_signature=surface_signature
-            if context.scene.hl_preview_bounce_samples>0:
+            if context.scene.hl_preview_bounce_samples>0 or context.scene.hl_preview_surface_cache:
                 from .previewmaterials import BounceMaterials
                 from .ops import game_root,game_content
                 import os
@@ -606,6 +609,11 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             self.scene_signature=(self.surface_signature,self.material_revision,self.cache.light_signature,self.cache.sky_color,
                 tuple((key,id(g),g.shadow_revision,g.use_uv) for key,g in self.cache.geometry.items()),
                 tuple((key,tuple(v for row in matrix for v in row)) for key,matrix in self.cache.instances))
+            if context.scene.hl_preview_surface_cache:
+                from .previewlivecache import LiveSurfaceCache
+                if self.surface_cache is None:self.surface_cache=LiveSurfaceCache()
+                self.surface_cache.update(context,depsgraph,self.cache,self.material_revision)
+            else:self.surface_cache=None
             self.error = ''
         except Exception as exc:
             self.error = str(exc)
@@ -627,37 +635,49 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             if self.shader is None or self.shader_bounce!=shader_mode:
                 self.shader = diagnostic_shader(lit=True, textured=True, shadows=True, display=not progressive,bounce=bounce)
                 self.shader_bounce=shader_mode
-            if bounce and self.bounce_pending:
+            if (bounce or self.surface_cache is not None) and self.bounce_pending:
                 from .previewtrace import TraceCache
                 if self.cache.trace is None:self.cache.trace=TraceCache()
                 self.cache.trace.update_bounce_materials(self.cache,self.bounce_materials)
                 self.bounce_pending=False
                 self.bounce_uploads+=1
             matrix=context.region_data.perspective_matrix.copy()
+            excluded=self.surface_cache.keys if self.surface_cache else set()
+            if self.surface_cache:
+                changed=self.surface_cache.refine(self.cache,(self.scene_signature,self.bounce_uploads),
+                    frames=context.scene.hl_preview_refine_frames if progressive else 1,
+                    rays=samples,bounces=context.scene.hl_preview_max_bounces)
+                if changed:self.tag_redraw()
             if progressive:
                 from .previewhistory import FrameHistory
                 if self.history is None:self.history=FrameHistory()
                 if self.history_depth_shader is None:self.history_depth_shader=depth_shader()
-                signature=(self.scene_signature,samples,context.scene.hl_preview_max_bounces,self.bounce_uploads,tuple(v for row in matrix for v in row))
+                signature=(self.scene_signature,samples,context.scene.hl_preview_max_bounces,self.bounce_uploads,self.surface_cache.generation if self.surface_cache else None,tuple(v for row in matrix for v in row))
                 def sample(frame):
+                    if self.surface_cache:self.surface_cache.draw_depth(matrix)
                     if len(self.cache.instances)>256:
                         gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
-                        draw_depth(self.cache,self.history_depth_shader,matrix)
+                        draw_depth(self.cache,self.history_depth_shader,matrix,exclude_keys=excluded)
                     draw_geometry(self.cache,self.shader,matrix,lit=True,textured=True,shadows=True,
                                   bounce_samples=samples if bounce else None,sampled_bounce_sky=True,sampled_bounce_area=True,bounce_seed=frame,bounce_depth=context.scene.hl_preview_max_bounces,
-                                  primary_sky_index=(frame*9)%162,primary_sky_count=9,primary_area_phase=frame%8 if area_batches else -1)
-                frames=self.history.render(signature,sample,lambda:draw_depth(self.cache,self.history_depth_shader,matrix),
+                                  primary_sky_index=(frame*9)%162,primary_sky_count=9,primary_area_phase=frame%8 if area_batches else -1,exclude_keys=excluded)
+                def restore_depth():
+                    if self.surface_cache:self.surface_cache.draw_depth(matrix)
+                    draw_depth(self.cache,self.history_depth_shader,matrix,exclude_keys=excluded)
+                frames=self.history.render(signature,sample,restore_depth,
                                            exposure=context.scene.hl_preview_exposure,max_frames=context.scene.hl_preview_refine_frames)
                 if frames<context.scene.hl_preview_refine_frames:self.tag_redraw()
             else:
                 self.history=None
+                if self.surface_cache:self.surface_cache.draw_depth(matrix)
                 draw_geometry(self.cache,self.shader,matrix,lit=True,textured=True,shadows=True,display=True,
-                              exposure=context.scene.hl_preview_exposure)
+                              exposure=context.scene.hl_preview_exposure,exclude_keys=excluded)
+            if self.surface_cache:self.surface_cache.draw(matrix,context.scene.hl_preview_exposure)
         except Exception as exc:
             self.error=str(exc)
             self.update_stats('L4D2 Preview GPU error', str(exc))
             return
-        warning = '; '.join(self.cache.warnings+(self.cache.surface_materials.warnings if self.cache.surface_materials else [])+(self.bounce_materials.warnings if bounce and self.bounce_materials else []))
+        warning = '; '.join((self.surface_cache.warnings if self.surface_cache else [])+self.cache.warnings+(self.cache.surface_materials.warnings if self.cache.surface_materials else [])+(self.bounce_materials.warnings if bounce and self.bounce_materials else []))
         self.update_stats('L4D2 Preview', warning or ('Experimental bounced light' if bounce else 'Direct light and opaque shadows'))
 
     def render(self, depsgraph):
@@ -699,6 +719,7 @@ class HAMMERLESS_PT_l4d2_preview(bpy.types.Panel):
         col.label(text='Blender emission lights nearby surfaces.')
         col.label(text='Base textures; linear irradiance / 255.')
         col.operator('hammerless.refresh_preview_materials', icon='FILE_REFRESH')
+        col.prop(context.scene,'hl_preview_surface_cache')
         col.prop(context.scene,'hl_preview_exposure')
         col.prop(context.scene,'hl_preview_bounce_samples')
         col.prop(context.scene,'hl_preview_max_bounces')
@@ -713,6 +734,9 @@ CLASSES = (HAMMERLESS_L4D2Preview, HAMMERLESS_OT_refresh_preview_materials, HAMM
 
 
 def register():
+    bpy.types.Scene.hl_preview_surface_cache = bpy.props.BoolProperty(
+        name='Surface Lighting Cache (Experimental)',default=False,
+        description='Reuse brush lighting at exported lightmap density while navigating. Scene edits restart lighting. Props, instances and unsupported brushes use per-pixel lighting. One million cached sample limit')
     bpy.types.Scene.hl_preview_max_bounces = bpy.props.IntProperty(
         name='Max Bounces',default=1,min=1,max=8,
         description='Maximum diffuse reflections per preview ray. Higher values add light carried around more corners, but cost more time. Does not change bake settings')
@@ -730,6 +754,7 @@ def register():
 
 
 def unregister():
+    del bpy.types.Scene.hl_preview_surface_cache
     del bpy.types.Scene.hl_preview_max_bounces
     del bpy.types.Scene.hl_preview_refine_frames
     del bpy.types.Scene.hl_preview_bounce_samples

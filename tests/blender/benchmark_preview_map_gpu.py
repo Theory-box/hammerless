@@ -65,6 +65,13 @@ def run():
         cache.trace=TraceCache();cache.trace.update_bounce_materials(cache,resolver)
         assert not resolver.warnings,resolver.warnings
     shader=preview.diagnostic_shader(lit=True,textured=True,shadows=True,bounce=bounce)
+    live=None;layout_ms=None
+    if '--surface-cache' in sys.argv:
+        assert bounce and progressive,'Surface cache benchmark requires --bounce --progressive'
+        from hammerless.blender.previewlivecache import LiveSurfaceCache
+        live=LiveSurfaceCache();start=time.perf_counter()
+        live.update(bpy.context,deps,cache,0)
+        layout_ms=(time.perf_counter()-start)*1000
     width,height=720,480
     if '--resolution' in sys.argv:width,height=map(int,sys.argv[sys.argv.index('--resolution')+1].split('x'))
     if progressive:
@@ -72,6 +79,7 @@ def run():
         history=FrameHistory();depth_shader=preview.depth_shader()
     off=gpu.types.GPUOffScreen(width,height,format='RGBA32F')
     result={'file':str(path),'gpu':gpu.platform.renderer_get(),'unit_scale':scale,'triangles':sum(len(g.positions)//3 for g in cache.geometry.values()),'instances':len(cache.instances),'resolution':[width,height],
+            'surface_cache':({'layout_ms':layout_ms,'cached_objects':len(live.keys),'charts':len(live.faces),'samples':len(live.positions) if live.positions is not None else 0,'warnings':live.warnings} if live else None),
             'bounce_rays':8 if bounce else 0,'material_warnings':cache.surface_materials.warnings+(resolver.warnings if bounce else []),
             'bounces':bounce_depth,'primary_sky_directions_per_frame':9 if progressive else 162,'progressive':progressive,'refinement_frames':refinement_frames,'sampled_bounce_area':'--sample-area' in sys.argv,
             'game_root':root,'stored_game_root':stored_root if bounce else None,
@@ -110,23 +118,27 @@ def run():
                     for frame in range(refinement_frames+2 if progressive else 10):
                         start=time.perf_counter()
                         fb.clear(color=(.025,.025,.025,1),depth=1)
+                        excluded=live.keys if live else ()
+                        if live:live.refine(cache,(name,sky),frames=refinement_frames,rays=8,bounces=bounce_depth)
                         def sample(seed):
+                            if live:live.draw_depth(projection)
                             if '--prepass' in sys.argv:
                                 gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
-                                preview.draw_depth(cache,depth_shader,projection)
+                                preview.draw_depth(cache,depth_shader,projection,exclude_keys=excluded)
                             preview.draw_geometry(cache,shader,projection,lit=True,textured=True,shadows=True,
                                 bounce_samples=8 if bounce else None,sampled_bounce_area='--sample-area' in sys.argv,sampled_bounce_sky='--sample-sky' in sys.argv,
                                 bounce_seed=seed,bounce_depth=bounce_depth,
-                                primary_sky_index=(seed*9)%162 if progressive else -1,primary_sky_count=9 if progressive else 162,primary_area_phase=seed%8 if progressive and '--area-size' in sys.argv else -1)
+                                primary_sky_index=(seed*9)%162 if progressive else -1,primary_sky_count=9 if progressive else 162,primary_area_phase=seed%8 if progressive and '--area-size' in sys.argv else -1,exclude_keys=excluded)
                         if progressive:
-                            history.render((name,sky),sample,lambda:preview.draw_depth(cache,depth_shader,projection),max_frames=refinement_frames)
+                            history.render((name,sky),sample,lambda:preview.draw_depth(cache,depth_shader,projection,exclude_keys=excluded),max_frames=refinement_frames)
                         else:sample(0)
+                        if live:live.draw(projection,0)
                         fb.read_color(width//2,height//2,1,1,4,0,'FLOAT')
                         timings.append((time.perf_counter()-start)*1000)
                         if progressive and frame==71 and refinement_frames>72:
                             with history.history_fb.bind():
                                 checkpoint=np.asarray(history.history_fb.read_color(0,0,width,height,4,0,'FLOAT').to_list(),dtype=np.float32)
-                    if progressive:
+                    if progressive and not live:
                         with history.history_fb.bind():pixels=np.asarray(history.history_fb.read_color(0,0,width,height,4,0,'FLOAT').to_list(),dtype=np.float32)
                         pixels[:,:,3]=1
                     else:pixels=np.asarray(fb.read_color(0,0,width,height,4,0,'FLOAT').to_list(),dtype=np.float32)
@@ -136,9 +148,29 @@ def run():
                     assert coverage>.01, f'{name}: no meaningful geometry coverage'
                 image=bpy.data.images.new('Benchmark frame',width,height,float_buffer=True)
                 image.pixels.foreach_set(pixels.reshape(-1))
-                image.save_render(str(OUT/f'map-{name}-sky{int(sky)}-bounce{int(bounce)}.png'),scene=scene)
+                prefix=Path(sys.argv[sys.argv.index('--report-name')+1]).stem if '--report-name' in sys.argv else 'map'
+                image.save_render(str(OUT/f'{prefix}-{name}-sky{int(sky)}-bounce{int(bounce)}.png'),scene=scene)
                 bpy.data.images.remove(image)
+                navigation=[]
+                if '--navigation' in sys.argv:
+                    original_projection=projection.copy()
+                    evaluations=live.cache.evaluations if live and live.cache else None
+                    with off.bind():
+                        gpu.state.viewport_set(0,0,width,height)
+                        fb=gpu.state.active_framebuffer_get()
+                        for step in range(10):
+                            projection=original_projection.copy();projection[0][3]+=(step+1)*.001
+                            start=time.perf_counter();fb.clear(color=(.025,.025,.025,1),depth=1)
+                            if live:live.refine(cache,(name,sky),frames=refinement_frames,rays=8,bounces=bounce_depth)
+                            history.render((name,sky,'navigation',step),sample,
+                                lambda:preview.draw_depth(cache,depth_shader,projection,exclude_keys=excluded),max_frames=refinement_frames)
+                            if live:live.draw(projection,0)
+                            fb.read_color(width//2,height//2,1,1,4,0,'FLOAT')
+                            navigation.append((time.perf_counter()-start)*1000)
+                    projection=original_projection
+                    if evaluations is not None:assert live.cache.evaluations==evaluations,'Camera movement retraced surface cache'
                 result['runs'].append({'view':name,'sky':sky,'first_frame_ms':timings[0],
+                    'navigation_median_ms':statistics.median(navigation) if navigation else None,
                     'eye':list(eye),'first_hit':ray[4].name if ray[0] else None,'hit_distance':(ray[1]-eye).length if ray[0] else None,
                     'linear_range':[float(pixels[:,:,:3].min()),float(pixels[:,:,:3].max())],
                     'median_ms':statistics.median(timings[1:refinement_frames] if progressive else timings[1:]),

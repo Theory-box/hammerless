@@ -77,9 +77,9 @@ class CachedObjectCharts:
     must change after evaluated topology/UV edits, as SceneCache already does.
     """
     def __init__(self):
-        self.entries={};self.builds=0
+        self.entries={};self.bindings={};self.builds=0
 
-    def get(self,context,obj,depsgraph,geometry_token,source_revision=0):
+    def get(self,context,obj,depsgraph,geometry_token,source_revision=0,snapshot=None):
         s=context.scene.hammerless
         materials=tuple((slot.material.as_pointer(),slot.material.hammerless.lightmap_scale,
                          slot.material.hammerless.texture_scale,game_path(slot.material),texture_size(slot.material))
@@ -91,10 +91,15 @@ class CachedObjectCharts:
         key=obj.as_pointer()
         entry=self.entries.get(key)
         if entry is None or entry[0]!=signature:
-            charts=ChartSnapshot(context).object_charts(obj,depsgraph)
+            snapshot=snapshot or ChartSnapshot(context)
+            if callable(snapshot):snapshot=snapshot()
+            charts=snapshot.object_charts(obj,depsgraph)
+            self.bindings[key]={c.material_path:snapshot.materials.bindings[c.material_path]
+                                for c in charts if c.material_path in snapshot.materials.bindings}
             self.entries[key]=(signature,charts);self.builds+=1
         return self.entries[key][1]
 
     def retain(self,objects):
         keep={obj.as_pointer() for obj in objects}
         self.entries={key:entry for key,entry in self.entries.items() if key in keep}
+        self.bindings={key:value for key,value in self.bindings.items() if key in keep}
