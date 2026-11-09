@@ -11,7 +11,31 @@ from hammerless.blender.previewtrace import TraceCache
 from hammerless.blender.previewmaterials import BounceMaterial
 from hammerless.blender.previewlightcache import SurfaceLightCache,SurfaceCacheDisplay
 OUT=ROOT.parents[1]/'outputs/l4d2-preview'
+def offscreen_shadow_check():
+ from hammerless.blender.previewcull import visible_bounds
+ scene=SceneCache();scene.unit_scale=1
+ light=PointLight.from_keys({'_light':'255 255 255 200','_quadratic_attn':'1'})
+ scene.lights=[((100,0,100),light.intensity,light.attenuation)]
+ wall=np.array([(50,-10,40),(50,10,40),(50,10,60),(50,-10,40),(50,10,60),(50,-10,60)],dtype=np.float32)
+ g=Geometry(wall,np.tile((-1.,0.,0.),(6,1)).astype(np.float32))
+ g.materials=(BounceMaterial((.5,.5,.5),True,True,'offscreen blocker'),)
+ scene.geometry={0:g};scene.instances=[(0,Matrix.Identity(4))]
+ projection=Matrix.Diagonal((.1,.1,.01,1))
+ corners=np.array([[(x,y,z,1) for x in (50,50) for y in (-10,10) for z in (40,60)]])
+ assert not visible_bounds(corners,projection)[0],'Blocker must be outside camera frustum'
+ class Resolver:
+  def resolve(self,m):return m
+ scene.trace=TraceCache();scene.trace.update_bounce_materials(scene,Resolver())
+ cache=SurfaceLightCache([(0,0,0),(128,0,0)],[(0,0,1)]*2,sample_counts=[1,1])
+ cache.refine(scene,'wall',max_frames=1,rays=0,visible_groups=[0])
+ blocked=cache.readback();assert np.max(abs(blocked))<1e-7,blocked
+ scene.instances=[]
+ cache.refine(scene,'no-wall',max_frames=1,rays=0,visible_groups=[0])
+ unblocked=cache.readback();assert unblocked[0].min()>.01 and not unblocked[1].any(),unblocked
+ return {'blocked':blocked[0].tolist(),'unblocked':unblocked[0].tolist(),'unvisited_chart_zero':True}
+
 def run():
+ offscreen=offscreen_shadow_check()
  faces,_=read_faces((OUT/'two-bounce-reference/bounce0.bsp').read_bytes())
  scene=SceneCache();scene.unit_scale=1
  light=PointLight.from_keys({'_light':'255 180 90 200','_quadratic_attn':'1','_linear_attn':'0','_constant_attn':'0'})
@@ -49,6 +73,30 @@ def run():
  for _ in range(72):cache.refine(scene,'gi',max_frames=72,rays=8,bounces=2)
  indirect=cache.readback();gi_ms=(time.perf_counter()-start)*1000
  assert np.mean(indirect[interior]-direct[interior])>0
+ # Interleave charts with different histories; compare to all-sample tracing.
+ split=len(p)//2
+ partial=SurfaceLightCache(p,n,sample_counts=[split,len(p)-split])
+ for _ in range(5):assert partial.refine(scene,'partial',max_frames=72,rays=8,bounces=2,visible_groups=[0])
+ retained=partial.readback()
+ assert not retained[split:].any(),'Unvisited chart contains undefined lighting'
+ for _ in range(2):assert partial.refine(scene,'partial',max_frames=72,rays=8,bounces=2,visible_groups=[1])
+ np.testing.assert_array_equal(partial.readback()[:split],retained[:split])
+ assert list(partial.group_frames)==[5,2]
+ for _ in range(100):
+  if not partial.refine(scene,'partial',max_frames=72,rays=8,bounces=2,visible_groups=[0,1]):break
+ assert list(partial.group_frames)==[72,72]
+ subset_error=float(np.max(abs(partial.readback()-indirect)))
+ assert subset_error<1e-6,subset_error
+ count=partial.evaluations
+ assert not partial.refine(scene,'partial',max_frames=72,rays=8,bounces=2,visible_groups=[1])
+ assert partial.evaluations==count
+ assert partial.refine(scene,'partial',max_frames=73,rays=8,bounces=2,visible_groups=[1])
+ assert list(partial.group_frames)==[72,73]
+ assert not partial.refine(scene,'reset-empty',max_frames=72,rays=8,bounces=2,visible_groups=[])
+ assert not partial.readback().any() and not partial.group_frames.any()
+ # Reset without visible charts must not resurrect old values after swapping.
+ assert partial.refine(scene,'reset-empty',max_frames=72,rays=8,bounces=2,visible_groups=[0])
+ assert not partial.readback()[split:].any()
  np.savez_compressed(OUT/'surface-cache-samples.npz',positions=p,normals=n,direct=direct,lighting=indirect)
  (OUT/'surface-cache-charts.json').write_text(json.dumps(charts,indent=2))
  display=SurfaceCacheDisplay(cache,faces,charts)
@@ -100,7 +148,7 @@ def run():
   assert cache.evaluations==evaluations,'Camera changes evaluated lighting'
  finally:off.free()
  assert cache.refine(scene,'light-edited',max_frames=72,rays=8,bounces=2) and cache.frames==1
- return {'ok':True,'samples':len(p),'charts':len(charts),'texture_size':cache.size,'direct_max_error':error,'direct_ms_including_readback':direct_ms,'72_frame_gi_ms_including_readback':gi_ms,'unchanged_reused':True,'camera_draw_median_ms':float(np.median(timings[1:])),'camera_moves_without_lighting':30,'texture_transitions_across_row':sharp_edges,'texture_light_multiply_error':multiply_error,'data_export':'surface-cache-samples.npz','scope':'Compiled floor grids, two-bounce room; actual lightmap scale and camera-independent reusable lighting data. No live mesh atlas or final BSP export yet.'}
+ return {'ok':True,'samples':len(p),'charts':len(charts),'texture_size':cache.size,'direct_max_error':error,'direct_ms_including_readback':direct_ms,'72_frame_gi_ms_including_readback':gi_ms,'unchanged_reused':True,'camera_draw_median_ms':float(np.median(timings[1:])),'camera_moves_without_lighting':30,'texture_transitions_across_row':sharp_edges,'texture_light_multiply_error':multiply_error,'offscreen_shadow':offscreen,'subset_interleaving_error':subset_error,'subset_checks':['retained untouched chart','mixed-count scheduling','matches full-scene bounce','resume higher target','empty-visible invalidation'],'data_export':'surface-cache-samples.npz','scope':'Compiled floor grids, two-bounce room; actual lightmap scale and camera-independent reusable lighting data. No final BSP export yet.'}
 try:r=run()
 except Exception:r={'ok':False,'traceback':traceback.format_exc()}
 (OUT/'surface-cache-check.json').write_text(json.dumps(r,indent=2));print(json.dumps(r),flush=True)

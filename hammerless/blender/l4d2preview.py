@@ -647,7 +647,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             if self.surface_cache:
                 changed=self.surface_cache.refine(self.cache,(self.scene_signature,self.bounce_uploads),
                     frames=context.scene.hl_preview_refine_frames if progressive else 1,
-                    rays=samples,bounces=context.scene.hl_preview_max_bounces)
+                    rays=samples,bounces=context.scene.hl_preview_max_bounces,view_projection=matrix)
                 if changed:self.tag_redraw()
             if progressive:
                 from .previewhistory import FrameHistory
@@ -739,13 +739,13 @@ CLASSES = (HAMMERLESS_L4D2Preview, HAMMERLESS_OT_refresh_preview_materials, HAMM
 def register():
     bpy.types.Scene.hl_preview_surface_cache = bpy.props.BoolProperty(
         name='Surface Lighting Cache (Experimental)',default=False,
-        description='Reuse brush lighting at exported lightmap density while navigating. Scene edits restart lighting. Props, instances and unsupported brushes use per-pixel lighting. One million cached sample limit')
+        description='Cache brush lighting at exported lightmap density. Charts potentially visible to the camera refine first; offscreen geometry still casts shadows and contributes bounced light. Scene edits restart lighting. Props and unsupported faces use per-pixel lighting. One million cached sample limit')
     bpy.types.Scene.hl_preview_max_bounces = bpy.props.IntProperty(
         name='Max Bounces',default=1,min=1,max=8,
         description='Maximum diffuse reflections per preview ray. Higher values add light carried around more corners, but cost more time. Does not change bake settings')
     bpy.types.Scene.hl_preview_refine_frames = bpy.props.IntProperty(
         name='Refinement Frames',default=72,min=1,max=512,
-        description='Average fresh bounce and sky samples while still. Multiples of 72 complete both eight-frame area and eighteen-frame sky cycles; other counts can leave partial estimates. Camera or scene changes restart refinement')
+        description='Average fresh bounce and sky samples. Multiples of 72 complete both eight-frame area and eighteen-frame sky cycles. With surface caching, each chart keeps its progress while navigating; newly revealed charts begin refining. Scene edits restart lighting; uncached geometry also restarts on camera changes')
     bpy.types.Scene.hl_preview_bounce_samples = bpy.props.IntProperty(
         name='Bounce Rays',default=0,min=0,max=128,
         description='Experimental indirect light: 0 disables it. Try 8 or 16 paths per frame; larger values slow interaction. Samples accumulate while still. No denoising')

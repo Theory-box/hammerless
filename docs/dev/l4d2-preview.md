@@ -241,7 +241,7 @@ revision tokens are caller obligations; these are not yet wired into view_update
 Displacements/models reject chart extraction rather than pretending they are
 planar brush faces. These checks preceded the live integration below.
 
-## Live surface cache integration (opt-in, not installed yet)
+## Live surface cache integration (opt-in)
 
 `hl_preview_surface_cache` enables the first live brush-cache path. Default is
 false while broad validation remains incomplete. `view_update` builds/reuses
@@ -330,3 +330,48 @@ general realtime result. Next bounded investigation: visibility-driven primary
 chart refinement while preserving all ray occluders and bounce contributors.
 Reports: hotel-surface-cache.json, hotel-partial-cache.json,
 chart-rejections.json, partial-surface-cache.json in outputs/l4d2-preview.
+
+## Camera-frustum chart scheduling and test package
+
+The live cache now refines conservatively camera-frustum-visible charts, using
+bounds from the displayed original triangles. This is not occlusion culling:
+hidden/back-facing charts may still be processed. All geometry remains in the
+ray scene. Each chart has its own refinement count; equal-count pending charts
+share a deterministic seed. A shared sample vertex buffer and one current index
+subset avoid resending all samples whenever selection changes. Two GPU textures
+retain mean irradiance plus per-luxel count; untouched texels are copied exactly,
+and both histories clear on scene invalidation, even when no charts are visible.
+
+GPU tests passed mixed 5/2 chart histories converging to the full-scene 72-pass
+reference with maximum difference 0.0, retained untouched values, increased
+target resumption and empty-visible invalidation. A blocker verified outside the
+camera frustum still produced zero receiver irradiance; removing it produced
+0.278673 linear irradiance, while the unvisited chart stayed zero. Real mixed
+prop/brush viewport callbacks passed. Independent review found no blocking
+defect; input-shape and fractional-count validation were tightened afterward.
+
+Hotel, same 720p/eight-rays/one-bounce/eighteen-pass test: interior refinement
+43–48 ms versus 192–241 ms before scheduling. Only 66 cached charts were in the
+interior frustum, versus 3,066 in the overview. Interior navigation measured
+30–35 ms. Overview remains heavy (425–484 ms refinement, 289–344 ms navigation)
+and is not a realtime success. These are synchronous GPU timings, not UI FPS.
+Report: hotel-visible-cache.json. The scheduled cache is opt-in under Render
+Properties > L4D2 Preview > Surface Lighting Cache (Experimental). Existing
+saved bounce/exposure settings are preserved. Newly revealed charts refine on
+demand; already cached charts retain progress. Scene edits restart lighting.
+
+Packaging target: outputs/l4d2-preview/hammerless-l4d2-preview-experimental.zip.
+The isolated package test uses a content-hash-specific extraction directory and
+checks full addon registration, engine selection, cache property and packaged
+visibility-capable code. Deployment retains a backup and verifies every archived
+file byte-for-byte against the installed addon. Initial preparation and scene-edit
+latency, exact VRAD boundary filtering and advanced shader parity remain limitations.
+
+Installed test package on 2026-11-09: all 5,727 ZIP files verified byte-for-byte
+against Blender 4.4 extensions/user_default/hammerless. Prior install backup:
+outputs/l4d2-preview/installed-backup-20261109-181344.zip. Exact package SHA-256
+prefix 95c3c29b2fbf passed full registration/defaults/engine-selection/unregistration
+in its isolated package-smoke directory. Hotel image comparison against the
+pre-scheduling version: overview pixel-identical; interior differed at only two
+pixels, each by one 8-bit channel level. Raw PNG hashes differed, so pixel data
+was compared directly using Pillow/NumPy rather than inferring visual changes.

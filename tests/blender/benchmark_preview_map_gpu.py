@@ -120,7 +120,7 @@ def run():
                         fb.clear(color=(.025,.025,.025,1),depth=1)
                         excluded=live.keys if live else ()
                         remaining=live.remaining if live else None
-                        if live:live.refine(cache,(name,sky),frames=refinement_frames,rays=8,bounces=bounce_depth)
+                        if live:live.refine(cache,(name,sky),frames=refinement_frames,rays=8,bounces=bounce_depth,view_projection=projection if "--visible-cache" in sys.argv else None)
                         def sample(seed):
                             if live:live.draw_depth(projection)
                             if '--prepass' in sys.argv:
@@ -152,7 +152,7 @@ def run():
                 prefix=Path(sys.argv[sys.argv.index('--report-name')+1]).stem if '--report-name' in sys.argv else 'map'
                 image.save_render(str(OUT/f'{prefix}-{name}-sky{int(sky)}-bounce{int(bounce)}.png'),scene=scene)
                 bpy.data.images.remove(image)
-                navigation=[]
+                navigation=[];navigation_evaluations=None
                 if '--navigation' in sys.argv:
                     original_projection=projection.copy()
                     evaluations=live.cache.evaluations if live and live.cache else None
@@ -162,16 +162,18 @@ def run():
                         for step in range(10):
                             projection=original_projection.copy();projection[0][3]+=(step+1)*.001
                             start=time.perf_counter();fb.clear(color=(.025,.025,.025,1),depth=1)
-                            if live:live.refine(cache,(name,sky),frames=refinement_frames,rays=8,bounces=bounce_depth)
+                            if live:live.refine(cache,(name,sky),frames=refinement_frames,rays=8,bounces=bounce_depth,view_projection=projection if "--visible-cache" in sys.argv else None)
                             history.render((name,sky,'navigation',step),sample,
                                 lambda:preview.draw_depth(cache,depth_shader,projection,exclude_keys=excluded,raster_geometry=remaining),max_frames=refinement_frames)
                             if live:live.draw(projection,0)
                             fb.read_color(width//2,height//2,1,1,4,0,'FLOAT')
                             navigation.append((time.perf_counter()-start)*1000)
                     projection=original_projection
-                    if evaluations is not None:assert live.cache.evaluations==evaluations,'Camera movement retraced surface cache'
+                    navigation_evaluations=live.cache.evaluations-evaluations if evaluations is not None else None
+                    if evaluations is not None and '--visible-cache' not in sys.argv:assert navigation_evaluations==0,'Camera movement retraced surface cache'
                 result['runs'].append({'view':name,'sky':sky,'first_frame_ms':timings[0],
                     'navigation_median_ms':statistics.median(navigation) if navigation else None,
+                    'navigation_new_evaluations':navigation_evaluations,'visible_charts':live.visible_charts if live else None,
                     'eye':list(eye),'first_hit':ray[4].name if ray[0] else None,'hit_distance':(ray[1]-eye).length if ray[0] else None,
                     'linear_range':[float(pixels[:,:,:3].min()),float(pixels[:,:,:3].max())],
                     'median_ms':statistics.median(timings[1:refinement_frames] if progressive else timings[1:]),

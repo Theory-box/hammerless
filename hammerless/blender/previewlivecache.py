@@ -143,15 +143,23 @@ class LiveSurfaceCache:
         self.units=settings.units_per_meter
         self.positions=np.concatenate([f.samples() for f in faces])/self.units if faces else None
         self.normals=np.concatenate([np.tile(f.normal,(f.w*f.h,1)) for f in faces]) if faces else None
+        corners=[]
+        for face in faces:
+            low=face.positions.min(axis=0)/self.units;high=face.positions.max(axis=0)/self.units
+            corners.append([(x,y,z,1) for x in (low[0],high[0]) for y in (low[1],high[1]) for z in (low[2],high[2])])
+        self.bounds=np.asarray(corners,dtype=np.float64).reshape(-1,8,4)
 
-    def refine(self,scene,signature,*,frames,rays,bounces):
+    def refine(self,scene,signature,*,frames,rays,bounces,view_projection=None):
         if not self.faces:return False
         from .previewlightcache import SurfaceLightCache,SurfaceCacheDisplay
         if self.cache is None:
-            self.cache=SurfaceLightCache(self.positions,self.normals)
+            self.cache=SurfaceLightCache(self.positions,self.normals,sample_counts=[f.w*f.h for f in self.faces])
             self.display=SurfaceCacheDisplay(self.cache,self.faces,self.charts,
                 lambda face:self.bindings[face.index],units_per_meter=self.units)
-        return self.cache.refine(scene,(signature,self.generation),max_frames=frames,rays=rays,bounces=bounces)
+        from .previewcull import visible_bounds
+        visible=np.flatnonzero(visible_bounds(self.bounds,view_projection)) if view_projection is not None else None
+        self.visible_charts=len(visible) if visible is not None else len(self.faces)
+        return self.cache.refine(scene,(signature,self.generation),max_frames=frames,rays=rays,bounces=bounces,visible_groups=visible)
 
     def draw(self,matrix,exposure):
         if self.display:self.display.draw(matrix,exposure)

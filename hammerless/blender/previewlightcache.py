@@ -2,7 +2,8 @@
 
 Lighting remains linear irradiance / 255, separate from material color. Explicit
 readback can feed export experiments; ordinary refinement stays on the GPU.
-Caller supplies surface samples and invalidation signature, never a camera.
+Caller supplies surface samples, invalidation signature and optional chart IDs
+to refine. Visibility changes scheduling, never the retained ray scene.
 """
 import math
 import numpy as np
@@ -10,10 +11,27 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix
 from .l4d2preview import diagnostic_shader, draw_geometry
-from .previewhistory import fullscreen
+
+
+def accumulation_shader():
+    """Preserve untouched luxels; average newly sampled ones by their own count."""
+    info=gpu.types.GPUShaderCreateInfo()
+    info.vertex_in(0,'VEC2','position')
+    info.sampler(0,'FLOAT_2D','sampleImage');info.sampler(1,'FLOAT_2D','previousImage')
+    info.fragment_out(0,'VEC4','color')
+    info.vertex_source('void main(){gl_Position=vec4(position,0,1);}')
+    info.fragment_source('''void main(){
+        ivec2 p=ivec2(gl_FragCoord.xy);
+        vec4 old=texelFetch(previousImage,p,0), fresh=texelFetch(sampleImage,p,0);
+        if(fresh.a==0.0){color=old;return;}
+        float count=old.a+1.0;
+        color=vec4(mix(old.rgb,fresh.rgb,1.0/count),count);
+    }''')
+    shader=gpu.shader.create_from_info(info)
+    return shader,batch_for_shader(shader,'TRIS',{'position':[(-1,-1),(3,-1),(-1,3)]})
 
 class SurfaceLightCache:
-    def __init__(self,positions,normals):
+    def __init__(self,positions,normals,*,sample_counts=None):
         self.positions=np.asarray(positions,dtype=np.float32).reshape(-1,3)
         self.normals=np.asarray(normals,dtype=np.float32).reshape(-1,3)
         if self.positions.shape!=self.normals.shape or not len(self.positions):
@@ -21,6 +39,12 @@ class SurfaceLightCache:
         if not np.isfinite(self.positions).all() or not np.isfinite(self.normals).all():
             raise ValueError('Surface samples must be finite')
         self.count=len(self.positions)
+        raw_sizes=np.asarray(sample_counts if sample_counts is not None else [self.count],dtype=np.float64)
+        if raw_sizes.ndim!=1 or not np.isfinite(raw_sizes).all() or np.any(raw_sizes<=0) or np.any(raw_sizes!=np.floor(raw_sizes)) or raw_sizes.sum()!=self.count:
+            raise ValueError('Chart sample counts must partition the surface samples')
+        self.group_sizes=raw_sizes.astype(np.int64)
+        self.group_starts=np.r_[0,np.cumsum(self.group_sizes)[:-1]]
+        self.group_frames=np.zeros(len(self.group_sizes),dtype=np.int32)
         width=min(2048,max(1,math.ceil(math.sqrt(self.count))))
         height=math.ceil(self.count/width)
         if height>8192:raise ValueError('Surface sample budget exceeded')
@@ -28,38 +52,72 @@ class SurfaceLightCache:
         ids=np.arange(self.count)
         clips=np.column_stack(((ids%width+.5)/width*2-1,(ids//width+.5)/height*2-1)).astype(np.float32)
         self.shader=diagnostic_shader(lit=True,shadows=True,bounce=True,surface_samples=True)
-        self.batch=batch_for_shader(self.shader,'POINTS',{'position':self.positions,'normal':self.normals,
-            'faceNormal':self.normals,'sampleClip':clips})
+        # Share the immutable vertex buffer across changing point-index subsets.
+        fmt=gpu.types.GPUVertFormat()
+        for name,size in (('position',3),('normal',3),('faceNormal',3),('sampleClip',2)):
+            fmt.attr_add(id=name,comp_type='F32',len=size,fetch_mode='FLOAT')
+        self.vbo=gpu.types.GPUVertBuf(fmt,self.count)
+        for name,data in (('position',self.positions),('normal',self.normals),('faceNormal',self.normals),('sampleClip',clips)):
+            self.vbo.attr_fill(name,data)
+        self.batch=gpu.types.GPUBatch(type='POINTS',buf=self.vbo)
+        self.selected_key=None;self.selected_batch=None;self.batch_builds=0
         self.sample=gpu.types.GPUTexture(self.size,format='RGBA32F')
         self.texture=gpu.types.GPUTexture(self.size,format='RGBA32F')
+        self.spare_texture=gpu.types.GPUTexture(self.size,format='RGBA32F')
         self.depth=gpu.types.GPUTexture(self.size,format='DEPTH_COMPONENT32F')
         self.sample_fb=gpu.types.GPUFrameBuffer(color_slots=self.sample,depth_slot=self.depth)
         self.result_fb=gpu.types.GPUFrameBuffer(color_slots=self.texture)
-        self.average_shader,self.average_batch=fullscreen(False)
+        self.spare_fb=gpu.types.GPUFrameBuffer(color_slots=self.spare_texture)
+        self.average_shader,self.average_batch=accumulation_shader()
         self.signature=None;self.frames=0;self.evaluations=0
+        self.last_samples=0
 
-    def refine(self,scene,signature,*,max_frames=72,rays=8,bounces=1):
+    def refine(self,scene,signature,*,max_frames=72,rays=8,bounces=1,visible_groups=None):
+        visible=np.arange(len(self.group_sizes)) if visible_groups is None else np.asarray(visible_groups,dtype=np.float64)
+        if visible.ndim!=1 or not np.isfinite(visible).all() or np.any(visible!=np.floor(visible)) or np.any(visible<0) or np.any(visible>=len(self.group_sizes)):
+            raise ValueError('Invalid visible chart index')
+        visible=np.unique(visible.astype(np.int64))
         signature=(signature,rays,bounces)
-        if signature!=self.signature:self.signature=signature;self.frames=0
-        if self.frames>=max(1,max_frames):return False
+        reset=signature!=self.signature
+        if reset:self.signature=signature;self.frames=0;self.group_frames[:]=0
+        self.last_samples=0
         viewport=gpu.state.viewport_get()
         depth=gpu.state.depth_test_get();mask=gpu.state.depth_mask_get();blend=gpu.state.blend_get()
         try:
+            if reset:
+                with self.result_fb.bind():self.result_fb.clear(color=(0,0,0,0))
+                with self.spare_fb.bind():self.spare_fb.clear(color=(0,0,0,0))
+            pending=visible[self.group_frames[visible]<max(1,max_frames)]
+            if not len(pending):return False
+            seed=int(self.group_frames[pending].min())
+            selected=pending[self.group_frames[pending]==seed]
+            count=int(self.group_sizes[selected].sum())
+            if count==self.count:batch=self.batch
+            else:
+                key=selected.tobytes()
+                if key!=self.selected_key:
+                    indices=np.concatenate([np.arange(self.group_starts[i],self.group_starts[i]+self.group_sizes[i],dtype=np.int32) for i in selected])
+                    index_buffer=gpu.types.GPUIndexBuf(type='POINTS',seq=indices)
+                    self.selected_batch=gpu.types.GPUBatch(type='POINTS',buf=self.vbo,elem=index_buffer)
+                    self.selected_key=key;self.batch_builds+=1
+                batch=self.selected_batch
             with self.sample_fb.bind():
                 gpu.state.viewport_set(0,0,*self.size)
                 self.sample_fb.clear(color=(0,0,0,0),depth=1)
                 draw_geometry(scene,self.shader,Matrix.Identity(4),lit=True,shadows=True,
-                    bounce_samples=rays,bounce_depth=bounces,bounce_seed=self.frames,
+                    bounce_samples=rays,bounce_depth=bounces,bounce_seed=seed,
                     sampled_bounce_sky=True,sampled_bounce_area=True,
-                    primary_sky_index=self.frames*9,primary_sky_count=9,
-                    primary_area_phase=self.frames%8,lighting_samples=self.batch)
-            with self.result_fb.bind():
+                    primary_sky_index=seed*9,primary_sky_count=9,
+                    primary_area_phase=seed%8,lighting_samples=batch)
+            with self.spare_fb.bind():
                 gpu.state.viewport_set(0,0,*self.size)
-                gpu.state.depth_test_set('NONE');gpu.state.depth_mask_set(False);gpu.state.blend_set('ALPHA')
-                if self.frames==0:self.result_fb.clear(color=(0,0,0,0))
-                shader=self.average_shader;shader.bind();shader.uniform_sampler('image',self.sample)
-                shader.uniform_float('weight',1/(self.frames+1));self.average_batch.draw(shader)
-            self.frames+=1;self.evaluations+=self.count
+                gpu.state.depth_test_set('NONE');gpu.state.depth_mask_set(False);gpu.state.blend_set('NONE')
+                shader=self.average_shader;shader.bind();shader.uniform_sampler('sampleImage',self.sample)
+                shader.uniform_sampler('previousImage',self.texture);self.average_batch.draw(shader)
+            self.texture,self.spare_texture=self.spare_texture,self.texture
+            self.result_fb,self.spare_fb=self.spare_fb,self.result_fb
+            self.group_frames[selected]+=1;self.frames=int(self.group_frames.min())
+            self.evaluations+=count;self.last_samples=count
             return True
         finally:
             gpu.state.viewport_set(*viewport);gpu.state.depth_test_set(depth)
