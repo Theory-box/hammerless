@@ -17,3 +17,4 @@ tests/compile/vis_certify.exe
 tests/compile/vis_certify.pdb
 scripts/netprop_tables.json
 scripts/netprop_harvest.json
+/tests/blender/.runner.lock

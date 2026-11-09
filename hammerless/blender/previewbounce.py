@@ -39,8 +39,12 @@ vec3 previewBounce(vec3 p,vec3 n) {
         // keeps their full cosine normalization and multiplies this term by
         // 162. Expected sky illumination is unchanged, at greater variance.
         int skyIndex=bounceSkySampled!=0?int(bounceHash(uint(j)+uint(bounceSeed)*9781u+uint(depth)*13007u+719u)%162u):-1;
+        // Independently select one sample per area emitter at each hit.
+        // previewDirect weights by the emitter's sample count. Values >=8
+        // encode this random selection; 0..7 are primary deterministic batches.
+        int areaPhase=bounceAreaSampled!=0?8+int(bounceHash(uint(j)*271u+uint(bounceSeed)*65537u+uint(depth)*8191u+2917u)&0x3fffffffu):-1;
         throughput*=surface.rgb;
-        sum+=previewDirect(hit+hn*(1.0/unitScale),hn,skyIndex,1)*throughput;
+        sum+=previewDirect(hit+hn*(1.0/unitScale),hn,skyIndex,1,areaPhase)*throughput;
         pathNormal=hn;origin=hit+hn*(1.25/unitScale);
         }
     }

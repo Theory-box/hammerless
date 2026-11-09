@@ -12,6 +12,7 @@ OUT=ROOT.parents[1]/'outputs/l4d2-preview'
 def run():
     bounce='--bounce' in sys.argv
     progressive='--progressive' in sys.argv
+    refinement_frames=int(sys.argv[sys.argv.index('--frames')+1]) if '--frames' in sys.argv else 72 if '--area-size' in sys.argv else 18
     bounce_depth=int(sys.argv[sys.argv.index('--bounces')+1]) if '--bounces' in sys.argv else 1
     props.register()
     path=Path(sys.argv[sys.argv.index('--')+1]).resolve()
@@ -72,7 +73,7 @@ def run():
     off=gpu.types.GPUOffScreen(width,height,format='RGBA32F')
     result={'file':str(path),'gpu':gpu.platform.renderer_get(),'unit_scale':scale,'triangles':sum(len(g.positions)//3 for g in cache.geometry.values()),'instances':len(cache.instances),'resolution':[width,height],
             'bounce_rays':8 if bounce else 0,'material_warnings':cache.surface_materials.warnings+(resolver.warnings if bounce else []),
-            'bounces':bounce_depth,'primary_sky_directions_per_frame':9 if progressive else 162,'progressive':progressive,
+            'bounces':bounce_depth,'primary_sky_directions_per_frame':9 if progressive else 162,'progressive':progressive,'refinement_frames':refinement_frames,'sampled_bounce_area':'--sample-area' in sys.argv,
             'game_root':root,'stored_game_root':stored_root if bounce else None,
             'scope':'Saved map geometry; synthetic camera point light and optional flat sky. Not a bake parity test. Synchronous draw plus pixel readback, excludes scene preparation.','runs':[]}
     try:
@@ -83,26 +84,45 @@ def run():
             projection=cam.calc_matrix_camera(deps,x=width,y=height)@cam.matrix_world.inverted()
             # Explicit test illumination avoids benchmarking an imported map with no lights.
             cache.lights=[(tuple(eye),(2000000.,)*3,(0.,0.,1.))]
+            if '--area-size' in sys.argv:
+                from hammerless.core.surfacelights import rectangle_samples,light_sample
+                from hammerless.core.previewlighting import PointLight,spot_parameters,vrad_light_direction
+                size=float(sys.argv[sys.argv.index('--area-size')+1])
+                right=cam.matrix_world.to_3x3().col[0];up=cam.matrix_world.to_3x3().col[1]
+                direction=(target-eye).normalized();cache.lights=[]
+                area_samples=rectangle_samples(size,size)
+                for sample_index,(sx,sy,weight) in enumerate(area_samples):
+                    position=eye+(right*sx+up*sy)/scale
+                    entity=light_sample(position*scale,direction,(200*weight,)*3,'Benchmark area')
+                    light=PointLight.from_keys(entity.keyvalues);cone=spot_parameters(entity.keyvalues)
+                    d=vrad_light_direction(entity.angles,entity.keyvalues)
+                    cache.lights.append((tuple(position),light.intensity,(*light.attenuation,len(area_samples)),(*d,cone[0]),(*cone[1:],sample_index+1)))
+                result['area_size_source_units']=size
+                result['area_samples']=len(cache.lights)
             cache.light_texture=None
             for sky in (False,True):
                 cache.sky_color=(51.,)*3 if sky else (0.,)*3
                 timings=[]
+                checkpoint=None
                 with off.bind():
                     gpu.state.viewport_set(0,0,width,height)
                     fb=gpu.state.active_framebuffer_get()
-                    for frame in range(20 if progressive else 10):
+                    for frame in range(refinement_frames+2 if progressive else 10):
                         start=time.perf_counter()
                         fb.clear(color=(.025,.025,.025,1),depth=1)
                         def sample(seed):
                             preview.draw_geometry(cache,shader,projection,lit=True,textured=True,shadows=True,
-                                bounce_samples=8 if bounce else None,sampled_bounce_sky='--sample-sky' in sys.argv,
+                                bounce_samples=8 if bounce else None,sampled_bounce_area='--sample-area' in sys.argv,sampled_bounce_sky='--sample-sky' in sys.argv,
                                 bounce_seed=seed,bounce_depth=bounce_depth,
-                                primary_sky_index=(seed*9)%162 if progressive else -1,primary_sky_count=9 if progressive else 162)
+                                primary_sky_index=(seed*9)%162 if progressive else -1,primary_sky_count=9 if progressive else 162,primary_area_phase=seed%8 if progressive and '--area-size' in sys.argv else -1)
                         if progressive:
-                            history.render((name,sky),sample,lambda:preview.draw_depth(cache,depth_shader,projection),max_frames=18)
+                            history.render((name,sky),sample,lambda:preview.draw_depth(cache,depth_shader,projection),max_frames=refinement_frames)
                         else:sample(0)
                         fb.read_color(width//2,height//2,1,1,4,0,'FLOAT')
                         timings.append((time.perf_counter()-start)*1000)
+                        if progressive and frame==71 and refinement_frames>72:
+                            with history.history_fb.bind():
+                                checkpoint=np.asarray(history.history_fb.read_color(0,0,width,height,4,0,'FLOAT').to_list(),dtype=np.float32)
                     if progressive:
                         with history.history_fb.bind():pixels=np.asarray(history.history_fb.read_color(0,0,width,height,4,0,'FLOAT').to_list(),dtype=np.float32)
                         pixels[:,:,3]=1
@@ -118,10 +138,13 @@ def run():
                 result['runs'].append({'view':name,'sky':sky,'first_frame_ms':timings[0],
                     'eye':list(eye),'first_hit':ray[4].name if ray[0] else None,'hit_distance':(ray[1]-eye).length if ray[0] else None,
                     'linear_range':[float(pixels[:,:,:3].min()),float(pixels[:,:,:3].max())],
-                    'median_ms':statistics.median(timings[1:18] if progressive else timings[1:]),
-                    'settled_ms':statistics.median(timings[18:]) if progressive else None,
+                    'median_ms':statistics.median(timings[1:refinement_frames] if progressive else timings[1:]),
+                    'settled_ms':statistics.median(timings[refinement_frames:]) if progressive else None,
                     'max_ms':max(timings[1:]),'coverage':coverage,
-                    'mesh_bvh_builds':cache.trace.builds})
+                    'mesh_bvh_builds':cache.trace.builds,
+                    'convergence_72_to_final': ({'mean_absolute_linear':float(np.abs(checkpoint[:,:,:3]-pixels[:,:,:3]).mean()),
+                        'p95_absolute_linear':float(np.percentile(np.abs(checkpoint[:,:,:3]-pixels[:,:,:3]),95))}
+                        if checkpoint is not None else None)})
     finally:
         off.free()
         del cache,shader,off

@@ -25,11 +25,11 @@ def run():
     resolver=Resolver();cache.trace.update_bounce_materials(cache,resolver)
     shader=diagnostic_shader(lit=True,shadows=True,bounce=True)
     off=gpu.types.GPUOffScreen(1,1,format='RGBA32F')
-    def draw(samples,sampled_sky=False,depth=1,sky_index=-1,sky_count=162):
+    def draw(samples,sampled_sky=False,depth=1,sky_index=-1,sky_count=162,sampled_area=False):
         with off.bind():
             gpu.state.viewport_set(0,0,1,1)
             fb=gpu.state.active_framebuffer_get();fb.clear(color=(0,0,0,1),depth=1)
-            draw_geometry(cache,shader,Matrix.Scale(.5,4),lit=True,shadows=True,bounce_samples=samples,sampled_bounce_sky=sampled_sky,bounce_depth=depth,primary_sky_index=sky_index,primary_sky_count=sky_count)
+            draw_geometry(cache,shader,Matrix.Scale(.5,4),lit=True,shadows=True,bounce_samples=samples,sampled_bounce_area=sampled_area,sampled_bounce_sky=sampled_sky,bounce_depth=depth,primary_sky_index=sky_index,primary_sky_count=sky_count)
             return np.array(fb.read_color(0,0,1,1,4,0,'FLOAT').to_list()[0][0][:3])
     try:
         direct=draw(0);full=draw(128);indirect=full-direct
@@ -54,6 +54,14 @@ def run():
         assert sky_full[0]>.001,sky_full
         assert np.allclose(sky_sampled,sky_full,rtol=.06,atol=.0005),(sky_sampled,sky_full)
         cache.sky_color=(0.,)*3
+        # Uneven 17-sample emitter with varying positions/powers; lights point
+        # toward the ceiling, so the observed floor signal must be indirect.
+        cache.lights=[(((i-8)/8,0,2),(100000.+i*10000.,)*3,(0,0,1.,17),(0,0,1,1),(.0000174533,0,1,i+1)) for i in range(17)]
+        cache.light_texture=None
+        area_full=draw(8192)-draw(0)
+        area_sampled=draw(8192,sampled_area=True)-draw(0)
+        assert area_full[0]>.001,area_full
+        assert np.allclose(area_sampled,area_full,rtol=.05,atol=.0001),(area_sampled,area_full)
         cache.lights=[((0,0,2),(4000000.,)*3,(0,0,1.))];cache.light_texture=None
         # Flip only the hit surface: back faces block but must not return light.
         ceiling.positions=pos.copy();ceiling.normals=np.tile([0,0,1],(6,1)).astype(np.float32)
@@ -66,7 +74,7 @@ def run():
         return {'ok':True,'direct':direct.tolist(),'first_bounce':indirect.tolist(),
             'two_bounces':second.tolist(),'four_bounces':fourth.tolist(),
             'primary_sky_full':primary_full.tolist(),'primary_sky_cycle':primary_cycle.tolist(),
-            'sky_full':sky_full.tolist(),'sky_sampled':sky_sampled.tolist(),
+            'area_full':area_full.tolist(),'area_sampled':area_sampled.tolist(),'sky_full':sky_full.tolist(),'sky_sampled':sky_sampled.tolist(),
             'checks':['red color transfer','reflectivity linearity','light intensity linearity','back-face rejection','misses return zero','18-frame direct sky matches all 162 directions'],
             'scope':'Controlled one/two/four-bounce transport and direct-sky cycle equivalence; not broad bake parity or realtime performance'}
     finally:off.free()

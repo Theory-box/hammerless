@@ -18,6 +18,8 @@ from hammerless.core.bspdecompile import Bsp
 out=ROOT.parents[1]/('outputs/l4d2-preview/playable-shadow-reference' if '--shadow' in sys.argv else 'outputs/l4d2-preview/playable-reference')
 if '--grid-probe' in sys.argv:
     out=ROOT.parents[1]/'outputs/l4d2-preview/grid-probe-reference'
+if '--area' in sys.argv:
+    out=ROOT.parents[1]/'outputs/l4d2-preview/playable-area-reference'
 out.mkdir(parents=True,exist_ok=True)
 root=Path(find_game_root());game=root/'left4dead2'
 w=VMFWriter()
@@ -47,6 +49,15 @@ if '--grid-probe' in sys.argv:
         world.add(w.solid(brush))
 entities=[Entity('info_player_start',(-128,-128,8)),Entity('info_director',(0,0,16)),
           Entity('light',(-64,0,128) if '--shadow' in sys.argv else (0,0,128),keyvalues={'_light':'255 180 90 200','_constant_attn':'0','_linear_attn':'0','_quadratic_attn':'1'})]
+if '--area' in sys.argv:
+    import math
+    from hammerless.core.surfacelights import rectangle_samples,light_sample
+    entities=[e for e in entities if e.classname!='light']
+    for x,y,weight in rectangle_samples(64,64):
+        entities.append(light_sample((x,y,128),(0,0,-1),(10000*weight/(100*math.pi),)*3,'Area reference'))
+    blocker=box_brush((0,-128,64),(128,128,68),'dev/dev_measuregeneric01b')
+    for f in blocker.faces:f.lightmap_scale=4
+    world.add(w.solid(blocker))
 for i in range(4):
     entities.append(Entity('info_survivor_position',(-128+i*64,-128,8),keyvalues={'Order':str(i+1)}))
 text=w.document(world,[w.entity(e) for e in entities])

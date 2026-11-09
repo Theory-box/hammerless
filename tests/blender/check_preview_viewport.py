@@ -9,9 +9,11 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 from hammerless.blender import props,l4d2preview as preview
 OUT=ROOT.parents[1]/('outputs/l4d2-preview/viewport-bounce-check.json' if '--bounce' in sys.argv else 'outputs/l4d2-preview/viewport-check.json')
-PROGRESSIVE='--bounce' in sys.argv or '--sky' in sys.argv
-TARGET_FRAMES=18 if '--sky' in sys.argv else 3
+PROGRESSIVE=any(x in sys.argv for x in ('--bounce','--sky','--area','--emission'))
+TARGET_FRAMES=18 if '--sky' in sys.argv else 8 if any(v in sys.argv for v in ('--area','--emission')) else 3
 if '--sky' in sys.argv:OUT=OUT.with_name('viewport-sky-check.json')
+if any(v in sys.argv for v in ('--area','--emission')):OUT=OUT.with_name('viewport-area-check.json')
+if '--emission' in sys.argv:OUT=OUT.with_name('viewport-emission-check.json')
 state={'frames':0,'updates':0,'done':False,'stage':0,'samples':[],'await_update':0}
 original_draw=preview.HAMMERLESS_L4D2Preview.view_draw
 original_update=preview.HAMMERLESS_L4D2Preview.view_update
@@ -42,10 +44,13 @@ def draw(self,context,depsgraph):
         pixel=fb.read_color(x+w//2,y+h//2,1,1,4,0,'FLOAT').to_list()[0][0]
         brightness=200 if state['stage']==0 else 50
         if '--sky' in sys.argv:brightness+=self.cache.sky_color[0]
+        if any(v in sys.argv for v in ('--area','--emission')):
+            # Analytic flat receiver: source and receiver cosine / distance squared.
+            brightness=sum(light[1][0]*(light[0][2]-2)**2 / (light[0][0]**2+light[0][1]**2+(light[0][2]-2)**2)**2 for light in self.cache.lights)
         if state['stage']>=4:brightness*=2
         expected=1.055*(brightness/255)**(1/2.4)-.055
         assert not self.error,self.error
-        assert len(self.cache.geometry)==1, len(self.cache.geometry)
+        assert len(self.cache.geometry)==(2 if '--emission' in sys.argv else 1), len(self.cache.geometry)
         if PROGRESSIVE:
             visited=state.setdefault('history_stages',{})
             stage=str(state['stage'])
@@ -57,7 +62,7 @@ def draw(self,context,depsgraph):
             depth=fb.read_depth(x+w//2,y+h//2,1,1).to_list()[0][0]
             assert 0<depth<1,('Viewport depth missing',depth)
         assert max(abs(v-expected) for v in pixel[:3])<.015,(pixel,expected)
-        if '--sky' in sys.argv:
+        if '--sky' in sys.argv or any(v in sys.argv for v in ('--area','--emission')):
             assert self.bounce_materials is None and self.bounce_uploads==0, 'Sky-only preview prepared bounce data'
         if state['stage']>0:
             assert self.cache.extractions==state['initial_extractions'],'Transform/light edit re-extracted geometry'
@@ -76,7 +81,9 @@ def draw(self,context,depsgraph):
             def edit():
                 if state['stage']==1:
                     lamp.hammerless.keyvalues[0].value='255 255 255 50'
+                    if any(v in sys.argv for v in ('--area','--emission')):lamp.data.energy=2500
                     lamp.update_tag()
+                    if '--emission' in sys.argv:emission.inputs['Strength'].default_value=.25
                 elif state['stage']==2:
                     cube.location.x=.1
                 elif state['stage']==3:
@@ -119,10 +126,21 @@ try:
     bsdf=next(n for n in mat.node_tree.nodes if n.type=='BSDF_PRINCIPLED')
     mat.node_tree.links.new(texture.outputs['Color'],bsdf.inputs['Base Color'])
     cube.data.materials.append(mat)
-    bpy.ops.object.light_add(type='POINT',location=(0,0,102))
+    bpy.ops.object.light_add(type='AREA' if any(v in sys.argv for v in ('--area','--emission')) else 'POINT',location=(0,0,102))
     lamp=bpy.context.object
+    if any(v in sys.argv for v in ('--area','--emission')):lamp.data.size=64;lamp.data.energy=10000
     for key,value in {'_light':'255 255 255 200','_quadratic_attn':'1'}.items():
         item=bpy.context.object.hammerless.keyvalues.add();item.key=key;item.value=value
+    if '--emission' in sys.argv:
+        lamp.data.energy=0
+        bpy.ops.mesh.primitive_plane_add(size=64,location=(64,0,102),rotation=(3.141592653589793,0,0))
+        emitter=bpy.context.object
+        emitting=bpy.data.materials.new('Emitting reference');emitting.use_nodes=True
+        emission=emitting.node_tree.nodes.new('ShaderNodeEmission')
+        emission.inputs['Strength'].default_value=1
+        output=next(n for n in emitting.node_tree.nodes if n.type=='OUTPUT_MATERIAL')
+        emitting.node_tree.links.new(emission.outputs[0],output.inputs['Surface'])
+        emitter.data.materials.append(emitting)
     scene.render.engine=preview.HAMMERLESS_L4D2Preview.bl_idname
     for screen in bpy.data.screens:
         for area in screen.areas:

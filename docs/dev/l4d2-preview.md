@@ -7,11 +7,13 @@ replacement for VRAD or the game's material shaders. No release authorized.
 
 - Evaluated object-local geometry cache; transforms reuse extracted geometry
   and mesh BVHs. Instance transforms have a separate top-level accelerator.
-- Point, spot and sun direct lighting; flat sky visibility; opaque GPU shadow
+- Point, spot, sun and exporter-sampled area direct lighting; flat sky visibility; opaque GPU shadow
   rays using a software BVH (not hardware ray tracing).
 - Progressive diffuse paths, configurable rays and one to eight bounces.
   Flat sky also refines when bounce rays are zero: nine directions per frame,
-  18 frames per complete 162-direction cycle. Partial cycles are estimates.
+  18 frames per complete 162-direction cycle. Large area emitters use eight
+  batches; 72 frames complete both cycles. Partial cycles are estimates.
+  Area sampling on secondary bounce hits selects one weighted emitter sample.
 - Linear accumulation, fixed sRGB display, exposure without retracing, viewport
   depth restoration. Camera/scene/material changes reset accumulation.
 - Source texture precedence, custom image selection, UnlitGeneric base output,
@@ -50,8 +52,7 @@ this repository. Test code is under `tests/blender`, `tests/compile` and
 
 ## Remaining work
 
-- Alpha-tested/translucent geometry and shadows; area lights and material
-  emission; normal maps, advanced Source shaders and model lighting parity.
+- Alpha-tested/translucent geometry and shadows; material emission; normal maps, advanced Source shaders and model lighting parity.
 - Integrate bake-like filtering only with correct grid provenance and boundary
   treatment. Do not replace it with a screen-space blur or guessed square grid.
   Avoid correlating its nine-phase schedule with sky-direction subsets.
@@ -75,3 +76,79 @@ log; read its tail.
 The old rotated `game-shadow-reference-v2` capture is invalid for pixel
 comparison. Use `game-shadow-still`, with its recorded camera and BSP hash.
 `mat_fullbright 1` is not an UnlitGeneric parity reference.
+
+## Area-light milestone
+
+- Export sample positions/power verified for square, rectangle, disk and ellipse,
+  with rotation, mirrored scale, zero energy and ignored emitters.
+- GPU radiometry agrees with an independent two-cosine/inverse-square sum.
+  Half-emitter occlusion returns half the illumination; moving the blocker
+  preserves its mesh BVH. Complete eight-phase means match full evaluation,
+  including uneven 17-sample sets.
+- Actual viewport callbacks verified eight-frame accumulation and light,
+  transform, camera, refresh resets; exposure retains the converged history.
+- Compiled 17-position area shadow profile: unfiltered maximum linear error
+  0.00899, planar four-cell-filtered maximum 0.000238. Filtering remains test-only.
+- Representative map at 720p, one 256-sample area: full direct sampling
+  96-139 ms/frame, progressive 13.7-14.3 ms without sky and 15.4-15.5 ms with
+  sky. Settled frames about 2 ms. Synthetic light placement; no GI in this
+  benchmark. Multiple area emitters and bounced-area performance unverified.
+
+## Controlled rerun after process cleanup (2026-11-09)
+
+Earlier timings above were collected while leftover Blender test processes
+existed. They are historical measurements, not reliable paired speedup evidence.
+Use `tests/blender/run_isolated.py` for subsequent GUI tests: it holds a single-run
+lock, assigns the process to a Windows kill-on-close job, waits for exit and
+kills its owned job on timeout. Python-only tests cover normal exit, timeout,
+descendant cleanup and preservation of an unrelated process. A zero process
+exit does NOT establish test success; inspect the fresh test JSON as well.
+
+Fresh area GPU checks and bounce checks passed. The area secondary-ray estimator
+now chooses one emitter sample per hit, weighted by the emitter sample count;
+primary rays retain the eight-batch cycle. In the controlled 8192-path fixture,
+full area evaluation returned 0.03140916 red, sampled evaluation 0.03095248
+(1.45% difference). This is a finite-sample check, not broad convergence proof.
+
+Fresh representative-map 1280x720 timings, one 256-sample area, eight paths per
+pixel, one bounce, sampled sky/area and progressive primary lighting:
+with sky, overview 28.94 ms and spawn 49.90 ms median refining frame; settled
+cached drawing 1.92/2.32 ms. Includes synchronous pixel readback, excludes scene
+preparation. Only eight refinement frames were measured: this establishes cost,
+NOT completed sky convergence or final image quality. RTX 4090. Reports:
+`outputs/l4d2-preview/map-clean-sampled-area.json` and corresponding process log.
+No test Blender processes remained after the rerun (only original PID 7676).
+
+Convergence rerun at 640x360: compared 72 accumulated frames with 288
+(same sequence, not an independent ground truth). Spawn-view mean absolute
+linear RGB difference 0.00023261, 95th percentile 0.00065941; overview below
+0.0000005 mean. Inspected the saved spawn image: visible room/materials and
+soft illumination, but dark under synthetic benchmark lighting. This checks
+stability, not matching an actual map bake. Sky/no-sky spawn results coincide
+in this enclosed view; this fixture is insufficient for outdoor GI validation.
+Report: `outputs/l4d2-preview/map-convergence-clean.json`. Test exited in 38.8s.
+
+Fresh matched GPU VRAD two-bounce room comparison (2026-11-09): 36 floor samples
+(nine per compiled face), compiled geometry/reflectivity, 4096 rays. Indirect mean absolute
+linear RGB error 0.00043256, max 0.00141554, mean relative error 5.07%.
+Both bakes were rebuilt during this run; compiler log confirms two GI passes.
+This is bounded transport agreement, not arbitrary-material/game-image parity.
+Report: `outputs/l4d2-preview/two-bounce-reference/results.json`.
+
+## Trying this experimental build
+
+Install the local preview ZIP using Blender Preferences > Install from Disk.
+Select **L4D2 Preview (Experimental)** as the render engine, then use Rendered
+viewport shading. Render Properties contains exposure, Bounce Rays, Max Bounces
+and Refinement Frames. Start with 0 bounce rays for direct light; try 8 rays,
+1 bounce and 72 refinement frames for indirect light. These settings do not
+change the map bake. F12 final rendering is not implemented.
+
+Connected Blender emission now contributes sampled direct lighting using the
+existing exporter's mesh-light conversion. Snapshot tests verify positions,
+power changes, transforms and removal; actual viewport tests verify resulting
+illumination and accumulation resets. Emission samples are cached per geometry,
+transform and material revision. Native VMT selfillum/texlights and visible
+self-emission are NOT covered by this integration. Alpha-cutout/translucent
+shadows remain opaque, and game exposure/advanced shader matching is pending.
+This is an experimental test package, not completion of the renderer goal.
