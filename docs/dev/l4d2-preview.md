@@ -482,3 +482,55 @@ Two samples per type with profiling overhead, not UI FPS. Independent source
 review found no blocker. Tests cover same-length changes, Unicode, empty text,
 removal, cap boundary/oversized fallback, and live source-text edits that rebuild
 charts despite no geometry notification.
+
+### Bounce setting cost profile
+
+`profile_preview_bounce_settings.py` measures synchronized surface-cache
+refinement and raster work separately at 1280x720 in the hotel interior,
+synthetic single point light, no sky. Four measured passes after warmup per
+setting; 12,033 visible cached samples. These are not UI frame times.
+
+| Rays | Max bounces | Cache ms | Raster/display ms |
+|---:|---:|---:|---:|
+| 0 | 1 | 11.49 | 12.18 |
+| 4 | 1 | 12.15 | 19.74 |
+| 8 | 1 | 14.16 | 26.81 |
+| 16 | 1 | 17.06 | 41.18 |
+| 4 | 2 | 12.89 | 21.93 |
+| 4 | 4 | 15.65 | 27.16 |
+
+The incremental cost is predominantly the uncached per-pixel lighting path in
+this view. Optimizing scene-change preparation cannot remove that tracing cost.
+Report: bounce-settings-profile.json. This sweep does not establish timings for
+other viewpoints, many real lights, sky, or the user's current map.
+
+### Guarded repeated light updates
+
+LightUpdateGuard checks explicit fingerprints for silent custom properties,
+source contents, materials, import identity/registry, collections and context.
+Only nonempty exclusively-light notification batches are eligible. Unknown or
+non-light updates clear the baseline without scanning the fingerprint. A first
+light update warms through the full path; subsequent matching updates reuse
+geometry, materials and charts but recalculate lights and invalidate irradiance.
+Light-parented geometry and light instancers stay on the full path. Errors clear
+the baseline. This remains O(objects) checking, not constant-time dirty tracking.
+
+Independent review found no remaining production blocker. Paired actual
+view_update CPU harnesses matched guarded and forced-full geometry, chart arrays
+and lighting across silent role/density/source/material/model changes, visibility,
+collection roles, frame changes, explicit material refresh and parent classnames.
+The benchmark invokes view_update from real depsgraph_update_post notifications.
+Its forced-full reference bypasses guard cost, preventing an inflated speedup.
+Hotel repeated light CPU updates: 132–146 ms versus 198–219 ms reference. First
+warmup was 333 ms versus 196 ms reference, a real tradeoff for isolated edits.
+This measures update preparation only, not full viewport FPS. Brush updates do
+not pay the added full fingerprint scan. Report: light-update-profile.json.
+
+The actual viewport regression passed with --light-fast (20 draw callbacks,
+5 update callbacks, one confirmed fast update), checking consecutive brightness
+changes and the resulting history reset/output. The new test timer initially
+captured a transient RenderEngine Context and crashed its isolated test process;
+it was corrected to query bpy.context inside the timer. Its second brightness
+edit now changes intensity rather than just retagging unchanged data, so the
+history-reset assertion tests a real lighting change. No production Context is
+retained by the guard.

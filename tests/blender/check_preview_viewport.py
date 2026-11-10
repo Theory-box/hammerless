@@ -24,6 +24,8 @@ original_update=preview.HAMMERLESS_L4D2Preview.view_update
 
 def finish(result):
     if state['done']:return
+    if '--light-fast' in sys.argv and result.get('ok') and not state.get('fast_updates'):
+        result={'ok':False,'error':'Viewport never exercised fast light path','state':dict(state)}
     state['done']=True
     OUT.parent.mkdir(parents=True,exist_ok=True)
     OUT.write_text(json.dumps(result,indent=2))
@@ -34,6 +36,15 @@ def update(self,context,depsgraph):
     state['updates']+=1
     state.setdefault('update_events',[]).append({'stage':state['stage'],'ids':[(u.id.bl_rna.identifier,u.id.name,u.is_updated_geometry,u.is_updated_transform,u.is_updated_shading) for u in depsgraph.updates]})
     original_update(self,context,depsgraph)
+    state['fast_updates']=self.update_guard.fast_updates
+    if '--light-fast' in sys.argv and state['stage']==1 and not state.get('repeat_light_tag'):
+        state['repeat_light_tag']=True
+        state['await_update']=state['updates']+1
+        def retag():
+            lamp=next(o for o in bpy.context.scene.objects if o.type=='LIGHT')
+            lamp.hammerless.keyvalues[0].value='255 255 255 50'
+            lamp.update_tag()
+        bpy.app.timers.register(retag,first_interval=.01)
 
 
 def draw(self,context,depsgraph):
@@ -91,7 +102,7 @@ def draw(self,context,depsgraph):
             state['pending_edit']=True
             def edit():
                 if state['stage']==1:
-                    lamp.hammerless.keyvalues[0].value='255 255 255 50'
+                    lamp.hammerless.keyvalues[0].value='255 255 255 75' if '--light-fast' in sys.argv else '255 255 255 50'
                     if any(v in sys.argv for v in ('--area','--emission')):lamp.data.energy=2500
                     lamp.update_tag()
                     if '--emission' in sys.argv:emission.inputs['Strength'].default_value=.25

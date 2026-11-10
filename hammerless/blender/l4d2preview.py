@@ -563,9 +563,20 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         self.error = ''
         self.surface_signature = None
         self.surface_cache = None
+        from .previewchanges import LightUpdateGuard
+        self.update_guard = LightUpdateGuard()
 
     def view_update(self, context, depsgraph):
         try:
+            if self.update_guard.check(context,depsgraph,self.surface_cache,_material_refresh_revision):
+                # Only lighting changes: retain geometry/material/chart snapshots.
+                # The explicit guard also catches custom changes Blender may not tag.
+                self.cache.update_lights(depsgraph)
+                old=self.scene_signature
+                self.scene_signature=(old[0],old[1],self.cache.light_signature,self.cache.sky_color,old[4],old[5])
+                self.error=''
+                self.tag_redraw()
+                return
             self.cache.update(depsgraph)
             self.cache.update_lights(depsgraph)
             material_change = any(isinstance(u.id, (bpy.types.Material,bpy.types.Image,bpy.types.ShaderNodeTree))
@@ -620,6 +631,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             self.error = str(exc)
             self.cache = SceneCache()
             self.bounce_signature = None
+            self.update_guard.clear()
         self.tag_redraw()
 
     def view_draw(self, context, depsgraph):
