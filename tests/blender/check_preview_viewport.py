@@ -22,6 +22,14 @@ state={'frames':0,'updates':0,'done':False,'stage':0,'samples':[],'await_update'
 original_draw=preview.HAMMERLESS_L4D2Preview.view_draw
 original_update=preview.HAMMERLESS_L4D2Preview.view_update
 
+if '--native' in sys.argv:
+    from hammerless.blender.previewnativeview import NativeView
+    original_capture=NativeView._capture
+    def capture(self,*args):
+        original_capture(self,*args)
+        state['captures']=state.get('captures',0)+1
+    NativeView._capture=capture
+
 
 def finish(result):
     if state['done']:return
@@ -107,6 +115,39 @@ def draw(self,context,depsgraph):
             depth=fb.read_depth(x+w//2,y+h//2,1,1).to_list()[0][0]
             assert 0<depth<1,('Viewport depth missing',depth)
         assert max(abs(v-expected) for v in pixel[:3])<.015,(pixel,expected)
+
+        if '--native' in sys.argv:
+            assert self.native_view.compose[2], 'Optimized depth-copy path was not exercised'
+            state['depth_copy_verified']=True
+            wanted_captures=(1,1,2,3,3,4)[state['stage']]
+            assert state['captures']==wanted_captures,('Receiver recapture mismatch',state['stage'],state['captures'])
+            with self.native_view.framebuffer.bind():
+                source_depth=gpu.state.active_framebuffer_get().read_depth(w//2,h//2,1,1).to_list()[0][0]
+            assert abs(source_depth-depth)<1e-6,('Copied depth mismatch',source_depth,depth)
+            background=fb.read_depth(x+1,y+1,1,1).to_list()[0][0]
+            assert abs(background-1)<1e-6,('Background depth mismatch',background)
+            if state['stage']==0:
+                from gpu_extras.batch import batch_for_shader
+                info=gpu.types.GPUShaderCreateInfo()
+                info.vertex_in(0,'VEC3','position');info.fragment_out(0,'VEC4','color')
+                info.vertex_source('void main(){gl_Position=vec4(position,1);}')
+                info.fragment_source('void main(){color=vec4(1,0,1,1);}')
+                overlay=gpu.shader.create_from_info(info)
+                old_test=gpu.state.depth_test_get();old_mask=gpu.state.depth_mask_get()
+                old_blend=gpu.state.blend_get()
+                try:
+                    gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(False);gpu.state.blend_set('NONE')
+                    def marker(d):
+                        overlay.bind()
+                        batch_for_shader(overlay,'TRIS',{'position':[(-.02,-.02,2*d-1),(.02,-.02,2*d-1),(0,.02,2*d-1)]}).draw(overlay)
+                        return fb.read_color(x+w//2,y+h//2,1,1,4,0,'FLOAT').to_list()[0][0]
+                    behind=marker(min(.99,depth+.05))
+                    assert max(abs(a-b) for a,b in zip(behind,pixel))<.002,('Behind-surface overlay visible',behind,pixel)
+                    front=marker(max(.01,depth-.05))
+                    assert front[0]>.99 and front[1]<.001 and front[2]>.99,('Foreground overlay missing',front)
+                    state['overlay_occlusion_verified']=True
+                finally:
+                    gpu.state.depth_test_set(old_test);gpu.state.depth_mask_set(old_mask);gpu.state.blend_set(old_blend)
         if '--native' not in sys.argv and ('--sky' in sys.argv or any(v in sys.argv for v in ('--area','--emission'))):
             assert self.bounce_materials is None and self.bounce_uploads==0, 'Sky-only preview prepared bounce data'
         if state['stage']>0:

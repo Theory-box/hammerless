@@ -729,3 +729,25 @@ can still be expensive and hit safety/deadline limits. This is not yet the
 requested 10-20x improvement or a measured win against GPU VRAD baking.
 
 Results: workspace outputs/l4d2-preview/native-realmap.json and comparison PNGs.
+
+### Receiver/depth reuse follow-up (2026-11-09)
+
+Receiver capture now has its own key: geometry/material revision, camera,
+viewport size and unit scale. Light/sky and sampling changes still invalidate
+lighting but retain unchanged receiver points and G-buffer textures.
+
+OpenGL composition copies the existing G-buffer depth rather than resubmitting
+all visible geometry for each accepted lighting sample. Other backends retain
+the geometry-depth fallback. Source and destination depth are separate textures.
+
+Nine CPU tests passed. Actual viewport tests verified capture counts across
+light, geometry, camera, exposure and material-refresh edits; copied depth
+matched the source; background depth stayed 1; markers behind surfaces were
+occluded and markers in front remained visible. The test explicitly required
+the optimized depth-copy path. Independent static review passed.
+
+A bounded hotel comparison at 160x90 timed composition with and without the
+redundant geometry-depth pass. After one warmup, three paired samples gave
+median 5.09/23.89 ms for depth redraw plus composition versus 0.098/0.119 ms
+for depth-copy composition in two views. These are isolated stage costs, not
+whole-renderer speedups. Lighting parity remained within the earlier errors.

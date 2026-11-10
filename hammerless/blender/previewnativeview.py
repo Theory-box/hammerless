@@ -11,22 +11,36 @@ from .previewhistory import FrameHistory
 
 
 def _composition():
+    vertex='void main(){gl_Position=vec4(position,0,1);}'
+    body="""void main(){
+        ivec2 p=ivec2(gl_FragCoord.xy);
+        DEPTH_WRITE
+        if(texelFetch(positionImage,p,0).w<0.5){color=vec4(vec3(.0019349845),1);return;}
+        vec4 a=texelFetch(albedoImage,p,0);
+        vec3 light=texelFetch(lightImage,p,0).rgb;
+        color=vec4(a.rgb*(a.a>0.5?vec3(1):light),1);
+    }"""
+    # Match FrameHistory's OpenGL compatibility path: Blender 4.4 does
+    # not expose depth_write through GPUShaderCreateInfo. Reuse the G-buffer
+    # depth rather than submitting the entire scene once per lighting sample.
+    if gpu.platform.backend_type_get()=='OPENGL':
+        try:
+            shader=gpu.types.GPUShader('in vec2 position;'+vertex,
+                'uniform sampler2D albedoImage,lightImage,positionImage,depthImage;'
+                'out vec4 color;'+body.replace('DEPTH_WRITE','gl_FragDepth=texelFetch(depthImage,p,0).r;'))
+            return shader,batch_for_shader(shader,'TRIS',{'position':[(-1,-1),(3,-1),(-1,3)]}),True
+        except (AttributeError,TypeError,RuntimeError):
+            pass
     info=gpu.types.GPUShaderCreateInfo()
     info.vertex_in(0,'VEC2','position')
     info.sampler(0,'FLOAT_2D','albedoImage')
     info.sampler(1,'FLOAT_2D','lightImage')
     info.sampler(2,'FLOAT_2D','positionImage')
     info.fragment_out(0,'VEC4','color')
-    info.vertex_source('void main(){gl_Position=vec4(position,0,1);}')
-    info.fragment_source("""void main(){
-        ivec2 p=ivec2(gl_FragCoord.xy);
-        if(texelFetch(positionImage,p,0).w<0.5){color=vec4(vec3(.0019349845),1);return;}
-        vec4 a=texelFetch(albedoImage,p,0);
-        vec3 light=texelFetch(lightImage,p,0).rgb;
-        color=vec4(a.rgb*(a.a>0.5?vec3(1):light),1);
-    }""")
+    info.vertex_source(vertex)
+    info.fragment_source(body.replace('DEPTH_WRITE',''))
     shader=gpu.shader.create_from_info(info)
-    return shader,batch_for_shader(shader,'TRIS',{'position':[(-1,-1),(3,-1),(-1,3)]})
+    return shader,batch_for_shader(shader,'TRIS',{'position':[(-1,-1),(3,-1),(-1,3)]}),False
 
 
 class NativeView:
@@ -35,7 +49,7 @@ class NativeView:
         self.client=previewnative.get_client()
         self.geometry_token=None;self.lights_token=None
         self.vertices=self.metadata=self.lights=None
-        self.signature=None;self.size=None;self.request=None
+        self.signature=None;self.capture_signature=None;self.size=None;self.request=None
         self.serial=0;self.completed=0;self.error=''
         self.history=None;self.receiver_shader=None;self.depth_shader=None
         self.compose=None;self.light_texture=None
@@ -58,6 +72,7 @@ class NativeView:
         self.client.release(self.owner)
         self.request=None
         self.history=None
+        self.capture_signature=None
         self.framebuffer=None
         self.albedo=self.position=self.normal=self.depth=None
         self.light_texture=None
@@ -118,7 +133,13 @@ class NativeView:
         key=(signature,tuple(float(v) for row in matrix for v in row),size,int(rays),int(depth),float(cache.unit_scale),tuple(cache.sky_color),self.geometry_token,self.lights_token)
         if key!=self.signature:
             self.pause()
-            self._capture(cache,matrix,size)
+            # Surface positions/albedo/depth do not depend on light values or
+            # sampling settings. Still invalidate lighting for every full key.
+            capture_key=(self.geometry_token,tuple(float(v) for row in matrix for v in row),
+                         size,float(cache.unit_scale))
+            if capture_key!=self.capture_signature:
+                self._capture(cache,matrix,size)
+                self.capture_signature=capture_key
             self.signature=key;self.completed=0;self.error='';self.light_texture=None
         advance=False
         if self.request is not None:
@@ -137,12 +158,14 @@ class NativeView:
         def sample(_frame):
             old_depth=gpu.state.depth_test_get();old_mask=gpu.state.depth_mask_get();old_blend=gpu.state.blend_get()
             try:
-                # Populate depth first: a depth-only shader may leave attachment color
-                # undefined on some drivers, so composition must overwrite it last.
+                shader,batch,copies_depth=self.compose
                 gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True);gpu.state.blend_set('NONE')
-                restore_depth()
-                gpu.state.depth_test_set('NONE');gpu.state.depth_mask_set(False)
-                shader,batch=self.compose;shader.bind()
+                if not copies_depth:
+                    # Depth-only draws can leave color undefined: compose last.
+                    restore_depth()
+                    gpu.state.depth_test_set('NONE');gpu.state.depth_mask_set(False)
+                shader.bind()
+                if copies_depth:shader.uniform_sampler('depthImage',self.depth)
                 shader.uniform_sampler('albedoImage',self.albedo)
                 shader.uniform_sampler('lightImage',self.light_texture)
                 shader.uniform_sampler('positionImage',self.position)

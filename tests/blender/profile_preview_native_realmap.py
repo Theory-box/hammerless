@@ -38,7 +38,7 @@ def run():
     ts=time.perf_counter();shader=preview.diagnostic_shader(lit=True,textured=True,shadows=True,bounce=True)
     shader_compile_ms=(time.perf_counter()-ts)*1000
     width,height=160,90;off=gpu.types.GPUOffScreen(width,height,format='RGBA32F')
-    native=NativeView(owner='realmap-parity');rows=[];serial=0
+    native=NativeView(owner='realmap-parity');rows=[];serial=0;composition_timings=[]
     ts=time.perf_counter();native.prepare(scene,resolver,'geometry','lights');native_cpu_prepare_ms=(time.perf_counter()-ts)*1000
     def baseline(matrix,rays,seed):
         ts=time.perf_counter()
@@ -93,8 +93,33 @@ def run():
                 rows.append(row);references.append(ref);candidates.append(candidate);print(json.dumps(row),flush=True)
                 OUT.mkdir(parents=True,exist_ok=True);(OUT/'native-realmap-progress.json').write_text(json.dumps(rows,indent=2))
             save_image(np.mean(references,axis=0),np.mean(candidates,axis=0),view)
+            # Compare identical composition with/without the old redundant
+            # geometry depth pass. Includes a sync readback, excludes ray work.
+            rgba=np.ones((width*height,4),np.float32);rgba[:,:3]=irradiance
+            light_image=gpu.types.GPUTexture((width,height),format='RGBA32F',
+                data=gpu.types.Buffer('FLOAT',rgba.size,rgba.ravel()))
+            cs,cb,depth_copy=native.compose
+            assert depth_copy,'Benchmark requires optimized OpenGL path'
+            timings={'redraw_geometry':[],'copy_depth':[]}
+            for trial in range(4):
+                for mode in ('redraw_geometry','copy_depth'):
+                    ts=time.perf_counter()
+                    with off.bind():
+                        gpu.state.viewport_set(0,0,width,height)
+                        gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True);gpu.state.blend_set('NONE')
+                        gpu.state.active_framebuffer_get().clear(color=(0,0,0,0),depth=1)
+                        if mode=='redraw_geometry':preview.draw_depth(scene,native.depth_shader,matrix)
+                        cs.bind()
+                        for name,texture in (('albedoImage',native.albedo),('lightImage',light_image),
+                                             ('positionImage',native.position),('depthImage',native.depth)):
+                            cs.uniform_sampler(name,texture)
+                        cb.draw(cs)
+                        gpu.state.active_framebuffer_get().read_color(width//2,height//2,1,1,4,0,'FLOAT')
+                    if trial:timings[mode].append((time.perf_counter()-ts)*1000)
+            composition_timings.append({'view':view,'milliseconds':timings})
+
         return dict(ok=True,file=str(path),screen=[width,height],instances=len(scene.instances),lights=len(scene.lights),triangles=len(native.vertices),sky=list(scene.sky_color),
-            scene_setup_ms=scene_setup_ms,software_trace_prepare_ms=software_trace_prepare_ms,shader_compile_ms=shader_compile_ms,native_cpu_prepare_ms=native_cpu_prepare_ms,rows=rows,
+            scene_setup_ms=scene_setup_ms,software_trace_prepare_ms=software_trace_prepare_ms,shader_compile_ms=shader_compile_ms,native_cpu_prepare_ms=native_cpu_prepare_ms,rows=rows,composition_timings=composition_timings,
             scope='Two spawn views; same8rays,1bounce,seeds0/1,sky/area sampling; textured linear RGB compared only on raster-covered pixels. First native roundtrip includes process/AS setup. Capture includes readback; subsequent shade reuses captured receivers. Measurements are bounded diagnostics, not final convergence or fullviewport performance.')
     finally:
         native.close();previewnative.shutdown();off.free()
