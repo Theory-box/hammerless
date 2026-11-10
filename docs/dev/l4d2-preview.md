@@ -579,3 +579,41 @@ ray-slices-profile.json. No claim of improved bake parity or reduced total work.
 Camera/projection/viewport or scene-signature changes temporarily use current-geometry unshadowed direct lighting. Ray tracing, bounce uploads, history advancement, and surface-cache refinement resume after 150 ms idle; navigation/animation keep the pause active. Surface-cache receivers remain visible and depth is written. Cached lighting is preserved; final signatures still invalidate stale results. This does not yet defer CPU geometry/chart preparation or solve startup latency. Workbench 2.0 local quick_navigation.py and extraction budgeting were inspected as reference. Isolated mixed-cache viewport regression passed with 42 paused draws, unchanged heavy-work counters, valid depth, and automatic full-lighting resumption.
 
 Idle scheduling update: the engine now evaluates the complete configured ray set per logical frame, superseding two-ray slicing above. Existing full/sliced measurements showed 1.5–3.8x longer settling from repeated raster/direct work. Cheap interaction remains; a submitted idle dispatch cannot be preempted. Optional sliced APIs and equivalence tests remain available. Final mixed-cache viewport regression passed after this change.
+
+
+### GPU VRAD comparison: structural audit (2026-11-09)
+Independent source review compared native/hlvrad/shaders/gi.comp, gpu.c,
+direct.c, gather.comp and gi_convergence.h with previewbounce.py,
+previewtrace.py and previewlightcache.py. GPU VRAD uses Vulkan hardware ray
+queries and gathers previous-pass lightmap radiance. Preview traverses a
+software BVH and evaluates all direct lights/shadow rays at every path hit.
+SurfaceLightCache stores the resulting samples but currently does not supply
+hit radiance back to the bounce integrator. Native direct gathering also has
+PVS light rejection and native GI has a convergence test; these are not present
+in the preview path. Existing saved-map timings used synthetic one-point/no-sky
+lighting, so they do not establish real-map time-to-quality relative to VRAD.
+
+The bounded profile_preview_radiance_reuse.py experiment measures only replacing
+one-bounce hit-direct evaluation by a precomputed shadowed donor grid. Both
+variants retain software tracing and identical rays. All offscreen donors in
+its two-plane fixture are initialized. This is neither a production general
+atlas nor a native-VRAD quality comparison. Independent review checked offsets,
+units, reflectivity, triangle indexing and timing scope. Next gates: shadow
+boundaries/discontinuities, real geometry and light distributions, multiple
+transport passes with separate direct/indirect buffers, and synchronized total
+preparation+convergence comparison. Missing donor entries must never silently
+return black; visible-only scheduling cannot supply indirect donors reliably.
+No 10–20x whole-engine claim is supported yet. A persistent native backend
+requires its own measured transfer, update, and display costs before commitment.
+
+Radiance-reuse experiment passed all 27 combinations (33/65/129-square donor
+samples, 1/8/32 lights, 8/32/128 rays), with independent review. Latest fine-grid
+32-light/128-ray warm draw: 6.542 ms baseline vs 0.821 ms reuse (7.97x), indirect
+relative RMSE 0.0292%. At one light/32 rays, improvement was only1.10x. Fine-grid
+errors stayed below0.068%. CPU-observed preparation for32lights/129square was
+8.387ms with existing shader reuse (includes synchronized readback, upload only
+submitted). Cold first donor constructor was5482ms; baseline shader creation
+6091ms. Do not compare warm draw alone with whole-map bake time. This establishes
+feasibility of eliminating hit-direct work, not real-map convergence or native
+VRAD parity. Latest isolated runner exited normally in35.016seconds. Result:
+outputs/l4d2-preview/radiance-reuse-profile.json in the workspace output directory.
