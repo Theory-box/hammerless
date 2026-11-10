@@ -61,7 +61,15 @@ def run():
             rows.append(dict(view=index,total_ms=elapsed_ms,
                 covered=len(native.covered),profile=stream.getvalue()))
             print(stream.getvalue(),flush=True)
-        return dict(ok=True,scene_setup_ms=scene_setup_ms,screen=[width,height],rows=rows)
+        ts=time.perf_counter()
+        for revision in range(20):native.stage(scene,resolver,revision,revision)
+        stage_ms=(time.perf_counter()-ts)*1000
+        assert native.vertices is None,'Staging performed geometry preparation'
+        ts=time.perf_counter();native._flush_pending();flush_ms=(time.perf_counter()-ts)*1000
+        assert native.geometry_token==19 and native.lights_token==19
+        return dict(ok=True,scene_setup_ms=scene_setup_ms,screen=[width,height],rows=rows,
+                    twenty_stage_calls_ms=stage_ms,one_idle_flush_ms=flush_ms,
+                    native_triangles=len(native.vertices))
     finally:
         native.close();previewnative.shutdown();off.free()
 try:result=run()

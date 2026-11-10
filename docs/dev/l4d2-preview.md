@@ -777,3 +777,22 @@ warm case; that version was corrected before packaging.
 Seven culling tests pass, including shared geometry, mirrored/nonuniform
 transforms, replacement/invalidation and camera fastpath. Independent static
 review approved the cache and per-draw texture handle changes.
+
+### Defer native geometry snapshots until idle (2026-11-09)
+
+Engine dependency updates now stage only the latest cache/resolver/tokens.
+NativeView.draw flushes that snapshot after the existing150ms interaction pause;
+drag callbacks no longer repeatedly flatten the full world into native arrays.
+The main-thread scene references never enter the worker. Pause retains pending
+work, close drops it, and successful preparation commits all arrays/tokens
+together. Immediate prepare remains available for diagnostic callers.
+
+Twelve native CPU tests passed. The actual viewport regression passed all edit
+and depth/occlusion stages and explicitly asserted that snapshot preparation
+never ran inside a dependency-update callback. Independent review approved.
+
+On2,716,132 hotel triangles,20 synthetic stage calls took0.022ms total and the
+single idle preparation took784ms. This excludes normal scene extraction,
+drawing and interaction work; it is not a full drag-latency measurement.
+The idle preparation stall remains. No-op dependency updates can still cancel
+pending work unnecessarily; that separate optimization is not part of this change.

@@ -54,15 +54,34 @@ class NativeView:
         self.history=None;self.receiver_shader=None;self.depth_shader=None
         self.compose=None;self.light_texture=None
         self.points=None;self.covered=None
+        self._pending_prepare=None
+
+    def stage(self,cache,resolver,geometry_token,lights_token):
+        """Keep only the latest main-thread scene update until interaction stops.
+
+        Cache/resolver are main-thread references, never background inputs. The
+        next idle draw snapshots their latest state before submitting any work.
+        """
+        self.pause()
+        self._pending_prepare=(cache,resolver,geometry_token,lights_token)
 
     def prepare(self,cache,resolver,geometry_token,lights_token):
-        """Main-thread immutable scene snapshot; no native process is started here."""
-        if self.vertices is None or geometry_token!=self.geometry_token:
-            self.vertices,self.metadata=previewnative.flatten_scene(cache,resolver)
-            self.geometry_token=geometry_token
-        if self.lights is None or lights_token!=self.lights_token:
-            self.lights=previewnative.pack_lights(cache)
-            self.lights_token=lights_token
+        """Immediately build an immutable scene snapshot (also used by benchmarks)."""
+        vertices,metadata=self.vertices,self.metadata
+        lights=self.lights
+        if vertices is None or geometry_token!=self.geometry_token:
+            vertices,metadata=previewnative.flatten_scene(cache,resolver)
+        if lights is None or lights_token!=self.lights_token:
+            lights=previewnative.pack_lights(cache)
+        # Commit only after every snapshot succeeds; a failed preparation must
+        # not advertise tokens for a partially prepared scene.
+        self.vertices,self.metadata,self.lights=vertices,metadata,lights
+        self.geometry_token,self.lights_token=geometry_token,lights_token
+        self._pending_prepare=None
+
+    def _flush_pending(self):
+        if self._pending_prepare is not None:
+            self.prepare(*self._pending_prepare)
 
     def pause(self):
         self.client.pause(self.owner)
@@ -70,6 +89,7 @@ class NativeView:
 
     def close(self):
         self.client.release(self.owner)
+        self._pending_prepare=None
         self.request=None
         self.history=None
         self.capture_signature=None
@@ -124,6 +144,7 @@ class NativeView:
     def draw(self,cache,matrix,signature,rays,depth,frames,exposure):
         """Return (displayed, pending, status). Caller supplies cheap first-frame fallback."""
         from .l4d2preview import draw_depth
+        self._flush_pending()
         if self.vertices is None:
             return False,False,'Native scene is not prepared'
         size=tuple(gpu.state.viewport_get()[2:])

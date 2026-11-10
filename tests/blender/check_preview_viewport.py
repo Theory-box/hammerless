@@ -24,6 +24,12 @@ original_update=preview.HAMMERLESS_L4D2Preview.view_update
 
 if '--native' in sys.argv:
     from hammerless.blender.previewnativeview import NativeView
+    original_prepare=NativeView.prepare
+    def prepare(self,*args):
+        assert not state.get('inside_update'), 'Native snapshot built inside dependency update'
+        state['native_prepares']=state.get('native_prepares',0)+1
+        return original_prepare(self,*args)
+    NativeView.prepare=prepare
     original_capture=NativeView._capture
     def capture(self,*args):
         original_capture(self,*args)
@@ -44,7 +50,9 @@ def finish(result):
 def update(self,context,depsgraph):
     state['updates']+=1
     state.setdefault('update_events',[]).append({'stage':state['stage'],'ids':[(u.id.bl_rna.identifier,u.id.name,u.is_updated_geometry,u.is_updated_transform,u.is_updated_shading) for u in depsgraph.updates]})
-    original_update(self,context,depsgraph)
+    state['inside_update']=True
+    try:original_update(self,context,depsgraph)
+    finally:state['inside_update']=False
     state['fast_updates']=self.update_guard.fast_updates
     if '--light-fast' in sys.argv and state['stage']==1 and not state.get('repeat_light_tag'):
         state['repeat_light_tag']=True

@@ -650,7 +650,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         if self.native_view is None:
             self.native_view = NativeView(owner=id(self))
         signature = self.scene_signature
-        self.native_view.prepare(self.cache, self.bounce_materials,
+        self.native_view.stage(self.cache, self.bounce_materials,
                                  (signature[:2], signature[4:]), self.cache.light_signature)
 
     def view_update(self, context, depsgraph):
