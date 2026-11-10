@@ -53,7 +53,9 @@ assert surfaces.resolve(plain)[0] is default_image, 'Plain Blender color overrod
 assert surfaces.resolve(mat)[0] is image, 'Custom image lost'
 mat.hammerless.source_material='wall'
 surfaces=SurfaceMaterials(content,None,'wall')
-assert surfaces.resolve(mat)[0] is default_image, 'Blender image overrode explicit Source material'
+from unittest.mock import patch
+with patch('hammerless.blender.preview._image_for_texture',side_effect=AssertionError('Assigned image must not reload VTF')):
+    assert surfaces.resolve(mat)[0] is image, 'Assigned Blender image was not reused'
 reads=content.reads
 surfaces.resolve(mat)
 assert content.reads==reads, 'Surface snapshot reread content'

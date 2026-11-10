@@ -63,13 +63,15 @@ class ChartSnapshot:
         if self.document is not None and obj.name in self.originals and obj.get(vmfimport.KIND)=='solid':
             original=self.document.solids.get(obj.get(vmfimport.ID))
             if original is None:raise ValueError('Imported source brush is missing')
-            # solid_block may return the original; scale overrides must not mutate
-            # shared import state used by the actual build or later snapshots.
-            original=copy.deepcopy(original)
+            # solid_block is copy-on-write. Keep original side identities so its
+            # cached polygon clipping remains usable for unchanged brushes.
             def default_side(vertices,material,tex=None):
                 return self.writer.side(Polygon(list(vertices),material or 'tools/toolsnodraw',tex_axes=tex))
             rebuilt=vi.solid_block(original,vmfimport._faces(obj,self.settings.units_per_meter,self.materials,depsgraph),self.writer.new_id,default_side)
             if self.settings.lightmap_scale_imported:
+                # Only this operation mutates side values. Clone here, rather
+                # than copying every source brush for a read-only chart lookup.
+                rebuilt=copy.deepcopy(rebuilt)
                 def scale_of(path):
                     mat=bpy.data.materials.get(path.lower().replace('\\','/'))
                     return (mat.hammerless.lightmap_scale if mat else 0) or self.settings.lightmap_scale

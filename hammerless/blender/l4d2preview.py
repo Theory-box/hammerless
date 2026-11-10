@@ -37,7 +37,10 @@ class Geometry:
 
 
 def extract_geometry(obj):
-    mesh = obj.to_mesh()
+    # SceneCache supplies an evaluated object. Its mesh already contains applied
+    # modifiers; only Edit Mode needs a temporary mesh to materialize live BMesh.
+    temporary = bool(getattr(obj.original.data, 'is_editmode', False))
+    mesh = obj.to_mesh() if temporary else obj.data
     try:
         mesh.calc_loop_triangles()
         positions = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
@@ -49,11 +52,12 @@ def extract_geometry(obj):
         mesh.loop_triangles.foreach_get('loops', loops)
         normals = np.empty(len(mesh.corner_normals) * 3, dtype=np.float32)
         mesh.corner_normals.foreach_get('vector', normals)
-        geometry = Geometry(positions[vertices].copy(), normals.reshape(-1, 3)[loops].copy())
+        # Integer-array indexing already owns a copy, independent of Blender data.
+        geometry = Geometry(positions[vertices], normals.reshape(-1, 3)[loops])
         uv = np.zeros((len(mesh.loops), 2), dtype=np.float32)
         if mesh.uv_layers.active:
             mesh.uv_layers.active.data.foreach_get('uv', uv.ravel())
-        geometry.uvs = uv[loops].copy()
+        geometry.uvs = uv[loops]
         face_normals = np.empty((len(mesh.loop_triangles), 3), dtype=np.float32)
         mesh.loop_triangles.foreach_get('normal', face_normals.ravel())
         geometry.face_normals = np.repeat(face_normals, 3, axis=0)
@@ -68,7 +72,7 @@ def extract_geometry(obj):
         mesh.loop_triangles.foreach_get('material_index', geometry.material_ids)
         return geometry
     finally:
-        obj.to_mesh_clear()
+        if temporary:obj.to_mesh_clear()
 
 
 class SceneCache:
@@ -629,6 +633,8 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         self.interacting = False
         self.interaction_shader = None
         self.native_view = None
+        self.native_surface = None
+        self.surface_first_draw = True
 
     def __del__(self):
         native = getattr(self, 'native_view', None)
@@ -650,8 +656,13 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         if self.native_view is None:
             self.native_view = NativeView(owner=id(self))
         signature = self.scene_signature
+        tokens=((signature[:2], signature[4:]),self.cache.light_signature)
+        pending=self.native_view._pending_prepare
+        current=(pending[2],pending[3]) if pending is not None else (self.native_view.geometry_token,self.native_view.lights_token)
+        if tokens==current:return
+        if self.native_surface is not None:self.native_surface.pause(self.native_view)
         self.native_view.stage(self.cache, self.bounce_materials,
-                                 (signature[:2], signature[4:]), self.cache.light_signature)
+                               *tokens)
 
     def view_update(self, context, depsgraph):
         try:
@@ -710,10 +721,14 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                 tuple((key,id(g),g.shadow_revision,g.use_uv) for key,g in self.cache.geometry.items()),
                 tuple((key,tuple(v for row in matrix for v in row)) for key,matrix in self.cache.instances))
             self._prepare_native(context)
-            if context.scene.hl_preview_surface_cache and not context.scene.hl_preview_native:
+            if context.scene.hl_preview_surface_cache:
                 from .previewlivecache import LiveSurfaceCache
-                if self.surface_cache is None:self.surface_cache=LiveSurfaceCache()
-                self.surface_cache.update(context,depsgraph,self.cache,self.material_revision)
+                if self.surface_cache is None:
+                    self.surface_cache=LiveSurfaceCache()
+                    self.surface_first_draw=True
+                if context.scene.hl_preview_native:
+                    self.surface_cache.stage(context,depsgraph,self.cache,self.material_revision)
+                else:self.surface_cache.update(context,depsgraph,self.cache,self.material_revision)
             else:self.surface_cache=None
             self.error = ''
         except Exception as exc:
@@ -741,6 +756,39 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                 self.interaction_until=now+0.15
             self.interaction_signature=interaction_signature
             self.interacting=now<self.interaction_until
+            if (context.scene.hl_preview_native and self.native_view is not None
+                    and self.surface_cache is not None):
+                from .previewnativesurface import NativeSurfaceCache
+                if self.native_surface is None:
+                    self.native_view.pause()
+                    self.native_surface=NativeSurfaceCache()
+                # Show the scene before chart construction. Subsequent idle frames
+                # admit visible receiver objects; the complete ray scene is retained.
+                if not self.surface_first_draw and not self.interacting and self.native_surface.request is None:
+                    self.surface_cache.advance(context,depsgraph,self.cache,self.material_revision,matrix)
+                self.surface_first_draw=False
+                preparing=self.surface_cache.has_pending(matrix)
+                pending,status=self.native_surface.step(
+                    self.native_view,self.surface_cache,self.cache,self.scene_signature,
+                    rays=context.scene.hl_preview_bounce_samples,
+                    bounces=context.scene.hl_preview_max_bounces,
+                    frames=context.scene.hl_preview_refine_frames,
+                    view_projection=matrix,paused=self.interacting,yield_after_result=preparing)
+                # Each triangle belongs to one display path. Drawing the direct
+                # mesh beneath cached copies causes precision-dependent z-fighting.
+                if self.interaction_shader is None:
+                    self.interaction_shader=diagnostic_shader(lit=True,textured=True,display=True)
+                draw_geometry(self.cache,self.interaction_shader,matrix,lit=True,textured=True,
+                              display=True,exposure=context.scene.hl_preview_exposure,
+                              exclude_keys=self.native_surface.exclude_keys,
+                              raster_geometry=self.native_surface.remaining)
+                self.native_surface.draw(matrix,context.scene.hl_preview_exposure)
+                if pending or self.interacting or preparing:self.tag_redraw()
+                self.update_stats('L4D2 Preview',status)
+                return
+            if self.native_surface is not None:
+                if self.native_view is not None:self.native_surface.pause(self.native_view)
+                self.native_surface=None
             if self.interacting:
                 if self.native_view is not None:self.native_view.pause()
                 # Current geometry and depth, without tracing or touching the
@@ -869,8 +917,10 @@ class HAMMERLESS_PT_l4d2_preview(bpy.types.Panel):
         col.label(text='Base textures; linear irradiance / 255.')
         col.operator('hammerless.refresh_preview_materials', icon='FILE_REFRESH')
         col.prop(context.scene,'hl_preview_native')
-        row=col.row();row.enabled=not context.scene.hl_preview_native
-        row.prop(context.scene,'hl_preview_surface_cache')
+        col.prop(context.scene,'hl_preview_surface_cache')
+        if context.scene.hl_preview_native and context.scene.hl_preview_surface_cache:
+            col.label(text='Brush lighting stays visible while navigating.')
+            col.label(text='Props/unsupported faces: direct preview only.',icon='INFO')
         col.prop(context.scene,'hl_preview_exposure')
         col.prop(context.scene,'hl_preview_bounce_samples')
         col.prop(context.scene,'hl_preview_max_bounces')
@@ -887,10 +937,10 @@ CLASSES = (HAMMERLESS_L4D2Preview, HAMMERLESS_OT_refresh_preview_materials, HAMM
 def register():
     bpy.types.Scene.hl_preview_native = bpy.props.BoolProperty(
         name='Hardware Ray Tracing (Experimental)',default=False,
-        description='Use a separate Vulkan hardware ray tracing worker. Requires a ray-query capable GPU. Pauses during interaction. Surface lighting cache is not used in this mode')
+        description='Use a separate Vulkan hardware ray tracing worker. Requires a ray-query capable GPU. Pauses during interaction. Enable Surface Lighting Cache to retain brush lighting while navigating')
     bpy.types.Scene.hl_preview_surface_cache = bpy.props.BoolProperty(
         name='Surface Lighting Cache (Experimental)',default=False,
-        description='Cache brush lighting at exported lightmap density. Charts potentially visible to the camera refine first; offscreen geometry still casts shadows and contributes bounced light. Scene edits restart lighting. Props and unsupported faces use per-pixel lighting. One million cached sample limit')
+        description='Cache brush lighting at exported lightmap density. Camera movement retains lighting. Offscreen geometry still affects lighting. With Hardware Ray Tracing, previous brush lighting remains visible during interaction and updates; props and unsupported faces currently use direct preview only. One million cached sample limit')
     bpy.types.Scene.hl_preview_max_bounces = bpy.props.IntProperty(
         name='Max Bounces',default=1,min=1,max=8,
         description='Maximum diffuse reflections per preview ray. Higher values add light carried around more corners, but cost more time. Does not change bake settings')

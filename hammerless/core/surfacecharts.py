@@ -21,10 +21,14 @@ def chart_triangle_mask(chart,triangles,normals,tolerance=.005):
     length=np.linalg.norm(normals,axis=1)
     facing=np.divide(normals@chart.normal,length,out=np.zeros_like(length),where=length>1e-12)
     keep=(facing>.9999)&np.all(abs(local@chart.normal)<=tolerance,axis=1)
-    for a,b in zip(chart.polygon,np.roll(chart.polygon,-1,axis=0)):
-        edge=b-a;edge_length=np.linalg.norm(edge)
-        if edge_length<=1e-12:return np.zeros(len(triangles),dtype=bool)
-        keep &= np.all(np.cross(edge/edge_length,local-(a-origin))@chart.normal>=-tolerance,axis=1)
+    edges=np.roll(chart.polygon,-1,axis=0)-chart.polygon
+    lengths=np.linalg.norm(edges,axis=1)
+    if np.any(lengths<=1e-12):return np.zeros(len(triangles),dtype=bool)
+    # (edge x displacement) . normal == displacement . (normal x edge).
+    # Compute the small edge normals once instead of crossing every vertex.
+    inward=np.cross(chart.normal,edges/lengths[:,None])
+    for a,n in zip(chart.polygon-origin,inward):
+        keep &= np.all((local-a)@n>=-tolerance,axis=1)
     keep &= np.isfinite(triangles).all(axis=(1,2))&np.isfinite(normals).all(axis=1)
     return keep
 
@@ -66,9 +70,10 @@ class SurfaceChart:
         # trace from unrelated empty space outside the convex source polygon.
         inside=np.ones(len(points),dtype=bool)
         closest=points.copy();best=np.full(len(points),np.inf)
-        for a,b in zip(self.polygon,np.roll(self.polygon,-1,axis=0)):
-            edge=b-a
-            inside &= np.cross(edge,points-a)@self.normal>=-1e-6
+        edges=np.roll(self.polygon,-1,axis=0)-self.polygon
+        inward=np.cross(self.normal,edges)
+        for a,edge,n in zip(self.polygon,edges,inward):
+            inside &= (points-a)@n>=-1e-6
             length=np.dot(edge,edge)
             t=np.clip((points-a)@edge/length,0,1) if length>1e-12 else np.zeros(len(points))
             q=a+t[:,None]*edge
@@ -81,13 +86,16 @@ class SurfaceChart:
 def chart_from_side(side,vertices,index=0,max_samples=1048576):
     p=np.asarray(vertices,dtype=np.float64)
     if len(p)<3 or not np.isfinite(p).all():raise ValueError('Invalid surface polygon')
-    normal=np.sum(np.cross(p,np.roll(p,-1,axis=0)),axis=0)
+    local=p-p[0]
+    normal=np.sum(np.cross(local,np.roll(local,-1,axis=0)),axis=0)
     length=np.linalg.norm(normal)
     if length<1e-9:raise ValueError('Degenerate surface polygon')
     normal/=length
     if np.max(abs((p-p[0])@normal))>1e-4:raise ValueError('Surface chart must be planar')
-    for a,b in zip(p,np.roll(p,-1,axis=0)):
-        if np.min(np.cross(b-a,p-a)@normal)<-1e-5:
+    edges=np.roll(p,-1,axis=0)-p
+    inward=np.cross(normal,edges)
+    for a,n in zip(local,inward):
+        if np.min((local-a)@n)<-1e-5:
             raise ValueError('Surface chart requires a convex exported face')
     scale=float(side.get('lightmapscale') or 16)
     axes=[parse_axis(side.get(k)) for k in ('uaxis','vaxis')]

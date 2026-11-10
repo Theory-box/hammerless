@@ -186,15 +186,21 @@ class SurfaceCacheDisplay:
         info.push_constant('FLOAT','exposure');info.push_constant('INT','hasTexture');info.push_constant('INT','unlit');info.sampler(1,'FLOAT_2D','baseTexture');info.sampler(0,'FLOAT_2D','lighting');info.fragment_out(0,'VEC4','color')
         info.vertex_source('void main(){gl_Position=mvp*vec4(position,1);sampleUV=luxel;sampleChart=chart;materialUV=baseUV;}')
         info.fragment_source('''
-        vec3 fetchLuxel(ivec2 p){
+        vec4 fetchLuxel(ivec2 p){
             ivec2 size=ivec2(sampleChart.yz);p=clamp(p,ivec2(0),size-1);
             int index=int(sampleChart.x)+p.y*size.x+p.x;
-            return texelFetch(lighting,ivec2(index%atlasWidth,index/atlasWidth),0).rgb;
+            return texelFetch(lighting,ivec2(index%atlasWidth,index/atlasWidth),0);
         }
         void main(){
             ivec2 p=ivec2(floor(sampleUV));vec2 t=fract(sampleUV);
-            vec3 c=mix(mix(fetchLuxel(p),fetchLuxel(p+ivec2(1,0)),t.x),
-                       mix(fetchLuxel(p+ivec2(0,1)),fetchLuxel(p+ivec2(1,1)),t.x),t.y);
+            vec4 a=fetchLuxel(p),b=fetchLuxel(p+ivec2(1,0));
+            vec4 d=fetchLuxel(p+ivec2(0,1)),e=fetchLuxel(p+ivec2(1,1));
+            // A partly updated native chart must not blend missing samples as
+            // black. Keep the underlying direct display until all contributors exist.
+            if(a.a<=0.0 || (t.x>0.0 && b.a<=0.0) ||
+               (t.y>0.0 && d.a<=0.0) || (t.x>0.0 && t.y>0.0 && e.a<=0.0))discard;
+            vec4 sampleLight=mix(mix(a,b,t.x),mix(d,e,t.x),t.y);
+            vec3 c=sampleLight.rgb;
             vec3 albedo=hasTexture!=0?texture(baseTexture,fract(materialUV)).rgb:vec3(1);
             c=max(albedo*(unlit!=0?vec3(1):c)*exposure,vec3(0));
             c=mix(12.92*c,1.055*pow(c,vec3(1.0/2.4))-.055,greaterThan(c,vec3(.0031308)));

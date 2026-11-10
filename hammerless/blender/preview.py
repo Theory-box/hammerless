@@ -21,7 +21,7 @@ def _image_for_texture(texture: str, content, game_dir, *, cache_scope="", verif
     never per draw. Default callers retain the existing material-preview cache.
     """
     from .ops import cache_name
-    import hashlib
+    from ..core.vtf_read import preview_digest
     name = cache_name("HL_tex_", cache_scope + ":" + texture if cache_scope else texture)
     img = bpy.data.images.get(name)
     if not verify_content and img is not None and "hl_full_size" in img:
@@ -30,7 +30,7 @@ def _image_for_texture(texture: str, content, game_dir, *, cache_scope="", verif
     data = read_texture_bytes(content, texture, game_dir)
     if not data:
         return None, 0, 0
-    digest = hashlib.sha256(data).hexdigest() if verify_content else None
+    digest = preview_digest(data, PREVIEW_SIZE) if verify_content else None
     if digest and img is not None and img.get('hl_content_digest') == digest and 'hl_full_size' in img:
         w, h = img['hl_full_size']
         return img, w, h

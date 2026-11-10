@@ -54,34 +54,84 @@ def remaining_geometry(original,keep):
 
 class LiveSurfaceCache:
     SAMPLE_BUDGET=1_000_000
+    OBJECTS_PER_ADVANCE=8
 
     def __init__(self):
         self.layouts=CachedObjectCharts();self.document_ids={};self.source_revision=SourceRevision()
         self.signature=None;self.generation=0
+        self.requested_keys=set();self.candidate_keys=[]
+        self.candidate_bounds=np.empty((0,8,4),dtype=np.float64)
         self.geometry_refs={}
         self.object_data={};self.display_tokens={};self.object_generation=0
         self.previous_cache=None;self.previous_display=None
         self.faces=[];self.charts=[];self.bindings={};self.keys=set();self.remaining={}
         self.warnings=[];self.budget_warnings=[];self.match_warnings=[];self.cache=None;self.display=None
 
-    def update(self,context,depsgraph,scene,material_revision):
-        settings=context.scene.hammerless
-        if not vmfimport.imported(context.scene):self.document_ids.clear()
-        text=bpy.data.texts.get(context.scene.get(vmfimport.SOURCE_KEY,''))
-        source=self.source_revision.update(text.as_string() if text else None)
+    def _candidates(self,depsgraph,scene):
         counts=Counter(key for key,_ in scene.instances)
-        candidates=[]
+        candidates=[];seen=set()
         for instance in depsgraph.object_instances:
             obj=instance.object.original
             key=obj.as_pointer()
-            if (key not in scene.geometry or counts[key]!=1 or instance.is_instance or
+            if (key in seen or key not in scene.geometry or counts[key]!=1 or instance.is_instance or
                 obj.type!='MESH' or effective_role(obj,getattr(scene,'role_lookup',None)) in ('MODEL','TERRAIN') or obj.data.get('hl_model') or
                 obj.hammerless.use_convex_hull or
                 obj.get(vmfimport.KIND)=='disp'):
                 continue
             # Extraction currently uses the original object's world transform.
             if instance.matrix_world!=obj.matrix_world:continue
-            candidates.append(obj)
+            seen.add(key);candidates.append(obj)
+        return candidates
+
+    def stage(self,context,depsgraph,scene,material_revision):
+        """Refresh admitted objects immediately; defer new charts until visible.
+
+        Bounds use extracted meshes, including evaluated modifiers. Local
+        extrema are cached per geometry revision; no charts are built here
+        for unrequested objects.
+        """
+        from .previewcull import _local_bounds
+        candidates=self._candidates(depsgraph,scene)
+        self.candidate_keys=[obj.as_pointer() for obj in candidates]
+        matrices=dict(scene.instances)
+        self.candidate_bounds=np.asarray([
+            _local_bounds(scene.geometry[key]) @ np.asarray(matrices[key],dtype=np.float64).T
+            for key in self.candidate_keys],dtype=np.float64).reshape(-1,8,4)
+        self.requested_keys.intersection_update(self.candidate_keys)
+        self.update(context,depsgraph,scene,material_revision,requested_keys=self.requested_keys)
+
+    def _pending_keys(self,view_projection):
+        from .previewcull import visible_bounds
+        visible=(visible_bounds(self.candidate_bounds,view_projection)
+                 if view_projection is not None else np.ones(len(self.candidate_keys),dtype=bool))
+        return [key for key,keep in zip(self.candidate_keys,visible)
+                if keep and key not in self.requested_keys]
+
+    def has_pending(self,view_projection=None):
+        """Only visible unrequested objects require another preparation draw."""
+        return bool(self._pending_keys(view_projection))
+
+    def advance(self,context,depsgraph,scene,material_revision,view_projection=None):
+        """Admit a bounded object batch, retaining grids across camera moves.
+
+        A document snapshot or large brush remains indivisible: this limits
+        object count, not wall time. Failed or budget-denied objects also count
+        as requested, so they cannot create an endless redraw loop.
+        """
+        pending=self._pending_keys(view_projection)[:self.OBJECTS_PER_ADVANCE]
+        if not pending:return False
+        self.requested_keys.update(pending)
+        self.update(context,depsgraph,scene,material_revision,requested_keys=self.requested_keys)
+        return True
+
+    def update(self,context,depsgraph,scene,material_revision,requested_keys=None):
+        settings=context.scene.hammerless
+        if not vmfimport.imported(context.scene):self.document_ids.clear()
+        text=bpy.data.texts.get(context.scene.get(vmfimport.SOURCE_KEY,''))
+        source=self.source_revision.update(text.as_string() if text else None)
+        candidates=self._candidates(depsgraph,scene)
+        if requested_keys is not None:
+            candidates=[obj for obj in candidates if obj.as_pointer() in requested_keys]
         snapshot=None
         def get_snapshot():
             nonlocal snapshot
@@ -97,6 +147,12 @@ class LiveSurfaceCache:
                 prepared.append((key,charts))
             except (ValueError,RuntimeError) as exc:
                 warnings.append(f'{obj.name}: per-pixel lighting ({exc})')
+        if requested_keys is not None:
+            # Camera expansion must not evict an already resident grid merely
+            # because a newly visible object occurs earlier in depsgraph order.
+            residents={key:i for i,(key,entry) in enumerate(self.object_data.items())
+                       if entry['samples'] is not None}
+            prepared.sort(key=lambda item:residents.get(item[0],len(self.object_data)))
         self.layouts.retain(candidates)
         # Hold prior geometry references until after comparing tokens, so Python
         # cannot recycle an old id into an apparently unchanged layout.

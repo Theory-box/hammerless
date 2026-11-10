@@ -265,6 +265,9 @@ typedef struct { int face, kind; float lux[6]; } gpustri_t;     /* (gi.comp's ST
 void GPU_GIScene(const float *verts, const gpustri_t *tris, int ntris);
 void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *out, float *layerout);   /* out: 16 floats a point */
 void GPU_GILayers(const float *grids, size_t nluxels, const int *ofs, int nfaces, int nlayers);
+extern int g_giRepeat, g_giServer;
+extern float g_giRelightScale;
+extern const char *g_giRepeatPrefix;
 extern int g_giPasses, g_giRays;                                  /* (-gi n, -girays n) */
 void BuildIndirectGPU(void);
 void GpuGISurfaces(void);

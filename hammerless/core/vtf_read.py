@@ -121,8 +121,8 @@ def _decode_plain(data: bytes, fmt: int, w: int, h: int) -> np.ndarray:
     raise ValueError(f"unsupported VTF format {name}")
 
 
-def read_vtf(data: bytes, max_size: int = 512) -> tuple[int, int, np.ndarray]:
-    """Returns (full width, full height, rgba uint8 image of the chosen mip, top row first)."""
+def _preview_payload(data: bytes, max_size: int = 512):
+    """Select precisely the metadata and mip bytes used by the preview decoder."""
     sig, major, minor, header_size = struct.unpack_from("<4s3I", data, 0)
     if sig != b"VTF\0":
         raise ValueError("not a VTF file")
@@ -156,6 +156,25 @@ def read_vtf(data: bytes, max_size: int = 512) -> tuple[int, int, np.ndarray]:
             chosen = (offset, mw, mh)
         offset += _mip_size(fmt, mw, mh) * frames * faces * max(1, depth >> level)   # (volume: halves too)
     off, mw, mh = chosen
-    blob = data[off:off + _mip_size(fmt, mw, mh)]
+    blob = memoryview(data)[off:off + _mip_size(fmt, mw, mh)]
+    return w, h, fmt, mw, mh, blob
+
+
+def preview_digest(data: bytes, max_size: int = 512) -> str:
+    """Validate rendered pixels, not unused high-resolution/animation payloads.
+
+    Includes full dimensions because material UV mapping depends on them. Offset,
+    format, selected frame/face and mip changes are captured by the parsed payload.
+    """
+    import hashlib
+    w, h, fmt, mw, mh, blob = _preview_payload(data, max_size)
+    digest = hashlib.sha256(struct.pack('<5I', w, h, fmt, mw, mh))
+    digest.update(blob)
+    return 'preview-mip-v1:' + digest.hexdigest()
+
+
+def read_vtf(data: bytes, max_size: int = 512) -> tuple[int, int, np.ndarray]:
+    """Returns (full width, full height, rgba uint8 image of the chosen mip, top row first)."""
+    w, h, fmt, mw, mh, blob = _preview_payload(data, max_size)
     img = _decode_dxt(blob, fmt, mw, mh) if fmt in BLOCK_FORMATS else _decode_plain(blob, fmt, mw, mh)
     return w, h, img

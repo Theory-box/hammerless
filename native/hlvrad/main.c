@@ -112,6 +112,7 @@ static void TakeVis(void) {
 static void FinalLightWork(int face, int thread) { (void)thread; FinalLightFace(face); }
 
 int main(int argc, char **argv) {
+    double main_started = Now();
     const char *map = NULL, *designer_lights = NULL, *skymap_path = NULL, *nobake_path = NULL, *keep_path = NULL;
     Msg("Hammerless hlvrad\n");
     for (int i = 1; i < argc; i++) {
@@ -127,6 +128,21 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-embree")) g_bEmbree = 1;         /* (Embree's tracer: faster, not vrad's to the bit) */
         else if (!_stricmp(a, "-gpu")) g_bGPU = 1;               /* (the GPU's ray tracing: faster, not vrad's to the bit) */
         else if (!_stricmp(a, "-gi") && i + 1 < argc) g_giPasses = atoi(argv[++i]);    /* (bounces by final gathering: -gpu) */
+        else if (!_stricmp(a, "-girelight")) {
+            if(i+1>=argc)Error("-girelight needs an intensity factor");
+            char *end;double factor=strtod(argv[++i],&end);
+            if(end==argv[i] || *end || !isfinite(factor) || factor<0 || factor>16)Error("-girelight factor must be finite, 0..16");
+            g_giRelightScale=(float)factor;
+        }
+        else if (!_stricmp(a, "-girepeat") || !_stricmp(a, "-giserver")) {
+            if(g_giRepeat)Error("Choose only one -girepeat or -giserver");
+            g_giServer=!_stricmp(a,"-giserver");
+            if(i+2>=argc)Error("-girepeat needs repeat count and artifact prefix");
+            char *end;long count=strtol(argv[++i],&end,10);
+            if(*end || count<2 || count>8)Error("-girepeat count must be 2..8");
+            g_giRepeat=(int)count;g_giRepeatPrefix=argv[++i];
+            if(!*g_giRepeatPrefix)Error("-girepeat needs a nonempty artifact prefix");
+        }
         else if (!_stricmp(a, "-girays") && i + 1 < argc) g_giRays = atoi(argv[++i]);            /* (its rays a sample) */
         else if (!_stricmp(a, "-chop") && i + 1 < argc) minchop = (float)atof(argv[++i]);     /* (patches at a face's edges) */
         else if (!_stricmp(a, "-maxchop") && i + 1 < argc) maxchop = (float)atof(argv[++i]);  /* (and inside it) */
@@ -202,6 +218,18 @@ int main(int argc, char **argv) {
         } else map = a;
     }
     if (!map) Error("usage: hlvrad [options] -game <gamedir> <map>");
+    if(g_giServer && g_giRelightScale>=0)Error("-giserver excludes -girelight; use stdin SCALE");
+    if(g_giRelightScale>=0 && !g_giRepeat)Error("-girelight requires -girepeat diagnostic mode");
+    if(g_giRepeat) {
+        if(getenv("RTTEST") || getenv("TLTEST"))Error("-girepeat excludes RTTEST/TLTEST diagnostic hooks");
+        if(g_giPasses>64 || g_giRays<1 || g_giRays>8192)Error("-girepeat supports 1..64 GI passes and 1..8192 rays");
+        if(!g_bGPU || g_giPasses<1 || g_layerLights || g_remix || g_visFrom || keep_path || nobake_path || skymap_path || g_onlyLights)
+            Error("-girepeat requires -gpu -gi and excludes layers/remix/visfrom/keeplight/nobake/skymap/onlylights");
+        char input_full[32768],output_full[32768];
+        if(!_fullpath(input_full,map,sizeof(input_full)) || !_fullpath(output_full,g_giRepeatPrefix,sizeof(output_full)))Error("Invalid diagnostic path");
+        if(!_stricmp(input_full,output_full))Error("Artifact prefix must differ from input map");
+        Msg("Diagnostic persistent GI%s; input BSP will not be written.\n",g_giServer?" controlled session":g_giRelightScale>=0?" with one real intensity edit":" replay only (no light edits)");
+    }
     if (g_remix) g_layerLights = NULL, g_visFrom = NULL;   /* (a remix keeps the layers and the map's vis) */
     if (g_visFrom && g_visThreadsAfter >= 0) {      /* (few threads while vis runs: it has the rest of the CPU) */
         int during = g_visThreadsAfter;
@@ -309,6 +337,7 @@ int main(int argc, char **argv) {
     RT_SetupAccelerationStructure();
     Stage("ray tracer");
     if (g_bGPU && !GPU_Init()) g_bGPU = 0;
+    if(g_giRepeat && !g_bGPU)Error("-girepeat requires working GPU ray tracing");
     if (g_numLayers && !g_bGPU) Error("-layers needs the GPU (it couldn't start)");
     if (g_bGPU) {
         GPU_ShadowScene();
@@ -383,9 +412,11 @@ int main(int argc, char **argv) {
     RunThreadsOn(numfaces, FinalLightWork);
     Stage("final light");
     if (g_giPasses) {
+        if(g_giRepeat)Msg("[girepeat] initial_setup_and_direct_seconds %.6f\n",Now()-main_started);
         BuildIndirectGPU();
         Stage("gi (bounced light)");
     }
+    if(g_giRepeat) {Msg("Diagnostic GI replay finished; input BSP untouched.\n");return 0;}
     if (g_numLayers) {
         WriteLayers(g_layersOut);
         Stage("layers");

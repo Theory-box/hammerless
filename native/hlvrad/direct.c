@@ -6,6 +6,7 @@
  * of the nearby samples (its own face's and its smoothing neighbours'), weights by overlap / distance
  * (vrad's "radial" filter), and it is stored as 4 bytes (3 mantissas, a shared exponent). */
 #include <float.h>
+#include <ctype.h>
 #include <xmmintrin.h>
 #include "hlvrad.h"
 #include "gi_convergence.h"
@@ -1872,6 +1873,9 @@ void AllocFacelights(void) { facelight = xalloc(sizeof(facelight_t) * (numfaces 
  * direct light was gathered at) get the light the lightmaps around them send back (gi.comp), g_giPasses times: each
  * pass gathers from the lightmaps the last one made (direct + bounced so far), so n passes give n bounces. */
 int g_giPasses, g_giRays = 256;
+int g_giRepeat, g_giServer;
+float g_giRelightScale=-1.0f;
+const char *g_giRepeatPrefix;
 static void FinalWork(int face, int thread) { (void)thread; FinalLightFace(face); }
 
 /* ------------------------------------------------------------------ -layers */
@@ -2088,8 +2092,78 @@ void WriteLayers(const char *path) {
     Msg("%d light layers written to %s\n", g_numLayers, path);
 }
 
+/* Diagnostic only: same geometry, exactly one steady point/spot light. Full
+ * normal direct gathering is repeated; no scaling of baked output is used. */
+static directlight_t *ReplayEditableLight(void) {
+    if(numdispsurfs)return NULL;
+    directlight_t *selected=NULL;
+    for(directlight_t *dl=activelights;dl;dl=dl->next)
+        if(dl->light.type==emit_point || dl->light.type==emit_spotlight) {
+            if(selected || dl->light.style!=0)return NULL;
+            selected=dl;
+        }
+    return selected;
+}
+static directlight_t *ReplayEditedLight(void) {
+    directlight_t *selected=ReplayEditableLight();
+    if(!selected)Error("Intensity editing requires exactly one style-0 point/spot light and no displacements");
+    return selected;
+}
+static double ReplayRebuildDirect(float factor,const vec3_t original_intensity) {
+    directlight_t *light=ReplayEditedLight();
+    double started=Seconds();
+    dface_t *faces=xalloc(sizeof(dface_t)*numfaces);memcpy(faces,g_pFaces,sizeof(dface_t)*numfaces);
+    int *counts=xalloc(sizeof(int)*numfaces);size_t total=0;
+    for(int f=0;f<numfaces;f++)total+=(size_t)(counts[f]=facelight[f].numsamples);
+    float *samples=xalloc(total*6*sizeof(float));size_t at=0;
+    for(int f=0;f<numfaces;f++)for(int j=0;j<counts[f];j++,at++) {
+        memcpy(samples+at*6,facelight[f].sample[j].pos,12);
+        memcpy(samples+at*6+3,facelight[f].sample[j].normal,12);
+    }
+    for(int c=0;c<3;c++)light->light.intensity[c]=original_intensity[c]*factor;
+    GPU_Lights();BuildFacelightsGPU();
+    at=0;
+    for(int f=0;f<numfaces;f++) {
+        if(facelight[f].numsamples!=counts[f])Error("Relight changed receiver count");
+        for(int j=0;j<counts[f];j++,at++)
+            if(memcmp(samples+at*6,facelight[f].sample[j].pos,12) || memcmp(samples+at*6+3,facelight[f].sample[j].normal,12))Error("Relight changed receiver geometry");
+    }
+    int bytes=lightdatasize;free(dlightdata);dlightdata=NULL;PrecompLightmapOffsets();
+    if(lightdatasize!=bytes || memcmp(faces,g_pFaces,sizeof(dface_t)*numfaces))Error("Relight changed face/lightmap layout");
+    PrepareFinalLight();RunThreadsOn(numfaces,FinalWork);
+    free(samples);free(counts);free(faces);
+    return Seconds()-started;
+}
+
+/* Bounded line protocol. SCALE is absolute relative to the initial light. */
+static int ReadGICommand(float *factor) {
+    char line[256];
+    if(!fgets(line,sizeof(line),stdin)) {
+        if(ferror(stdin))Error("GI session input failed");
+        return 0;
+    }
+    if(!strchr(line,'\n') && !feof(stdin))Error("GI session command too long");
+    char *start=line;while(isspace((unsigned char)*start))start++;
+    char *end=start+strlen(start);while(end>start && isspace((unsigned char)end[-1]))*--end=0;
+    if(!strcmp(start,"QUIT"))return 0;
+    if(!strcmp(start,"SOLVE"))return 1;
+    if(!strncmp(start,"SCALE",5) && isspace((unsigned char)start[5])) {
+        char *value=start+5,*tail;double parsed=strtod(value,&tail);
+        if(tail==value)Error("SCALE requires a factor");
+        while(isspace((unsigned char)*tail))tail++;
+        if(*tail || !isfinite(parsed) || parsed<0 || parsed>16)Error("SCALE factor must be finite, 0..16, without extra tokens");
+        *factor=(float)parsed;return 2;
+    }
+    Error("Expected SOLVE, SCALE factor, or QUIT");return 0;
+}
+
 void BuildIndirectGPU(void) {
     if (!g_giPasses) return;
+    vec3_t original_intensity={0,0,0};
+    directlight_t *editable=g_giRelightScale>=0?ReplayEditedLight():g_giServer?ReplayEditableLight():NULL;
+    if(editable)VectorCopy(editable->light.intensity,original_intensity);
+    /* SOLVE needs no editable light: any existing fixed light set is valid. */
+    double replay_prepare_started=Seconds();
     GpuGISurfaces();
     /* the points: every lit face's samples, 4 at a time as their direct light was gathered */
     int cap = 4096, n = 0;
@@ -2175,11 +2249,52 @@ void BuildIndirectGPU(void) {
         lout = xalloc(sizeof(float) * 48 * most * (size_t)(n + 1));
         junk = xalloc(sizeof(float) * 64 * (size_t)(n + 1));
     }
-    double last = 0;
     double *faceChange = xalloc(sizeof(double) * (numfaces + 1));
-    int stablePasses = 0;
+    int repeats=g_giRepeat?g_giRepeat:1;
+    unsigned char *direct_bytes=NULL,*first_result=NULL,*previous_result=NULL;
+    FILE *report=NULL;
+    if(g_giRepeat) {
+        direct_bytes=xalloc(lightdatasize);first_result=xalloc(lightdatasize);previous_result=xalloc(lightdatasize);
+        memcpy(direct_bytes,dlightdata,lightdatasize);
+        char name[4096];int written=snprintf(name,sizeof(name),"%s.jsonl",g_giRepeatPrefix);
+        if(written<0 || written>=(int)sizeof(name))Error("Diagnostic output path too long");
+        report=fopen(name,"wb");if(!report)Error("Cannot open diagnostic report %s",name);
+        fprintf(report,"{\"kind\":\"prepare\",\"scope\":\"fixed geometry GI diagnostic\",\"relight_factor\":%.9g,\"seconds\":%.9f,\"faces\":%d,\"groups\":%d,\"lightdata_bytes\":%d,\"rays\":%d,\"bounce_ceiling\":%d}\n",g_giRelightScale,Seconds()-replay_prepare_started,numfaces,n,lightdatasize,g_giRays,g_giPasses);
+        fflush(report);
+    }
+    int completed_requests=0;float current_factor=1.0f;
+    if(g_giServer) {Msg("HLGI_CAPABILITIES scale %d\nHLGI_READY\n",editable!=NULL);fflush(stdout);}
+    for(int repeat=0;repeat<repeats;repeat++) {
+        int change_light=repeat==1 && g_giRelightScale>=0;
+        float requested_factor=change_light?g_giRelightScale:current_factor;
+        if(g_giServer) {
+            int command=ReadGICommand(&requested_factor);
+            if(!command)break;
+            if(command==2 && !editable)Error("SCALE unavailable for this map; session supports SOLVE only");
+            change_light=command==2 && requested_factor!=current_factor;
+        }
+        double direct_seconds=0;
+        if(change_light) {
+            direct_seconds=ReplayRebuildDirect(requested_factor,original_intensity);
+            current_factor=requested_factor;
+            memcpy(direct_bytes,dlightdata,lightdatasize);
+            for(int f=0;f<numfaces;f++)if(k0[f]>=0)
+                for(int b=0;b<NUM_BUMP_VECTS+1;b++)if(direct[f][b])
+                    memcpy(direct[f][b],facelight[f].light[k0[f]][b],sizeof(vec3_t)*facelight[f].numsamples);
+        }
+        double restore_started=Seconds();
+        if(repeat) {
+            memcpy(dlightdata,direct_bytes,lightdatasize);
+            for(int f=0;f<numfaces;f++)if(k0[f]>=0)
+                for(int b=0;b<NUM_BUMP_VECTS+1;b++)if(direct[f][b])
+                    memcpy(facelight[f].light[k0[f]][b],direct[f][b],sizeof(vec3_t)*facelight[f].numsamples);
+        }
+        double restore_seconds=Seconds()-restore_started,solve_started=Seconds();
+    double last = 0;
+    int stablePasses = 0,passes_done=0;
     for (int pass = 0; pass < g_giPasses; pass++) {
         double t0 = Seconds(), total = 0;
+        passes_done=pass+1;
         memset(faceChange, 0, sizeof(double) * (numfaces + 1));
         GPU_Lightmaps();
         for (int first = 0; first < g_numLayers; first += GI_LAYER_BATCH) {     /* (-layers: theirs, batch by batch) */
@@ -2287,10 +2402,35 @@ void BuildIndirectGPU(void) {
         stablePasses = pass > 0 && !unsettled ? stablePasses + 1 : 0;
         Msg("\tGI bounce #%i: %.2f%% more, %d unsettled faces, worst change %.3fx tolerance, stable %d/3\n",
             pass + 1, last > 0 ? 100.0 * (total - last) / last : 100.0, unsettled, worst, stablePasses);
+        if(report) {fprintf(report,"{\"kind\":\"pass\",\"repeat\":%d,\"pass\":%d,\"seconds\":%.9f,\"unsettled_faces\":%d,\"worst_change\":%.9g,\"stable_passes\":%d}\n",repeat,pass+1,Seconds()-t0,unsettled,worst,stablePasses);fflush(report);}
         if (stablePasses >= 3) { Msg("GI stopped: surface convergence\n"); break; }
         if (pass + 1 == g_giPasses) Msg("GI stopped: bounce ceiling (%d)\n", g_giPasses);
         last = total;
     }
+        double solve_seconds=Seconds()-solve_started;
+        if(report) {
+            int equal=repeat?memcmp(first_result,dlightdata,lightdatasize)==0:1;
+            int equal_previous=repeat?memcmp(previous_result,dlightdata,lightdatasize)==0:1;
+            memcpy(previous_result,dlightdata,lightdatasize);
+            if(!repeat)memcpy(first_result,dlightdata,lightdatasize);
+            unsigned int hash=2166136261u;
+            for(int i=0;i<lightdatasize;i++)hash=(hash^dlightdata[i])*16777619u;
+            double write_started=Seconds();char name[4096];
+            int written=snprintf(name,sizeof(name),"%s.%d.bin",g_giRepeatPrefix,repeat);
+            if(written<0 || written>=(int)sizeof(name))Error("Diagnostic output path too long");
+            FILE *artifact=fopen(name,"wb");if(!artifact)Error("Cannot open diagnostic artifact %s",name);
+            unsigned int header[4]={0x48474931u,(unsigned int)numfaces,(unsigned int)sizeof(dface_t),(unsigned int)lightdatasize};
+            if(fwrite(header,sizeof(header),1,artifact)!=1 || fwrite(g_pFaces,sizeof(dface_t),numfaces,artifact)!=(size_t)numfaces || fwrite(dlightdata,1,lightdatasize,artifact)!=(size_t)lightdatasize || fclose(artifact))Error("Cannot write diagnostic artifact");
+            fprintf(report,"{\"kind\":\"replay\",\"repeat\":%d,\"state\":\"%s\",\"factor\":%.9g,\"direct_recompute_seconds\":%.9f,\"restore_seconds\":%.9f,\"solve_seconds\":%.9f,\"artifact_seconds\":%.9f,\"passes\":%d,\"lightdata_fnv1a32\":%u,\"equal_first\":%s,\"equal_previous\":%s}\n",repeat,(g_giServer?current_factor!=1.0f:(repeat && g_giRelightScale>=0))?"edited":"original",current_factor,direct_seconds,restore_seconds,solve_seconds,Seconds()-write_started,passes_done,hash,equal?"true":"false",equal_previous?"true":"false");
+            if(fflush(report))Error("Cannot flush diagnostic report");
+            Msg("[girepeat] replay %d: restore %.6f s solve %.6f s passes %d identical %d\n",repeat,restore_seconds,solve_seconds,passes_done,equal);
+        }
+        completed_requests++;
+        if(g_giServer) {Msg("HLGI_RESULT %d %.9g\n",repeat,current_factor);fflush(stdout);}
+    }
+    if(report && fclose(report))Error("Cannot close diagnostic report");
+    if(g_giServer) {Msg("HLGI_DONE %d\n",completed_requests);fflush(stdout);}
+    free(direct_bytes);free(first_result);free(previous_result);
     for (int facenum = 0; facenum < numfaces; facenum++)
         for (int b = 0; b < NUM_BUMP_VECTS + 1; b++) free(direct[facenum][b]);
     if (ldirect) {
