@@ -6,12 +6,12 @@ invalidate all irradiance; camera movement does not.
 """
 from collections import Counter
 from dataclasses import replace
-import hashlib
 import numpy as np
 import bpy
 from .previewsurfacecharts import CachedObjectCharts,ChartSnapshot,chart_material_path
 from .extract import effective_role
 from . import vmfimport
+from .previewsource import SourceRevision
 from ..core.surfacecharts import chart_triangle_mask
 
 
@@ -56,7 +56,7 @@ class LiveSurfaceCache:
     SAMPLE_BUDGET=1_000_000
 
     def __init__(self):
-        self.layouts=CachedObjectCharts();self.document_ids={}
+        self.layouts=CachedObjectCharts();self.document_ids={};self.source_revision=SourceRevision()
         self.signature=None;self.generation=0
         self.geometry_refs={}
         self.object_data={};self.display_tokens={};self.object_generation=0
@@ -68,7 +68,7 @@ class LiveSurfaceCache:
         settings=context.scene.hammerless
         if not vmfimport.imported(context.scene):self.document_ids.clear()
         text=bpy.data.texts.get(context.scene.get(vmfimport.SOURCE_KEY,''))
-        source=hashlib.sha256(text.as_string().encode()).digest() if text else None
+        source=self.source_revision.update(text.as_string() if text else None)
         counts=Counter(key for key,_ in scene.instances)
         candidates=[]
         for instance in depsgraph.object_instances:

@@ -32,6 +32,7 @@ def finish(result):
 
 def update(self,context,depsgraph):
     state['updates']+=1
+    state.setdefault('update_events',[]).append({'stage':state['stage'],'ids':[(u.id.bl_rna.identifier,u.id.name,u.is_updated_geometry,u.is_updated_transform,u.is_updated_shading) for u in depsgraph.updates]})
     original_update(self,context,depsgraph)
 
 

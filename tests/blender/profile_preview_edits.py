@@ -63,7 +63,7 @@ def run():
   refine_profile.disable();refine_stream=io.StringIO();pstats.Stats(refine_profile,stream=refine_stream).sort_stats("cumtime").print_stats(18)
   rows.append(dict(kind=kind,deps_ms=deps_ms,scene_ms=scene_ms,lights_ms=lights_ms,layout_ms=layout_ms,first_refine_ms=refine_ms,
                    layout_builds=live.layouts.builds,geometry_reextracted=cache.geometry[key] is not initial_geometry,profile=stream.getvalue(),refine_profile=refine_stream.getvalue()))
- return dict(ok=True,file=str(path),instances=len(cache.instances),samples=live.cache.count,initial_layout_ms=initial,brush=brush.name,rows=rows,
+ return dict(ok=True,source_memo_bytes=sys.getsizeof(live.source_revision.raw) if hasattr(live,'source_revision') else None,source_hashes=getattr(getattr(live,'source_revision',None),'hashes',None),file=str(path),instances=len(cache.instances),samples=live.cache.count,initial_layout_ms=initial,brush=brush.name,rows=rows,
              scope='1280x720 camera frustum; real saved-map edits and layout; synthetic single point lighting, eight rays/one bounce; cProfile overhead included in layout timings; no scene save')
 try:result=run()
 except Exception:result={'ok':False,'traceback':traceback.format_exc()}

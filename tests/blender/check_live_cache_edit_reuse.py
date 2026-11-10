@@ -38,6 +38,14 @@ def run():
   cache.update(deps);live.update(bpy.context,deps,cache,revision)
   return deps
  deps=update();assert len(live.faces)==10
+ source_text=bpy.data.texts[scene[vmfimport.SOURCE_KEY]];original_source=source_text.as_string()
+ hashes=live.source_revision.hashes;deps=update()
+ assert live.source_revision.hashes==hashes
+ builds=live.layouts.builds
+ source_text.from_string(original_source+'\n// source edit without geometry notification\n');deps=update()
+ assert live.source_revision.hashes==hashes+1 and live.layouts.builds==builds+2
+ source_text.from_string(original_source);deps=update()
+ assert live.source_revision.hashes==hashes+2
  # Shared material metadata is evaluated once per update, never cached across
  # updates: direct material setting edits must invalidate both brushes.
  from hammerless.blender import previewsurfacecharts as chart_module

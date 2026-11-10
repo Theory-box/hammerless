@@ -458,3 +458,27 @@ about 0.62–0.64 s including dependency graph update. Light edits essentially
 unchanged. These are two samples each with profiling overhead, not UI FPS.
 Report: edit-profile-document.json. Remaining chart work includes full source
 hashing, candidate/signature scans and atlas metadata assembly.
+
+### Source comparison and rejected light-notification shortcut
+
+Blender 4.4.3 notification testing found that simultaneous object role, scene
+lightmap scale, material lightmap scale, or source Text edits plus light movement
+can emit only the light Object update. Therefore no dependency-graph-only
+light-edit shortcut was enabled. This was measured in an isolated ordinary
+evaluated scene; actual RenderEngine callback logging was also added to the
+viewport fixture. Report: preview-light-notifications.json.
+
+Instead, SourceRevision retains one source string and its SHA256 digest. Every
+update still reads and compares exact text contents; unchanged text reuses the
+digest, edits recompute it, and import removal clears it. Retained Python string
+storage is capped at 64 MiB; oversized sources retain the old hash-every-update
+behavior. This caps retained storage, not transient peak allocations. Hotel
+retained 9,041,754 bytes and hashed once across initial setup plus four edits.
+
+Same hotel profile (edit-profile-source.json): light chart check 85–90 ms vs
+148–154 ms; brush chart preparation 208 ms vs 271–282 ms. Combined measured
+stages about 0.25 s light and 0.50–0.55 s brush, including dependency graph work.
+Two samples per type with profiling overhead, not UI FPS. Independent source
+review found no blocker. Tests cover same-length changes, Unicode, empty text,
+removal, cap boundary/oversized fallback, and live source-text edits that rebuild
+charts despite no geometry notification.
