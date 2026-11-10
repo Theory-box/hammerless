@@ -687,3 +687,45 @@ preview's shader traversal cannot directly enable these DirectX APIs; native
 GPU VRAD uses Vulkan. The linked Vulkan PTLAS example is a possible future native
 backend reference, not a fix for repeated lighting work or sparse radiance
 coverage. No driver or SDK changes were made.
+
+### Native hardware-ray checkpoint (2026-11-09)
+
+An optional **Hardware Rays (Experimental)** toggle uses one owned hidden
+Vulkan ray-query worker, preserving the existing opaque preview light equations.
+It rasterizes visible receivers once per changed view and retains all scene
+triangles for shadows and bounce hits. Camera/scene changes cancel stale work;
+light-only changes retain acceleration structures. The backend currently uses
+per-pixel accumulation, not the surface-lighting cache, and does not export bakes.
+
+Validation: eight native analytic/occlusion/transport cases; six subprocess
+ownership/error/cancellation tests; actual Blender viewport light, geometry,
+camera, exposure, and material-refresh stages. Independent reviews covered
+shader equations, synchronization, scene lifetime, stale output and integration.
+GPUBuffer multidimensional strides in Blender 4.4 produced incorrect NumPy
+readback; flattening Buffer.dimensions before frombuffer fixes it and was
+confirmed against a direct framebuffer pixel read.
+
+Hotel comparison: 2,716,132 triangles, 2,848 light entries, two spawn viewpoints,
+160x90, eight rays, one bounce, matching seeds and sampled sky/area lights.
+Maximum absolute linear RGB error was 7.45e-9; one view is extremely dark.
+This is bounded parity evidence, not exhaustive material/game parity.
+
+Initial 73-receiver dispatches incurred 1.5-1.96 seconds of latency. Increasing
+the estimated-work budget to 128M, capped at 4096 receivers, removed much of the
+submission/wait overhead. Subsequent native roundtrips measured 86.93, 106.06,
+and 45.24 ms versus software 99.48, 219.98, and 154.01 ms on matching samples.
+These single measurements are not stable FPS estimates or final convergence
+benchmarks. First native request including worker/scene upload took 787 ms;
+CPU flattening 902 ms. Capture cost 670/434 ms in these views remains significant.
+The software-only trace preparation and shader compilation took 16.68 and
+6.30 seconds respectively; the native path bypasses those steps. Shared map
+loading/material extraction still took 14.71 seconds.
+
+Current limitations: no alpha/shader expansion; no denoising; full-resolution
+receiver readback/upload; geometry edits rebuild the flattened native scene;
+only one active native viewport is supported (others get an explicit status).
+Cancellation occurs between 4096-point packets. High ray/bounce/light counts
+can still be expensive and hit safety/deadline limits. This is not yet the
+requested 10-20x improvement or a measured win against GPU VRAD baking.
+
+Results: workspace outputs/l4d2-preview/native-realmap.json and comparison PNGs.

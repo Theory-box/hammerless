@@ -73,7 +73,7 @@ class LightUpdateGuard:
         registry=tuple(sorted((key,_pointer(value)) for key,value in refs.items())) if refs is not None else None
         settings=(s.game_root,s.default_material,s.units_per_meter,s.lightmap_scale,s.lightmap_scale_imported,
             scene.hl_preview_surface_cache,scene.hl_preview_bounce_samples,scene.hl_preview_max_bounces,
-            scene.hl_preview_refine_frames,refresh_revision)
+            scene.hl_preview_refine_frames,getattr(scene,'hl_preview_native',False),refresh_revision)
         return (_pointer(scene),_pointer(context.view_layer),_pointer(depsgraph),scene.frame_current,scene.frame_subframe,
                 settings,source,registry,tuple(rows),material_rows)
 

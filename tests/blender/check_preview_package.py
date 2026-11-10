@@ -18,6 +18,11 @@ def run():
  assert bpy.context.scene.hl_preview_refine_frames==72
  assert bpy.context.scene.hl_preview_bounce_samples==0
  assert bpy.context.scene.hl_preview_surface_cache==False
+ assert bpy.context.scene.hl_preview_native==False
+ assert (target/'hammerless/core/hlpreview.exe').is_file()
+ from hammerless.blender.previewnativeview import NativeView
+ bpy.context.scene.hl_preview_native=True
+ assert bpy.context.scene.hl_preview_native
  from hammerless.blender.previewlivecache import LiveSurfaceCache
  from hammerless.blender.previewlightcache import SurfaceLightCache
  assert 'visible_groups' in SurfaceLightCache.refine.__code__.co_varnames

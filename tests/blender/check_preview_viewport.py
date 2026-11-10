@@ -16,6 +16,7 @@ if any(v in sys.argv for v in ('--area','--emission')):OUT=OUT.with_name('viewpo
 if '--emission' in sys.argv:OUT=OUT.with_name('viewport-emission-check.json')
 if '--prepass' in sys.argv:OUT=OUT.with_name('viewport-prepass-check.json')
 if '--surface-cache' in sys.argv:OUT=OUT.with_name('viewport-surface-cache-check.json')
+if '--native' in sys.argv:OUT=OUT.with_name('viewport-native-check.json')
 if '--mixed-cache' in sys.argv:OUT=OUT.with_name('viewport-mixed-cache-check.json')
 state={'frames':0,'updates':0,'done':False,'stage':0,'samples':[],'await_update':0}
 original_draw=preview.HAMMERLESS_L4D2Preview.view_draw
@@ -56,6 +57,10 @@ def draw(self,context,depsgraph):
                 self.cache.trace.builds if self.cache.trace else 0)
     before=work_counts()
     original_draw(self,context,depsgraph)
+    if '--native' in sys.argv and not self.error:
+        native=self.native_view
+        if native is None or native.history is None or native.completed==0:return
+        self.history=native.history
     if state['done']:return
     if self.interacting:
         state['interaction_draws']=state.get('interaction_draws',0)+1
@@ -102,11 +107,11 @@ def draw(self,context,depsgraph):
             depth=fb.read_depth(x+w//2,y+h//2,1,1).to_list()[0][0]
             assert 0<depth<1,('Viewport depth missing',depth)
         assert max(abs(v-expected) for v in pixel[:3])<.015,(pixel,expected)
-        if '--sky' in sys.argv or any(v in sys.argv for v in ('--area','--emission')):
+        if '--native' not in sys.argv and ('--sky' in sys.argv or any(v in sys.argv for v in ('--area','--emission'))):
             assert self.bounce_materials is None and self.bounce_uploads==0, 'Sky-only preview prepared bounce data'
         if state['stage']>0:
             assert self.cache.extractions==state['initial_extractions'],'Transform/light edit re-extracted geometry'
-            if '--bounce' in sys.argv:
+            if '--bounce' in sys.argv and '--native' not in sys.argv:
                 assert self.bounce_uploads==state['initial_bounce_uploads']+(1 if state['stage']==5 else 0),'Unexpected bounce material rebuild count'
         state['samples'].append({'stage':state['stage'],'pixel':pixel,'expected_srgb':expected,
                                 'history_frames':self.history.frames if self.history else 0})
@@ -142,7 +147,8 @@ def draw(self,context,depsgraph):
             bpy.app.timers.register(edit,first_interval=.1)
     except Exception:
         finish({'ok':False,'traceback':traceback.format_exc(),'frames':state['frames'],
-                'updates':state['updates'],'engine_error':self.error})
+                'updates':state['updates'],'engine_error':self.error,
+                })
 
 
 try:
@@ -151,6 +157,7 @@ try:
     preview.HAMMERLESS_L4D2Preview.view_update=update
     preview.register()
     scene=bpy.context.scene
+    scene.hl_preview_native='--native' in sys.argv
     scene.hl_preview_surface_cache='--surface-cache' in sys.argv
     scene.hammerless.auto_sun=False
     scene.hammerless.ambient_brightness=30 if '--sky' in sys.argv else 0

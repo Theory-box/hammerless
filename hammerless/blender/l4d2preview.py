@@ -250,7 +250,9 @@ class SceneCache:
         self.instances = instances
 
 
-def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, bounce=False, surface_samples=False):
+def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, bounce=False, surface_samples=False, receiver_data=False):
+    if receiver_data and (not lit or not textured or shadows or bounce or display):
+        raise ValueError("Receiver data requires unlit textured raster input")
     if bounce and not (lit and shadows):
         raise ValueError('Bounced lighting requires lit geometry and ray tracing')
     interface = gpu.types.GPUStageInterfaceInfo('hl_preview_normal')
@@ -285,6 +287,7 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
     if lit:
         info.push_constant('MAT4', 'model')
         info.push_constant('FLOAT', 'unitScale')
+    if lit and not receiver_data:
         info.push_constant('INT', 'lightCount')
         info.sampler(0, 'FLOAT_2D', 'lights')
         info.sampler(5, 'FLOAT_2D', 'skyDirections')
@@ -315,6 +318,25 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
     if surface_samples:info.vertex_in(5,'VEC2','sampleClip')
     clip='vec4(sampleClip,0,1)' if surface_samples else 'mvp*vec4(position,1.0)'
     info.vertex_source('void main() { gl_Position='+clip+'; worldNormal=normalMatrix*normal; '+info_world+' }')
+    if receiver_data:
+        info.fragment_out(1,'VEC4','receiverPosition')
+        info.fragment_out(2,'VEC4','receiverNormal')
+        info.fragment_source(r"""void main(){
+            vec2 coords=surfaceUV;
+            if(useUV==0 && paintedUV<0.5){
+                vec3 fn=surfaceNormal,a=abs(fn),p=worldPosition*unitScale;
+                if(a.z>=a.x && a.z>=a.y)coords=vec2(fn.z>=0.0?p.x:-p.x,p.y);
+                else if(a.x>=a.y)coords=vec2(fn.x>0.0?p.y:-p.y,p.z);
+                else coords=vec2(fn.y>0.0?-p.x:p.x,p.z);
+                coords/=textureSizeScale.xy*textureSizeScale.z;
+            }
+            vec3 albedo=baseColor;
+            if(hasTexture!=0)albedo=texture(baseTexture,fract(coords)).rgb;
+            color=vec4(albedo,float(surfaceUnlit));
+            receiverPosition=vec4(worldPosition+normalize(surfaceNormal)*(receiverOffset/unitScale),1.0);
+            receiverNormal=vec4(normalize(worldNormal),0.0);
+        }""")
+        return gpu.shader.create_from_info(info)
     fragment = '''void main() {
         vec3 sum=vec3(0.0), n=normalize(worldNormal);
         vec3 samplePosition=worldPosition+normalize(surfaceNormal)*(receiverOffset/unitScale);
@@ -430,7 +452,7 @@ def bounce_slice_stride(total):
     return stride
 
 
-def draw_geometry(cache, shader, view_projection, lit=False, textured=False, shadows=False, display=False, exposure=0.0, bounce_samples=None, sampled_bounce_sky=False, bounce_seed=0, bounce_depth=1, primary_sky_index=-1, primary_sky_count=162, primary_area_phase=-1, sampled_bounce_area=False, lighting_samples=None, exclude_keys=(), raster_geometry=None, bounce_sample_offset=0, bounce_sample_count=None, bounce_sample_stride=1):
+def draw_geometry(cache, shader, view_projection, lit=False, textured=False, shadows=False, display=False, exposure=0.0, bounce_samples=None, sampled_bounce_sky=False, bounce_seed=0, bounce_depth=1, primary_sky_index=-1, primary_sky_count=162, primary_area_phase=-1, sampled_bounce_area=False, lighting_samples=None, exclude_keys=(), raster_geometry=None, bounce_sample_offset=0, bounce_sample_count=None, bounce_sample_stride=1, receiver_data=False):
     """Draw to the bound framebuffer; caller owns clearing and viewport setup."""
     old_depth = gpu.state.depth_test_get()
     old_mask = gpu.state.depth_mask_get()
@@ -465,7 +487,9 @@ def draw_geometry(cache, shader, view_projection, lit=False, textured=False, sha
             shader.uniform_int('bounceSeed',int(bounce_seed))
             shader.uniform_int('bounceDepth',max(1,min(8,int(bounce_depth))))
             shader.uniform_sampler('traceSurfaces',cache.trace.surfaces)
-        if lit:
+        if receiver_data:
+            shader.uniform_float('unitScale', cache.unit_scale)
+        if lit and not receiver_data:
             shader.uniform_sampler('lights', cache.upload_lights())
             shader.uniform_int('lightCount', len(cache.lights))
             shader.uniform_float('unitScale', cache.unit_scale)
@@ -598,6 +622,30 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         self.interaction_until = 0.0
         self.interacting = False
         self.interaction_shader = None
+        self.native_view = None
+
+    def __del__(self):
+        native = getattr(self, 'native_view', None)
+        if native is not None:
+            try:
+                native.close()
+            except Exception:
+                # Module globals may already be gone during interpreter exit;
+                # the native client's atexit and owned Job also close its worker.
+                pass
+
+    def _prepare_native(self, context):
+        if not context.scene.hl_preview_native:
+            if self.native_view is not None:
+                self.native_view.close()
+                self.native_view = None
+            return
+        from .previewnativeview import NativeView
+        if self.native_view is None:
+            self.native_view = NativeView(owner=id(self))
+        signature = self.scene_signature
+        self.native_view.prepare(self.cache, self.bounce_materials,
+                                 (signature[:2], signature[4:]), self.cache.light_signature)
 
     def view_update(self, context, depsgraph):
         try:
@@ -607,6 +655,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                 self.cache.update_lights(depsgraph)
                 old=self.scene_signature
                 self.scene_signature=(old[0],old[1],self.cache.light_signature,self.cache.sky_color,old[4],old[5])
+                self._prepare_native(context)
                 self.error=''
                 self.tag_redraw()
                 return
@@ -631,7 +680,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                     for mat in g.materials or (None,):resolver.resolve(mat)
                 self.cache.surface_materials=resolver
                 self.surface_signature=surface_signature
-            if context.scene.hl_preview_bounce_samples>0 or context.scene.hl_preview_surface_cache:
+            if context.scene.hl_preview_bounce_samples>0 or context.scene.hl_preview_surface_cache or context.scene.hl_preview_native:
                 from .previewmaterials import BounceMaterials
                 from .ops import game_root,game_content
                 import os
@@ -654,13 +703,15 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             self.scene_signature=(self.surface_signature,self.material_revision,self.cache.light_signature,self.cache.sky_color,
                 tuple((key,id(g),g.shadow_revision,g.use_uv) for key,g in self.cache.geometry.items()),
                 tuple((key,tuple(v for row in matrix for v in row)) for key,matrix in self.cache.instances))
-            if context.scene.hl_preview_surface_cache:
+            self._prepare_native(context)
+            if context.scene.hl_preview_surface_cache and not context.scene.hl_preview_native:
                 from .previewlivecache import LiveSurfaceCache
                 if self.surface_cache is None:self.surface_cache=LiveSurfaceCache()
                 self.surface_cache.update(context,depsgraph,self.cache,self.material_revision)
             else:self.surface_cache=None
             self.error = ''
         except Exception as exc:
+            if self.native_view is not None:self.native_view.pause()
             self.error = str(exc)
             self.cache = SceneCache()
             self.bounce_signature = None
@@ -674,7 +725,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             return
         try:
             matrix=context.region_data.perspective_matrix.copy()
-            interaction_signature=(self.scene_signature,tuple(v for row in matrix for v in row),
+            interaction_signature=(self.scene_signature,self.cache.unit_scale,tuple(v for row in matrix for v in row),
                                    tuple(gpu.state.viewport_get()[2:]))
             now=time.monotonic()
             navigating=getattr(context.region_data,'is_navigating',False)
@@ -685,6 +736,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             self.interaction_signature=interaction_signature
             self.interacting=now<self.interaction_until
             if self.interacting:
+                if self.native_view is not None:self.native_view.pause()
                 # Current geometry and depth, without tracing or touching the
                 # accumulation. Never exclude surface-cache receivers here.
                 if self.interaction_shader is None:
@@ -696,6 +748,23 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                 return
             samples=context.scene.hl_preview_bounce_samples
             bounce=samples>0
+            if context.scene.hl_preview_native and self.native_view is not None:
+                signature=(self.scene_signature,samples,context.scene.hl_preview_max_bounces,
+                           tuple(v for row in matrix for v in row),tuple(gpu.state.viewport_get()[2:]))
+                displayed,pending,status=self.native_view.draw(
+                    self.cache,matrix,signature,rays=samples,depth=context.scene.hl_preview_max_bounces,
+                    frames=context.scene.hl_preview_refine_frames,exposure=context.scene.hl_preview_exposure)
+                if not displayed:
+                    if self.interaction_shader is None:
+                        self.interaction_shader=diagnostic_shader(lit=True,textured=True,display=True)
+                    draw_geometry(self.cache,self.interaction_shader,matrix,lit=True,textured=True,
+                                  display=True,exposure=context.scene.hl_preview_exposure)
+                if pending:self.tag_redraw()
+                self.update_stats('L4D2 Preview',status)
+                return
+            if not context.scene.hl_preview_native and self.native_view is not None:
+                self.native_view.close()
+                self.native_view=None
             area_batches=any(len(l)>4 and len(l[4])>3 and l[4][3]>0 for l in self.cache.lights)
             progressive=bounce or area_batches or any(c>0 for c in self.cache.sky_color)
             shader_mode=(bounce,progressive)
@@ -746,6 +815,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             if self.surface_cache:self.surface_cache.draw(matrix,context.scene.hl_preview_exposure)
         except Exception as exc:
             self.error=str(exc)
+            if self.native_view is not None:self.native_view.pause()
             self.update_stats('L4D2 Preview GPU error', str(exc))
             return
         warnings = (self.surface_cache.warnings if self.surface_cache else [])+self.cache.warnings+(self.cache.surface_materials.warnings if self.cache.surface_materials else [])+(self.bounce_materials.warnings if bounce and self.bounce_materials else [])
@@ -792,7 +862,9 @@ class HAMMERLESS_PT_l4d2_preview(bpy.types.Panel):
         col.label(text='Blender emission lights nearby surfaces.')
         col.label(text='Base textures; linear irradiance / 255.')
         col.operator('hammerless.refresh_preview_materials', icon='FILE_REFRESH')
-        col.prop(context.scene,'hl_preview_surface_cache')
+        col.prop(context.scene,'hl_preview_native')
+        row=col.row();row.enabled=not context.scene.hl_preview_native
+        row.prop(context.scene,'hl_preview_surface_cache')
         col.prop(context.scene,'hl_preview_exposure')
         col.prop(context.scene,'hl_preview_bounce_samples')
         col.prop(context.scene,'hl_preview_max_bounces')
@@ -807,6 +879,9 @@ CLASSES = (HAMMERLESS_L4D2Preview, HAMMERLESS_OT_refresh_preview_materials, HAMM
 
 
 def register():
+    bpy.types.Scene.hl_preview_native = bpy.props.BoolProperty(
+        name='Hardware Ray Tracing (Experimental)',default=False,
+        description='Use a separate Vulkan hardware ray tracing worker. Requires a ray-query capable GPU. Pauses during interaction. Surface lighting cache is not used in this mode')
     bpy.types.Scene.hl_preview_surface_cache = bpy.props.BoolProperty(
         name='Surface Lighting Cache (Experimental)',default=False,
         description='Cache brush lighting at exported lightmap density. Charts potentially visible to the camera refine first; offscreen geometry still casts shadows and contributes bounced light. Scene edits restart lighting. Props and unsupported faces use per-pixel lighting. One million cached sample limit')
@@ -827,6 +902,9 @@ def register():
 
 
 def unregister():
+    from .previewnative import shutdown
+    shutdown()
+    del bpy.types.Scene.hl_preview_native
     del bpy.types.Scene.hl_preview_surface_cache
     del bpy.types.Scene.hl_preview_max_bounces
     del bpy.types.Scene.hl_preview_refine_frames

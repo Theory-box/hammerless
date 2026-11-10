@@ -46,7 +46,7 @@ class FrameHistory:
             # Legacy GLSL construction is absent on some newer/back-end builds.
             self.cached_display=None
 
-    def render(self,signature,draw_sample,draw_depth,exposure=0.,max_frames=64,sample_weights=None):
+    def render(self,signature,draw_sample,draw_depth,exposure=0.,max_frames=64,sample_weights=None,advance=True):
         """draw_sample(frame_index) writes linear RGB and depth to the bound target.
 
         OpenGL restores cached depth with a full-screen shader. Other backends
@@ -78,7 +78,7 @@ class FrameHistory:
         if signature!=self.signature:
             self.frames=0;self.batch_index=0;self.signature=signature
         try:
-            if self.frames<max(1,max_frames) or self.batch_index:
+            if advance and (self.frames<max(1,max_frames) or self.batch_index):
                 with self.sample_fb.bind():
                     gpu.state.viewport_set(0,0,*size)
                     self.sample_fb.clear(color=(.0019349845,.0019349845,.0019349845,1),depth=1)

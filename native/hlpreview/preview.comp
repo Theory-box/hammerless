@@ -1,0 +1,317 @@
+#version 460
+#extension GL_EXT_ray_query : require
+layout(local_size_x=64) in;
+layout(set=0,binding=0) uniform accelerationStructureEXT scene;
+layout(set=0,binding=1,std430) readonly buffer Surfaces {vec4 surfaces[];};
+layout(set=0,binding=2,std430) readonly buffer Lights {vec4 lights[];};
+layout(set=0,binding=3,std430) readonly buffer Points {vec4 points[];};
+layout(set=0,binding=4,std430) writeonly buffer Output {vec4 result[];};
+layout(push_constant) uniform PC {uint count;int lightCount;int triangles;uint pad;int rays;int depth;int seed;int flags;float unitScale;float skyR;float skyG;float skyB;} pc;
+#define lightCount pc.lightCount
+#define unitScale pc.unitScale
+#define skyColor vec3(pc.skyR,pc.skyG,pc.skyB)
+#define bounceSamples pc.rays
+#define bounceSampleCount pc.rays
+#define bounceSampleOffset 0
+#define bounceSampleStride 1
+#define bounceDepth pc.depth
+#define bounceSeed pc.seed
+#define bounceSkySampled (pc.flags&1)
+#define bounceAreaSampled (pc.flags&2)
+float traceVisibility(vec3 o,vec3 target) {
+    vec3 delta=target-o;float end=length(delta);
+    if(end<=1e-7 || pc.triangles==0)return 1.0;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q,scene,gl_RayFlagsOpaqueEXT|gl_RayFlagsTerminateOnFirstHitEXT,0xFF,o,1e-7,delta/end,end);
+    while(rayQueryProceedEXT(q)){}
+    if(rayQueryGetIntersectionTypeEXT(q,true)==gl_RayQueryCommittedIntersectionNoneEXT)return 1.0;
+    return rayQueryGetIntersectionTEXT(q,true)<end?0.0:1.0;
+}
+bool traceClosest(vec3 o,vec3 d,float end,out float distance,out vec3 n,out vec2 bary,out int tri,out int inst) {
+    if(pc.triangles==0)return false;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q,scene,gl_RayFlagsOpaqueEXT,0xFF,o,1e-7,normalize(d),end);
+    while(rayQueryProceedEXT(q)){}
+    if(rayQueryGetIntersectionTypeEXT(q,true)==gl_RayQueryCommittedIntersectionNoneEXT)return false;
+    distance=rayQueryGetIntersectionTEXT(q,true);
+    tri=rayQueryGetIntersectionPrimitiveIndexEXT(q,true);inst=0;
+    bary=rayQueryGetIntersectionBarycentricsEXT(q,true);
+    n=normalize(surfaces[tri*2+1].xyz);
+    return distance<end;
+}
+// Float32 Halton directions from core.previewlighting.sky_directions(162).
+const vec3 skyDirections[162]=vec3[162](
+vec3(-0.433012694, -0.75, -0.5),
+vec3(0.663413942, 0.556670427, 0.5),
+vec3(-0.621548235, 0.226225063, -0.75),
+vec3(0.168134123, -0.953536034, 0.25),
+vec3(0.168134123, 0.953536034, -0.25),
+vec3(-0.621548235, -0.226225063, 0.75),
+vec3(0.370859683, -0.311188221, -0.875),
+vec3(0.965413034, 0.228807092, 0.125),
+vec3(-0.636162996, 0.674293399, -0.375),
+vec3(-0.2238857, -0.747830331, 0.625),
+vec3(0.466156781, 0.626157224, -0.625),
+vec3(-0.920756578, 0.107621014, 0.375),
+vec3(0.392973214, -0.911014318, -0.125),
+vec3(-0.0281492434, 0.483303845, 0.875),
+vec3(-0.29073745, -0.191221029, -0.9375),
+vec3(0.891885579, -0.447921753, 0.0625),
+vec3(0.803570926, 0.403568476, -0.4375),
+vec3(-0.69077903, 0.45433253, 0.5625),
+vec3(-0.042223867, -0.724955797, -0.6875),
+vec3(0.376243204, 0.872229815, 0.3125),
+vec3(-0.975622892, -0.11403396, -0.1875),
+vec3(0.348120272, -0.467606694, 0.8125),
+vec3(-0.167195156, 0.558470726, -0.8125),
+vec3(-0.674070895, -0.714473367, 0.1875),
+vec3(0.924312592, -0.219066113, -0.3125),
+vec3(0.724000692, 0.0562737845, 0.6875),
+vec3(-0.467642218, 0.681839049, -0.5625),
+vec3(-0.387910306, -0.811245561, 0.4375),
+vec3(0.712533951, 0.698848426, -0.0625),
+vec3(-0.335238874, 0.0933201164, 0.9375),
+vec3(0.0618711784, -0.240198657, -0.96875),
+vec3(0.0967635885, 0.994816661, 0.03125),
+vec3(-0.804151714, -0.365531802, -0.46875),
+vec3(0.689253628, -0.49264887, 0.53125),
+vec3(0.662068069, 0.212283581, -0.71875),
+vec3(-0.710651636, 0.644881964, 0.28125),
+vec3(-0.206576601, -0.953663766, -0.21875),
+vec3(0.332835943, 0.528080165, 0.78125),
+vec3(-0.536332726, 0.020812152, -0.84375),
+vec3(0.46031937, -0.873894751, 0.15625),
+vec3(-0.127084374, 0.930422187, -0.34375),
+vec3(-0.596385658, -0.462233782, 0.65625),
+vec3(0.744883418, -0.304318368, -0.59375),
+vec3(0.782332778, 0.472140223, 0.40625),
+vec3(-0.871702075, 0.480984867, -0.09375),
+vec3(0.0081975339, -0.422662675, 0.90625),
+vec3(0.13685599, 0.39997673, -0.90625),
+vec3(-0.976933658, -0.191863507, 0.09375),
+vec3(0.600818038, -0.688461065, -0.40625),
+vec3(-0.289816856, 0.750644505, 0.59375),
+vec3(-0.47371158, -0.587310195, -0.65625),
+vec3(0.927782953, -0.145102605, 0.34375),
+vec3(0.975854874, 0.152620926, -0.15625),
+vec3(-0.336969614, 0.417776763, 0.84375),
+vec3(-0.22482951, -0.582323015, -0.78125),
+vec3(0.641596794, 0.735188365, 0.21875),
+vec3(-0.941646457, 0.184933335, -0.28125),
+vec3(0.225082055, -0.657827139, 0.71875),
+vec3(0.0164286289, 0.847055793, -0.53125),
+vec3(-0.773407638, -0.426748276, 0.46875),
+vec3(0.855748773, -0.516447008, -0.03125),
+vec3(0.229615822, 0.0938083827, 0.96875),
+vec3(-0.139176145, 0.107869647, -0.984375),
+vec3(-0.135314777, -0.990679443, 0.015625),
+vec3(0.407723069, 0.774043143, -0.484375),
+vec3(-0.856169999, -0.0332232937, 0.515625),
+vec3(0.3619093, -0.5742082, -0.734375),
+vec3(-0.204098716, 0.942224562, 0.265625),
+vec3(-0.719917119, -0.653289914, -0.234375),
+vec3(0.612568855, -0.196412295, 0.765625),
+vec3(0.416006505, 0.297343582, -0.859375),
+vec3(-0.901316583, 0.409698665, 0.140625),
+vec3(0.0903432518, -0.928809822, -0.359375),
+vec3(0.191534355, 0.74358201, 0.640625),
+vec3(-0.763839602, -0.212629274, -0.609375),
+vec3(0.657207966, -0.644585013, 0.390625),
+vec3(-0.42879799, 0.89675492, -0.109375),
+vec3(-0.257203221, -0.375011474, 0.890625),
+vec3(0.3863222, -0.0300273374, -0.921875),
+vec3(0.996610343, 0.0257748272, 0.078125),
+vec3(-0.473475546, 0.773202717, -0.421875),
+vec3(-0.389568567, -0.716943383, 0.578125),
+vec3(0.55488354, 0.490599871, -0.671875),
+vec3(-0.895722151, 0.300026387, 0.328125),
+vec3(0.196089074, -0.965405643, -0.171875),
+vec3(0.0830327794, 0.554359555, 0.828125),
+vec3(-0.562177956, -0.221237913, -0.796875),
+vec3(0.766095936, -0.609784603, 0.203125),
+vec3(0.923172355, 0.244168043, -0.296875),
+vec3(-0.501172066, 0.504422247, 0.703125),
+vec3(-0.219299614, -0.807982326, -0.546875),
+vec3(0.513670504, 0.728574216, 0.453125),
+vec3(-0.994813085, 0.0902757272, -0.046875),
+vec3(0.126987502, -0.274639606, 0.953125),
+vec3(-0.0253969375, 0.301509082, -0.953125),
+vec3(-0.820099115, -0.570298314, 0.046875),
+vec3(0.806703448, -0.379351079, -0.453125),
+vec3(0.738197565, 0.394958347, 0.546875),
+vec3(-0.603990674, 0.37524724, -0.703125),
+vec3(-0.0308583938, -0.954417646, 0.296875),
+vec3(0.364448458, 0.908800066, -0.203125),
+vec3(-0.598045349, -0.0856272578, 0.796875),
+vec3(0.346246004, -0.440820485, -0.828125),
+vec3(-0.306839943, 0.936113358, 0.171875),
+vec3(-0.630266488, -0.703632116, -0.328125),
+vec3(0.724875033, -0.15211904, 0.671875),
+vec3(0.81158793, 0.0842406303, -0.578125),
+vec3(-0.53196913, 0.734186888, 0.421875),
+vec3(-0.4066706, -0.910228252, -0.078125),
+vec3(0.269531488, 0.278386891, 0.921875),
+vec3(-0.441088229, 0.110581547, -0.890625),
+vec3(0.272748172, -0.955848098, 0.109375),
+vec3(0.0654014796, 0.918223679, -0.390625),
+vec3(-0.713086545, -0.346655041, 0.609375),
+vec3(0.636024058, -0.430201083, -0.640625),
+vec3(0.880967736, 0.307807446, 0.359375),
+vec3(-0.750141442, 0.64615202, -0.140625),
+vec3(-0.0952971131, -0.502387345, 0.859375),
+vec3(0.328818917, 0.552898228, -0.765625),
+vec3(-0.972065032, 0.0125679113, 0.234375),
+vec3(0.471204162, -0.841076672, -0.265625),
+vec3(-0.109211303, 0.669900179, 0.734375),
+vec3(-0.663423121, -0.542218208, -0.515625),
+vec3(0.818162918, -0.309823006, 0.484375),
+vec3(0.842419207, 0.538596094, -0.015625),
+vec3(-0.156320319, 0.0810544044, 0.984375),
+vec3(0.00564317545, -0.124627925, -0.9921875),
+vec3(0.299155027, 0.954172552, 0.0078125),
+vec3(-0.849549532, -0.189781502, -0.4921875),
+vec3(0.58302474, -0.634199202, 0.5078125),
+vec3(-0.25747177, 0.618761659, -0.7421875),
+vec3(-0.586942732, -0.767483532, 0.2578125),
+vec3(0.962132394, -0.125085667, -0.2421875),
+vec3(0.641814053, 0.117451869, 0.7578125),
+vec3(-0.322555751, 0.379399061, -0.8671875),
+vec3(-0.332962662, -0.933539867, 0.1328125),
+vec3(0.593268514, 0.716383815, -0.3671875),
+vec3(-0.763394833, 0.129524678, 0.6328125),
+vec3(0.27388069, -0.737610281, -0.6171875),
+vec3(-0.0059717386, 0.923806787, 0.3828125),
+vec3(-0.856830537, -0.502104044, -0.1171875),
+vec3(0.408303946, -0.232228294, 0.8828125),
+vec3(0.337274045, 0.148078948, -0.9296875),
+vec3(-0.803971767, 0.590496004, 0.0703125),
+vec3(-0.0990296155, -0.897530913, -0.4296875),
+vec3(0.363903403, 0.73642242, 0.5703125),
+vec3(-0.731969833, -0.0473818816, -0.6796875),
+vec3(0.525661707, -0.788086116, 0.3203125),
+vec3(-0.233045086, 0.955720901, -0.1796875),
+vec3(-0.413450629, -0.395153135, 0.8203125),
+vec3(0.569845855, -0.166594595, -0.8046875),
+vec3(0.782872915, 0.590730906, 0.1953125),
+vec3(-0.876977444, 0.371585965, -0.3046875),
+vec3(0.0880495235, -0.713293612, 0.6953125),
+vec3(0.186648384, 0.810853958, -0.5546875),
+vec3(-0.856082201, -0.262335807, 0.4453125),
+vec3(0.730699301, -0.680505574, -0.0546875),
+vec3(-0.14826411, 0.290520281, 0.9453125),
+vec3(-0.150587201, -0.232212439, -0.9609375),
+vec3(0.997900963, -0.05165096, 0.0390625),
+vec3(0.886246264, 0.045871757, -0.4609375),
+vec3(-0.458274096, 0.706679881, 0.5390625)
+);
+vec3 previewDirect(vec3 samplePosition, vec3 n, int skyIndex, int skyCount, int areaPhase) {
+        vec3 sum=vec3(0.0);
+        
+        for(int i=0;i<lightCount;i++) {
+            int areaBatch=int(lights[i*5+4].w)-1;
+            float areaWeight=1.0;
+            if(areaPhase>=0 && areaBatch>=0) {
+                if(areaPhase<8) {
+                    if(areaBatch%8!=areaPhase) continue;
+                    areaWeight=8.0;
+                } else {
+                    int count=max(1,int(lights[i*5+2].w));
+                    if(areaBatch!=(areaPhase-8)%count) continue;
+                    areaWeight=float(count);
+                }
+            }
+            vec4 direction=lights[i*5+3];
+            vec3 target=lights[i*5+0].xyz;
+            if(direction.w==2.0) target=samplePosition-direction.xyz*(56755.84/unitScale);
+            vec3 delta=(target-samplePosition)*unitScale;
+            float lengthSquared=dot(delta,delta);
+            if(lengthSquared<=0.0) continue;
+            float d=max(sqrt(lengthSquared),1.0);
+            vec3 a=lights[i*5+2].xyz;
+            float cosine=max(dot(delta*inversesqrt(lengthSquared),n),0.0);
+            if(direction.w==1.0) {
+                vec3 cone=lights[i*5+4].xyz;
+                float facing=-dot(delta*inversesqrt(lengthSquared),direction.xyz);
+                if(facing<=cone.y) continue;
+                float ramp=1.0;
+                if(facing<cone.x) {
+                    ramp=clamp((facing-cone.y)/(cone.x-cone.y),0.0,1.0);
+                    if(cone.z!=0.0 && cone.z!=1.0) ramp=pow(ramp,float(int(4.0*cone.z))*0.25);
+                }
+                cosine*=ramp*facing;
+            }
+            if(cosine>0.0)cosine*=traceVisibility(samplePosition+n*(0.03125/unitScale),target);
+            sum+=lights[i*5+1].xyz*(areaWeight*cosine/(a.z*d*d+a.y*d+a.x));
+        }
+        if(any(greaterThan(skyColor,vec3(0.0)))) {
+            float weight=0.0, visibleWeight=0.0;
+            for(int j=0;j<162;j++) {
+                vec3 skyDirection=-skyDirections[j];
+                float facing=dot(n,skyDirection);
+                if(facing<=0.001) continue;
+                weight+=facing;
+                if(skyIndex>=0 && ((j-skyIndex+162)%162)>=skyCount)continue;
+                float visibility=traceVisibility(samplePosition+n*(0.03125/unitScale),samplePosition+skyDirection*(56755.84/unitScale));
+                visibleWeight+=facing*visibility*(skyIndex>=0?162.0/float(skyCount):1.0);
+            }
+            if(weight>0.0) sum+=skyColor*(visibleWeight/weight);
+        }
+        return sum;
+    }
+uint bounceHash(uint h) {
+    h^=h>>16;h*=0x7feb352du;h^=h>>15;h*=0x846ca68bu;h^=h>>16;return h;
+}
+vec3 previewBounce(vec3 p,vec3 n) {
+    if(bounceSamples<=0 || bounceSampleCount<=0)return vec3(0);
+    vec3 sum=vec3(0);
+    for(int localSample=0;localSample<bounceSampleCount;localSample++) {
+        int j=((bounceSampleOffset+localSample)*bounceSampleStride)%bounceSamples;
+        vec3 pathNormal=n,origin=p+n*(0.25/unitScale),throughput=vec3(1);
+        for(int depth=0;depth<bounceDepth;depth++) {
+        vec3 x=normalize(abs(pathNormal.z)<0.9?cross(pathNormal,vec3(0,0,1)):cross(pathNormal,vec3(1,0,0)));
+        vec3 y=cross(pathNormal,x);
+        float u=(float(j)+0.5)/float(bounceSamples);
+        float v=float(bitfieldReverse(uint(j)))/4294967296.0;
+        if(bounceSeed>0) {
+            uint h=bounceHash(uint(bounceSeed)*6271u);
+            u=fract(u+float(h&0xFFFFu)/65536.0);
+            v=fract(v+float(h>>16)/65536.0);
+        }
+        if(depth>0) {
+            uint h=bounceHash(uint(j)*9781u+uint(bounceSeed)*6271u+uint(depth)*13007u);
+            u=float(h&0xFFFFu)/65536.0;v=float(h>>16)/65536.0;
+        }
+        float phi=6.28318530718*u,ct=sqrt(1.0-v),st=sqrt(v);
+        vec3 d=x*(cos(phi)*st)+y*(sin(phi)*st)+pathNormal*ct;
+        float distance;vec3 hn;vec2 bary;int tri,inst;
+        if(!traceClosest(origin,d,56755.84/unitScale,distance,hn,bary,tri,inst))break;
+        if(dot(hn,d)>=0.0)break;
+        vec4 surface=surfaces[tri*2];
+        if(surface.w<0.5)break;
+        vec3 hit=origin+d*distance;
+        // Uniform selection from the SAME 162 VRAD directions; previewDirect
+        // keeps their full cosine normalization and multiplies this term by
+        // 162. Expected sky illumination is unchanged, at greater variance.
+        int skyIndex=bounceSkySampled!=0?int(bounceHash(uint(j)+uint(bounceSeed)*9781u+uint(depth)*13007u+719u)%162u):-1;
+        // Independently select one sample per area emitter at each hit.
+        // previewDirect weights by the emitter's sample count. Values >=8
+        // encode this random selection; 0..7 are primary deterministic batches.
+        int areaPhase=bounceAreaSampled!=0?8+int(bounceHash(uint(j)*271u+uint(bounceSeed)*65537u+uint(depth)*8191u+2917u)&0x3fffffffu):-1;
+        throughput*=surface.rgb;
+        sum+=previewDirect(hit+hn*(1.0/unitScale),hn,skyIndex,1,areaPhase)*throughput;
+        pathNormal=hn;origin=hit+hn*(1.25/unitScale);
+        }
+    }
+    return sum/float(bounceSampleCount);
+}
+
+void main() {
+    uint i=gl_GlobalInvocationID.x;if(i>=pc.count)return;
+    vec4 p=points[i*2];vec3 n=points[i*2+1].xyz;
+    if(p.w<=0.0 || dot(n,n)<1e-20){result[i]=vec4(0);return;}
+    n=normalize(n);
+    int skyIndex=(pc.flags&1)!=0?(pc.seed*9)%162:-1;
+    int areaPhase=(pc.flags&2)!=0?pc.seed%8:-1;
+    vec3 value=previewDirect(p.xyz,n,skyIndex,9,areaPhase)+previewBounce(p.xyz,n);
+    result[i]=vec4(value/255.0,1.0);
+}
