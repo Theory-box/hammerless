@@ -617,3 +617,73 @@ submitted). Cold first donor constructor was5482ms; baseline shader creation
 feasibility of eliminating hit-direct work, not real-map convergence or native
 VRAD parity. Latest isolated runner exited normally in35.016seconds. Result:
 outputs/l4d2-preview/radiance-reuse-profile.json in the workspace output directory.
+
+
+### Multi-surface / shadow-boundary validation (2026-11-09)
+
+The test-only `radiance_reuse_support.py` maps ray hits to measured direct-light
+samples using per-instance triangle lattices. It reconstructs TLAS instance and
+mesh/shadow triangle ordering, retains all occluding geometry, and falls back to
+the original direct evaluator for missing donors. Interpolation stays inside
+triangles; donor evaluation includes full sky and area lighting. Independent
+review verified mapping, normals, offsets, units, and fallback.
+
+The controlled fixture contains five receiving planes (including three differently
+transformed instances of one mesh), four two-sided blockers, and nine reordered
+instances. At 128 rays, indirect RMSE fell from 1.96% at spacing 0.5 to 1.31% at
+0.25 and 0.67% at 0.125. Peak errors persisted near boundaries: this is improving
+approximation, not exact hard-shadow preservation. Zero-budget fallback error was
+zero. The final run with bounded donor submissions and corrected PNG colorspace
+also passed. Draw speedups across these two-light cases were roughly 1.1–2x.
+
+The first hotel attempt used actual saved geometry and lighting, 160x90 pixels,
+and 8/32 rays. Its 131,072-sample budget cached only 579 of 24,320 eligible
+triangles (2.4%); measured views showed no lighting change and essentially no
+speedup. The isolated process exited abnormally with code 3221226505 after
+83.625 seconds. Exact cause remains unverified. Partial rows are preserved in
+`outputs/l4d2-preview/radiance-realmap-first-attempt.json` under the workspace.
+
+A bounded follow-up completed normally in 76.422 seconds. It uses 80x45 pixels,
+eight rays, a maximum 4x4 lattice per triangle, and 2,048-point donor submissions
+with completion readbacks. It retained 2,716,132 tracing triangles and 4,782
+instances, using all 2,848 extracted light entries (including emitter samples)
+and the actual sky. All 24,320 eligible triangles were cached with 339,270 samples;
+15,462 triangles were capped below the requested spacing. Geometry coverage is
+not ray-hit coverage.
+
+| View | Original draw | Reuse draw | Speedup | Indirect relative RMSE |
+|---|---:|---:|---:|---:|
+| 0 | 353.97 ms | 74.39 ms | 4.76x | 29.88% |
+| 1 | 654.17 ms | 113.93 ms | 5.74x | 37.80% |
+
+View 1 is extremely dark (mean linear light 0.000211), so its relative error
+exaggerates visible impact. View 0 has substantial localized error: maximum
+0.0587 and 99th percentile 0.0207. This cache is not suitable for production.
+Preparation cost 21.5 seconds, including 5.96 seconds for donor shader creation,
+11.94 seconds for batched direct evaluation, and 3.26 seconds for CPU layout.
+The separate original and reuse shaders took 5.32 and 17.74 seconds to create.
+Both versions use full direct evaluation per pixel, including all sky and area
+samples. These are matched experimental draw times, not normal progressive
+viewport FPS, complete convergence times, or a native GPU VRAD comparison.
+
+Results and comparison PNGs are in `outputs/l4d2-preview/` under the workspace.
+The independent reviewer confirmed the interpretation: reuse saves repeated work,
+but this coarse per-triangle layout fails the time-to-quality target. Do not
+simply increase its size. Next compare the existing native GPU VRAD pipeline on
+a matching fixed snapshot, including preparation, transfer, and convergence.
+Shared face lightmap charts avoid this test layout's duplicated triangle grids.
+No experimental cache was installed into the addon.
+
+### Clustered geometry reference
+
+The user-supplied DXR article was checked against Microsoft's primary post:
+https://devblogs.microsoft.com/directx/clas-ptlas-preview/
+and NVIDIA's overview:
+https://github.com/NVIDIA-RTX/Whitepapers/blob/main/dx_clusters_and_ptlas/README.md
+
+Clustered Geometry and PTLAS target acceleration-structure build/update costs.
+Microsoft explicitly cautions against generalizing its 66x demo gain. The current
+preview's shader traversal cannot directly enable these DirectX APIs; native
+GPU VRAD uses Vulkan. The linked Vulkan PTLAS example is a possible future native
+backend reference, not a fix for repeated lighting work or sparse radiance
+coverage. No driver or SDK changes were made.
