@@ -5,6 +5,8 @@ re-extract meshes. No scene mutation, bake invocation, timers or global handlers
 GPU resources belong to an engine instance and are released with that instance.
 """
 from dataclasses import dataclass, field
+import operator
+import math
 
 import bpy
 import gpu
@@ -293,6 +295,9 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
     if bounce:
         info.sampler(7, 'FLOAT_2D', 'traceSurfaces')
         info.push_constant('INT', 'bounceSamples')
+        info.push_constant('INT', 'bounceSampleOffset')
+        info.push_constant('INT', 'bounceSampleCount')
+        info.push_constant('INT', 'bounceSampleStride')
         info.push_constant('INT', 'bounceSkySampled')
         info.push_constant('INT', 'bounceAreaSampled')
         info.push_constant('INT', 'bounceSeed')
@@ -411,7 +416,20 @@ def diagnostic_shader(lit=False, textured=False, shadows=False, display=False, b
     return gpu.shader.create_from_info(info)
 
 
-def draw_geometry(cache, shader, view_projection, lit=False, textured=False, shadows=False, display=False, exposure=0.0, bounce_samples=None, sampled_bounce_sky=False, bounce_seed=0, bounce_depth=1, primary_sky_index=-1, primary_sky_count=162, primary_area_phase=-1, sampled_bounce_area=False, lighting_samples=None, exclude_keys=(), raster_geometry=None):
+def bounce_slice_stride(total):
+    """Spread early slices while permuting exactly the configured path indices.
+
+    Coprimality guarantees complete coverage. The half-turn choice is only a
+    simple early-preview heuristic, not an optimal sampling sequence.
+    """
+    total=operator.index(total)
+    if total<=1:return 1
+    stride=total//2+1
+    while math.gcd(stride,total)!=1:stride+=1
+    return stride
+
+
+def draw_geometry(cache, shader, view_projection, lit=False, textured=False, shadows=False, display=False, exposure=0.0, bounce_samples=None, sampled_bounce_sky=False, bounce_seed=0, bounce_depth=1, primary_sky_index=-1, primary_sky_count=162, primary_area_phase=-1, sampled_bounce_area=False, lighting_samples=None, exclude_keys=(), raster_geometry=None, bounce_sample_offset=0, bounce_sample_count=None, bounce_sample_stride=1):
     """Draw to the bound framebuffer; caller owns clearing and viewport setup."""
     old_depth = gpu.state.depth_test_get()
     old_mask = gpu.state.depth_mask_get()
@@ -430,7 +448,17 @@ def draw_geometry(cache, shader, view_projection, lit=False, textured=False, sha
             cache.trace.update(cache)
             cache.trace.bind(shader)
         if bounce_samples is not None:
-            shader.uniform_int('bounceSamples',max(0,int(bounce_samples)))
+            total=max(0,int(bounce_samples));offset=operator.index(bounce_sample_offset)
+            count=total-offset if bounce_sample_count is None else operator.index(bounce_sample_count)
+            stride=operator.index(bounce_sample_stride)
+            if offset<0 or count<0 or offset+count>total:
+                raise ValueError('Bounce sample slice must lie inside configured ray count')
+            if stride<=0 or (total>0 and math.gcd(stride,total)!=1):
+                raise ValueError('Bounce sample stride must be positive and coprime to ray count')
+            shader.uniform_int('bounceSamples',total)
+            shader.uniform_int('bounceSampleOffset',offset)
+            shader.uniform_int('bounceSampleCount',count)
+            shader.uniform_int('bounceSampleStride',stride%total if total else 1)
             shader.uniform_int('bounceSkySampled',int(sampled_bounce_sky))
             shader.uniform_int('bounceAreaSampled',int(sampled_bounce_area))
             shader.uniform_int('bounceSeed',int(bounce_seed))
@@ -667,20 +695,27 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                 if self.history is None:self.history=FrameHistory()
                 if self.history_depth_shader is None:self.history_depth_shader=depth_shader()
                 signature=(self.scene_signature,samples,context.scene.hl_preview_max_bounces,self.bounce_uploads,self.surface_cache.generation if self.surface_cache else None,tuple(v for row in matrix for v in row))
-                def sample(frame):
+                # Preserve the configured ray set, but submit at most two paths
+                # per pixel per draw. More rays take more refinement updates.
+                weights=tuple(min(2,samples-start) for start in range(0,samples,2)) if bounce else None
+                offsets=tuple(range(0,samples,2)) if bounce else ()
+                def sample(frame,batch_index=0):
                     if self.surface_cache:self.surface_cache.draw_depth(matrix)
                     if len(self.cache.instances)>256:
                         gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
                         draw_depth(self.cache,self.history_depth_shader,matrix,exclude_keys=excluded,raster_geometry=remaining)
                     draw_geometry(self.cache,self.shader,matrix,lit=True,textured=True,shadows=True,
                                   bounce_samples=samples if bounce else None,sampled_bounce_sky=True,sampled_bounce_area=True,bounce_seed=frame,bounce_depth=context.scene.hl_preview_max_bounces,
-                                  primary_sky_index=(frame*9)%162,primary_sky_count=9,primary_area_phase=frame%8 if area_batches else -1,exclude_keys=excluded,raster_geometry=remaining)
+                                  primary_sky_index=(frame*9)%162,primary_sky_count=9,primary_area_phase=frame%8 if area_batches else -1,exclude_keys=excluded,raster_geometry=remaining,
+                                  bounce_sample_offset=offsets[batch_index] if bounce else 0,
+                                  bounce_sample_count=weights[batch_index] if bounce else None,
+                                  bounce_sample_stride=bounce_slice_stride(samples) if bounce else 1)
                 def restore_depth():
                     if self.surface_cache:self.surface_cache.draw_depth(matrix)
                     draw_depth(self.cache,self.history_depth_shader,matrix,exclude_keys=excluded,raster_geometry=remaining)
                 frames=self.history.render(signature,sample,restore_depth,
-                                           exposure=context.scene.hl_preview_exposure,max_frames=context.scene.hl_preview_refine_frames)
-                if frames<context.scene.hl_preview_refine_frames:self.tag_redraw()
+                                           exposure=context.scene.hl_preview_exposure,max_frames=context.scene.hl_preview_refine_frames,sample_weights=weights)
+                if frames<context.scene.hl_preview_refine_frames or self.history.batch_index:self.tag_redraw()
             else:
                 self.history=None
                 if self.surface_cache:self.surface_cache.draw_depth(matrix)
@@ -761,7 +796,7 @@ def register():
         description='Average fresh bounce and sky samples. Multiples of 72 complete both eight-frame area and eighteen-frame sky cycles. With surface caching, each chart keeps its progress while navigating; newly revealed charts begin refining. Scene edits restart lighting; uncached geometry also restarts on camera changes')
     bpy.types.Scene.hl_preview_bounce_samples = bpy.props.IntProperty(
         name='Bounce Rays',default=0,min=0,max=128,
-        description='Experimental indirect light: 0 disables it. Try 8 or 16 paths per frame; larger values slow interaction. Samples accumulate while still. No denoising')
+        description='Experimental indirect light: 0 disables it. Rays per refinement step; uncached surfaces process up to two rays per draw. Early previews are noisier and larger values take more updates to settle, but the final path count is preserved. Cached brush lighting currently uses all rays per update. No denoising')
     bpy.types.Scene.hl_preview_exposure = bpy.props.FloatProperty(
         name='Preview Exposure',default=0.,min=-10.,max=10.,
         description='Display-only exposure in stops: +1 doubles brightness. Does not change exported lights or simulate game auto-exposure')

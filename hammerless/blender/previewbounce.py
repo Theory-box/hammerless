@@ -9,9 +9,10 @@ uint bounceHash(uint h) {
     h^=h>>16;h*=0x7feb352du;h^=h>>15;h*=0x846ca68bu;h^=h>>16;return h;
 }
 vec3 previewBounce(vec3 p,vec3 n) {
-    if(bounceSamples<=0)return vec3(0);
+    if(bounceSamples<=0 || bounceSampleCount<=0)return vec3(0);
     vec3 sum=vec3(0);
-    for(int j=0;j<bounceSamples;j++) {
+    for(int localSample=0;localSample<bounceSampleCount;localSample++) {
+        int j=((bounceSampleOffset+localSample)*bounceSampleStride)%bounceSamples;
         vec3 pathNormal=n,origin=p+n*(0.25/unitScale),throughput=vec3(1);
         for(int depth=0;depth<bounceDepth;depth++) {
         vec3 x=normalize(abs(pathNormal.z)<0.9?cross(pathNormal,vec3(0,0,1)):cross(pathNormal,vec3(1,0,0)));
@@ -48,6 +49,6 @@ vec3 previewBounce(vec3 p,vec3 n) {
         pathNormal=hn;origin=hit+hn*(1.25/unitScale);
         }
     }
-    return sum/float(bounceSamples);
+    return sum/float(bounceSampleCount);
 }
 '''

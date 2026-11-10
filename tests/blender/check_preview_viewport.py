@@ -73,6 +73,7 @@ def draw(self,context,depsgraph):
                 assert live.cache.evaluations==state['cached_evaluations'],'Camera/exposure retraced brush lighting'
         assert len(self.cache.geometry)==(2 if '--emission' in sys.argv else 1)+(256 if '--prepass' in sys.argv else 0)+int('--mixed-cache' in sys.argv), len(self.cache.geometry)
         if PROGRESSIVE:
+            if self.history.frames==0 and self.history.batch_index:return
             visited=state.setdefault('history_stages',{})
             stage=str(state['stage'])
             if stage not in visited:

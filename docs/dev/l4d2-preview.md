@@ -534,3 +534,42 @@ it was corrected to query bpy.context inside the timer. Its second brightness
 edit now changes intensity rather than just retagging unchanged data, so the
 history-reset assertion tests a real lighting change. No production Context is
 retained by the guard.
+
+## Uncached bounce ray slicing
+
+The live uncached raster path now traces at most two configured paths per draw.
+Bounce Rays remains the total per logical refinement frame; Max Bounces is
+unchanged. A global ray index and original total preserve hemisphere strata and
+hashes. A coprime stride permutes those indices to spread early samples; it is a
+preview-ordering heuristic, not a claim of unbiased partial images. Completed
+images use the same ray set. Surface-cache tracing remains unsliced.
+
+FrameHistory accepts optional integer slice weights and averages each slice by
+its actual path count. Logical frame seeds and direct sky/area phases stay fixed
+across slices. Frames counts completed logical frames; batch_index counts partial
+progress. Signature, size and slice-plan changes reset both. Increasing targets
+resumes; lowering targets finishes any already-started logical frame. Exposure
+preserves history. Existing unsliced consumers retain their API and behavior.
+
+GPU tests compare complete sliced/unsliced results at ray counts 3,4,6,7,16,128,
+depths 1 and 4, with sky and area sampling. They check uneven weighting,
+permutation coverage for all counts 1–128, resume and mid-frame reset. Independent
+review found no production blocker. Real mixed brush/prop viewport with repeated
+light edits passed (32 draws, 5 updates); legacy history/depth/exposure tests passed.
+
+Hotel 1280x720 interior, surface cache settled beforehand, single point light:
+
+| Rays | Bounces | Uncached update before | Sliced update | Three logical frames before/after |
+|---:|---:|---:|---:|---:|
+| 4 | 1 | 21.53 ms | 16.69 ms | 71 / 105 ms |
+| 16 | 1 | 43.80 ms | 16.27 ms | 135 / 409 ms |
+| 32 | 1 | 67.62 ms | 15.86 ms | 200 / 759 ms |
+| 4 | 4 | 27.29 ms | 20.50 ms | 82 / 122 ms |
+| 16 | 4 | 70.66 ms | 20.14 ms | 214 / 497 ms |
+
+This trades lower update latency for longer settling, because raster/direct work
+repeats. Early moving images are noisier; high-depth paths and surface-cache work
+can still stall. These isolated drawing timings are not whole-viewport FPS.
+Convergence totals exclude the first logical frame to avoid initial shader/batch
+creation confounding the comparison. Reports: ray-slices-check.json and
+ray-slices-profile.json. No claim of improved bake parity or reduced total work.
