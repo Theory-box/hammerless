@@ -751,3 +751,29 @@ redundant geometry-depth pass. After one warmup, three paired samples gave
 median 5.09/23.89 ms for depth redraw plus composition versus 0.098/0.119 ms
 for depth-copy composition in two views. These are isolated stage costs, not
 whole-renderer speedups. Lighting parity remained within the earlier errors.
+
+### Capture profiling and bounds reuse (2026-11-09)
+
+cProfile on the hotel at320x180 separated cold receiver preparation from
+warm camera redraw. Original firstcapture690ms included443ms in raster bounds
+and341ms in min/max scans. A new busy view cost481ms largely from batch creation,
+draw submission and first texture uploads. A warm return cost9.9ms; readback
+was only about3ms there. These are profiler-instrumented diagnostics.
+
+Per-geometry local bounds now survive transform-only scene updates. The original
+camera fastpath remains: unchanged instance/geometry containers do not rescan
+localbounds. SceneCache.update publishes new containers; future in-place geometry
+writers must invalidate both local and outer world bounds. Per-draw image handles
+also avoid repeated texture lookups without cross-frame staleness.
+
+Final profile: cold views656/480ms, warmviews10.1/79.6ms. A diagnostic replacing
+the instance/geometry containers while retaining meshes took60.4ms total,
+including55ms rebuilding worldbounds with no vertex min/max rescans. This is an
+isolated transform-cache reconstruction, not full brush-edit latency or FPS.
+Cold bounds still need initial scans; this map has4784 distinct cached geometries.
+An earlier version checked all localbounds every camera frame and regressed the
+warm case; that version was corrected before packaging.
+
+Seven culling tests pass, including shared geometry, mirrored/nonuniform
+transforms, replacement/invalidation and camera fastpath. Independent static
+review approved the cache and per-draw texture handle changes.

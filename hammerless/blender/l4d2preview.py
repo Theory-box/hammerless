@@ -457,6 +457,7 @@ def draw_geometry(cache, shader, view_projection, lit=False, textured=False, sha
     old_depth = gpu.state.depth_test_get()
     old_mask = gpu.state.depth_mask_get()
     old_blend = gpu.state.blend_get()
+    texture_handles = {}  # Per draw: no cross-frame image invalidation required.
     try:
         gpu.state.depth_test_set('LESS_EQUAL')
         gpu.state.depth_mask_set(True)
@@ -557,7 +558,12 @@ def draw_geometry(cache, shader, view_projection, lit=False, textured=False, sha
                     scale = mat.hammerless.texture_scale if mat else 0.25
                     shader.uniform_float('textureSizeScale', (w, h, max(scale, 1e-6)))
                     # Bind a valid sampler even for untextured materials.
-                    shader.uniform_sampler('baseTexture', gpu.texture.from_image(img) if img else cache.upload_lights())
+                    image_key=img.as_pointer() if img else 0
+                    texture=texture_handles.get(image_key)
+                    if texture is None:
+                        texture=gpu.texture.from_image(img) if img else cache.upload_lights()
+                        texture_handles[image_key]=texture
+                    shader.uniform_sampler('baseTexture', texture)
                     geometry.material_batches[int(mi)].draw(shader)
             else:
                 geometry.batch[lit].draw(shader)
