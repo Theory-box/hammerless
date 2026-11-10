@@ -106,4 +106,46 @@ class FlattenTests(unittest.TestCase):
   np.testing.assert_allclose(m[0,:4],[.2,.3,.4,1]);np.testing.assert_allclose(m[0,4:7],[-1,0,0])
   g.use_uv=True;v,m=native.flatten_scene(scene,resolver);np.testing.assert_equal(m[:,:4],0)
 
+class SnapshotTests(unittest.TestCase):
+ def test_incremental_matches_reference_for_scene_edits(self):
+  from types import SimpleNamespace as S
+  from unittest.mock import patch
+  def geometry(offset=0):
+   return S(positions=np.array([[0,0,0],[1,0,0],[0,1,0]],np.float32)+offset,shadow_positions=None,shadow_triangle_ids=None,material_ids=np.array([0]),materials=(object(),),use_uv=False,shadow_revision=0)
+  a,b=geometry(),geometry(2)
+  scene=S(geometry={1:a,2:b},instances=[(1,np.eye(4)),(1,np.eye(4)),(2,np.eye(4))])
+  resolver=S(resolve=lambda m:S(reflectivity=(.2,.3,.4),receives_light=True,verified=True))
+  cache=native.SceneSnapshotCache();token=1
+  def check():
+   actual=cache.update(scene,resolver,token);expected=native.flatten_scene(scene,resolver)
+   for x,y in zip(actual,expected):np.testing.assert_array_equal(x,y)
+   return actual
+  old=check();old_copy=tuple(x.copy() for x in old)
+  matrix=np.diag([-2.,3.,4.,1.]);matrix[0,3]=2
+  scene.instances=[(1,matrix),*scene.instances[1:]]
+  reference=native.flatten_scene
+  with patch.object(native,'flatten_scene',wraps=reference) as spy:
+   actual=cache.update(scene,resolver,token)
+   self.assertEqual(len(spy.call_args.args[0].instances),1)
+  for x,y in zip(actual,reference(scene,resolver)):np.testing.assert_array_equal(x,y)
+  for x,y in zip(old,old_copy):np.testing.assert_array_equal(x,y)
+  scene.instances=[scene.instances[2],scene.instances[0]];check()
+  scene.instances.append((1,np.eye(4)));check()
+  scene.geometry[1]=geometry(5);check()
+  token+=1;resolver.resolve=lambda m:S(reflectivity=(.7,.1,.2),receives_light=True,verified=True);check()
+  scene.geometry[1].use_uv=True;check()
+  scene.instances[0]=(2,np.zeros((4,4)));check()
+  scene.geometry[1].shadow_positions=np.zeros((0,3),np.float32);scene.geometry[1].shadow_triangle_ids=np.zeros(0,dtype=int);scene.geometry[1].shadow_revision+=1;check()
+  scene.instances=[];check()
+ def test_failed_update_keeps_prior_arrays_and_tokens(self):
+  from types import SimpleNamespace as S
+  from unittest.mock import patch
+  scene=S(geometry={},instances=[]);cache=native.SceneSnapshotCache()
+  before=cache.update(scene,None,1)
+  with patch.object(native,'MAX_TRIANGLES',-1):
+   # Explicit allocation failure verifies atomic commit even for an empty scene.
+   with patch.object(native.np,'empty',side_effect=MemoryError):
+    with self.assertRaises(MemoryError):cache.update(scene,None,2)
+  self.assertIs(cache.vertices,before[0]);self.assertEqual(cache.material_token,1)
+
 if __name__=='__main__':unittest.main()

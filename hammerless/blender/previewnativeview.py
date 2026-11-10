@@ -55,6 +55,7 @@ class NativeView:
         self.compose=None;self.light_texture=None
         self.points=None;self.covered=None
         self._pending_prepare=None
+        self.snapshot_cache=previewnative.SceneSnapshotCache()
 
     def stage(self,cache,resolver,geometry_token,lights_token):
         """Keep only the latest main-thread scene update until interaction stops.
@@ -70,7 +71,8 @@ class NativeView:
         vertices,metadata=self.vertices,self.metadata
         lights=self.lights
         if vertices is None or geometry_token!=self.geometry_token:
-            vertices,metadata=previewnative.flatten_scene(cache,resolver)
+            material_token=geometry_token[0] if isinstance(geometry_token,tuple) and geometry_token else geometry_token
+            vertices,metadata=self.snapshot_cache.update(cache,resolver,material_token)
         if lights is None or lights_token!=self.lights_token:
             lights=previewnative.pack_lights(cache)
         # Commit only after every snapshot succeeds; a failed preparation must
@@ -90,6 +92,7 @@ class NativeView:
     def close(self):
         self.client.release(self.owner)
         self._pending_prepare=None
+        self.snapshot_cache=previewnative.SceneSnapshotCache()
         self.request=None
         self.history=None
         self.capture_signature=None

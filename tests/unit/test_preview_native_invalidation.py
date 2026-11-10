@@ -24,6 +24,7 @@ class InvalidationTests(unittest.TestCase):
         transport=types.ModuleType('nativeview_test.previewnative')
         transport.get_client=lambda:self.client
         transport.MAX_POINTS=8_000_000
+        transport.SceneSnapshotCache=object
         history=types.ModuleType('nativeview_test.previewhistory');history.FrameHistory=object
         draw=types.ModuleType('nativeview_test.l4d2preview');draw.draw_depth=lambda *a:None
         extras=types.ModuleType('gpu_extras');extras.__path__=[]

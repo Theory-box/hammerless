@@ -135,6 +135,80 @@ def flatten_scene(scene, resolver):
     return np.concatenate(vertices), np.concatenate(metadata)
 
 
+class SceneSnapshotCache:
+    """One prior immutable packed scene; copy unchanged spans on scene edits.
+
+    No per-instance triangle copies are retained. A new snapshot never modifies
+    arrays that an in-flight worker may still read. Failed updates keep the
+    previous complete cache intact.
+    """
+    def __init__(self):
+        self.records={}
+        self.vertices=self.metadata=None
+        self.material_token=None
+
+    @staticmethod
+    def _same(a,b):
+        # Source arrays are immutable until replaced or their revision changes.
+        return (all(a[i] is b[i] for i in range(5))
+                and len(a[5])==len(b[5]) and all(x is y for x,y in zip(a[5],b[5]))
+                and a[6:10]==b[6:10])
+
+    def update(self,scene,resolver,material_token):
+        records={};occurrences={};changed=[];ordered=[];total=0
+        material_same=self.vertices is not None and material_token==self.material_token
+        for key,matrix in scene.instances:
+            occurrence=occurrences.get(key,0);occurrences[key]=occurrence+1
+            identity=(key,occurrence)
+            g=scene.geometry[key]
+            m=np.asarray(matrix,dtype=np.float64)
+            positions=g.positions if g.shadow_positions is None else g.shadow_positions
+            count=len(positions)//3
+            if count and abs(np.linalg.det(m[:3,:3]))<1e-15:count=0
+            record=(g,g.positions,g.shadow_positions,g.shadow_triangle_ids,g.material_ids,
+                    g.materials,g.shadow_revision,g.use_uv,tuple(m.reshape(-1)),count,total)
+            previous=self.records.get(identity)
+            unchanged=material_same and previous is not None and self._same(record,previous)
+            ordered.append((record,previous if unchanged else None))
+            records[identity]=record
+            if not unchanged and count:changed.append((key,matrix))
+            total+=count
+            if total>MAX_TRIANGLES:raise ValueError('Native preview triangle limit exceeded')
+        if (material_same and len(records)==len(self.records)
+                and all(previous is not None and record[10]==previous[10] for record,previous in ordered)):
+            # Refresh strong references/order even when all payload ranges match.
+            self.records=records
+            return self.vertices,self.metadata
+        changed_vertices=changed_metadata=None
+        if changed:
+            from types import SimpleNamespace
+            changed_vertices,changed_metadata=flatten_scene(
+                SimpleNamespace(instances=changed,geometry=scene.geometry),resolver)
+        if changed_vertices is not None and len(changed_vertices)==total:
+            # Initial/full rebuild already produced the complete immutable pair;
+            # avoid allocating/copying a second full-map pair.
+            vertices,metadata=changed_vertices,changed_metadata
+        else:
+            vertices=np.empty((total,9),dtype='<f4');metadata=np.empty((total,8),dtype='<f4')
+            cursor=0
+            for record,previous in ordered:
+                count,start=record[9:11]
+                if not count:continue
+                if previous is not None:
+                    old=previous[10]
+                    vertices[start:start+count]=self.vertices[old:old+count]
+                    metadata[start:start+count]=self.metadata[old:old+count]
+                else:
+                    vertices[start:start+count]=changed_vertices[cursor:cursor+count]
+                    metadata[start:start+count]=changed_metadata[cursor:cursor+count]
+                    cursor+=count
+            if changed_vertices is not None and cursor!=len(changed_vertices):
+                raise ValueError('Native preview incremental snapshot range mismatch')
+        self.records=records;self.vertices=vertices;self.metadata=metadata
+        self.material_token=material_token
+        return vertices,metadata
+
+
 def _array(data, columns, limit, name, copy=False):
     a = np.array(data, dtype='<f4', order='C', copy=True) if copy else np.asarray(data, dtype='<f4', order='C')
     if a.ndim != 2 or a.shape[1] != columns or len(a) > limit:

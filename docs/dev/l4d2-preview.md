@@ -796,3 +796,23 @@ single idle preparation took784ms. This excludes normal scene extraction,
 drawing and interaction work; it is not a full drag-latency measurement.
 The idle preparation stall remains. No-op dependency updates can still cancel
 pending work unnecessarily; that separate optimization is not part of this change.
+
+### Incremental CPU snapshots (2026-11-09)
+
+SceneSnapshotCache retains one packed scene and instance range records. On an
+edit it transforms changed instances and copies unchanged spans into fresh
+arrays; it never mutates snapshots held by an active worker. Material revision,
+geometry/shadow source identity, mesh revision, role, matrix and occurrence order
+control reuse. Initial/full rebuilds avoid an extra whole-map copy.
+
+Fourteen native CPU tests pass, including exact comparisons against standalone
+flattening through transforms, mirrors, additions/deletions/reordering, material
+and mesh changes, singular transforms, and failure. The actual viewport edit,
+depth-copy and overlay regression also passed. Independent review approved.
+
+Hotel test: 2,716,132 triangles, 4,784 instances, one moved 36-vertex brush.
+Incremental preparation took161.53ms versus848.83ms for the full reference;
+arrays matched exactly and the previous snapshot hash remained unchanged.
+Initial preparation measured1020.53ms in this run. These are CPU snapshot costs,
+excluding scene extraction, worker transfer and GPU acceleration-structure
+rebuilding. Those latter costs remain unchanged by this optimization.

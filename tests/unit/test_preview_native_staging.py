@@ -12,6 +12,7 @@ class StagingTests(unittest.TestCase):
     def setUp(self):
         self.client=Mock()
         self.native=S(get_client=lambda:self.client,flatten_scene=Mock(side_effect=lambda cache,resolver:(cache,'meta')),pack_lights=Mock(side_effect=lambda cache:cache))
+        self.native.SceneSnapshotCache=lambda:S(update=lambda cache,resolver,token:self.native.flatten_scene(cache,resolver))
         scope={'previewnative':self.native}
         exec(compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec'),scope)
         self.view=scope['NativeView'](17)
