@@ -48,8 +48,26 @@ def update(self,context,depsgraph):
 
 
 def draw(self,context,depsgraph):
+    def work_counts():
+        live=self.surface_cache
+        return (self.bounce_uploads,
+                live.cache.evaluations if live and live.cache else 0,
+                (self.history.frames,self.history.batch_index) if self.history else None,
+                self.cache.trace.builds if self.cache.trace else 0)
+    before=work_counts()
     original_draw(self,context,depsgraph)
     if state['done']:return
+    if self.interacting:
+        state['interaction_draws']=state.get('interaction_draws',0)+1
+        try:
+            assert not self.error,self.error
+            assert work_counts()==before,(before,work_counts())
+            x,y,w,h=gpu.state.viewport_get()
+            depth=gpu.state.active_framebuffer_get().read_depth(x+w//2,y+h//2,1,1).to_list()[0][0]
+            assert 0<depth<1,('Interaction depth missing',depth)
+        except Exception:
+            finish({'ok':False,'traceback':traceback.format_exc()})
+        return
     state['frames']+=1
     if state.get('pending_edit'):return
     if state['updates']<state['await_update']:return
@@ -94,6 +112,7 @@ def draw(self,context,depsgraph):
                                 'history_frames':self.history.frames if self.history else 0})
         if '--surface-cache' in sys.argv:state['cached_evaluations']=self.surface_cache.cache.evaluations
         if state['stage']==(5 if PROGRESSIVE else 2):
+            assert state.get('interaction_draws',0)>0,'No interaction pause exercised'
             finish({'ok':True,**state,'geometry':len(self.cache.geometry)})
         else:
             state['initial_extractions']=self.cache.extractions

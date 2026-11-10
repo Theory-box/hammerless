@@ -573,3 +573,9 @@ can still stall. These isolated drawing timings are not whole-viewport FPS.
 Convergence totals exclude the first logical frame to avoid initial shader/batch
 creation confounding the comparison. Reports: ray-slices-check.json and
 ray-slices-profile.json. No claim of improved bake parity or reduced total work.
+
+
+### Interaction refinement pause
+Camera/projection/viewport or scene-signature changes temporarily use current-geometry unshadowed direct lighting. Ray tracing, bounce uploads, history advancement, and surface-cache refinement resume after 150 ms idle; navigation/animation keep the pause active. Surface-cache receivers remain visible and depth is written. Cached lighting is preserved; final signatures still invalidate stale results. This does not yet defer CPU geometry/chart preparation or solve startup latency. Workbench 2.0 local quick_navigation.py and extraction budgeting were inspected as reference. Isolated mixed-cache viewport regression passed with 42 paused draws, unchanged heavy-work counters, valid depth, and automatic full-lighting resumption.
+
+Idle scheduling update: the engine now evaluates the complete configured ray set per logical frame, superseding two-ray slicing above. Existing full/sliced measurements showed 1.5–3.8x longer settling from repeated raster/direct work. Cheap interaction remains; a submitted idle dispatch cannot be preempted. Optional sliced APIs and equivalence tests remain available. Final mixed-cache viewport regression passed after this change.

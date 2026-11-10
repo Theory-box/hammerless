@@ -7,6 +7,7 @@ GPU resources belong to an engine instance and are released with that instance.
 from dataclasses import dataclass, field
 import operator
 import math
+import time
 
 import bpy
 import gpu
@@ -593,6 +594,10 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         self.surface_cache = None
         from .previewchanges import LightUpdateGuard
         self.update_guard = LightUpdateGuard()
+        self.interaction_signature = None
+        self.interaction_until = 0.0
+        self.interacting = False
+        self.interaction_shader = None
 
     def view_update(self, context, depsgraph):
         try:
@@ -668,6 +673,27 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             self.update_stats('L4D2 Preview', self.error)
             return
         try:
+            matrix=context.region_data.perspective_matrix.copy()
+            interaction_signature=(self.scene_signature,tuple(v for row in matrix for v in row),
+                                   tuple(gpu.state.viewport_get()[2:]))
+            now=time.monotonic()
+            navigating=getattr(context.region_data,'is_navigating',False)
+            playing=getattr(context.screen,'is_animation_playing',False)
+            if ((self.interaction_signature is not None and interaction_signature!=self.interaction_signature)
+                    or navigating or playing):
+                self.interaction_until=now+0.15
+            self.interaction_signature=interaction_signature
+            self.interacting=now<self.interaction_until
+            if self.interacting:
+                # Current geometry and depth, without tracing or touching the
+                # accumulation. Never exclude surface-cache receivers here.
+                if self.interaction_shader is None:
+                    self.interaction_shader=diagnostic_shader(lit=True,textured=True,display=True)
+                draw_geometry(self.cache,self.interaction_shader,matrix,lit=True,textured=True,
+                              display=True,exposure=context.scene.hl_preview_exposure)
+                self.tag_redraw()  # Ensures refinement resumes after input stops.
+                self.update_stats('L4D2 Preview','Interacting: ray-traced lighting paused')
+                return
             samples=context.scene.hl_preview_bounce_samples
             bounce=samples>0
             area_batches=any(len(l)>4 and len(l[4])>3 and l[4][3]>0 for l in self.cache.lights)
@@ -695,26 +721,22 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                 if self.history is None:self.history=FrameHistory()
                 if self.history_depth_shader is None:self.history_depth_shader=depth_shader()
                 signature=(self.scene_signature,samples,context.scene.hl_preview_max_bounces,self.bounce_uploads,self.surface_cache.generation if self.surface_cache else None,tuple(v for row in matrix for v in row))
-                # Preserve the configured ray set, but submit at most two paths
-                # per pixel per draw. More rays take more refinement updates.
-                weights=tuple(min(2,samples-start) for start in range(0,samples,2)) if bounce else None
-                offsets=tuple(range(0,samples,2)) if bounce else ()
-                def sample(frame,batch_index=0):
+                # Input uses the cheap interaction path above. While idle,
+                # complete the ray set once to avoid repeating primary lighting
+                # and rasterization for every two-ray slice.
+                def sample(frame):
                     if self.surface_cache:self.surface_cache.draw_depth(matrix)
                     if len(self.cache.instances)>256:
                         gpu.state.depth_test_set('LESS_EQUAL');gpu.state.depth_mask_set(True)
                         draw_depth(self.cache,self.history_depth_shader,matrix,exclude_keys=excluded,raster_geometry=remaining)
                     draw_geometry(self.cache,self.shader,matrix,lit=True,textured=True,shadows=True,
                                   bounce_samples=samples if bounce else None,sampled_bounce_sky=True,sampled_bounce_area=True,bounce_seed=frame,bounce_depth=context.scene.hl_preview_max_bounces,
-                                  primary_sky_index=(frame*9)%162,primary_sky_count=9,primary_area_phase=frame%8 if area_batches else -1,exclude_keys=excluded,raster_geometry=remaining,
-                                  bounce_sample_offset=offsets[batch_index] if bounce else 0,
-                                  bounce_sample_count=weights[batch_index] if bounce else None,
-                                  bounce_sample_stride=bounce_slice_stride(samples) if bounce else 1)
+                                  primary_sky_index=(frame*9)%162,primary_sky_count=9,primary_area_phase=frame%8 if area_batches else -1,exclude_keys=excluded,raster_geometry=remaining)
                 def restore_depth():
                     if self.surface_cache:self.surface_cache.draw_depth(matrix)
                     draw_depth(self.cache,self.history_depth_shader,matrix,exclude_keys=excluded,raster_geometry=remaining)
                 frames=self.history.render(signature,sample,restore_depth,
-                                           exposure=context.scene.hl_preview_exposure,max_frames=context.scene.hl_preview_refine_frames,sample_weights=weights)
+                                           exposure=context.scene.hl_preview_exposure,max_frames=context.scene.hl_preview_refine_frames)
                 if frames<context.scene.hl_preview_refine_frames or self.history.batch_index:self.tag_redraw()
             else:
                 self.history=None
@@ -796,7 +818,7 @@ def register():
         description='Average fresh bounce and sky samples. Multiples of 72 complete both eight-frame area and eighteen-frame sky cycles. With surface caching, each chart keeps its progress while navigating; newly revealed charts begin refining. Scene edits restart lighting; uncached geometry also restarts on camera changes')
     bpy.types.Scene.hl_preview_bounce_samples = bpy.props.IntProperty(
         name='Bounce Rays',default=0,min=0,max=128,
-        description='Experimental indirect light: 0 disables it. Rays per refinement step; uncached surfaces process up to two rays per draw. Early previews are noisier and larger values take more updates to settle, but the final path count is preserved. Cached brush lighting currently uses all rays per update. No denoising')
+        description='Experimental indirect light: 0 disables it. Rays per refinement step while idle. Higher values take longer per update but reduce sampling noise. Ray-traced lighting pauses during navigation and scene changes, then resumes after 150 ms idle. No denoising')
     bpy.types.Scene.hl_preview_exposure = bpy.props.FloatProperty(
         name='Preview Exposure',default=0.,min=-10.,max=10.,
         description='Display-only exposure in stops: +1 doubles brightness. Does not change exported lights or simulate game auto-exposure')
