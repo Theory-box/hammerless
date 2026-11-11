@@ -2157,6 +2157,9 @@ static int ReadGICommand(float *factor) {
     Error("Expected SOLVE, SCALE factor, or QUIT");return 0;
 }
 
+static void BuildFacelightsGPUFaces(const int *faces, int count);
+#include "live_session.h"
+
 void BuildIndirectGPU(void) {
     if (!g_giPasses) return;
     vec3_t original_intensity={0,0,0};
@@ -2216,6 +2219,8 @@ void BuildIndirectGPU(void) {
             memcpy(q->pos, p.pos, sizeof(q->pos));
             for (int b = 0; b < normalCount; b++) memcpy(q->nrm[b], p.normals[b], sizeof(q->nrm[b]));
             q->lanes = count, q->normalCount = normalCount;
+            memcpy(q->cluster, cluster, sizeof(q->cluster));        /* (-live: gather.comp's too, as GpuQuery's) */
+            q->skip = -1, q->slot = -1;
             where[n][0] = facenum, where[n][1] = group;
             n++;
         }
@@ -2250,6 +2255,10 @@ void BuildIndirectGPU(void) {
         junk = xalloc(sizeof(float) * 64 * (size_t)(n + 1));
     }
     double *faceChange = xalloc(sizeof(double) * (numfaces + 1));
+    if (g_live) {                       /* (the session: until its owner ends it; nothing is written) */
+        LiveSession(groups, where, n, k0, direct, out, faceChange);
+        return;
+    }
     int repeats=g_giRepeat?g_giRepeat:1;
     unsigned char *direct_bytes=NULL,*first_result=NULL,*previous_result=NULL;
     FILE *report=NULL;
@@ -2448,13 +2457,14 @@ void BuildIndirectGPU(void) {
 static int *roundfaces;
 static void RoundWork(int i, int thread) { (void)thread; BuildFacelights(roundfaces[i]); }
 
-void BuildFacelightsGPU(void) {
+/* (faces NULL: every face; else those, -live's: a face's direct light is its own samples' alone) */
+static void BuildFacelightsGPUFaces(const int *faces, int count) {
     gpufaces = xalloc(sizeof(gpuface_t) * (numfaces + 1));
     roundfaces = xalloc(sizeof(int) * (numfaces + 1));
     free(gpuzero);
     gpuzero = xalloc(sizeof(float) * ((size_t)GPU_GroupFloats() + 64));
-    int nround = numfaces, R = GPU_GroupFloats();
-    for (int i = 0; i < numfaces; i++) roundfaces[i] = i;
+    int nround = faces ? count : numfaces, R = GPU_GroupFloats();
+    for (int i = 0; i < nround; i++) roundfaces[i] = faces ? faces[i] : i;
     for (int round = 1; nround; round++) {
         double t0 = Seconds();
         RunThreadsOn(nround, RoundWork);
@@ -2492,3 +2502,5 @@ void BuildFacelightsGPU(void) {
     free(gpufaces), free(roundfaces);
     gpufaces = NULL;
 }
+
+void BuildFacelightsGPU(void) { BuildFacelightsGPUFaces(NULL, 0); }

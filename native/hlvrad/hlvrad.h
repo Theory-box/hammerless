@@ -335,6 +335,16 @@ void ParseEntities(void);
 const char *ValueForKey(const entity_t *e, const char *key);
 float FloatForKey(const entity_t *e, const char *key);
 void GetVectorForKey(const entity_t *e, const char *key, vec3_t v);
+void SetKeyValue(entity_t *e, const char *key, const char *value);
+int AddEntity(void);
+/* live.c (-live: the session's command lines and shared memory) */
+void LiveStartInput(void);
+int LiveGetLine(char *buf, int size, int wait);
+int LivePending(void);
+unsigned char *LiveMap(const char *name, size_t size);
+void LiveBarrier(void);
+extern int g_live;
+extern const char *g_liveName;
 
 /* ------------------------------------------------------------------ options */
 extern int g_bHDR;

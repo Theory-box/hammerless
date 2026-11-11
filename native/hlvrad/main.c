@@ -143,6 +143,7 @@ int main(int argc, char **argv) {
             g_giRepeat=(int)count;g_giRepeatPrefix=argv[++i];
             if(!*g_giRepeatPrefix)Error("-girepeat needs a nonempty artifact prefix");
         }
+        else if (!_stricmp(a, "-live") && i + 1 < argc) g_live = 1, g_liveName = argv[++i];   /* (a session: live_session.h) */
         else if (!_stricmp(a, "-girays") && i + 1 < argc) g_giRays = atoi(argv[++i]);            /* (its rays a sample) */
         else if (!_stricmp(a, "-chop") && i + 1 < argc) minchop = (float)atof(argv[++i]);     /* (patches at a face's edges) */
         else if (!_stricmp(a, "-maxchop") && i + 1 < argc) maxchop = (float)atof(argv[++i]);  /* (and inside it) */
@@ -230,6 +231,8 @@ int main(int argc, char **argv) {
         if(!_stricmp(input_full,output_full))Error("Artifact prefix must differ from input map");
         Msg("Diagnostic persistent GI%s; input BSP will not be written.\n",g_giServer?" controlled session":g_giRelightScale>=0?" with one real intensity edit":" replay only (no light edits)");
     }
+    if (g_live && (!g_bGPU || g_giPasses < 1 || g_layerLights || g_remix || g_visFrom || keep_path || g_onlyLights || g_giRepeat))
+        Error("-live needs -gpu -gi, without layers / remix / visfrom / keeplight / onlylights / girepeat");
     if (g_remix) g_layerLights = NULL, g_visFrom = NULL;   /* (a remix keeps the layers and the map's vis) */
     if (g_visFrom && g_visThreadsAfter >= 0) {      /* (few threads while vis runs: it has the rest of the CPU) */
         int during = g_visThreadsAfter;
@@ -338,6 +341,7 @@ int main(int argc, char **argv) {
     Stage("ray tracer");
     if (g_bGPU && !GPU_Init()) g_bGPU = 0;
     if(g_giRepeat && !g_bGPU)Error("-girepeat requires working GPU ray tracing");
+    if (g_live && !g_bGPU) Error("-live needs the GPU (it couldn't start)");
     if (g_numLayers && !g_bGPU) Error("-layers needs the GPU (it couldn't start)");
     if (g_bGPU) {
         GPU_ShadowScene();
@@ -417,6 +421,7 @@ int main(int argc, char **argv) {
         Stage("gi (bounced light)");
     }
     if(g_giRepeat) {Msg("Diagnostic GI replay finished; input BSP untouched.\n");return 0;}
+    if (g_live) return 0;               /* (the session has ended: the map is as it was) */
     if (g_numLayers) {
         WriteLayers(g_layersOut);
         Stage("layers");

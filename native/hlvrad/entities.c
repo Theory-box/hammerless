@@ -72,3 +72,26 @@ void GetVectorForKey(const entity_t *e, const char *key, vec3_t v) {
     v[1] = (float)b;
     v[2] = (float)c;
 }
+
+/* -live: an entity's key set (added when it has none), and a new entity without keys (its index) */
+void SetKeyValue(entity_t *e, const char *key, const char *value) {
+    char *v = xalloc(strlen(value) + 1);
+    strcpy(v, value);
+    for (int i = e->numpairs - 1; i >= 0; i--)
+        if (!strcmp(e->keys[i], key)) {
+            free(e->values[i]);
+            e->values[i] = v;
+            return;
+        }
+    e->keys = realloc(e->keys, sizeof(char *) * (e->numpairs + 1));
+    e->values = realloc(e->values, sizeof(char *) * (e->numpairs + 1));
+    e->keys[e->numpairs] = xalloc(strlen(key) + 1);
+    strcpy(e->keys[e->numpairs], key);
+    e->values[e->numpairs++] = v;
+}
+
+int AddEntity(void) {
+    entities = realloc(entities, sizeof(entity_t) * (num_entities + 1));
+    memset(&entities[num_entities], 0, sizeof(entity_t));
+    return num_entities++;
+}
