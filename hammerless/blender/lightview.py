@@ -271,6 +271,9 @@ def _draw():
     s = bpy.context.scene.hammerless
     if not s.show_bake_visualizations or not s.show_lightmap:
         return
+    from . import l4d2preview
+    if l4d2preview.vrad_view(bpy.context) and s.lightmap_mode != "RESOLUTION":
+        return                       # (the L4D2 Preview engine draws the built map itself there)
     try:
         if os.path.normcase(bsp_path(bpy.context)) != os.path.normcase(_state["path"] or ""):
             return                   # (another scene or map: the shown lighting isn't its)

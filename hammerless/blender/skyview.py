@@ -79,7 +79,14 @@ def error() -> str | None:
 
 
 def _draw():
-    context = bpy.context
+    from . import l4d2preview
+    if l4d2preview.vrad_view(bpy.context):
+        return                      # (the L4D2 Preview engine draws the sky behind its map itself: draw_sky)
+    draw_sky(bpy.context)
+
+
+def draw_sky(context) -> None:
+    """The sky where nothing has been drawn (the far depth), with the view's matrices as they are set."""
     s = getattr(context.scene, "hammerless", None)
     if s is None or not s.show_bake_visualizations or not s.show_sky:
         return

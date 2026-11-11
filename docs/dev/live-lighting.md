@@ -15,6 +15,22 @@ a bake. The GPU bake stays as it is for Build; this reuses its code for the prev
   to the map's light entities (each carries its object's name, `_hlobject`, written by every build now; older builds
   are matched by class and place), sends what changed and shows each result in the Baked Lighting view.
 
+## In the L4D2 Preview render engine
+
+With **Built-Map Lighting** on (Render properties, the default) the engine's Rendered viewport shows the last
+build's map: its faces with the game's textures times the session's lightmaps, its props with their baked vertex
+light, the sky behind (`l4d2preview.py`: `_vrad_ready` starts the session and loads the map, `_vrad_draw` draws it
+with `lighttextures`). The engine starts the session itself and it ends 20 s after the last such viewport closes.
+The scene isn't extracted at all in this mode, so big scenes cost nothing per edit. Without a build, or with the
+option off, the engine's own experimental lighting draws the scene as before.
+
+A render engine's viewport gives `POST_VIEW` overlays no scene depth (measured in 4.4: the sky overlay covered
+everything whatever the engine wrote or left in the depth buffer), so the engine draws the sky itself
+(`skyview.draw_sky`) and the Sky and Lighting overlays stay out of such viewports (`l4d2preview.vrad_view`).
+Other overlays that test depth (nav, problems) draw over the map there.
+
+Test: `tests/blender/check_engine_vrad.py` (a window; saves before/after screenshots).
+
 ## How an edit is lit
 
 1. The light entities are parsed again and the old and new light lists compared. The changed lights are gathered
@@ -76,5 +92,5 @@ Hotel map (1.8M luxels, 167 lights): bake 22 s; a lamp edit: first result 0.8 s,
 - A face a changed light reaches only between its main samples isn't supersampled again until `COLD` or a Build.
 - Area lights, emissive surfaces, prop vertex light and leaf ambient aren't followed.
 - A light with a style of its own (switchable, flickering) makes all the direct light again.
-- The L4D2 Preview render engine still has its own lighting.
+- In the engine, walls and props changed since the build don't show until a Build; props keep the build's light.
 - Build could take a running session's lightmaps instead of baking again.

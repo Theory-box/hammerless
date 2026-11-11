@@ -27,6 +27,32 @@ def running() -> bool:
     return _live["session"] is not None
 
 
+def for_engine() -> bool:
+    """Whether the L4D2 Preview engine started the session (it ends when no viewport has shown it for a while)."""
+    return bool(_live.get("engine"))
+
+
+def _engine_viewport() -> bool:
+    """Whether any 3D viewport is showing the engine's Built-Map Lighting."""
+    try:
+        from .l4d2preview import HAMMERLESS_L4D2Preview
+        for window in bpy.context.window_manager.windows:
+            scene = window.scene
+            if scene.render.engine != HAMMERLESS_L4D2Preview.bl_idname or not getattr(scene, "hl_preview_vrad", False):
+                continue
+            for area in window.screen.areas:
+                if area.type == "VIEW_3D" and any(sp.type == "VIEW_3D" and sp.shading.type == "RENDERED" for sp in area.spaces[:1]):
+                    return True
+    except Exception:
+        return True                     # (can't tell: keep it)
+    return False
+
+
+def busy() -> bool:
+    """Whether results are still coming (starting, or the lighting hasn't settled)."""
+    return running() and (_live["gen"] < 0 or _live["state"] < 2 or _live["dirty"] or not _live["acked"])
+
+
 def status() -> str:
     """A line for the panel: what the session is doing."""
     if not running():
@@ -125,7 +151,10 @@ def _match(scene: dict, bsp: list) -> tuple[dict[str, int], int]:
 
 
 # ---------------------------------------------------------------- start, stop
-def start(context) -> str | None:
+ENGINE_IDLE = 20.0      # (seconds without a viewport showing it before the engine's session ends)
+
+
+def start(context, for_engine: bool = False) -> str | None:
     """Start following the scene's lights on the last build's map. Returns an error message, or None."""
     from . import lightview
     from .ops import compile_options, game_root
@@ -166,7 +195,7 @@ def start(context) -> str | None:
         return f"Couldn't start the light compiler: {ex}"
     _live.update(session=session, path=path, mtime=os.path.getmtime(path), raw=raw, ents=ents, sent={n: {} for n in ents},
                  unfollowed=unfollowed, serial=0, acked=True, dirty=True, gen=-1, state=0, index=None, error=None,
-                 started=time.time())
+                 started=time.time(), engine=for_engine, seen=time.time())
     err = lightview.load(context, path)
     if err:
         stop()
@@ -259,7 +288,7 @@ def _show(faces: bytes, light: bytes) -> None:
         return
     lux = decode_luxels(light[:len(light) // 4 * 4])
     data.atlas.reshape(-1, 4)[dst, :3] = lux[src]
-    if lightview._state["batch"] is not None:
+    if lightview._state["batch"] is not None or lightview._state["texture"] is not None:
         lightview._upload()
     lightview._redraw()
 
@@ -273,9 +302,14 @@ def _tick():
         if not session.alive():
             stop("Live Lighting stopped: " + (session.log[-1] if session.log else "the light compiler ended"))
             return None
+        if L["engine"] and _engine_viewport():
+            L["seen"] = time.time()
+        if L["engine"] and time.time() - L["seen"] > ENGINE_IDLE:      # (no viewport shows it any more)
+            stop(reload=False)
+            return None
         try:                            # (a new build of the map: the session starts again on it)
             if os.path.getmtime(L["path"]) != L["mtime"] and time.time() - os.path.getmtime(L["path"]) > 1.0:
-                err = start(bpy.context)
+                err = start(bpy.context, for_engine=L["engine"])
                 if err:
                     _live["error"] = err
                 return None if err else 0.05

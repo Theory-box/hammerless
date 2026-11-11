@@ -664,7 +664,81 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         self.native_view.stage(self.cache, self.bounce_materials,
                                *tokens)
 
+    def _vrad_ready(self, context):
+        """Built-Map Lighting: the last build's map, lit by the light compiler kept running (livelighting.py), is what
+        this viewport shows. Starts the session and loads the map when needed; False when there is no build to show
+        (the engine's own lighting is used then). Never raises."""
+        if not getattr(context.scene, 'hl_preview_vrad', False):
+            return False
+        try:
+            import os
+            from . import lightview, livelighting
+            path = lightview.bsp_path(context)
+            if not os.path.exists(path):
+                _VRAD['note'] = 'No build yet: Build the map once to see its baked-quality lighting here'
+                return False
+            stamp = (os.path.normcase(path), os.path.getmtime(path))
+            if not livelighting.running():
+                if _VRAD['failed'] == stamp:      # (it couldn't start on this build: not again)
+                    return False
+                err = livelighting.start(context, for_engine=True)
+                if err:
+                    _VRAD['failed'], _VRAD['note'] = stamp, err
+                    return False
+            state = lightview._state
+            if state['data'] is None or os.path.normcase(state['path'] or '') != stamp[0]:
+                err = lightview.load(context, path)
+                if err:
+                    _VRAD['failed'], _VRAD['note'] = stamp, err
+                    return False
+            _VRAD['note'] = ''
+            return True
+        except Exception as exc:
+            _VRAD['note'] = f'Built-map lighting unavailable: {exc}'
+            return False
+
+    def _vrad_draw(self, context):
+        """The compiled map's faces (game textures x the live lightmaps) and props, with depth."""
+        from . import lightview, lighttextures, livelighting
+        state = lightview._state
+        s = context.scene.hammerless
+        if state['texture'] is None:
+            lightview._upload()
+        if state['tbatches'] is None or state.get('tscale') != s.units_per_meter:
+            state['tbatches'] = lighttextures.build(state['data'], state['props'], s.units_per_meter,
+                                                    state['content'], state['game_dir'])
+            state['tscale'] = s.units_per_meter
+        rv3d = context.region_data
+        gpu.matrix.push()
+        gpu.matrix.push_projection()
+        try:
+            gpu.matrix.load_matrix(rv3d.view_matrix)
+            gpu.matrix.load_projection_matrix(rv3d.window_matrix)
+            # (the sky behind the map: the Sky view's own drawing can't be used here, a render engine's viewport
+            # gives overlays no depth to hide it behind the walls)
+            from . import skyview
+            skyview.draw_sky(context)
+            gpu.state.blend_set('NONE')
+            gpu.state.depth_mask_set(True)
+            gpu.state.depth_test_set('LESS_EQUAL')
+            gpu.state.face_culling_set('NONE')
+            lighttextures.draw(state['tbatches'], state['texture'], 2.0 ** context.scene.hl_preview_exposure, 0.0, True)
+        finally:
+            gpu.state.depth_test_set('NONE')
+            gpu.matrix.pop_projection()
+            gpu.matrix.pop()
+        note = livelighting.status().replace('Live Lighting: ', 'Lighting: ')
+        if state['edited']:
+            note += ' | walls changed since the build: Build to show them'
+        self.update_stats('L4D2 Preview', note)
+        if livelighting.busy():
+            self.tag_redraw()
+
     def view_update(self, context, depsgraph):
+        if self._vrad_ready(context):   # (the built map is shown: nothing of the scene to extract)
+            self.error = ''
+            self.tag_redraw()
+            return
         try:
             if self.update_guard.check(context,depsgraph,self.surface_cache,_material_refresh_revision):
                 # Only lighting changes: retain geometry/material/chart snapshots.
@@ -741,6 +815,20 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
 
     def view_draw(self, context, depsgraph):
         gpu.state.active_framebuffer_get().clear(color=(0.025, 0.025, 0.025, 1), depth=1.0)
+        if self._vrad_ready(context):
+            try:
+                self._vrad_draw(context)
+                return
+            except Exception as exc:    # (the engine's own lighting instead, until the next build)
+                import os
+                from . import lightview
+                path = lightview.bsp_path(context)
+                _VRAD['note'] = f'Built-map lighting unavailable: {exc}'
+                _VRAD['failed'] = (os.path.normcase(path), os.path.getmtime(path)) if os.path.exists(path) else None
+                from . import livelighting
+                if livelighting.for_engine():
+                    livelighting.stop(reload=False)
+                gpu.state.active_framebuffer_get().clear(color=(0.025, 0.025, 0.025, 1), depth=1.0)
         if self.error:
             self.update_stats('L4D2 Preview', self.error)
             return
@@ -912,6 +1000,18 @@ class HAMMERLESS_PT_l4d2_preview(bpy.types.Panel):
 
     def draw(self, context):
         col = self.layout.column()
+        col.prop(context.scene,'hl_preview_vrad')
+        if context.scene.hl_preview_vrad:
+            from . import livelighting
+            note = _VRAD['note'] or livelighting.status().replace('Live Lighting: ', 'Lighting: ')
+            if note:col.label(text=note, icon='ERROR' if _VRAD['note'] else 'INFO')
+            col.prop(context.scene,'hl_preview_exposure')
+            if not _VRAD['note']:
+                col.label(text="Shows the last build's map; lights are followed live.")
+                col.label(text='Walls moved since need a Build.')
+                return
+            col.separator()
+            col.label(text='Until then, the experimental preview lighting:')
         col.label(text='Point/spot/sun/area; opaque GPU shadows', icon='INFO')
         col.label(text='Blender emission lights nearby surfaces.')
         col.label(text='Base textures; linear irradiance / 255.')
@@ -947,7 +1047,32 @@ def _blender_panels():
             yield panel
 
 
+_VRAD = {'failed': None, 'note': ''}     # (the build Built-Map Lighting couldn't start on; why it isn't shown)
+
+
+def _vrad_toggled(self, context):
+    from . import livelighting
+    _VRAD['failed'] = None
+    if not self.hl_preview_vrad and livelighting.running() and livelighting.for_engine():
+        livelighting.stop()
+    for window in context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
+
+def vrad_view(context) -> bool:
+    """Whether this 3D viewport is showing the built map through the engine (the Lighting view's overlay stays out)."""
+    space = getattr(context, 'space_data', None)
+    return (space is not None and space.type == 'VIEW_3D' and space.shading.type == 'RENDERED'
+            and context.scene.render.engine == HAMMERLESS_L4D2Preview.bl_idname
+            and getattr(context.scene, 'hl_preview_vrad', False))
+
+
 def register():
+    bpy.types.Scene.hl_preview_vrad = bpy.props.BoolProperty(
+        name='Built-Map Lighting',default=True,update=_vrad_toggled,
+        description="Show the last build's map lit by the light compiler, kept running: the lighting is a bake's, and follows the lights as you edit them. Walls moved since the build show after a Build. Off: the experimental preview lighting on the scene as it is")
     bpy.types.Scene.hl_preview_native = bpy.props.BoolProperty(
         name='Hardware Ray Tracing (Experimental)',default=False,
         description='Use a separate Vulkan hardware ray tracing worker. Requires a ray-query capable GPU. Pauses during interaction. Enable Surface Lighting Cache to retain brush lighting while navigating')
@@ -978,6 +1103,7 @@ def unregister():
     from .previewnative import shutdown
     shutdown()
     del bpy.types.Scene.hl_preview_native
+    del bpy.types.Scene.hl_preview_vrad
     del bpy.types.Scene.hl_preview_surface_cache
     del bpy.types.Scene.hl_preview_max_bounces
     del bpy.types.Scene.hl_preview_refine_frames
