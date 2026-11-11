@@ -79,6 +79,9 @@ def error() -> str | None:
 
 
 def _draw():
+    from . import l4d2preview
+    if l4d2preview.vrad_view(bpy.context):
+        return                      # (the L4D2 Preview engine draws the sky behind its map itself: draw_sky)
     draw_sky(bpy.context)
 
 

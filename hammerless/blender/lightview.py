@@ -265,19 +265,7 @@ def _follow_compiles() -> None:
             _state["error"] = err
 
 
-def _draw_engine():
-    """The L4D2 Preview engine's Built-Map Lighting: its picture is drawn here, with the overlays (see
-    l4d2preview._vrad_draw for why), whatever the Lighting view's own switches say."""
-    try:
-        from . import l4d2preview
-        if l4d2preview.vrad_view(bpy.context):
-            l4d2preview.vrad_overlay_draw(bpy.context)
-    except Exception:
-        pass                         # (never an error out of a draw callback)
-
-
 def _draw():
-    _draw_engine()
     if _state["data"] is None:
         return
     s = bpy.context.scene.hammerless
@@ -285,7 +273,7 @@ def _draw():
         return
     from . import l4d2preview
     if l4d2preview.vrad_view(bpy.context) and s.lightmap_mode != "RESOLUTION":
-        return                       # (the L4D2 Preview engine's own picture of the built map is there: _draw_engine)
+        return                       # (the L4D2 Preview engine draws the built map itself there)
     try:
         if os.path.normcase(bsp_path(bpy.context)) != os.path.normcase(_state["path"] or ""):
             return                   # (another scene or map: the shown lighting isn't its)

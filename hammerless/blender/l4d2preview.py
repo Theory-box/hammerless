@@ -698,14 +698,36 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             return False
 
     def _vrad_draw(self, context):
-        """Built-Map Lighting's part in the engine's own draw: nothing but the status line. The picture is drawn by
-        vrad_overlay_draw, with the viewport's overlays: what a render engine draws here goes through the scene's
-        colour management (its exposure, view transform and look, measured in 4.4), and the picture must be the
-        game's whatever those are; the overlays' buffer is shown as it is, and its depth hides what is behind the
-        map's walls (the sky, the nav view), which a render engine's own depth doesn't."""
-        from . import lightview, livelighting
+        """The compiled map's faces (game textures x the live lightmaps), its props and the sky behind, drawn as the
+        Lighting view's overlay draws them. Blender shows what a render engine draws through the scene's view
+        settings, which neutral_view keeps at the plain sRGB display while this is the scene's engine; that display
+        codes the colours as the overlays' buffer does (measured, see docs/dev/live-lighting.md), so the picture is
+        the Lighting view's."""
+        from . import lightview, lighttextures, livelighting, skyview
         state = lightview._state
-        _VRAD['shown'] = True
+        s = context.scene.hammerless
+        if state['texture'] is None:
+            lightview._upload()
+        if state['tbatches'] is None or state.get('tscale') != s.units_per_meter:
+            state['tbatches'] = lighttextures.build(state['data'], state['props'], s.units_per_meter,
+                                                    state['content'], state['game_dir'])
+            state['tscale'] = s.units_per_meter
+        rv3d = context.region_data
+        gpu.matrix.push()
+        gpu.matrix.push_projection()
+        try:
+            gpu.matrix.load_matrix(rv3d.view_matrix)
+            gpu.matrix.load_projection_matrix(rv3d.window_matrix)
+            skyview.draw_sky(context)
+            gpu.state.blend_set('NONE')
+            gpu.state.depth_mask_set(True)
+            gpu.state.depth_test_set('LESS_EQUAL')
+            gpu.state.face_culling_set('NONE')
+            lighttextures.draw(state['tbatches'], state['texture'], 2.0 ** context.scene.hl_preview_exposure, 0.0, True)
+        finally:
+            gpu.state.depth_test_set('NONE')
+            gpu.matrix.pop_projection()
+            gpu.matrix.pop()
         note = livelighting.status().replace('Live Lighting: ', 'Lighting: ')
         if state['edited']:
             note += ' | walls changed since the build: Build to show them'
@@ -714,6 +736,7 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             self.tag_redraw()
 
     def view_update(self, context, depsgraph):
+        neutral_view_check(context.scene)
         if self._vrad_ready(context):   # (the built map is shown: nothing of the scene to extract)
             self.error = ''
             self.tag_redraw()
@@ -794,10 +817,8 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
 
     def view_draw(self, context, depsgraph):
         gpu.state.active_framebuffer_get().clear(color=(0.025, 0.025, 0.025, 1), depth=1.0)
-        _VRAD['shown'] = False
         if self._vrad_ready(context):
             try:
-                gpu.state.active_framebuffer_get().clear(color=(0, 0, 0, 1), depth=1.0)
                 self._vrad_draw(context)
                 return
             except Exception as exc:    # (the engine's own lighting instead, until the next build)
@@ -1042,26 +1063,73 @@ def _vrad_toggled(self, context):
                 area.tag_redraw()
 
 
-def vrad_overlay_draw(context) -> None:
-    """The compiled map's faces (game textures x the live lightmaps) and props, with depth, in a viewport where
-    vrad_view is true (called from the Lighting view's draw handler: the first of the add-on's overlays)."""
-    from . import lightview, lighttextures
-    state = lightview._state
-    if not _VRAD.get('shown') or state['data'] is None:
+# ---------------------------------------------------------------- the scene's view settings
+# Blender turns what a render engine draws into display colours with the scene's Colour Management settings: its
+# view transform, look, exposure, gamma and curves. The engine's picture must be the game's, which those would
+# change (measured in 4.4: exposure 2 doubles its brightness; AgX and Filmic can't be undone, saturated colours come
+# back up to 0.64 off). So while a scene's engine is this one its view settings are kept neutral (the plain sRGB
+# display), the ones it had kept on the scene ("hl_view_saved") and put back when it gets another engine.
+NEUTRAL_VIEW = {'view_transform': 'Standard', 'look': 'None', 'exposure': 0.0, 'gamma': 1.0, 'use_curve_mapping': False}
+_msgbus_owner = object()
+
+
+def _view_is_neutral(scene) -> bool:
+    vs = scene.view_settings
+    for key, want in NEUTRAL_VIEW.items():
+        have = getattr(vs, key, want)
+        if (abs(have - want) > 1e-6) if isinstance(want, float) else (have != want):
+            return False
+    return True
+
+
+def neutral_view() -> None:
+    """Every scene's view settings as its engine needs them: neutral for this engine's (the old ones kept), the kept
+    ones back for the others. Changes scenes: never called while drawing (neutral_view_check asks for it)."""
+    _VRAD['view_timer'] = False
+    for scene in bpy.data.scenes:
+        vs = scene.view_settings
+        saved = scene.get('hl_view_saved')
+        if scene.render.engine == HAMMERLESS_L4D2Preview.bl_idname:
+            if _view_is_neutral(scene):
+                continue
+            if saved is None:
+                scene['hl_view_saved'] = {key: getattr(vs, key) for key in NEUTRAL_VIEW if hasattr(vs, key)}
+            for key, want in NEUTRAL_VIEW.items():
+                try:
+                    setattr(vs, key, want)
+                except Exception:       # (a configuration without that view or look: as near as it goes)
+                    pass
+        elif saved is not None:
+            for key in NEUTRAL_VIEW:
+                try:
+                    if key in saved:
+                        setattr(vs, key, saved[key])
+                except Exception:
+                    pass
+            del scene['hl_view_saved']
+    return None
+
+
+def neutral_view_check(scene=None) -> None:
+    """Ask for neutral_view when a scene needs it (safe from draw and update callbacks: the change is made by a
+    timer)."""
+    if _VRAD.get('view_timer'):
         return
-    s = context.scene.hammerless
-    if state['texture'] is None:
-        lightview._upload()
-    if state['tbatches'] is None or state.get('tscale') != s.units_per_meter:
-        state['tbatches'] = lighttextures.build(state['data'], state['props'], s.units_per_meter,
-                                                state['content'], state['game_dir'])
-        state['tscale'] = s.units_per_meter
-    gpu.state.blend_set('NONE')
-    gpu.state.depth_mask_set(True)
-    gpu.state.depth_test_set('LESS_EQUAL')
-    gpu.state.face_culling_set('NONE')
-    lighttextures.draw(state['tbatches'], state['texture'], 2.0 ** context.scene.hl_preview_exposure, 0.0, True)
-    gpu.state.depth_test_set('NONE')
+    if scene is not None and scene.render.engine == HAMMERLESS_L4D2Preview.bl_idname and _view_is_neutral(scene):
+        return
+    _VRAD['view_timer'] = True
+    bpy.app.timers.register(neutral_view, first_interval=0.0)
+
+
+def _engine_changed(*_args):
+    neutral_view_check()
+
+
+@bpy.app.handlers.persistent
+def _view_on_load(*_args):
+    bpy.msgbus.clear_by_owner(_msgbus_owner)
+    bpy.msgbus.subscribe_rna(key=(bpy.types.RenderSettings, 'engine'), owner=_msgbus_owner, args=(), notify=_engine_changed)
+    neutral_view_check()
 
 
 def vrad_view(context) -> bool:
@@ -1098,9 +1166,28 @@ def register():
         bpy.utils.register_class(cls)
     for panel in _blender_panels():
         panel.COMPAT_ENGINES.add(HAMMERLESS_L4D2Preview.bl_idname)
+    bpy.app.handlers.load_post.append(_view_on_load)
+    _view_on_load()
 
 
 def unregister():
+    if _view_on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_view_on_load)
+    bpy.msgbus.clear_by_owner(_msgbus_owner)
+    try:                                # (the scenes' own view settings back: the engine is going)
+        for scene in bpy.data.scenes:
+            saved = scene.get('hl_view_saved')
+            if saved is None:
+                continue
+            for key in NEUTRAL_VIEW:
+                try:
+                    if key in saved:
+                        setattr(scene.view_settings, key, saved[key])
+                except Exception:
+                    pass
+            del scene['hl_view_saved']
+    except Exception:
+        pass
     for panel in _blender_panels():
         panel.COMPAT_ENGINES.discard(HAMMERLESS_L4D2Preview.bl_idname)
     from .previewnative import shutdown

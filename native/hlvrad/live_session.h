@@ -263,6 +263,7 @@ static void LiveExactDirect(live_t *L, int keepBounce, int some) {
         free(dlightdata);
         dlightdata = NULL;
         PrecompLightmapOffsets();
+        RadPlansReset();                        /* (the styles' order may be another: the radials' plans too) */
         free(L->gridofs), free(L->grid);        /* (the lightmaps laid out anew: the change grid with them) */
         L->gridofs = NULL, L->grid = NULL;
         if (!keepBounce) LiveSetRef(L, 0);      /* (no bounced light: gathered from nothing) */
@@ -538,6 +539,10 @@ static void LiveSession(gpugroup_t *groups, int (*where)[2], int n, int *k0, vec
     L.pend = xalloc(sizeof(float) * (numfaces + 1)), L.since = xalloc(sizeof(float) * (numfaces + 1));
     L.gtouch = xalloc((size_t)n + 1), L.pick = xalloc(sizeof(int) * (n + 1)), L.asked = xalloc(sizeof(gpugroup_t) * (n + 1));
     L.fullAll = 1;
+    if (!getenv("HLLIVENOPLAN")) {      /* (the faces' radials by plan: see RadPlan) */
+        g_radPlans = xalloc(sizeof(radplan_t) * (numfaces + 1));
+        g_radPlanOn = 1;
+    }
     L.rays = g_giRays, L.t0 = Seconds();
     L.debug = getenv("HLLIVEDBG") != NULL;
     L.deltaRays = getenv("HLLIVEDELTA") ? atoi(getenv("HLLIVEDELTA")) : 128;     /* (0: full passes only) */

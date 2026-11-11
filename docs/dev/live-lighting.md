@@ -24,13 +24,29 @@ with `lighttextures`). The engine starts the session itself and it ends 20 s aft
 The scene isn't extracted at all in this mode, so big scenes cost nothing per edit. Without a build, or with the
 option off, the engine's own experimental lighting draws the scene as before.
 
-The picture is drawn with the viewport's overlays (`l4d2preview.vrad_overlay_draw`, called first from the Lighting
-view's `POST_VIEW` handler), not in the engine's `view_draw`. Measured in 4.4: what `view_draw` draws goes through
-the scene's colour management (exposure 2 doubled the picture's brightness, AgX and Standard gave different
-pictures, and none was the Lighting view's), and its depth never reaches the overlays (the sky overlay covered
-everything). The overlays' buffer is shown as it is and keeps its own depth, so the picture is the same whatever
-the scene's exposure, view transform or look, and the sky and nav overlays are hidden behind the map's walls.
-`view_draw` only clears to black and writes the status line. The engine's own Exposure setting still applies.
+The picture is drawn in the engine's `view_draw` (`_vrad_draw`), the sky included (`skyview.draw_sky`; the Sky and
+Lighting overlays stay out of such viewports, `l4d2preview.vrad_view`).
+
+Colour, all measured in Blender 4.4 with flat test colours:
+
+- What a render engine draws in `view_draw` is read as linear light and shown through the scene's Colour Management:
+  view transform, look, exposure, gamma, curves (0.2173 drawn shows as 128 = its sRGB coding with Standard; exposure 2
+  doubles the picture; AgX and Standard differ).
+- A custom shader in a `POST_VIEW` overlay gets the same coding (0.2173 shows as 127). So the Lighting view, whose
+  shaders write sRGB-coded colours, shows them coded twice; its look is the reference the engine matches.
+- AgX and Filmic can't be undone (a round trip through their inverse was up to 0.64 off on saturated colours).
+
+So while a scene's engine is this one, `neutral_view` keeps its view settings neutral (Standard, look None,
+exposure 0, gamma 1, no curves), keeps the ones it had on the scene (`hl_view_saved`) and puts them back when the
+scene gets another engine (a message-bus subscription on the engine, `load_post`, and a check in `view_update`; the
+change itself is made by a timer, never while drawing). With that, the engine's picture is the Lighting view's:
+same-run screenshots agree to a level on lit surfaces and 3-4 levels (of 255) in deep shadow.
+
+Drawing the picture as an overlay was tried (commit 4388b05) and dropped: with Blender's overlays on it fights for
+depth with the overlay engine's own geometry (black stripes), and overlays being off would hide it.
+
+Open: the Lighting view's double coding makes both brighter than a single sRGB coding of texture x lightmap would
+be; whether that or the single coding is the game's brightness needs a comparison against the game.
 
 Test: `tests/blender/check_engine_vrad.py` (a window; saves before/after screenshots).
 
@@ -59,6 +75,9 @@ Speed-ups since the first version (all in `live_session.h`):
 - A face's luxels are made again only when its samples moved a quarter of a tolerance since they were last made
   (all that waited are made when the lighting settles). Displacements no longer make every pass's luxels again:
   their luxels blend their own and their neighbours' samples only.
+- A face's radial (which samples go into which lightmap cell, with what weight) is written down the first time it
+  is built and replayed after that (`RadPlan` in `direct.c`; `HLLIVENOPLAN` turns it off): the same sums in the
+  same order, without the geometry worked out again. Whole-map filtering 0.11 s -> 0.02-0.04 s a pass.
 - `HLLIVEDBG=1` prints each step's time and how many groups a pass gathered.
 
 ## Measured (RTX 4090)
@@ -68,6 +87,10 @@ After the speed-ups: user's map copy (8 threads), a lamp moved and recoloured: f
 settled about 4.5 s (the exact direct light of every face is 1.1 s of it). Hotel: a lamp edit: first result 0.05 s,
 settled 3.4 s (was 21 s; 58 of 1.8M luxels over 2%, worst 5.4%). `COLD` is still a fresh bake's to the byte on both.
 The session's start on the hotel takes 25 s to settle (a bake: 28 s): slow-converging maps spend it in change passes.
+
+With the radial plans: user's map lamp 0.04 s / 1.0 s settled; sun 0.12 s / 2.9 s (exact direct of every face
+1.0 s of it); hotel lamp 0.03 s / 2.4 s, and the hotel session's start settles in 8 s (was 25 s). `COLD` still a
+fresh bake's to the byte on both.
 
 The first version's numbers:
 

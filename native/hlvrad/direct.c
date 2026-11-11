@@ -1283,6 +1283,102 @@ static void FreeRadial(radial_t *rad) {
 }
 
 #define OO_SQRT_3 0.57735025882720947f
+
+/* -live: a face's radial as a plan. Which samples go into which of its cells, and with what weight, depends only on
+ * the map (the samples' places, the faces' lightmap vectors, the styles' order): the first time a face's style-0
+ * radial is built the additions are written down in the order they were made, and after that the radial is those
+ * additions done again with the samples' light as it is now: the same sums in the same order (the same floats),
+ * without the geometry worked out again. */
+typedef struct { int cell, sample; float r; unsigned short src; unsigned char mode, nstyle; } radent_t;
+typedef struct {
+    radent_t *e;
+    int n, cap, built;
+    float *weight;                      /* the cells' weights (the plan's own: they never change) */
+    int *srcface, nsrc;                 /* the faces its samples come from (src 0: its own) */
+} radplan_t;
+static radplan_t *g_radPlans;
+int g_radPlanOn;
+static __thread radplan_t *g_radRec;    /* (the plan being written down, by this thread) */
+static __thread int g_radSrc, g_radSample, g_radStyle;
+
+static void RadRecord(int cell, float r, int mode) {
+    radplan_t *p = g_radRec;
+    if (p->n == p->cap) p->cap = p->cap ? 2 * p->cap : 256, p->e = realloc(p->e, sizeof(radent_t) * p->cap);
+    radent_t *e = &p->e[p->n++];
+    e->cell = cell, e->sample = g_radSample, e->r = r, e->src = (unsigned short)g_radSrc;
+    e->mode = (unsigned char)mode, e->nstyle = (unsigned char)g_radStyle;
+}
+
+static int RadSource(radplan_t *p, int face) {
+    for (int i = 0; i < p->nsrc; i++)
+        if (p->srcface[i] == face) return i;
+    p->srcface = realloc(p->srcface, sizeof(int) * (p->nsrc + 1));
+    p->srcface[p->nsrc] = face;
+    return p->nsrc++;
+}
+
+/* the plans forgotten (the lightmaps laid out anew: the styles' order may have changed) */
+void RadPlansReset(void) {
+    if (!g_radPlans) return;
+    for (int f = 0; f < numfaces; f++) free(g_radPlans[f].e), free(g_radPlans[f].weight), free(g_radPlans[f].srcface);
+    memset(g_radPlans, 0, sizeof(radplan_t) * (numfaces + 1));
+}
+
+static radial_t *AllocateRadial(int facenum);
+static radial_t *RadReplay(int facenum, const radplan_t *p) {
+    radial_t *rad = AllocateRadial(facenum);
+    memcpy(rad->weight, p->weight, sizeof(float) * (size_t)(rad->w * rad->h));
+    for (int k = 0; k < p->n; k++) {
+        const radent_t *e = &p->e[k];
+        const facelight_t *fl = &facelight[p->srcface[e->src]];
+        int i = e->cell;
+        float r = e->r;
+        const float *l0 = fl->light[e->nstyle][0][e->sample];
+        switch (e->mode) {
+        case 0:
+            for (int c = 0; c < 3; c++) rad->light[0][i][c] += l0[c] * r;
+            break;
+        case 1:
+            for (int b = 0; b < NUM_BUMP_VECTS + 1; b++) {
+                const float *lb = fl->light[e->nstyle][b][e->sample];
+                for (int c = 0; c < 3; c++) rad->light[b][i][c] += lb[c] * r;
+            }
+            break;
+        case 2:
+            for (int c = 0; c < 3; c++) rad->light[0][i][c] += l0[c] * r;
+            for (int b = 1; b < NUM_BUMP_VECTS + 1; b++)
+                for (int c = 0; c < 3; c++) rad->light[b][i][c] += l0[c] * (r * OO_SQRT_3);
+            break;
+        default:
+            for (int b = 0; b < NUM_BUMP_VECTS + 1; b++)
+                for (int c = 0; c < 3; c++) rad->light[b][i][c] += l0[c] * r;
+        }
+    }
+    return rad;
+}
+
+/* whether a face's radial of this style goes by its plan: the plan when it has one, else NULL with the plan set up
+ * to be written down (RadDone ends that) */
+static radplan_t *RadPlan(int facenum, int style) {
+    if (!g_radPlanOn || g_radialAll || g_pFaces[facenum].styles[style] != 0) return NULL;
+    if (!g_radPlans) return NULL;
+    radplan_t *p = &g_radPlans[facenum];
+    if (p->built) return p;
+    p->n = 0, p->nsrc = 0;
+    RadSource(p, facenum);
+    g_radRec = p, g_radSrc = 0, g_radStyle = style;
+    return NULL;
+}
+
+static void RadDone(const radial_t *rad) {
+    radplan_t *p = g_radRec;
+    if (!p) return;
+    p->weight = xalloc(sizeof(float) * (size_t)(rad->w * rad->h + 1));
+    memcpy(p->weight, rad->weight, sizeof(float) * (size_t)(rad->w * rad->h));
+    p->built = 1;
+    g_radRec = NULL;
+}
+
 static void AddDirectToRadial(radial_t *rad, const vec3_t pnt, const float *cmins, const float *cmaxs, vec3_t *light,
                               int hasBump, int neighbourBump) {
     float coord[2];
@@ -1305,6 +1401,7 @@ static void AddDirectToRadial(radial_t *rad, const vec3_t pnt, const float *cmin
             float r = ds > dt ? ds : dt;
             r = r < 0.1 ? (float)(area / 0.1) : area / r;
             int i = s + t * rad->w;
+            if (g_radRec) RadRecord(i, r, hasBump ? (neighbourBump ? 1 : 2) : 0);
             if (hasBump) {
                 if (neighbourBump) {
                     for (int b = 0; b < NUM_BUMP_VECTS + 1; b++)
@@ -1324,11 +1421,14 @@ static void AddDirectToRadial(radial_t *rad, const vec3_t pnt, const float *cmin
 
 static radial_t *BuildLuxelRadial(int facenum, int style) {
     facelight_t *fl = &facelight[facenum];
+    radplan_t *plan = RadPlan(facenum, style);
+    if (plan) return RadReplay(facenum, plan);
     radial_t *rad = AllocateRadial(facenum);
     int bump = RADIAL_BUMP(facenum) ? 1 : 0;
     vec3_t light[NUM_BUMP_VECTS + 1];
     for (int k = 0; k < fl->numsamples; k++) {
         for (int b = 0; b < (bump ? NUM_BUMP_VECTS + 1 : 1); b++) VectorCopy(fl->light[style][b][k], light[b]);
+        g_radSample = k;
         AddDirectToRadial(rad, fl->sample[k].pos, fl->sample[k].mins, fl->sample[k].maxs, light, bump, bump);
     }
     int nn;
@@ -1346,7 +1446,9 @@ static radial_t *BuildLuxelRadial(int facenum, int style) {
         if (!nfl->light[nstyle][0]) continue;
         lightinfo_t l;
         InitLightinfo(&l, nf);
+        if (g_radRec) g_radSrc = RadSource(g_radRec, nf), g_radStyle = nstyle;
         for (int k = 0; k < nfl->numsamples; k++) {
+            g_radSample = k;
             for (int b = 0; b < (nbump ? NUM_BUMP_VECTS + 1 : 1); b++) VectorCopy(nfl->light[nstyle][b][k], light[b]);
             vec3_t tmp;
             float mins[2], maxs[2];
@@ -1357,6 +1459,7 @@ static radial_t *BuildLuxelRadial(int facenum, int style) {
             AddDirectToRadial(rad, nfl->sample[k].pos, mins, maxs, light, bump, nbump);
         }
     }
+    RadDone(rad);
     return rad;
 }
 
@@ -1432,6 +1535,8 @@ void PrepareFinalLight(void) {
 static radial_t *BuildDispLuxelRadial(int facenum, int style) {
     if (!samples_hashed) InsertSamplesDataIntoHashTable(), samples_hashed = 1;
     facelight_t *fl = &facelight[facenum];
+    radplan_t *plan = RadPlan(facenum, style);
+    if (plan) return RadReplay(facenum, plan);
     radial_t *rad = AllocateRadial(facenum);
     const dispsurf_t *d = &dispsurfs[g_pFaces[facenum].dispinfo];
     int bump = RADIAL_BUMP(facenum) ? 1 : 0;
@@ -1471,6 +1576,10 @@ static radial_t *BuildDispLuxelRadial(int facenum, int style) {
                         float influence = 1.0f - (dist * dist) / r2;
                         if (influence <= 0.0f) continue;
                         influence *= angle;
+                        if (g_radRec) {
+                            g_radSrc = RadSource(g_radRec, nf), g_radSample = ns, g_radStyle = nstyle;
+                            RadRecord(j, bump && !nbump ? influence * 0.05f : influence, bump ? (nbump ? 1 : 3) : 0);
+                        }
                         if (bump && nbump) {
                             for (int b = 0; b < NUM_BUMP_VECTS + 1; b++)
                                 for (int k = 0; k < 3; k++) rad->light[b][j][k] += nfl->light[nstyle][b][ns][k] * influence;
@@ -1485,6 +1594,7 @@ static radial_t *BuildDispLuxelRadial(int facenum, int style) {
                     }
                 }
     }
+    RadDone(rad);
     return rad;
 }
 
