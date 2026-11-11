@@ -165,7 +165,9 @@ def load(context, path: str | None = None) -> str | None:
         with open(path, "rb") as f:
             raw = f.read()
         from . import lightmix
-        mixing = os.path.exists(lightmix.layers_path(path))
+        from . import livelighting
+        # (Live Lighting shows the static lighting its session makes: no layers)
+        mixing = os.path.exists(lightmix.layers_path(path)) and not livelighting.running()
         data = read_lightmaps(raw, None if mixing else 0)      # (mixing: every light on, as the layers have them)
     except Exception as ex:          # (a map being written, or cut short: never an error out of the draw callback)
         return f"Couldn't read the compiled map: {ex}"
@@ -247,6 +249,9 @@ def _follow_compiles() -> None:
     """A newer compile of the shown map replaces the view (checked at most once a second)."""
     now = time.time()
     if now - _state["checked"] < 1.0 or not _state["path"]:
+        return
+    from . import livelighting
+    if livelighting.running():          # (it starts again on a new build itself, and loads the view)
         return
     _state["checked"] = now
     try:
@@ -470,6 +475,8 @@ def draw_panel(layout, context):
             if quick:
                 _note(layout, ["Lighting Quality is Off"], icon="ERROR")
         return
+    from . import livelighting
+    livelighting.draw_panel(layout, context)
     row = layout.row(align=True)
     row.prop(s, "lightmap_mode", expand=True)
     if s.lightmap_mode == "RESOLUTION":
@@ -546,8 +553,13 @@ def _on_depsgraph(scene, depsgraph):
             pass
     if _state["edited"]:
         return
+    from . import livelighting
+    live = livelighting.running()
     for u in depsgraph.updates:
         i = u.id
+        if live and (isinstance(i, (bpy.types.Light, bpy.types.Scene)) or (
+                isinstance(i, bpy.types.Object) and i.type == "LIGHT")):
+            continue                     # (Live Lighting follows the lights)
         if mixing and (isinstance(i, (bpy.types.Light, bpy.types.Scene)) or (
                 isinstance(i, bpy.types.Object) and (i.type == "LIGHT" or i.name in mixed)
                 and not u.is_updated_transform)):
@@ -563,10 +575,14 @@ def register():
         bpy.utils.register_class(c)
     bpy.app.handlers.load_post.append(_forget_on_load)
     bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
+    from . import livelighting
+    livelighting.register()
     _handlers.append(bpy.types.SpaceView3D.draw_handler_add(_draw, (), "WINDOW", "POST_VIEW"))
 
 
 def unregister():
+    from . import livelighting
+    livelighting.unregister()
     if _forget_on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_forget_on_load)
     if _on_depsgraph in bpy.app.handlers.depsgraph_update_post:

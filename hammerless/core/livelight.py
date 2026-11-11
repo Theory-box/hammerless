@@ -31,8 +31,11 @@ class LiveError(RuntimeError):
 
 
 class LiveLight:
-    def __init__(self, exe, args, low_priority=True, on_log=None):
-        """args: hlvrad's options and the map, as for a bake with -gpu -gi (the session adds -live <name>)."""
+    def __init__(self, exe, args, low_priority=True, on_log=None, queue_events=True):
+        """args: hlvrad's options and the map, as for a bake with -gpu -gi (the session adds -live <name>).
+        queue_events False: results aren't kept for wait() (an owner that polls last_update() instead)."""
+        self.queue_events = queue_events
+        self._next_entity = None
         self.name = "hammerless_live_%d_%d" % (os.getpid(), int(time.time() * 1000) % 100000000)
         flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
         if low_priority and hasattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS"):
@@ -60,12 +63,14 @@ class LiveLight:
                 u = (int(p[1]), int(p[2]), int(p[3]), int(p[4]), float(p[5]), time.time())
                 with self._lock:
                     self.updates.append(u)
-                self._events.put(u)
+                    del self.updates[:-200]
+                if self.queue_events:
+                    self._events.put(u)
             elif line.startswith("HLLIVE_READY "):
                 p = line.split()
                 self.ready = (int(p[2]), int(p[3]), int(p[4]))
             elif line.startswith("HLLIVE_ENT "):
-                self._new_entities.put(int(line.split()[1]))
+                pass                    # (add() knows the index: the map's entities, then one each)
             else:
                 self.log.append(line)
                 del self.log[:-400]
@@ -88,8 +93,15 @@ class LiveLight:
 
     def add(self, keys):
         """A new light entity with these keys (classname, origin, _light...): its index."""
+        while self.ready is None:       # (the map's entity count comes with its first lightmaps)
+            if not self.alive():
+                raise LiveError("the lighting session has ended:\n" + "\n".join(self.log[-12:]))
+            time.sleep(0.01)
+        if self._next_entity is None:
+            self._next_entity = self.ready[2]
         self._send("ADD")
-        entity = self._new_entities.get(timeout=30)
+        entity = self._next_entity
+        self._next_entity += 1
         for k, v in keys.items():
             self.set(entity, k, v)
         return entity
@@ -129,6 +141,11 @@ class LiveLight:
                 raise LiveError("the lighting session has ended:\n" + "\n".join(self.log[-12:]))
             if (serial is None or u[1] >= serial) and (state is None or u[2] >= state):
                 return u
+
+    def last_update(self):
+        """The newest result's tuple, or None."""
+        with self._lock:
+            return self.updates[-1] if self.updates else None
 
     def snapshot(self):
         """(faces bytes, lightmap bytes, info) as they are now: the faces are the map's dface_t records (56 bytes

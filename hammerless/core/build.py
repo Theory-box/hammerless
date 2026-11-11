@@ -518,6 +518,14 @@ def default_light_environment(settings):
     return Entity("light_environment", (0, 0, 0), (s.sun_pitch, s.sun_yaw, 0), kv)
 
 
+def tag_light_objects(entities) -> None:
+    """Each light entity carries the Blender object it came from, "_hlobject" (the sun added from the Lighting
+    settings: "*sun"): Live Lighting follows the scene's lights by it."""
+    for e in entities:
+        if e.classname in LAYER_LIGHTS and e.keyvalues.get("_hl_surface_sample") != "1" and "_hlobject" not in e.keyvalues:
+            e.keyvalues = {**e.keyvalues, "_hlobject": e.source or "*sun"}
+
+
 def tag_light_layers(entities) -> int:
     """Live Light Mixing: each light entity gets a layer of its own (hlvrad -layers ... keys): "_hllayer" n, and the
     object it came from, "_hlobject" (the sun added from the Lighting settings: "*sun"); a light_environment's sky
@@ -680,6 +688,7 @@ def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
         entities.append(default_light_environment(s))
         report.info.append("No sun in the scene. Added one from the Lighting settings." if s.auto_light_environment
                            else "No sun in the scene: added the sky light only (Add Sun if Missing is off).")
+    tag_light_objects(entities)
     if s.light_mixing:
         tag_light_layers(entities)
     if s.fog_enabled and "env_fog_controller" not in classes:
