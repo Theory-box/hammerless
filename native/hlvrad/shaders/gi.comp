@@ -94,7 +94,10 @@ void main() {
         vec3 nz = normalize(n[0]);
         vec3 nx = normalize(abs(nz.z) < 0.9 ? cross(nz, vec3(0, 0, 1)) : cross(nz, vec3(1, 0, 0)));
         vec3 ny = cross(nz, nx);
-        uint h = Hash(t * 9781u + uint(pc.seed) * 6271u);
+        // (-live: a group gathered apart from its bake's job says where it was in that job, pad0 = place + 1: the same
+        // turn of the ray set as a bake gives it)
+        uint ht = groups[gi].pad0 > 0 ? uint(groups[gi].pad0 - 1) * 4u + uint(lane) : t;
+        uint h = Hash(ht * 9781u + uint(pc.seed) * 6271u);
         float r0 = float(h & 0xFFFFu) / 65536.0, r1 = float(h >> 16) / 65536.0;     // (this point's turn of the set)
         float wsum[4] = float[4](0.0, 0.0, 0.0, 0.0);
         for (int i = 0; i < pc.nrays; i++) {

@@ -934,6 +934,19 @@ class HAMMERLESS_PT_l4d2_preview(bpy.types.Panel):
 CLASSES = (HAMMERLESS_L4D2Preview, HAMMERLESS_OT_refresh_preview_materials, HAMMERLESS_PT_l4d2_preview)
 
 
+def _blender_panels():
+    """Blender's own panels that show for EEVEE (materials, lights, world, mesh data, output...): they show for this
+    engine too, so a material's or a light's settings stay editable while it is the scene's engine. Not EEVEE's
+    render and view layer settings: those are its own."""
+    skip = ('bl_ui.properties_render', 'bl_ui.properties_view_layer')
+    for panel in bpy.types.Panel.__subclasses__():
+        engines = getattr(panel, 'COMPAT_ENGINES', None)
+        if engines is None or getattr(panel, '__module__', '') in skip:
+            continue
+        if 'BLENDER_EEVEE_NEXT' in engines or 'BLENDER_EEVEE' in engines:
+            yield panel
+
+
 def register():
     bpy.types.Scene.hl_preview_native = bpy.props.BoolProperty(
         name='Hardware Ray Tracing (Experimental)',default=False,
@@ -955,9 +968,13 @@ def register():
         description='Display-only exposure in stops: +1 doubles brightness. Does not change exported lights or simulate game auto-exposure')
     for cls in CLASSES:
         bpy.utils.register_class(cls)
+    for panel in _blender_panels():
+        panel.COMPAT_ENGINES.add(HAMMERLESS_L4D2Preview.bl_idname)
 
 
 def unregister():
+    for panel in _blender_panels():
+        panel.COMPAT_ENGINES.discard(HAMMERLESS_L4D2Preview.bl_idname)
     from .previewnative import shutdown
     shutdown()
     del bpy.types.Scene.hl_preview_native

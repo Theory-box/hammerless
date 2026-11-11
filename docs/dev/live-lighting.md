@@ -27,7 +27,30 @@ a bake. The GPU bake stays as it is for Build; this reuses its code for the prev
 
 `COLD` lights the edits as a bake from nothing; its lightmaps are a fresh bake's to the byte.
 
+Speed-ups since the first version (all in `live_session.h`):
+
+- Step 1 only asks the sample groups in clusters the changed lights can reach.
+- Bounce passes are **change passes**: what the lightmaps changed by since the bounced light was gathered (a signed
+  grid through `gi.comp`'s layer channel) gathered with 128 rays (`HLLIVEDELTA`, 0 = full passes only) and added to
+  the bounced light. Their jobs are bigger than a bake's (a point's turn of the ray set needn't be a bake's there).
+  On a map with vis, only groups in clusters that see a changed face are gathered (when that is under 3/4 of them).
+- When change passes have nothing to add, a **full pass** (a bake's rays) replaces the bounced light of the groups
+  change passes touched; each such group carries its place in the job a bake gathers it in (`pad0`), so its rays are
+  the bake's. Change passes that add under two tolerances a face after a full pass need no full pass after them.
+- A face's luxels are made again only when its samples moved a quarter of a tolerance since they were last made
+  (all that waited are made when the lighting settles). Displacements no longer make every pass's luxels again:
+  their luxels blend their own and their neighbours' samples only.
+- `HLLIVEDBG=1` prints each step's time and how many groups a pass gathered.
+
 ## Measured (RTX 4090)
+
+After the speed-ups: user's map copy (8 threads), a lamp moved and recoloured: first result 0.04 s, exact direct
+0.23 s, settled 1.3 s (4 of 2.7M luxels over 2% from a fresh bake, worst 2.5%); a sun edit: first result 0.23 s,
+settled about 4.5 s (the exact direct light of every face is 1.1 s of it). Hotel: a lamp edit: first result 0.05 s,
+settled 3.4 s (was 21 s; 58 of 1.8M luxels over 2%, worst 5.4%). `COLD` is still a fresh bake's to the byte on both.
+The session's start on the hotel takes 25 s to settle (a bake: 28 s): slow-converging maps spend it in change passes.
+
+The first version's numbers:
 
 User's map copy, 2.4M samples, 3 light entities, 1024 bounce rays, 4 threads, whole map every time:
 bake 8.5 s; session start to first lightmaps 3.5 s; a lamp moved and recoloured: first result 0.22 s, exact direct

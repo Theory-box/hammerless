@@ -711,6 +711,9 @@ void GPU_GILayers(const float *grids, size_t nluxels, const int *ofs, int nfaces
     gi_layerofs = Upload(ofs, 4 * (size_t)(nfaces ? nfaces : 1));
 }
 
+/* how many groups a bake's GI job has at this ray count (a point's turn of the ray set comes from its place in it) */
+int GPU_GIJobGroups(int rays) { return JobSize(4.0 * rays, RAY_BUDGET, GATHER_CHUNK); }
+
 /* each point's bounced light (gi.comp), rays a point: per point 16 floats (4 normals' colours); with layers
  * (GPU_GILayers) also per point and layer 3 floats in layerout */
 void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *out, float *layerout) {
@@ -719,7 +722,9 @@ void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *ou
         int none = -1;
         gi_layers = Upload(NULL, 16), gi_layerofs = Upload(&none, 4);
     }
-    int chunk = JobSize(4.0 * rays, RAY_BUDGET, GATHER_CHUNK);
+    /* (out NULL, -live's change passes: only the layers' answers are wanted, and a point's turn of the ray set needn't
+     * be a bake's (it comes from the point's place in its job), so the jobs can be bigger: fewer waits) */
+    int chunk = JobSize(4.0 * rays, RAY_BUDGET, out ? GATHER_CHUNK : 8 * GATHER_CHUNK);
     for (int at = 0; at < n; at += chunk) {
         int k = n - at < chunk ? n - at : chunk;
         Ensure(&in_buf, sizeof(gpugroup_t) * (size_t)k);
@@ -732,7 +737,7 @@ void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *ou
         int outs[2] = {5, 9};
         VkDeviceSize sizes[2] = {64 * 4 * (VkDeviceSize)k, 4 * 4 * 12 * (VkDeviceSize)k * (pc.nlayers ? pc.nlayers : 1)};
         RunOut(&prog_gi, &gi_tlas, bufs, &pc, sizeof(pc), 4 * (uint32_t)k, outs, sizes, pc.nlayers ? 2 : 1);
-        memcpy(out + 64 * (size_t)at, out_buf.map, 64 * 4 * (size_t)k);
+        if (out) memcpy(out + 64 * (size_t)at, out_buf.map, 64 * 4 * (size_t)k);
         if (pc.nlayers)
             memcpy(layerout + 48 * (size_t)pc.nlayers * at, gi_layerout.map, 192 * (size_t)pc.nlayers * k);
     }
