@@ -17,7 +17,18 @@ a bake. The GPU bake stays as it is for Build; this reuses its code for the prev
 
 ## In the L4D2 Preview render engine
 
-With **Built-Map Lighting** on (Render properties, the default) the engine's Rendered viewport shows the last
+The engine's Render properties have a **Lighting** dropdown (`scene.hl_preview_lighting`):
+
+- **Live** (default): the session runs while a Rendered viewport of the engine is open. **Live Quality** (As Baked /
+  Draft = a quarter of the bake's bounce rays, `RAYS`) and **Update Pace** (Fast / Balanced / Light = a rest of 0 /
+  40 / 150 ms after each step of the session's work, `PACE`, ended at once by a command) are its settings. When
+  the session can't start or ends (no ray-tracing card, not enough memory, the Exact compiler chosen) the last
+  bake's lighting is shown with a message saying why and suggesting Baked + Bake (`l4d2preview.live_failure`);
+  nothing is baked for the user. Measured memory of the session: 1.9 GB of RAM on the user's map (2.4M samples;
+  4.1 GB committed), 1.0 GB on c1m1 (peak 3.2 GB while starting).
+- **Baked**: the last bake's lighting as it is (Live Light Mixing's layers included), a Bake button, no process.
+
+In both, the engine's Rendered viewport shows the last
 build's map: its faces with the game's textures times the session's lightmaps, its props with their baked vertex
 light, the sky behind (`l4d2preview.py`: `_vrad_ready` starts the session and loads the map, `_vrad_draw` draws it
 with `lighttextures`). The engine starts the session itself and it ends 20 s after the last such viewport closes.

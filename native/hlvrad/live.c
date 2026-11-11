@@ -61,6 +61,11 @@ int LiveGetLine(char *buf, int size, int wait) {
     }
 }
 
+/* a rest of up to ms milliseconds, ended at once by a command (PACE: the card left to the owner's viewport) */
+void LiveRest(int ms) {
+    if (ms > 0) WaitForSingleObject(have, (DWORD)ms);
+}
+
 /* whether a command waits (or stdin has ended): long work looks between its steps */
 int LivePending(void) {
     EnterCriticalSection(&lock);

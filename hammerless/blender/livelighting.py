@@ -38,7 +38,7 @@ def _engine_viewport() -> bool:
         from .l4d2preview import HAMMERLESS_L4D2Preview
         for window in bpy.context.window_manager.windows:
             scene = window.scene
-            if scene.render.engine != HAMMERLESS_L4D2Preview.bl_idname or not getattr(scene, "hl_preview_vrad", False):
+            if scene.render.engine != HAMMERLESS_L4D2Preview.bl_idname or getattr(scene, "hl_preview_lighting", "") != "LIVE":
                 continue
             for area in window.screen.areas:
                 if area.type == "VIEW_3D" and any(sp.type == "VIEW_3D" and sp.shading.type == "RENDERED" for sp in area.spaces[:1]):
@@ -46,6 +46,30 @@ def _engine_viewport() -> bool:
     except Exception:
         return True                     # (can't tell: keep it)
     return False
+
+
+PACE_MS = {"FAST": 0, "BALANCED": 40, "LIGHT": 150}
+
+
+def apply_settings(scene) -> None:
+    """The scene's Live Quality and Update Pace to the session (when one runs)."""
+    session = _live.get("session")
+    if session is None:
+        return
+    try:
+        rays = _live.get("rays_full") or 1024
+        if getattr(scene, "hl_live_quality", "FULL") == "DRAFT":
+            rays = max(64, rays // 4)
+        if rays != _live.get("rays"):
+            session.rays(rays)
+            _live["rays"] = rays
+            _live["state"] = min(_live.get("state", 0), 1)
+        pace = PACE_MS.get(getattr(scene, "hl_live_pace", "FAST"), 0)
+        if pace != _live.get("pace"):
+            session.pace(pace)
+            _live["pace"] = pace
+    except livelight.LiveError:
+        pass                            # (it has ended: the timer says so)
 
 
 def busy() -> bool:
@@ -195,7 +219,7 @@ def start(context, for_engine: bool = False) -> str | None:
         return f"Couldn't start the light compiler: {ex}"
     _live.update(session=session, path=path, mtime=os.path.getmtime(path), raw=raw, ents=ents, sent={n: {} for n in ents},
                  unfollowed=unfollowed, serial=0, acked=True, dirty=True, gen=-1, state=0, index=None, error=None,
-                 started=time.time(), engine=for_engine, seen=time.time())
+                 started=time.time(), engine=for_engine, seen=time.time(), rays_full=opts.gi_rays, rays=opts.gi_rays, pace=0)
     err = lightview.load(context, path)
     if err:
         stop()

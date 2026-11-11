@@ -26,6 +26,7 @@
  *   GO [serial]                  light the changes so far (the serial comes back with each result)
  *   COLD [serial]                the changes so far, lit as a bake from nothing (one result, when done)
  *   RAYS <n>                     bounce rays a sample from now on
+ *   PACE <ms>                    a rest after each step of the work (the card left to the owner's viewport)
  *   QUIT
  * Results: "HLLIVE_UPDATE gen serial state pass seconds" on stdout once the shared memory holds them. Shared memory:
  * 16 uint32 (magic HLLV, version, generation (odd while being written), faces, bytes a face, lightmap bytes, state,
@@ -561,7 +562,7 @@ static void LiveSession(gpugroup_t *groups, int (*where)[2], int n, int *k0, vec
     int rough = 0, settled = 0, changed = 0;
     /* (change passes next; how many since a full one. From nothing, the start: the first bounce is most of the
      * bounced light, so a full pass makes it; the later bounces are changes) */
-    int byChange = 0, nchange = 0, nfull = 0;
+    int byChange = 0, nchange = 0, nfull = 0, pace = 0;
     char line[4096];
     for (;;) {
         int r = LiveGetLine(line, sizeof(line), settled >= 2 && !rough);
@@ -591,6 +592,9 @@ static void LiveSession(gpugroup_t *groups, int (*where)[2], int n, int *k0, vec
                 int rays = atoi(arg);
                 if (rays < 1 || rays > 8192) Error("HLLIVE: RAYS 1..8192");
                 if (rays != L.rays) L.rays = rays, settled = 0, nfull = 0, L.fullAll = 1, byChange = 0;
+            } else if (!strcmp(line, "PACE")) {
+                pace = atoi(arg);
+                if (pace < 0 || pace > 2000) Error("HLLIVE: PACE 0..2000");
             } else if (!strcmp(line, "GO") || !strcmp(line, "COLD")) {
                 L.t0 = Seconds();
                 if (*arg) L.serial = atoi(arg);
@@ -622,7 +626,9 @@ static void LiveSession(gpugroup_t *groups, int (*where)[2], int n, int *k0, vec
             } else Error("HLLIVE: unknown command \"%s\"", line);
             continue;
         }
-        /* no command waits: the next step of the work */
+        /* no command waits: the next step of the work (after a rest, when the owner asked for one) */
+        if (pace && settled < 2) LiveRest(pace);
+        if (LivePending()) continue;
         if (rough) {
             LiveExactDirect(&L, 1, 1);
             rough = 0, settled = 0;

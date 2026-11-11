@@ -665,36 +665,46 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                                *tokens)
 
     def _vrad_ready(self, context):
-        """Built-Map Lighting: the last build's map, lit by the light compiler kept running (livelighting.py), is what
-        this viewport shows. Starts the session and loads the map when needed; False when there is no build to show
-        (the engine's own lighting is used then). Never raises."""
-        if not getattr(context.scene, 'hl_preview_vrad', False):
-            return False
+        """Whether the last build's map is what this viewport shows (False: no build to show yet, the engine's own
+        experimental lighting draws the scene). Loads the map when needed. Lighting Live: the light compiler is
+        kept running on it (livelighting.py) and its lightmaps follow the lights; when that can't start, the build's
+        own lighting is shown and _VRAD['note'] says why. Baked: the build's own lighting. Never raises."""
         try:
             import os
             from . import lightview, livelighting
+            live = context.scene.hl_preview_lighting == 'LIVE'
             path = lightview.bsp_path(context)
             if not os.path.exists(path):
-                _VRAD['note'] = 'No build yet: Build the map once to see its baked-quality lighting here'
+                _VRAD['note'], _VRAD['nobuild'] = '', True
                 return False
+            _VRAD['nobuild'] = False
             stamp = (os.path.normcase(path), os.path.getmtime(path))
-            if not livelighting.running():
-                if _VRAD['failed'] == stamp:      # (it couldn't start on this build: not again)
-                    return False
-                err = livelighting.start(context, for_engine=True)
-                if err:
-                    _VRAD['failed'], _VRAD['note'] = stamp, err
-                    return False
+            if not live:
+                _VRAD['note'] = ''
+                if livelighting.running() and livelighting.for_engine():
+                    livelighting.stop()
+            elif not livelighting.running() and _VRAD['failed'] != stamp:
+                if _VRAD.get('started') == stamp:       # (it started on this build and ended: not again)
+                    _VRAD['failed'] = stamp
+                    _VRAD['note'] = live_failure(livelighting._live.get('error') or 'the light compiler ended')
+                else:
+                    err = livelighting.start(context, for_engine=True)
+                    if err:
+                        _VRAD['failed'], _VRAD['note'] = stamp, live_failure(err)
+                    else:
+                        _VRAD['started'], _VRAD['note'] = stamp, ''
+                        livelighting.apply_settings(context.scene)
             state = lightview._state
+            if not livelighting.running():
+                lightview._follow_compiles()            # (a new build of the map replaces the shown one)
             if state['data'] is None or os.path.normcase(state['path'] or '') != stamp[0]:
                 err = lightview.load(context, path)
                 if err:
-                    _VRAD['failed'], _VRAD['note'] = stamp, err
+                    _VRAD['note'] = err
                     return False
-            _VRAD['note'] = ''
-            return True
+            return state['data'] is not None
         except Exception as exc:
-            _VRAD['note'] = f'Built-map lighting unavailable: {exc}'
+            _VRAD['note'] = f"The built map can't be shown: {exc}"
             return False
 
     def _vrad_draw(self, context):
@@ -728,8 +738,15 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             gpu.state.depth_test_set('NONE')
             gpu.matrix.pop_projection()
             gpu.matrix.pop()
-        note = livelighting.status().replace('Live Lighting: ', 'Lighting: ')
-        if state['edited']:
+        if _VRAD['note']:
+            note = _VRAD['note']
+        elif livelighting.running():
+            note = livelighting.status().replace('Live Lighting: ', 'Live lighting: ')
+        else:
+            note = "Baked lighting (the last build's)"
+        if state['edited'] and not livelighting.running():
+            note += ' | the scene changed since the bake: Bake to update'
+        elif state['edited']:
             note += ' | walls changed since the build: Build to show them'
         self.update_stats('L4D2 Preview', note)
         if livelighting.busy():
@@ -1001,19 +1018,45 @@ class HAMMERLESS_PT_l4d2_preview(bpy.types.Panel):
         return context.scene.render.engine == HAMMERLESS_L4D2Preview.bl_idname
 
     def draw(self, context):
+        from . import lightview, livelighting
+        scene = context.scene
         col = self.layout.column()
-        col.prop(context.scene,'hl_preview_vrad')
-        if context.scene.hl_preview_vrad:
-            from . import livelighting
-            note = _VRAD['note'] or livelighting.status().replace('Live Lighting: ', 'Lighting: ')
-            if note:col.label(text=note, icon='ERROR' if _VRAD['note'] else 'INFO')
-            col.prop(context.scene,'hl_preview_exposure')
-            if not _VRAD['note']:
-                col.label(text="Shows the last build's map; lights are followed live.")
-                col.label(text='Walls moved since need a Build.')
-                return
-            col.separator()
-            col.label(text='Until then, the experimental preview lighting:')
+        col.prop(scene, 'hl_preview_lighting')
+        live = scene.hl_preview_lighting == 'LIVE'
+        kind, message = lightview.bake_status(context)
+        if kind in ('NONE', 'UNLIT'):
+            box = col.box()
+            box.label(text=message + ':', icon='ERROR')
+            box.label(text='bake once to see its lighting here.')
+            lightview._bake_button(box)
+        elif live:
+            if _VRAD['note']:
+                box = col.box()
+                for k, line in enumerate(_wrap(_VRAD['note'], 46)):
+                    box.label(text=line, icon='ERROR' if k == 0 else 'BLANK1')
+                lightview._bake_button(box)
+            else:
+                text = livelighting.status().replace('Live Lighting: ', '') if livelighting.running() else 'starts in a Rendered viewport'
+                col.label(text='Live: ' + text, icon='LIGHT_SUN')
+            col.prop(scene, 'hl_live_quality')
+            col.prop(scene, 'hl_live_pace')
+            col.label(text='Lights are followed as you edit them.')
+            col.label(text='Walls moved since the build need a Bake.')
+            col.label(text=f'Memory while live: about {LIVE_MEMORY}.')
+        else:
+            if kind == 'BUSY':
+                col.label(text='Baking... the view updates when done', icon='SORTTIME')
+            elif lightview._state['edited']:
+                col.label(text='The scene changed since the bake.', icon='ERROR')
+            else:
+                col.label(text="Showing the last bake's lighting.", icon='INFO')
+            lightview._bake_button(col, 'Bake Again' if lightview._state['edited'] else 'Bake Lighting')
+            col.label(text='Lights you change show after a bake.')
+        col.prop(scene, 'hl_preview_exposure')
+        if not _VRAD.get('nobuild'):
+            return
+        col.separator()
+        col.label(text='Until the first bake, the experimental preview:')
         col.label(text='Point/spot/sun/area; opaque GPU shadows', icon='INFO')
         col.label(text='Blender emission lights nearby surfaces.')
         col.label(text='Base textures; linear irradiance / 255.')
@@ -1049,18 +1092,51 @@ def _blender_panels():
             yield panel
 
 
-_VRAD = {'failed': None, 'note': ''}     # (the build Built-Map Lighting couldn't start on; why it isn't shown)
+# (the build Live lighting couldn't start on, and why; the build it did start on; whether there is no build at all)
+_VRAD = {'failed': None, 'note': '', 'started': None, 'nobuild': False}
+LIVE_MEMORY = '1-2 GB of RAM, more on big maps'      # (measured: 1.9 GB on a 2.4M-sample map, 1.0 GB on c1m1)
 
 
-def _vrad_toggled(self, context):
-    from . import livelighting
-    _VRAD['failed'] = None
-    if not self.hl_preview_vrad and livelighting.running() and livelighting.for_engine():
-        livelighting.stop()
+def _wrap(text: str, width: int) -> list[str]:
+    lines, line = [], ''
+    for word in text.split():
+        if line and len(line) + 1 + len(word) > width:
+            lines.append(line)
+            line = word
+        else:
+            line = (line + ' ' + word).strip()
+    return lines + ([line] if line else [])
+
+
+def live_failure(why: str) -> str:
+    """What the engine says when Live lighting can't run: why, and what to do (it bakes nothing itself)."""
+    why = why.replace('Live Lighting stopped: ', '').replace('Error: ', '').replace('Live Lighting needs', 'it needs').strip().rstrip('.')
+    low = why.lower()
+    if 'out of memory' in low or 'memory' in low:
+        why = 'not enough memory for the map'
+    elif "needs the gpu" in low or 'ray' in low or 'vulkan' in low:
+        why = "this graphics card (or its driver) can't do the hardware ray tracing it needs"
+    return f"Live lighting couldn't start: {why}. Showing the last bake: choose Baked and use Bake to update it."
+
+
+def _redraw_views(context):
     for window in context.window_manager.windows:
         for area in window.screen.areas:
-            if area.type == 'VIEW_3D':
+            if area.type in ('VIEW_3D', 'PROPERTIES'):
                 area.tag_redraw()
+
+
+def _lighting_changed(self, context):
+    from . import livelighting
+    _VRAD['failed'], _VRAD['started'], _VRAD['note'] = None, None, ''
+    if self.hl_preview_lighting != 'LIVE' and livelighting.running() and livelighting.for_engine():
+        livelighting.stop()
+    _redraw_views(context)
+
+
+def _live_setting_changed(self, context):
+    from . import livelighting
+    livelighting.apply_settings(self)
 
 
 # ---------------------------------------------------------------- the scene's view settings
@@ -1136,14 +1212,23 @@ def vrad_view(context) -> bool:
     """Whether this 3D viewport is showing the built map through the engine (the Lighting view's overlay stays out)."""
     space = getattr(context, 'space_data', None)
     return (space is not None and space.type == 'VIEW_3D' and space.shading.type == 'RENDERED'
-            and context.scene.render.engine == HAMMERLESS_L4D2Preview.bl_idname
-            and getattr(context.scene, 'hl_preview_vrad', False))
+            and context.scene.render.engine == HAMMERLESS_L4D2Preview.bl_idname and not _VRAD.get('nobuild'))
 
 
 def register():
-    bpy.types.Scene.hl_preview_vrad = bpy.props.BoolProperty(
-        name='Built-Map Lighting',default=True,update=_vrad_toggled,
-        description="Show the last build's map lit by the light compiler, kept running: the lighting is a bake's, and follows the lights as you edit them. Walls moved since the build show after a Build. Off: the experimental preview lighting on the scene as it is")
+    bpy.types.Scene.hl_preview_lighting = bpy.props.EnumProperty(
+        name='Lighting', default='LIVE', update=_lighting_changed,
+        items=(('LIVE', 'Live', "The light compiler stays running on the last build's map and its lighting follows the lights as you edit them, at a bake's quality. Needs a graphics card with hardware ray tracing, and memory for the map while a Rendered viewport is open"),
+               ('BAKED', 'Baked', "The last bake's lighting, as it is. Nothing runs in the background: lights you change show after the next bake")))
+    bpy.types.Scene.hl_live_quality = bpy.props.EnumProperty(
+        name='Live Quality', default='FULL', update=_live_setting_changed,
+        items=(('FULL', 'As Baked', "Bounced light with the bake's own ray count: what a bake gives"),
+               ('DRAFT', 'Draft', "A quarter of the bake's bounce rays: updates settle sooner, the bounced light is a little rougher. Bake for the real thing")))
+    bpy.types.Scene.hl_live_pace = bpy.props.EnumProperty(
+        name='Update Pace', default='FAST', update=_live_setting_changed,
+        items=(('FAST', 'Fast', 'Lighting updates as fast as the graphics card allows'),
+               ('BALANCED', 'Balanced', 'A short rest between lighting updates: a smoother viewport while the lighting settles'),
+               ('LIGHT', 'Light', 'Longer rests between lighting updates: for slower machines, the lighting takes longer to settle')))
     bpy.types.Scene.hl_preview_native = bpy.props.BoolProperty(
         name='Hardware Ray Tracing (Experimental)',default=False,
         description='Use a separate Vulkan hardware ray tracing worker. Requires a ray-query capable GPU. Pauses during interaction. Enable Surface Lighting Cache to retain brush lighting while navigating')
@@ -1193,7 +1278,9 @@ def unregister():
     from .previewnative import shutdown
     shutdown()
     del bpy.types.Scene.hl_preview_native
-    del bpy.types.Scene.hl_preview_vrad
+    del bpy.types.Scene.hl_preview_lighting
+    del bpy.types.Scene.hl_live_quality
+    del bpy.types.Scene.hl_live_pace
     del bpy.types.Scene.hl_preview_surface_cache
     del bpy.types.Scene.hl_preview_max_bounces
     del bpy.types.Scene.hl_preview_refine_frames

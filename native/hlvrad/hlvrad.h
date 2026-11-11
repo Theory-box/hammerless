@@ -342,6 +342,7 @@ int AddEntity(void);
 void LiveStartInput(void);
 int LiveGetLine(char *buf, int size, int wait);
 int LivePending(void);
+void LiveRest(int ms);
 unsigned char *LiveMap(const char *name, size_t size);
 void LiveBarrier(void);
 extern int g_live;

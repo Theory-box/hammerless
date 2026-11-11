@@ -112,6 +112,10 @@ class LiveLight:
     def rays(self, n):
         self._send("RAYS %d" % n)
 
+    def pace(self, ms):
+        """A rest of ms milliseconds after each step of the session's work (the graphics card left to the viewport)."""
+        self._send("PACE %d" % ms)
+
     def go(self):
         """Light the edits sent so far: the serial its results carry."""
         self.serial += 1
