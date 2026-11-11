@@ -1,5 +1,5 @@
-"""Live Lighting in Blender (no window needed): start it on the opened scene's last build, move a light, and see the
-shown lightmaps follow.
+"""The engine's live lighting session in Blender (no window needed): start it on the opened scene's last build, move a
+light, and see the engine's lightmaps follow.
 
     blender --background --factory-startup <map.blend> --python tests/blender/check_live_lighting.py [-- --light NAME]
 
@@ -22,7 +22,7 @@ from hammerless.blender import lightview, livelighting
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 want = argv[argv.index("--light") + 1] if "--light" in argv else None
 ctx = bpy.context
-out = {"map": lightview.bsp_path(ctx)}
+out = {"map": livelighting.bsp_path(ctx)}
 
 
 def pump(until, timeout):
@@ -52,7 +52,7 @@ try:
     assert pump(lambda: L["state"] >= 2 and L["acked"] and not L["dirty"], 180), "never settled"
     out["settled_s"] = round(time.time() - t0, 2)
     out["relit_at_start"] = [l for l in L["session"].log if l.startswith("HLLIVE_LIGHTS")]
-    atlas = lightview._state["data"].atlas
+    atlas = livelighting._view["data"].atlas
     before = atlas.copy()
 
     lamps = [o for o in ctx.scene.objects if o.type == "LIGHT" and o.data.type in ("POINT", "SPOT") and o.name in L["ents"]]
@@ -71,10 +71,10 @@ try:
     gen = L["gen"]
     assert pump(lambda: L["gen"] != gen and L["acked"], 60), "the edit gave no result"
     out["edit_first_result_s"] = round(time.time() - t1, 3)
-    first = lightview._state["data"].atlas.copy()
+    first = livelighting._view["data"].atlas.copy()
     assert pump(lambda: L["state"] >= 2 and L["acked"], 180), "the edit never settled"
     out["edit_settled_s"] = round(time.time() - t1, 3)
-    after = lightview._state["data"].atlas
+    after = livelighting._view["data"].atlas
     out["texels_changed_first"] = int((abs(first - before).max(axis=2) > 1e-4).sum())
     out["texels_changed_settled"] = int((abs(after - before).max(axis=2) > 1e-4).sum())
     out["status"] = livelighting.status()

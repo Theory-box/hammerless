@@ -11,9 +11,15 @@ a bake. The GPU bake stays as it is for Build; this reuses its code for the prev
 - `hlvrad -live <name>` (`native/hlvrad/live_session.h`, part of `direct.c`; `live.c` for stdin and shared memory).
   The command protocol and the shared memory layout are documented at the top of `live_session.h`.
 - `hammerless/core/livelight.py`: the client (start, `set` / `add` / `delete` / `go` / `cold`, `snapshot`).
-- `hammerless/blender/livelighting.py`: the Lighting view's **Live Lighting** button. It matches the scene's lights
-  to the map's light entities (each carries its object's name, `_hlobject`, written by every build now; older builds
-  are matched by class and place), sends what changed and shows each result in the Baked Lighting view.
+- `hammerless/blender/livelighting.py`: the engine's side. It keeps the engine's own copy of the built map
+  (`view_load`: lightmaps, props, the atlas texture; `_view`), matches the scene's lights to the map's light
+  entities (each carries its object's name, `_hlobject`, written by every build now; older builds are matched by
+  class and place), sends what changed and puts each result into the engine's lightmaps.
+
+Live lighting belongs to the render engine only. The side panel's Baked Lighting view previews the bake as it did
+before (its only change: it doesn't draw over the engine's Rendered viewports), and the engine reads none of that
+view's settings or state: its own map copy, its own exposure, the sky always drawn at the map's own brightness.
+(An earlier version had a Live Lighting button in the Lighting view and shared its state; removed 2026-11-10.)
 
 ## In the L4D2 Preview render engine
 
@@ -117,8 +123,9 @@ Hotel map (1.8M luxels, 167 lights): bake 22 s; a lamp edit: first result 0.8 s,
 
 - `tests/compile/live_session.py <bsp> --game <dir>`: a session against fresh bakes (settled: close; `COLD`: to the
   byte, before and after an edit).
-- `tests/blender/check_live_lighting.py` (background) and `check_live_lighting_window.py` (a window: timer,
-  depsgraph handler, texture upload). Neither saves the .blend nor writes the map.
+- `tests/blender/check_live_lighting.py` (background: the session and the light matching) and
+  `check_engine_vrad.py` (a window: the engine, timer, depsgraph handler, screenshots). Neither saves the .blend
+  nor writes the map.
 
 ## Not done
 

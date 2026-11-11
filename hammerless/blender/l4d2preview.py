@@ -666,14 +666,15 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
 
     def _vrad_ready(self, context):
         """Whether the last build's map is what this viewport shows (False: no build to show yet, the engine's own
-        experimental lighting draws the scene). Loads the map when needed. Lighting Live: the light compiler is
-        kept running on it (livelighting.py) and its lightmaps follow the lights; when that can't start, the build's
-        own lighting is shown and _VRAD['note'] says why. Baked: the build's own lighting. Never raises."""
+        experimental lighting draws the scene). Loads the map when needed (livelighting.view_load: the engine's own
+        copy). Lighting Live: the light compiler is kept running on it and its lightmaps follow the lights; when
+        that can't start, the build's own lighting is shown and _VRAD['note'] says why. Baked: the build's own
+        lighting. Never raises."""
         try:
             import os
-            from . import lightview, livelighting
+            from . import livelighting
             live = context.scene.hl_preview_lighting == 'LIVE'
-            path = lightview.bsp_path(context)
+            path = livelighting.bsp_path(context)
             if not os.path.exists(path):
                 _VRAD['note'], _VRAD['nobuild'] = '', True
                 return False
@@ -681,59 +682,57 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             stamp = (os.path.normcase(path), os.path.getmtime(path))
             if not live:
                 _VRAD['note'] = ''
-                if livelighting.running() and livelighting.for_engine():
+                if livelighting.running():
                     livelighting.stop()
             elif not livelighting.running() and _VRAD['failed'] != stamp:
                 if _VRAD.get('started') == stamp:       # (it started on this build and ended: not again)
                     _VRAD['failed'] = stamp
                     _VRAD['note'] = live_failure(livelighting._live.get('error') or 'the light compiler ended')
                 else:
-                    err = livelighting.start(context, for_engine=True)
+                    err = livelighting.start(context)
                     if err:
                         _VRAD['failed'], _VRAD['note'] = stamp, live_failure(err)
                     else:
                         _VRAD['started'], _VRAD['note'] = stamp, ''
                         livelighting.apply_settings(context.scene)
-            state = lightview._state
-            if not livelighting.running():
-                lightview._follow_compiles()            # (a new build of the map replaces the shown one)
-            if state['data'] is None or os.path.normcase(state['path'] or '') != stamp[0]:
-                err = lightview.load(context, path)
+            view = livelighting._view
+            livelighting.view_follow(context)           # (a new build of the map replaces the shown one)
+            if view['data'] is None or os.path.normcase(view['path'] or '') != stamp[0]:
+                err = livelighting.view_load(context, path)
                 if err:
                     _VRAD['note'] = err
                     return False
-            return state['data'] is not None
+            return view['data'] is not None
         except Exception as exc:
             _VRAD['note'] = f"The built map can't be shown: {exc}"
             return False
 
     def _vrad_draw(self, context):
-        """The compiled map's faces (game textures x the live lightmaps), its props and the sky behind, drawn as the
-        Lighting view's overlay draws them. Blender shows what a render engine draws through the scene's view
-        settings, which neutral_view keeps at the plain sRGB display while this is the scene's engine; that display
-        codes the colours as the overlays' buffer does (measured, see docs/dev/live-lighting.md), so the picture is
-        the Lighting view's."""
-        from . import lightview, lighttextures, livelighting, skyview
-        state = lightview._state
-        s = context.scene.hammerless
-        if state['texture'] is None:
-            lightview._upload()
-        if state['tbatches'] is None or state.get('tscale') != s.units_per_meter:
-            state['tbatches'] = lighttextures.build(state['data'], state['props'], s.units_per_meter,
-                                                    state['content'], state['game_dir'])
-            state['tscale'] = s.units_per_meter
+        """The compiled map's faces (game textures x the lightmaps), its props and the sky behind. Blender shows what
+        a render engine draws through the scene's view settings, which neutral_view keeps at the plain sRGB display
+        while this is the scene's engine; that display codes the colours as the overlays' buffer does (measured, see
+        docs/dev/live-lighting.md), so the picture is the Lighting view's Textured one. Nothing here reads the
+        Lighting view's own settings."""
+        from . import lighttextures, livelighting, skyview
+        view = livelighting._view
+        scale = context.scene.hammerless.units_per_meter
+        if view['texture'] is None:
+            livelighting.view_upload()
+        if view['tbatches'] is None or view['tscale'] != scale:
+            view['tbatches'] = lighttextures.build(view['data'], view['props'], scale, view['content'], view['game_dir'])
+            view['tscale'] = scale
         rv3d = context.region_data
         gpu.matrix.push()
         gpu.matrix.push_projection()
         try:
             gpu.matrix.load_matrix(rv3d.view_matrix)
             gpu.matrix.load_projection_matrix(rv3d.window_matrix)
-            skyview.draw_sky(context)
+            skyview.draw_sky(context, always=True)
             gpu.state.blend_set('NONE')
             gpu.state.depth_mask_set(True)
             gpu.state.depth_test_set('LESS_EQUAL')
             gpu.state.face_culling_set('NONE')
-            lighttextures.draw(state['tbatches'], state['texture'], 2.0 ** context.scene.hl_preview_exposure, 0.0, True)
+            lighttextures.draw(view['tbatches'], view['texture'], 2.0 ** context.scene.hl_preview_exposure, 0.0, True)
         finally:
             gpu.state.depth_test_set('NONE')
             gpu.matrix.pop_projection()
@@ -741,13 +740,13 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
         if _VRAD['note']:
             note = _VRAD['note']
         elif livelighting.running():
-            note = livelighting.status().replace('Live Lighting: ', 'Live lighting: ')
+            note = 'Live lighting: ' + livelighting.status()
+            if view['edited']:
+                note += ' | walls changed since the build: Bake to show them'
         else:
             note = "Baked lighting (the last build's)"
-        if state['edited'] and not livelighting.running():
-            note += ' | the scene changed since the bake: Bake to update'
-        elif state['edited']:
-            note += ' | walls changed since the build: Build to show them'
+            if view['edited']:
+                note += ' | the scene changed since the bake: Bake to update'
         self.update_stats('L4D2 Preview', note)
         if livelighting.busy():
             self.tag_redraw()
@@ -840,13 +839,12 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
                 return
             except Exception as exc:    # (the engine's own lighting instead, until the next build)
                 import os
-                from . import lightview
-                path = lightview.bsp_path(context)
-                _VRAD['note'] = f'Built-map lighting unavailable: {exc}'
-                _VRAD['failed'] = (os.path.normcase(path), os.path.getmtime(path)) if os.path.exists(path) else None
                 from . import livelighting
-                if livelighting.for_engine():
-                    livelighting.stop(reload=False)
+                path = livelighting.bsp_path(context)
+                _VRAD['note'] = f"The built map can't be drawn: {exc}"
+                _VRAD['failed'] = (os.path.normcase(path), os.path.getmtime(path)) if os.path.exists(path) else None
+                livelighting.stop(reload=False)
+                livelighting.view_clear()
                 gpu.state.active_framebuffer_get().clear(color=(0.025, 0.025, 0.025, 1), depth=1.0)
         if self.error:
             self.update_stats('L4D2 Preview', self.error)
@@ -1036,7 +1034,7 @@ class HAMMERLESS_PT_l4d2_preview(bpy.types.Panel):
                     box.label(text=line, icon='ERROR' if k == 0 else 'BLANK1')
                 lightview._bake_button(box)
             else:
-                text = livelighting.status().replace('Live Lighting: ', '') if livelighting.running() else 'starts in a Rendered viewport'
+                text = livelighting.status() if livelighting.running() else 'starts in a Rendered viewport'
                 col.label(text='Live: ' + text, icon='LIGHT_SUN')
             col.prop(scene, 'hl_live_quality')
             col.prop(scene, 'hl_live_pace')
@@ -1046,11 +1044,11 @@ class HAMMERLESS_PT_l4d2_preview(bpy.types.Panel):
         else:
             if kind == 'BUSY':
                 col.label(text='Baking... the view updates when done', icon='SORTTIME')
-            elif lightview._state['edited']:
+            elif livelighting._view['edited']:
                 col.label(text='The scene changed since the bake.', icon='ERROR')
             else:
                 col.label(text="Showing the last bake's lighting.", icon='INFO')
-            lightview._bake_button(col, 'Bake Again' if lightview._state['edited'] else 'Bake Lighting')
+            lightview._bake_button(col, 'Bake Again' if livelighting._view['edited'] else 'Bake Lighting')
             col.label(text='Lights you change show after a bake.')
         col.prop(scene, 'hl_preview_exposure')
         if not _VRAD.get('nobuild'):
@@ -1110,7 +1108,7 @@ def _wrap(text: str, width: int) -> list[str]:
 
 def live_failure(why: str) -> str:
     """What the engine says when Live lighting can't run: why, and what to do (it bakes nothing itself)."""
-    why = why.replace('Live Lighting stopped: ', '').replace('Error: ', '').replace('Live Lighting needs', 'it needs').strip().rstrip('.')
+    why = why.replace('Error: ', '').strip().rstrip('.')
     low = why.lower()
     if 'out of memory' in low or 'memory' in low:
         why = 'not enough memory for the map'
@@ -1129,7 +1127,7 @@ def _redraw_views(context):
 def _lighting_changed(self, context):
     from . import livelighting
     _VRAD['failed'], _VRAD['started'], _VRAD['note'] = None, None, ''
-    if self.hl_preview_lighting != 'LIVE' and livelighting.running() and livelighting.for_engine():
+    if self.hl_preview_lighting != 'LIVE' and livelighting.running():
         livelighting.stop()
     _redraw_views(context)
 
@@ -1253,9 +1251,13 @@ def register():
         panel.COMPAT_ENGINES.add(HAMMERLESS_L4D2Preview.bl_idname)
     bpy.app.handlers.load_post.append(_view_on_load)
     _view_on_load()
+    from . import livelighting
+    livelighting.register()
 
 
 def unregister():
+    from . import livelighting
+    livelighting.unregister()
     if _view_on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_view_on_load)
     bpy.msgbus.clear_by_owner(_msgbus_owner)

@@ -1,9 +1,11 @@
-"""Live Lighting: the Baked Lighting view follows the scene's lights as they're edited.
+"""The L4D2 Preview engine's lighting: the last build's map, and the live session that keeps its lighting up to date.
 
-The Hammerless light compiler stays running on the last build's map (core/livelight.py: hlvrad -live). The scene's
-lights are compared with the ones it has (each light entity carries its object's name, "_hlobject"); what changed is
-sent, and each result it makes (the changed light at once, then the bounced light settling) replaces the lightmaps
-the view shows. The map's geometry is the last build's: walls moved since need a Build.
+The engine shows the compiled map (view_load: its faces, lightmaps and props, kept here; the Lighting view in the
+side panel has its own copy and its own settings, and neither touches the other's). Lighting Live: the Hammerless
+light compiler stays running on that map (core/livelight.py: hlvrad -live). The scene's lights are compared with
+the ones it has (each light entity carries its object's name, "_hlobject"); what changed is sent, and each result it
+makes (the changed light at once, then the bounced light settling) replaces the lightmaps the engine shows. The
+map's geometry is the last build's: walls moved since need a Build.
 """
 import os
 import re
@@ -21,19 +23,87 @@ LIGHT_CLASSES = ("light", "light_spot", "light_environment")
 STATES = {0: "updating", 1: "bounce light settling", 2: "up to date", 3: "up to date"}
 
 _live = {"session": None}
+# the built map as the engine shows it: its lightmaps (core.lightmap.Lightmaps), props, and what was made of them
+# for the GPU (the atlas texture; the batches per material, made by the engine's draw)
+_view = {"path": None, "mtime": None, "data": None, "props": None, "content": None, "game_dir": None,
+         "texture": None, "tbatches": None, "tscale": None, "edited": False, "checked": 0.0}
+
+
+def bsp_path(context) -> str:
+    from .ops import work_dir
+    return os.path.join(work_dir(context), f"{context.scene.hammerless.map_name}.bsp")
+
+
+def view_load(context, path: str) -> str | None:
+    """The compiled map read for the engine (its static lighting; the live session's results replace it as they
+    come). Returns an error message, or None."""
+    from ..core.lightmap import read_lightmaps
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        data = read_lightmaps(raw, 0)
+    except Exception as ex:             # (a map being written, or cut short)
+        return f"Couldn't read the compiled map: {ex}"
+    if data.faces == 0:
+        return "The last build has no baked lighting: bake once to see it here"
+    props = content = game_dir = None
+    try:                                # (the props' models come from the game: without it, the faces alone)
+        from ..core.proplight import read_prop_lighting
+        from .ops import game_content, game_root
+        root = game_root(context)
+        content = game_content(root)
+        game_dir = os.path.join(root, "left4dead2") if root else None
+        if content is not None:
+            props = read_prop_lighting(raw, content)
+    except Exception:
+        props = None
+    _view.update(path=path, mtime=os.path.getmtime(path), data=data, props=props, content=content, game_dir=game_dir,
+                 texture=None, tbatches=None, tscale=None, edited=False)
+    return None
+
+
+def view_clear() -> None:
+    _view.update(path=None, mtime=None, data=None, props=None, texture=None, tbatches=None, tscale=None, edited=False)
+
+
+def view_upload() -> None:
+    """The lightmaps to the GPU as they are now."""
+    import gpu
+    atlas = _view["data"].atlas
+    h, w = atlas.shape[:2]
+    buf = gpu.types.Buffer("FLOAT", w * h * 4, np.maximum(atlas, 0.0).ravel())
+    _view["texture"] = gpu.types.GPUTexture((w, h), format="RGBA16F", data=buf)
+
+
+def view_follow(context) -> None:
+    """A newer build of the shown map replaces it (checked at most once a second; the live session does its own)."""
+    now = time.time()
+    if running() or not _view["path"] or now - _view["checked"] < 1.0:
+        return
+    _view["checked"] = now
+    try:
+        mtime = os.path.getmtime(_view["path"])
+    except OSError:
+        return
+    if mtime != _view["mtime"] and now - mtime > 1.0:        # (finished writing)
+        _view["mtime"] = mtime
+        view_load(context, _view["path"])
+
+
+def _redraw() -> None:
+    wm = bpy.context.window_manager
+    for window in wm.windows if wm else ():
+        for area in window.screen.areas:
+            if area.type in ("VIEW_3D", "PROPERTIES"):
+                area.tag_redraw()
 
 
 def running() -> bool:
     return _live["session"] is not None
 
 
-def for_engine() -> bool:
-    """Whether the L4D2 Preview engine started the session (it ends when no viewport has shown it for a while)."""
-    return bool(_live.get("engine"))
-
-
 def _engine_viewport() -> bool:
-    """Whether any 3D viewport is showing the engine's Built-Map Lighting."""
+    """Whether any 3D viewport is showing the engine's Live lighting."""
     try:
         from .l4d2preview import HAMMERLESS_L4D2Preview
         for window in bpy.context.window_manager.windows:
@@ -83,8 +153,8 @@ def status() -> str:
         return _live.get("error") or ""
     L = _live
     if L["gen"] < 0:
-        return "Live Lighting: starting (the map is being lit)..."
-    text = "Live Lighting: " + STATES.get(L["state"], "updating")
+        return "starting (the map is being lit)..."
+    text = STATES.get(L["state"], "updating")
     if L["unfollowed"]:
         text += " (%d lights not followed: Build)" % L["unfollowed"]
     return text
@@ -175,24 +245,23 @@ def _match(scene: dict, bsp: list) -> tuple[dict[str, int], int]:
 
 
 # ---------------------------------------------------------------- start, stop
-ENGINE_IDLE = 20.0      # (seconds without a viewport showing it before the engine's session ends)
+ENGINE_IDLE = 20.0      # (seconds without a viewport showing it before the session ends)
 
 
-def start(context, for_engine: bool = False) -> str | None:
+def start(context) -> str | None:
     """Start following the scene's lights on the last build's map. Returns an error message, or None."""
-    from . import lightview
     from .ops import compile_options, game_root
-    stop()
+    stop(reload=False)
     s = context.scene.hammerless
-    path = lightview.bsp_path(context)
+    path = bsp_path(context)
     if not os.path.exists(path):
         return "This map hasn't been built yet: press Build first"
     opts = compile_options(s)
     if opts.rad == "SKIP" or not cc.use_hlvrad(opts) or opts.light_exact:
-        return "Live Lighting needs the Hammerless light compiler on the GPU (Lighting settings: not Exact, not Off)"
+        return "it needs the Hammerless light compiler on the GPU (Lighting settings: not Exact, not Off)"
     root = game_root(context)
     if not root:
-        return "Live Lighting needs the game folder (Settings)"
+        return "it needs the game folder (Settings)"
     tools = cc.Tools(root)
     base = os.path.splitext(path)[0]
     try:
@@ -219,10 +288,10 @@ def start(context, for_engine: bool = False) -> str | None:
         return f"Couldn't start the light compiler: {ex}"
     _live.update(session=session, path=path, mtime=os.path.getmtime(path), raw=raw, ents=ents, sent={n: {} for n in ents},
                  unfollowed=unfollowed, serial=0, acked=True, dirty=True, gen=-1, state=0, index=None, error=None,
-                 started=time.time(), engine=for_engine, seen=time.time(), rays_full=opts.gi_rays, rays=opts.gi_rays, pace=0)
-    err = lightview.load(context, path)
+                 started=time.time(), seen=time.time(), rays_full=opts.gi_rays, rays=opts.gi_rays, pace=0)
+    err = view_load(context, path)
     if err:
-        stop()
+        stop(reload=False)
         return err
     if not bpy.app.timers.is_registered(_tick):
         bpy.app.timers.register(_tick, first_interval=0.05, persistent=True)
@@ -237,10 +306,10 @@ def stop(error: str | None = None, reload: bool = True) -> None:
         session.close()
         if not reload:
             return
-        try:                            # (the view back to the build's own lighting)
-            from . import lightview
-            if lightview.shown():
-                lightview.load(bpy.context)
+        try:                            # (the engine's view back to the build's own lighting)
+            if _view["path"]:
+                view_load(bpy.context, _view["path"])
+            _redraw()
         except Exception:
             pass
 
@@ -299,9 +368,8 @@ def _index(data, raw: bytes, faces: bytes):
 
 
 def _show(faces: bytes, light: bytes) -> None:
-    from . import lightview
-    data = lightview._state["data"]
-    if data is None or lightview._state["mix"] is not None:
+    data = _view["data"]
+    if data is None:
         return
     L = _live
     key = (id(data), len(light))
@@ -312,9 +380,9 @@ def _show(faces: bytes, light: bytes) -> None:
         return
     lux = decode_luxels(light[:len(light) // 4 * 4])
     data.atlas.reshape(-1, 4)[dst, :3] = lux[src]
-    if lightview._state["batch"] is not None or lightview._state["texture"] is not None:
-        lightview._upload()
-    lightview._redraw()
+    if _view["texture"] is not None:
+        view_upload()
+    _redraw()
 
 
 def _tick():
@@ -324,16 +392,16 @@ def _tick():
         return None
     try:
         if not session.alive():
-            stop("Live Lighting stopped: " + (session.log[-1] if session.log else "the light compiler ended"))
+            stop(session.log[-1] if session.log else "the light compiler ended")
             return None
-        if L["engine"] and _engine_viewport():
+        if _engine_viewport():
             L["seen"] = time.time()
-        if L["engine"] and time.time() - L["seen"] > ENGINE_IDLE:      # (no viewport shows it any more)
+        if time.time() - L["seen"] > ENGINE_IDLE:       # (no viewport shows it any more)
             stop(reload=False)
             return None
         try:                            # (a new build of the map: the session starts again on it)
             if os.path.getmtime(L["path"]) != L["mtime"] and time.time() - os.path.getmtime(L["path"]) > 1.0:
-                err = start(bpy.context, for_engine=L["engine"])
+                err = start(bpy.context)
                 if err:
                     _live["error"] = err
                 return None if err else 0.05
@@ -346,69 +414,43 @@ def _tick():
             L["gen"], L["state"] = last[0], info["state"]
             if info["serial"] >= L["serial"]:
                 L["acked"] = True
-            for window in bpy.context.window_manager.windows:      # (the panel's status line)
-                for area in window.screen.areas:
-                    if area.type == "VIEW_3D":
-                        area.tag_redraw()
         if L["dirty"] and L["acked"] and L["gen"] >= 0:
             _sync(bpy.context)
     except livelight.LiveError as ex:
-        stop("Live Lighting stopped: " + str(ex).splitlines()[0])
+        stop(str(ex).splitlines()[0])
         return None
     except Exception as ex:             # (never an error out of a timer: it would repeat forever)
-        stop(f"Live Lighting stopped: {ex}")
+        stop(str(ex))
         return None
     return 0.03
 
 
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph):
-    if not running():
+    """The scene changed: lights are the live session's to follow; what it can't follow (walls; lights too when no
+    session runs) makes the shown build out of date."""
+    if _view["data"] is None:
         return
+    live = running()
     for u in depsgraph.updates:
         i = u.id
-        if isinstance(i, (bpy.types.Light, bpy.types.Scene, bpy.types.Collection)) or (
-                isinstance(i, bpy.types.Object) and (i.type == "LIGHT" or i.name in _live.get("ents", ()))):
+        light = isinstance(i, (bpy.types.Light, bpy.types.Scene, bpy.types.Collection)) or (
+            isinstance(i, bpy.types.Object) and (i.type == "LIGHT" or i.name in _live.get("ents", ())))
+        if light and live:
             _live["dirty"] = True
-            return
+        elif isinstance(i, (bpy.types.Light, bpy.types.Mesh, bpy.types.Material)) or (
+                isinstance(i, bpy.types.Object) and i.type in ("MESH", "LIGHT")
+                and (u.is_updated_geometry or u.is_updated_transform)):
+            _view["edited"] = True
 
 
 @bpy.app.handlers.persistent
 def _on_load(*_args):
     stop(reload=False)
-
-
-class HL_OT_live_lighting(bpy.types.Operator):
-    bl_idname = "hammerless.live_lighting"
-    bl_label = "Live Lighting"
-    bl_description = ("The lighting view follows the lights as you move and change them: the light compiler stays "
-                      "running on the last build's map. Walls moved since the build need a Build")
-
-    def execute(self, context):
-        if running():
-            stop()
-            return {"FINISHED"}
-        err = start(context)
-        if err:
-            self.report({"ERROR"}, err)
-            return {"CANCELLED"}
-        s = context.scene.hammerless
-        s.show_bake_visualizations = True
-        s.show_lightmap = True
-        return {"FINISHED"}
-
-
-def draw_panel(layout, context) -> None:
-    row = layout.row(align=True)
-    row.operator("hammerless.live_lighting", text="Stop Live Lighting" if running() else "Live Lighting",
-                 icon="PAUSE" if running() else "PLAY", depress=running())
-    text = status()
-    if text:
-        layout.label(text=text, icon="INFO")
+    view_clear()
 
 
 def register():
-    bpy.utils.register_class(HL_OT_live_lighting)
     bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
     bpy.app.handlers.load_pre.append(_on_load)
 
@@ -421,4 +463,4 @@ def unregister():
         bpy.app.handlers.load_pre.remove(_on_load)
     if bpy.app.timers.is_registered(_tick):
         bpy.app.timers.unregister(_tick)
-    bpy.utils.unregister_class(HL_OT_live_lighting)
+    view_clear()

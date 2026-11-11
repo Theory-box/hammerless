@@ -45,12 +45,12 @@ def shot(name):
 def finish(ok, why=""):
     out["ok"], out["why"] = ok, why
     out["status"] = livelighting.status()
-    out["engine_session"] = livelighting.for_engine()
     from hammerless.blender import l4d2preview
-    st = lightview._state
+    st = livelighting._view
     out["vrad"] = dict(l4d2preview._VRAD, failed=str(l4d2preview._VRAD["failed"]))
     out["drawn"] = {"tbatches": None if st["tbatches"] is None else len(st["tbatches"]), "texture": st["texture"] is not None,
                     "faces": None if st["data"] is None else st["data"].faces}
+    out["lighting_view_untouched"] = lightview._state["data"] is None
     livelighting.stop(reload=False)
     print("ENGINE_VRAD_RESULT " + json.dumps(out), flush=True)
     bpy.ops.wm.quit_blender()
@@ -91,7 +91,7 @@ def step():
                 bpy.context.scene.hammerless.show_sky = True
                 out["shot_before"] = shot("engine_vrad_before.png")
                 lamp = next(o for o in bpy.context.scene.objects if o.type == "LIGHT" and o.name in L["ents"])
-                state["before"] = lightview._state["data"].atlas.copy()
+                state["before"] = livelighting._view["data"].atlas.copy()
                 state["gen"] = L["gen"]
                 lamp.data.color = (1.0, 0.35, 0.2)
                 lamp.rotation_euler.z += 0.5
@@ -105,7 +105,7 @@ def step():
         elif state["phase"] == 4:
             if now - state["t"] > 1.0:
                 out["shot_after"] = shot("engine_vrad_after.png")
-                changed = int((abs(lightview._state["data"].atlas - state["before"]).max(axis=2) > 1e-4).sum())
+                changed = int((abs(livelighting._view["data"].atlas - state["before"]).max(axis=2) > 1e-4).sum())
                 out["texels_changed"] = changed
                 return finish(changed > 0, "" if changed else "the lighting didn't change")
     except Exception as ex:

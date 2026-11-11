@@ -85,10 +85,11 @@ def _draw():
     draw_sky(bpy.context)
 
 
-def draw_sky(context) -> None:
-    """The sky where nothing has been drawn (the far depth), with the view's matrices as they are set."""
+def draw_sky(context, always: bool = False) -> None:
+    """The sky where nothing has been drawn (the far depth), with the view's matrices as they are set. always: the
+    L4D2 Preview engine's (the map's sky as it is, whatever the Sky view's own switch and exposure say)."""
     s = getattr(context.scene, "hammerless", None)
-    if s is None or not s.show_bake_visualizations or not s.show_sky:
+    if s is None or (not always and (not s.show_bake_visualizations or not s.show_sky)):
         return
     sky = s.skyname.strip().lower()
     if not sky:
@@ -103,7 +104,7 @@ def draw_sky(context) -> None:
     sh.bind()
     vp = gpu.matrix.get_projection_matrix() @ gpu.matrix.get_model_view_matrix()
     sh.uniform_float("invViewProj", vp.inverted())
-    sh.uniform_float("exposure", 2.0 ** s.sky_view_exposure)
+    sh.uniform_float("exposure", 1.0 if always else 2.0 ** s.sky_view_exposure)
     sh.uniform_sampler("image", _state["texture"])
     gpu.state.depth_test_set("LESS_EQUAL")
     gpu.state.depth_mask_set(False)
