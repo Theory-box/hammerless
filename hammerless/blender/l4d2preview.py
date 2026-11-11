@@ -698,35 +698,14 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
             return False
 
     def _vrad_draw(self, context):
-        """The compiled map's faces (game textures x the live lightmaps) and props, with depth."""
-        from . import lightview, lighttextures, livelighting
+        """Built-Map Lighting's part in the engine's own draw: nothing but the status line. The picture is drawn by
+        vrad_overlay_draw, with the viewport's overlays: what a render engine draws here goes through the scene's
+        colour management (its exposure, view transform and look, measured in 4.4), and the picture must be the
+        game's whatever those are; the overlays' buffer is shown as it is, and its depth hides what is behind the
+        map's walls (the sky, the nav view), which a render engine's own depth doesn't."""
+        from . import lightview, livelighting
         state = lightview._state
-        s = context.scene.hammerless
-        if state['texture'] is None:
-            lightview._upload()
-        if state['tbatches'] is None or state.get('tscale') != s.units_per_meter:
-            state['tbatches'] = lighttextures.build(state['data'], state['props'], s.units_per_meter,
-                                                    state['content'], state['game_dir'])
-            state['tscale'] = s.units_per_meter
-        rv3d = context.region_data
-        gpu.matrix.push()
-        gpu.matrix.push_projection()
-        try:
-            gpu.matrix.load_matrix(rv3d.view_matrix)
-            gpu.matrix.load_projection_matrix(rv3d.window_matrix)
-            # (the sky behind the map: the Sky view's own drawing can't be used here, a render engine's viewport
-            # gives overlays no depth to hide it behind the walls)
-            from . import skyview
-            skyview.draw_sky(context)
-            gpu.state.blend_set('NONE')
-            gpu.state.depth_mask_set(True)
-            gpu.state.depth_test_set('LESS_EQUAL')
-            gpu.state.face_culling_set('NONE')
-            lighttextures.draw(state['tbatches'], state['texture'], 2.0 ** context.scene.hl_preview_exposure, 0.0, True)
-        finally:
-            gpu.state.depth_test_set('NONE')
-            gpu.matrix.pop_projection()
-            gpu.matrix.pop()
+        _VRAD['shown'] = True
         note = livelighting.status().replace('Live Lighting: ', 'Lighting: ')
         if state['edited']:
             note += ' | walls changed since the build: Build to show them'
@@ -815,8 +794,10 @@ class HAMMERLESS_L4D2Preview(bpy.types.RenderEngine):
 
     def view_draw(self, context, depsgraph):
         gpu.state.active_framebuffer_get().clear(color=(0.025, 0.025, 0.025, 1), depth=1.0)
+        _VRAD['shown'] = False
         if self._vrad_ready(context):
             try:
+                gpu.state.active_framebuffer_get().clear(color=(0, 0, 0, 1), depth=1.0)
                 self._vrad_draw(context)
                 return
             except Exception as exc:    # (the engine's own lighting instead, until the next build)
@@ -1059,6 +1040,28 @@ def _vrad_toggled(self, context):
         for area in window.screen.areas:
             if area.type == 'VIEW_3D':
                 area.tag_redraw()
+
+
+def vrad_overlay_draw(context) -> None:
+    """The compiled map's faces (game textures x the live lightmaps) and props, with depth, in a viewport where
+    vrad_view is true (called from the Lighting view's draw handler: the first of the add-on's overlays)."""
+    from . import lightview, lighttextures
+    state = lightview._state
+    if not _VRAD.get('shown') or state['data'] is None:
+        return
+    s = context.scene.hammerless
+    if state['texture'] is None:
+        lightview._upload()
+    if state['tbatches'] is None or state.get('tscale') != s.units_per_meter:
+        state['tbatches'] = lighttextures.build(state['data'], state['props'], s.units_per_meter,
+                                                state['content'], state['game_dir'])
+        state['tscale'] = s.units_per_meter
+    gpu.state.blend_set('NONE')
+    gpu.state.depth_mask_set(True)
+    gpu.state.depth_test_set('LESS_EQUAL')
+    gpu.state.face_culling_set('NONE')
+    lighttextures.draw(state['tbatches'], state['texture'], 2.0 ** context.scene.hl_preview_exposure, 0.0, True)
+    gpu.state.depth_test_set('NONE')
 
 
 def vrad_view(context) -> bool:

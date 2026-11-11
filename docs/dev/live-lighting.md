@@ -24,10 +24,13 @@ with `lighttextures`). The engine starts the session itself and it ends 20 s aft
 The scene isn't extracted at all in this mode, so big scenes cost nothing per edit. Without a build, or with the
 option off, the engine's own experimental lighting draws the scene as before.
 
-A render engine's viewport gives `POST_VIEW` overlays no scene depth (measured in 4.4: the sky overlay covered
-everything whatever the engine wrote or left in the depth buffer), so the engine draws the sky itself
-(`skyview.draw_sky`) and the Sky and Lighting overlays stay out of such viewports (`l4d2preview.vrad_view`).
-Other overlays that test depth (nav, problems) draw over the map there.
+The picture is drawn with the viewport's overlays (`l4d2preview.vrad_overlay_draw`, called first from the Lighting
+view's `POST_VIEW` handler), not in the engine's `view_draw`. Measured in 4.4: what `view_draw` draws goes through
+the scene's colour management (exposure 2 doubled the picture's brightness, AgX and Standard gave different
+pictures, and none was the Lighting view's), and its depth never reaches the overlays (the sky overlay covered
+everything). The overlays' buffer is shown as it is and keeps its own depth, so the picture is the same whatever
+the scene's exposure, view transform or look, and the sky and nav overlays are hidden behind the map's walls.
+`view_draw` only clears to black and writes the status line. The engine's own Exposure setting still applies.
 
 Test: `tests/blender/check_engine_vrad.py` (a window; saves before/after screenshots).
 
