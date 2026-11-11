@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (on main, very much work in progress)
+
+- **L4D2 Preview render engine: live lighting.** In a Rendered viewport the engine shows the last build's map (game textures, its lightmaps, props, sky). *Lighting: Live* keeps the Hammerless light compiler running on that map (`hlvrad -live`) and the lighting follows light edits at a bake's quality: on a 2.4M-sample map with an RTX 4090 a moved lamp shows in about 0.04 s and settles in about 1 s, a sun edit in about 3 s. *Lighting: Baked* shows the last bake with a Bake button and runs nothing in the background. When Live can't start, the last bake is shown with the reason.
+- Live settings: Live Quality (As Baked / Draft) and Update Pace (Fast / Balanced / Light, for slower machines).
+- While L4D2 Preview is the scene's engine, the scene's Colour Management is kept at Standard, exposure 0, gamma 1, no look or curves (Blender applies those to what an engine draws); the scene's own settings are put back when another engine is chosen.
+- Blender's material, light, world and data panels show while L4D2 Preview is the scene's engine.
+- Every build writes each light entity's object name into the map (`_hlobject`), which live lighting uses to follow the scene's lights. The first build after updating is a full one.
+- Known limits: only run on one NVIDIA RTX card so far (it uses Vulkan hardware ray tracing; AMD and Intel are untested); shows the last build's geometry; props keep the bake's light; area lights and emissive surfaces aren't followed live; a light with a pattern or switch makes all direct light again; about 1-2 GB of memory while live.
+
 ## 0.20.32 (test release, 2026-10-31)
 
 - Expand reusable logic nodes with typed list tools, per-action cooldowns and change detection, and movement-goal observations.
