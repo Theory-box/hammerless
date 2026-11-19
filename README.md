@@ -5,7 +5,7 @@
 No Hammer, no VMF editing, no console commands.
 
 > [!WARNING]
-> **Work in progress (v0.20.34, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene, and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
+> **Work in progress (v0.20.35, test release).** Hammerless builds and plays full maps end to end, but it's still early: expect bugs and changes between versions. **Work on copies of your .blend files** and keep backups: some tools change your scene, and a bug could damage a map. Building also replaces the map of the same name in your game's `maps` folder. Please [report bugs](../../issues).
 
 > **Very early (in test releases since 0.20.33): the L4D2 Preview render engine with live lighting.** Choose *L4D2 Preview (Experimental)* as the render engine and switch a viewport to Rendered: it shows the last build's map, and with *Lighting: Live* the Hammerless light compiler stays running and the lighting follows the lights you move, at a bake's quality. It is unfinished: it has only been run on one NVIDIA RTX card, it needs hardware ray tracing, it shows the last build's geometry (walls moved since need a bake), props keep the bake's light, and it uses 1-2 GB of memory while live. While it is the scene's engine it sets the scene's Colour Management to Standard / exposure 0 (your settings come back when you choose another engine). Expect it to change or break; notes are in [docs/dev/live-lighting.md](docs/dev/live-lighting.md).
 

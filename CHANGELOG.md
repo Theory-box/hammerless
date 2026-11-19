@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.35 (test release, 2026-11-19)
+
+Fixes from an audit on Blender 5.2 and 4.4.
+
+- Blender 5: a particle effect converted from the old card kind kept its class and keys (they were lost).
+- Blender 5.2: converting a preset to its single object, a particle card to a marker, or a light entity to a Blender light no longer leaves the new object linked twice in a collection (Organize Scene then stopped with an error).
+- Texturing one of Make Collision's props textures its whole set again (only the picked one got the texture).
+- Converting presets to their single object works again on Blender 4.x (every preset was skipped).
+- Add Entity, presets, Draw Brush, the model browser, lamps and placed characters no longer stop with an error when the active collection is unticked in the Outliner.
+- Example models keep their texture and glow on a Blender in another language.
+- The build warns, by name, when the build folder, the Windows temporary folder, the add-on's folder or the game folder has characters the map compilers can't read, and says what to do.
+
 ## 0.20.34 (test release, 2026-11-19)
 
 - **Convert to Brushes works on Blender 5.2**: its geometry library is now bundled for Blender 5.2's Python (3.13) as well as Blender 4.2-4.5's (3.11). The brush tools' tests (Convert to Brushes in every method, its worker processes, Carve / Clip / Hollow / Merge, Draw Brush) pass on Blender 5.2.4, 4.4 and 4.2.
