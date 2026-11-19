@@ -3114,8 +3114,17 @@ def compile_logic(context, ir, report) -> None:
     from .mapcollection import map_objects
     inside = map_objects(context.scene)
     for obj in sorted(context.scene.objects, key=lambda o: o.name):
-        if obj.name not in inside or effective_role(obj) == "IGNORE":
+        if obj.name not in inside:
             continue                                # (not part of the map: nor is its logic)
+        if effective_role(obj) == "IGNORE":
+            # (in the map's collection but not built, a plain empty for one: its Behaviours would silently do nothing)
+            graphs = [slot.graph.name for slot in obj.hammerless.behaviours if slot.graph is not None]
+            if graphs:
+                report.warnings.append(f"'{obj.name}' carries a Behaviour ({', '.join(graphs)}) but isn't built into the "
+                                       "map, so the Behaviour does nothing: give the object a Role (a Point Entity, a "
+                                       "Brush Entity, a Custom Model, a light...), or move the Behaviour to an object "
+                                       "that has one")
+            continue
         for slot in obj.hammerless.behaviours:
             if slot.graph is not None:
                 jobs.append((slot.graph, obj, slot))

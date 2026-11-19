@@ -1498,14 +1498,21 @@ def test_logic_examples_build():
         problems = []
         tree = build_example(bpy.context, i, problems)
         assert not problems, (ex["title"], problems)
-        assert len([n for n in tree.nodes if n.bl_idname != "NodeFrame"]) == len(ex["nodes"]), ex["title"]
-        assert len(tree.links) == len(ex["links"]), (ex["title"], len(tree.links), len(ex["links"]))
+        from hammerless.blender import example_ownership
+        if example_ownership.applicable(ex) or (ex.get("behaviours") and not ex["nodes"]):
+            # (built as a Behaviour on its object: its Self and settings nodes are added, some examples are reshaped
+            # for it, so the graph isn't the listed one node for node; it must have logic, and export cleanly)
+            assert any(n.bl_idname != "NodeFrame" for n in tree.nodes) and len(tree.links), ex["title"]
+        else:
+            assert len([n for n in tree.nodes if n.bl_idname != "NodeFrame"]) == len(ex["nodes"]), ex["title"]
+            assert len(tree.links) == len(ex["links"]), (ex["title"], len(tree.links), len(ex["links"]))
         # (Blender draws wires in an event loop red; they work. A real circle of value wires shows up as
         # a build warning below)
         blocks, log = export()
         # (an example that needs cheats on purpose gets that warning, and only that one)
         needs_cheats = False                      # (none: Slow Motion Headshots uses func_timescale)
-        warned = [ln for ln in log.splitlines() if tree.name in ln]
+        # (a Behaviour with a map-wide node, a goal or a horde for one, says so: that note is expected)
+        warned = [ln for ln in log.splitlines() if tree.name in ln and "act on the whole map" not in ln]
         if needs_cheats:
             ok = len(warned) == 1 and "Needs cheats" in warned[0]
         else:
@@ -1550,6 +1557,9 @@ def test_logic_examples_into_main_graph():
             continue
         if not has_fgd and any(n["type"] in ("HL_NodeObject", "HL_NodeDirector") for n in ex["nodes"]):
             continue
+        from hammerless.blender import example_ownership
+        if example_ownership.applicable(ex) or (ex.get("behaviours") and not ex["nodes"]):
+            continue                          # (a Behaviour on its object: nothing goes into the main graph)
         before = set(mine.nodes)
         problems = []
         assert build_example(bpy.context, i, problems, into=mine) == mine

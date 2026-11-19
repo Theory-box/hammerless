@@ -1768,12 +1768,20 @@ class _Compiler:
             a, b = self.typed_in(n, "a", vs.VEC), self.typed_in(n, "b", vs.VEC)
             f = self.typed_in(n, "scale", vs.NUM)
             op = s.get("op", "ADD")
+            # (a position can be nothing: the entity it is read from is gone (killed, removed, swapped for another),
+            # as every "position of" value gives null then. Maths on nothing would stop the script with an error,
+            # each time the graph runs; so a distance to nothing is "very far", a length or dot product 0, and a
+            # vector made from nothing is nothing, which the nodes that take positions already leave alone)
             if sock == "value":
-                return {"DISTANCE": f"(({a}) - ({b})).Length()", "LENGTH": f"({a}).Length()",
-                        "DOT": f"({a}).Dot({b})"}.get(op, "0.0")
-            return {"ADD": f"(({a}) + ({b}))", "SUBTRACT": f"(({a}) - ({b}))", "SCALE": f"(({a}) * ({f}))",
-                    "NORMALIZE": f"(function(v) {{ local l = v.Length(); return l > 0 ? v * (1.0 / l) : v; }})({a})",
-                    "CROSS": f"({a}).Cross({b})"}.get(op, a)
+                return {"DISTANCE": f"(function(a, b) {{ return (a == null || b == null) ? 1.0e30 : (a - b).Length(); }})({a}, {b})",
+                        "LENGTH": f"(function(a) {{ return a == null ? 0.0 : a.Length(); }})({a})",
+                        "DOT": f"(function(a, b) {{ return (a == null || b == null) ? 0.0 : a.Dot(b); }})({a}, {b})",
+                        }.get(op, "0.0")
+            two = "(function(a, b) {{ return (a == null || b == null) ? null : {}; }})({}, {})"
+            return {"ADD": two.format("a + b", a, b), "SUBTRACT": two.format("a - b", a, b),
+                    "SCALE": f"(function(a, f) {{ return a == null ? null : a * f; }})({a}, {f})",
+                    "NORMALIZE": f"(function(v) {{ if (v == null) return null; local l = v.Length(); return l > 0 ? v * (1.0 / l) : v; }})({a})",
+                    "CROSS": two.format("a.Cross(b)", a, b)}.get(op, a)
         if k == "CHECK":
             self.helper("HL_IsSet", HELPERS["HL_IsSet"])
             a, b = self.typed_in(n, "a", vs.ANY), self.typed_in(n, "b", vs.ANY)

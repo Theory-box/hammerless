@@ -10,6 +10,9 @@ import bpy
 
 # These objects illustrate a map-wide query, rather than own the query.
 GLOBAL_WITH_SAMPLES = {'Gas Can Counter'}
+# These stay world graphs: their first object is only a place (an empty marking where something spawns), which isn't
+# built into the map, so a Behaviour on it would never run.
+WORLD_GRAPHS = {'Witch Guards the Gate'}
 
 DESCRIPTIONS = {
     'Sleepers': 'Each placed character carries a Sleeper behaviour. A nearby survivor, a nearby gunshot, or a shot at this character wakes it. It stands up using its pose, becomes a real common in the same clothes, and attacks. Duplicate a character to add another; names do not control membership. Damage hooks need Hammerless\'s game mode.',
@@ -78,7 +81,7 @@ def _prepare(ex):
 
 def applicable(ex):
     return bool(ex.get('objects') and ex.get('nodes') and not ex.get('behaviours')
-                and ex['title'] not in GLOBAL_WITH_SAMPLES)
+                and ex['title'] not in GLOBAL_WITH_SAMPLES and ex['title'] not in WORLD_GRAPHS)
 
 
 def build(context, ex, objects, problems, number):

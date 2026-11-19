@@ -59,7 +59,26 @@ class Run:
         return f"Example {n:02d}: {self.titles[n]}"
 
     def ent(self, n: int, node: str) -> str:
-        return "hl_" + slug(f"{self.graph(n)}_{node}")
+        """The map's entity for a node of example n. An example built as a Behaviour on an object names its
+        entities after the object and the behaviour ("hl_example_04_room_tank_in_a_room_behaviour_example_04_room_
+        room"): looked up among the built map's names, by the example's number in front and the node at the end."""
+        plain = "hl_" + slug(f"{self.graph(n)}_{node}")
+        names = self.map_names()
+        if plain in names or not names:
+            return plain
+        found = sorted((x for x in names if x.startswith(f"hl_example_{n:02d}_") and x.endswith("_" + slug(node))),
+                       key=len)
+        return found[0] if found else plain
+
+    def map_names(self) -> set[str]:
+        if getattr(self, "_names", None) is None:
+            vmf = os.path.join(os.path.dirname(self.b.game), "hammerless_bench_build", MAP + ".vmf")
+            try:
+                with open(vmf, encoding="utf-8", errors="replace") as f:
+                    self._names = set(re.findall(r'"targetname" "([^"]+)"', f.read()))
+            except OSError:
+                self._names = set()
+        return self._names
 
     def obj(self, n: int, key: str) -> str:
         return "hl_" + slug(f"Example {n:02d} {key}")
@@ -67,7 +86,15 @@ class Run:
     # checks
     def fired(self, mark: int, n: int, *wires: str) -> list[str]:
         """The wires (e.g. 'button.pressed -> steps.in') of example n that did NOT fire since mark."""
-        got = set(self.b.events_since(mark))
+        got = set()
+        for line in self.b.events_since(mark):
+            got.add(line)
+            # an example built as a Behaviour on an object logs "[Example N <object> <title> Behaviour] Example N
+            # <object>/a.out -> Example N <object>/b.in": the same wire, with the object's name in front of each end
+            m = re.match(r"\[Example (\d+)\b[^\]]*\] (.+?) -> (.+)$", line)
+            if m and int(m.group(1)) == n:
+                ends = [re.sub(r"^Example \d+[^/]*/", "", end) for end in m.group(2, 3)]
+                got.add(f"[{self.graph(n)}] {ends[0]} -> {ends[1]}")
         return [w for w in wires if f"[{self.graph(n)}] {w}" not in got]
 
     def expect(self, n: int, mark: int, *wires: str, extra: str = ""):
@@ -303,7 +330,9 @@ def check(run: Run, n: int, b: Bench):
         assert inv.get("slot0") == "weapon_pumpshotgun", f"inventory {inv}"
         return "started with a pump shotgun"
     if n == 40:
-        return run.expect(40, run.load_mark, "bots.asked -> avoid.run")
+        # (the example is the crate's own Behaviour now: survivors may pick this crate up. Its rule runs when a
+        # survivor tries to, which the bench can't do; the old map-wide bot rule is no longer part of it)
+        raise SkipTest("not automated (needs real play: a survivor picking the crate up)")
     if n == 41:
         b.console("scripted_user_func boost", wait=0.05)
         v = b.value("T.host().GetVelocity().z")
@@ -335,9 +364,12 @@ def check(run: Run, n: int, b: Bench):
         return f"headshot: game at {slow:.2f}x, then back to {back:.2f}x, no cheats"
     if n == 53:
         # (the light itself switching is tests/ingame/test_lightstyles.py: this map isn't lit)
-        lights = b.value('(function() { local n = 0; for (local e = null; e = Entities.FindByName(e, "power_lights");) '
-                         'if (e.GetClassname() == "light") n++; return n; })()')
-        assert lights == 2, f"{lights} lights named power_lights in the map"
+        # (each lamp has a name of its own since the example became a Behaviour: the button's graph reaches them
+        # through its settings, not through a shared name)
+        lights = b.value('(function() { local n = 0; foreach (name in ["hl_light_example_53_lamp1", '
+                         '"hl_light_example_53_lamp2"]) { local e = Entities.FindByName(null, name); '
+                         'if (e != null && e.GetClassname() == "light") n++; } return n; })()')
+        assert lights == 2, f"{lights} of the example's 2 switchable lamps in the map"
         mk = m(); b.console(f"ent_fire {run.obj(53, 'button')} Press", wait=4)
         run.expect(53, mk, "button.pressed -> stutter.SetPattern", "button.pressed -> wait.in",
                    "wait.out -> off.TurnOff", "wait.out -> horde.start")
@@ -391,9 +423,14 @@ def check(run: Run, n: int, b: Bench):
                 f"shot: kept swelling ({shot[0]:.2f}), burst and gone; commons within its radius killed (3 of 3), "
                 f"the one outside alive")
     if n == 54:
-        lights = b.value('(function() { local n = 0; for (local e = null; e = Entities.FindByName(e, "tank_lights");) '
-                         'if (e.GetClassname() == "light") n++; return n; })()')
-        assert lights == 2, f"{lights} lights named tank_lights in the map"
+        # (each lamp carries the Behaviour and has a name of its own)
+        lights = b.value('(function() { local n = 0; foreach (name in ["hl_light_example_54_lamp1", '
+                         '"hl_light_example_54_lamp2"]) { local e = Entities.FindByName(null, name); '
+                         'if (e != null && e.GetClassname() == "light") n++; } return n; })()')
+        assert lights == 2, f"{lights} of the example's 2 switchable lamps in the map"
+        # (no real Tank alive, one an earlier example spawned for one: "no Tank left" must be true after the death)
+        b.run('for (local e = null; e = Entities.FindByClassname(e, "player");) '
+              'if (e.GetZombieType() == 8 && !e.IsDead()) e.TakeDamage(1000000, 0, null);'); time.sleep(1.5)
         mk = m(); b.run('FireGameEvent("tank_spawn", { userid = T.host().GetPlayerUserId(), tankid = 0 });'); time.sleep(1)
         run.expect(54, mk, "spawn.happened -> flicker.SetPattern")
         mk = m(); b.run('FireGameEvent("tank_killed", { userid = 0, attacker = T.host().GetPlayerUserId() });'); time.sleep(1.5)
@@ -527,8 +564,9 @@ def check(run: Run, n: int, b: Bench):
         # (500) above, looking straight down and turning with them; Level Aim puts their aim level; off: their own
         # eyes again, the cameras gone
         shots = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shots")
-        views = ('(function() { local a = []; foreach (s in T.survivors()) { local v = NetProps.GetPropEntity(s, '
-                 '"m_hViewEntity"); a.append(v == null ? null : [v.GetClassname(), v.GetOrigin() - s.GetOrigin(), '
+        # (the human survivors: the example's camera graph leaves bots alone)
+        views = ('(function() { local a = []; foreach (s in T.survivors()) { if (IsPlayerABot(s)) continue; '
+                 'local v = NetProps.GetPropEntity(s, "m_hViewEntity"); a.append(v == null ? null : [v.GetClassname(), v.GetOrigin() - s.GetOrigin(), '
                  'v.GetAngles().x, v.GetAngles().y, v.GetMoveParent() == s, s.EyeAngles().y]); } return a; })()')
         # (example 45 puts everyone in third person, which keeps the player's own view angles: first person here)
         b.console("sb_stop 1", "firstperson", wait=0.3)

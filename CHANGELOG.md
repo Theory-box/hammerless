@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Logic: the Vector Math node no longer stops the script when a position is missing.** A graph that measured the distance to an entity that had gone (killed, removed, swapped for another) threw a script error every time it ran; the Sleepers example did so on every tick once a sleeper woke. A distance to nothing is "very far", a length or dot product 0.
+- **The "Witch Guards the Gate" example works again** (it exported nothing: its Behaviour sat on an empty that isn't built). It is a world graph again.
+- The build warns when a Behaviour is on an object that isn't built into the map (it did nothing, silently).
+- Tests: the in-game example regression knows Behaviour-based examples (50 pass, 2 fail, 10 need real play); a new check builds and exports every example on its own.
+
 ## 0.20.35 (test release, 2026-11-19)
 
 Fixes from an audit on Blender 5.2 and 4.4.
