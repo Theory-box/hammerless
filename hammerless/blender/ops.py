@@ -655,7 +655,7 @@ def export_finish(prep) -> tuple[str | None, str | None, Report]:
                                                       "set Settings > Game & Folders > Work Folder to one"),
               ("Windows temporary folder", tempfile.gettempdir(),
                "it is under your Windows user name: set the TEMP and TMP environment variables to a folder with "
-               "plain letters, such as C:\Temp"),
+               "plain letters, such as C:\\Temp"),
               ("add-on's folder", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                "it is under your Windows user name: Blender's Preferences > File Paths > Extensions, or a Blender "
                "install with a portable folder, can put it elsewhere"),
