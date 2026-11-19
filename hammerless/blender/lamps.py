@@ -101,6 +101,10 @@ def convert_light_entities() -> int:
                 continue
             item = nh.keyvalues.add()
             item.key, item.value = k, v
+        # (the old object leaves its collections first: remapping would turn its place in each into a second link of
+        # the new light there, which Blender 5.2 keeps)
+        for coll in list(old.users_collection):
+            coll.objects.unlink(old)
         old.user_remap(new)                        # (logic nodes, parents, constraints: the new light now)
         name = old.name
         data = old.data

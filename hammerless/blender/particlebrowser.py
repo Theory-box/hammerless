@@ -166,6 +166,32 @@ def _material(name: str, path: str):
 
 # ---------------------------------------------------------------- the grid
 
+def _copy_registered(src, dst):
+    """A registered property group's values onto another of the same type (its groups and lists inside too). In
+    this order: numbers and choices, then text, then lists. Setting a value can run an update that fills a list with
+    defaults (a class's keys), and some numbers are only another way to write a text beside them (a key's colour
+    swatch and brightness write its value): the text and the lists are what is stored, so they go last."""
+    props = [p for p in src.bl_rna.properties if p.identifier != 'rna_type']
+    for p in sorted(props, key=lambda p: 2 if p.type == 'COLLECTION' else 1 if p.type == 'STRING' else 0):
+        name = p.identifier
+        value = getattr(src, name)
+        if p.type == 'POINTER':
+            if isinstance(value, bpy.types.PropertyGroup):
+                _copy_registered(value, getattr(dst, name))
+            elif not p.is_readonly:
+                setattr(dst, name, value)
+        elif p.type == 'COLLECTION':
+            target = getattr(dst, name)
+            target.clear()
+            for item in value:
+                _copy_registered(item, target.add())
+        elif not p.is_readonly:
+            try:
+                setattr(dst, name, value[:] if getattr(p, 'is_array', False) else value)
+            except (TypeError, ValueError, AttributeError):
+                pass                    # (a value its own update refuses: left at its default)
+
+
 def particle_empty(obj):
     """Replace only generated legacy cards; remap references and retain entity data."""
     if obj.type=='EMPTY':return obj
@@ -176,13 +202,21 @@ def particle_empty(obj):
         obj.data=mesh;return obj
     marker=bpy.data.objects.new(obj.name+'_marker',None)
     for key,value in obj.items():marker[key]=value.to_dict() if hasattr(value,'to_dict') else value
+    # (the entity's own settings: registered properties, which Blender 5 no longer lists among the custom ones)
+    for name in ('hammerless',):
+        if name not in marker.keys() or not marker.hammerless.classname:
+            _copy_registered(getattr(obj, name), getattr(marker, name))
     marker.parent=obj.parent;marker.parent_type=obj.parent_type;marker.parent_bone=obj.parent_bone
     marker.matrix_parent_inverse=obj.matrix_parent_inverse.copy();marker.matrix_basis=obj.matrix_basis.copy()
     marker.hide_render=obj.hide_render;marker.hide_viewport=obj.hide_viewport
     marker.empty_display_type='PLAIN_AXES';marker.empty_display_size=.15
-    for collection in obj.users_collection:collection.objects.link(marker)
     selected=obj.select_get();active=bpy.context.view_layer.objects.active==obj
-    name=obj.name;hidden=obj.hide_get();obj.user_remap(marker)
+    name=obj.name;hidden=obj.hide_get()
+    # (the old object leaves its collections before its users are pointed at the marker: remapping would turn its own
+    # place in a collection into a second link of the marker there, which Blender 5.2 keeps)
+    for collection in list(obj.users_collection):
+        collection.objects.link(marker);collection.objects.unlink(obj)
+    obj.user_remap(marker)
     bpy.data.objects.remove(obj,do_unlink=True);marker.name=name
     marker.select_set(selected);marker.hide_set(hidden)
     if active:bpy.context.view_layer.objects.active=marker

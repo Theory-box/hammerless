@@ -140,7 +140,9 @@ def convert_single_presets(context):
         part = children[0] if len(children) == 1 else None
         unsafe = (part is None or root.library or root.override_library or root.animation_data
                   or root.constraints or len(root.users_scene) != 1
-                  or set(root.keys()) - {'hammerless', '_RNA_UI'})
+                  # (custom properties someone added: not the add-on's own registered settings, which Blender 4
+                  # lists among them (hammerless, hl_overlay...) and Blender 5 doesn't)
+                  or {k for k in root.keys() if k != '_RNA_UI' and k not in root.bl_rna.properties})
         if not unsafe:
             unsafe = (part.hammerless.preset_part != PRESETS[key].parts[0].name
                       or part.hammerless.preset or part.library or part.override_library
@@ -171,9 +173,13 @@ def convert_single_presets(context):
         part.matrix_world = world
         part.hide_viewport = part.hide_viewport or root.hide_viewport
         part.hide_render = part.hide_render or root.hide_render
-        for coll in root.users_collection:
+        # (the wrapper leaves its collections before its users are pointed at the part: remapping would turn the
+        # wrapper's own place in a collection into a second link of the part there; Blender 5.2 keeps both, and the
+        # part can then no longer be unlinked from that collection)
+        for coll in list(root.users_collection):
             if part.name not in coll.objects:
                 coll.objects.link(part)
+            coll.objects.unlink(root)
         part.hammerless.preset = key
         root.user_remap(part)
         bpy.data.objects.remove(root, do_unlink=True)
