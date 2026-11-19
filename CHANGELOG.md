@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.36 (test release, 2026-11-19)
 
 - **Logic: the Vector Math node no longer stops the script when a position is missing.** A graph that measured the distance to an entity that had gone (killed, removed, swapped for another) threw a script error every time it ran; the Sleepers example did so on every tick once a sleeper woke. A distance to nothing is "very far", a length or dot product 0.
 - **The "Witch Guards the Gate" example works again** (it exported nothing: its Behaviour sat on an empty that isn't built). It is a world graph again.
