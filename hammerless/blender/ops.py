@@ -262,6 +262,27 @@ def write_log(lines: list[str], append: bool = False) -> None:
     txt.write("\n".join(lines) + "\n")
 
 
+def error_text(what: str, ex: BaseException) -> str:
+    """An unexpected error as a message someone can act on and report: what stopped, the error, the kind of error
+    and the add-on's file, line and function it came from; the whole traceback goes to the hammerless_log text and
+    the system console. Call it from the except block."""
+    import traceback
+    tb = traceback.extract_tb(ex.__traceback__)
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ours = [f for f in tb if os.path.abspath(f.filename).startswith(here)] or list(tb)
+    where = ""
+    if ours:
+        f = ours[-1]
+        where = f" [{type(ex).__name__} in {os.path.basename(f.filename)} line {f.lineno}, {f.name}]"
+    try:
+        write_log(["", f"ERROR: {what} stopped: {ex}{where}", "Please send these lines with a bug report:"]
+                  + traceback.format_exception(type(ex), ex, ex.__traceback__), append=True)
+    except Exception:
+        pass                             # (no text block can be written from here: the console has it)
+    traceback.print_exception(type(ex), ex, ex.__traceback__)
+    return f"{what} stopped: {ex}{where}. This is a bug in Hammerless: the details are in the hammerless_log text"
+
+
 def report_lines(rep: Report) -> list[str]:
     out = [f"ERROR: {e}" for e in rep.errors]
     out += [f"WARNING: {w}" for w in rep.warnings]
@@ -1480,8 +1501,10 @@ class HL_OT_build(bpy.types.Operator):
             except Exception as ex:          # (reported like any export error)
                 import traceback
                 traceback.print_exc()
+                tb = traceback.extract_tb(ex.__traceback__)
+                at = f" [{type(ex).__name__} in {os.path.basename(tb[-1].filename)} line {tb[-1].lineno}, {tb[-1].name}]" if tb else ""
                 r = Report()
-                r.errors.append(f"The export failed: {ex}")
+                r.errors.append(f"The export failed: {ex}{at}. This is a bug in Hammerless: please report it")
                 self._export_out = (None, prep.root, r)
         self._export_thread = export_thread(work)
         self._job = None
@@ -1676,9 +1699,7 @@ class HL_OT_build(bpy.types.Operator):
             try:
                 return self._export_done(context)
             except Exception as ex:
-                import traceback
-                traceback.print_exc()
-                self.report({"ERROR"}, f"Build & Play stopped: {ex}")
+                self.report({"ERROR"}, error_text("The build", ex))
                 if self._timer is not None:
                     context.window_manager.event_timer_remove(self._timer)
                     self._timer = None
@@ -1692,9 +1713,7 @@ class HL_OT_build(bpy.types.Operator):
         try:
             return self._step(context)
         except Exception as ex:          # never leave the timer and status text behind
-            import traceback
-            traceback.print_exc()
-            self.report({"ERROR"}, f"Build & Play stopped: {ex}")
+            self.report({"ERROR"}, error_text("The build", ex))
             return self._finish(context, {"CANCELLED"})
 
     def _settings(self, context):

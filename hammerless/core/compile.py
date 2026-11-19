@@ -382,10 +382,12 @@ def _steam_process() -> tuple[int, int]:
 
 
 def _process_running(name: str) -> bool:
+    # (bytes, decoded here: tasklist answers in the console's code page, and on a Windows in another language its
+    # "no tasks" line has bytes Python's own decoding refuses; subprocess then hands back None, not text)
     try:
-        out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/NH"], capture_output=True, text=True,
+        out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/NH"], capture_output=True,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
-        return name.lower() in out.lower()
+        return name.lower() in (out or b"").decode("ascii", "replace").lower()
     except OSError:
         return False
 

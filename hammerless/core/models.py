@@ -202,7 +202,7 @@ def compile_model(studiomdl: str, game_dir: str, spec: ModelSpec, work_dir: str)
     with open(qc, "w", encoding="utf-8") as f:
         f.write(qc_text(spec))
     run = subprocess.run([studiomdl, "-game", game_dir, "-nop4", "-nox360", qc], capture_output=True, text=True,
-                         cwd=work_dir, timeout=300,
+                         errors="replace", cwd=work_dir, timeout=300,     # (paths in another alphabet in its output)
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     log = (run.stdout or "") + (run.stderr or "")
     files = [f for f in model_files(spec.name) if os.path.exists(os.path.join(game_dir, *f.split("/")))]

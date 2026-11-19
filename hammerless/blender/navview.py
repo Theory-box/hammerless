@@ -675,9 +675,8 @@ class HL_OT_nav_analyze(bpy.types.Operator):
             try:
                 ok = self._after_export(context)
             except Exception as ex:
-                import traceback
-                traceback.print_exc()
-                self.report({"ERROR"}, f"Build Nav Mesh stopped: {ex}")
+                from .ops import error_text
+                self.report({"ERROR"}, error_text("Build Nav Mesh", ex))
                 ok = False
             if not ok:
                 _end_job(context, self._timer)

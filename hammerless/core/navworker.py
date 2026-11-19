@@ -52,7 +52,8 @@ def run(kind: str, args: dict, on_stage=None, should_stop=None):
         pickle.dump({"kind": kind, "args": args}, f, protocol=pickle.HIGHEST_PROTOCOL)
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     proc = subprocess.Popen([python_exe(), "-s", "-c", _BOOT, PACKAGE, PACKAGE_DIR, job, out],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=flags)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace",
+                            creationflags=flags)
     from .childkill import adopt
     adopt(proc)                  # (ends with Blender)
     err: list[str] = []
