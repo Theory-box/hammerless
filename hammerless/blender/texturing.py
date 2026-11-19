@@ -264,11 +264,17 @@ def selected_targets(context) -> list[tuple]:
                 out.append((obj, sel))
     else:
         out = [(o, None) for o in context.selected_objects if _paintable(o)]
-        sets = {o.parent for o, _f in out if o.get("hl_collision_of") is not None and o.parent is not None}
-        if sets:                        # (one collision prop picked: the texture goes on its whole set)
+        # (one collision prop picked: the texture goes on its whole set. A set: the collision objects made from the
+        # same mesh, which stand on their own (no parent) since Make Collision's outputs became independent, or are
+        # that mesh's children in maps made before)
+        sets = {(o.parent, o.get("hl_collision_of")) for o, _f in out if o.get("hl_collision_of") is not None}
+        if sets:
             have = {o for o, _f in out}
-            out += [(o, None) for p in sets for o in p.children
-                    if o.get("hl_collision_of") is not None and o not in have and _paintable(o)
+            pool = [o for parent, _of in sets if parent is not None for o in parent.children]
+            if any(parent is None for parent, _of in sets):
+                pool += [o for o in context.scene.objects if o.parent is None]
+            out += [(o, None) for o in dict.fromkeys(pool)
+                    if (o.parent, o.get("hl_collision_of")) in sets and o not in have and _paintable(o)
                     and o.hammerless.brush_detail != "VIS"]
     return out
 

@@ -2101,7 +2101,7 @@ def test_world_material_collections():
 def test_organize_imported_scene():
     from hammerless.blender import mapcollection as mc, vmfimport
     for brush_class, category in (("func_detail", "Detail"), ("fog_volume", "Volumes"),
-                                  ("trigger_once", "Volumes"), ("func_door", "Brush Entities")):
+                                  ("trigger_once", "Triggers"), ("func_door", "Brush Entities")):       # (triggers: Gameplay/Triggers)
         reset_scene()
         text = SMALL_VMF.replace('"func_detail"', '"' + brush_class + '"')
         vmfimport.import_text(bpy.context, text, os.path.join(TMP, "organize.vmf"))
@@ -2183,13 +2183,13 @@ def test_new_objects_sorted():
     bpy.ops.hammerless.add_preset(preset="START_SAFE_ROOM", landmark="landmark_0")
     settle()
     room = next(o for o in bpy.data.objects if o.hammerless.preset == "START_SAFE_ROOM")
-    assert where(room) == {"Prefabs"}, where(room)
-    assert all(where(c) == {"Prefabs"} for c in room.children_recursive)      # (its parts with it)
+    assert where(room) == {"Assemblies"}, where(room)             # (Gameplay/Assemblies)
+    assert all(where(c) == {"Assemblies"} for c in room.children_recursive)   # (its parts with it)
     # a change of kind: a brush becomes a trigger
     wall.hammerless.role, wall.hammerless.classname = "BRUSH_ENTITY", "trigger_once"
     wall.update_tag()
     settle()
-    assert where(wall) == {"Brush Entities"}, where(wall)
+    assert where(wall) == {"Triggers"}, where(wall)               # (Gameplay/Triggers)
     # your own collection inside the map: kept; renaming isn't "new"
     mine = bpy.data.collections.new("my stuff")
     coll.children.link(mine)
