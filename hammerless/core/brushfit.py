@@ -31,7 +31,8 @@ import numpy as np
 
 
 def _kernel():
-    """manifold3d: the vendored copy (hammerless/_vendor, for Blender's Python 3.11), else an installed one."""
+    """manifold3d: the vendored copy (hammerless/_vendor: builds for Python 3.11 and 3.13, Blender 4.2-4.5 and 5.2),
+    else an installed one."""
     vendor = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "_vendor")
     if os.path.isdir(vendor):               # (the bundled copy first: a known version, whatever else is installed)
         if hasattr(os, "add_dll_directory"):

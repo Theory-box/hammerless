@@ -304,7 +304,9 @@ class HL_OT_make_collision(bpy.types.Operator):
         try:
             from ..core import brushfit, organicfit
         except ImportError as e:
-            self.report({"ERROR"}, f"Convert to Brushes needs its geometry kernel (manifold3d), which didn't load: {e}")
+            import sys
+            self.report({"ERROR"}, f"Convert to Brushes needs its geometry kernel (manifold3d), which didn't load in this "
+                                   f"Blender (Python {sys.version_info.major}.{sys.version_info.minor}): {e}")
             return None
         hs = src.hammerless
         detail = hs.brush_detail_depth * scale
