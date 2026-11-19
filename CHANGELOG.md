@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased (on main, very much work in progress)
+## 0.20.33 (test release, 2026-11-19)
+
+- **Fixed: Build & Play stopped with "'NoneType' object has no attribute 'lower'"** on a Windows in a language other than English (the check for a running game couldn't read Windows' answer).
+- Unexpected build errors now name the kind of error and the add-on's file, line and function, and put the full details in the `hammerless_log` text for bug reports.
+- Blender 5.2 LTS: the add-on loads, exports and runs Build & Play there. Known problem: **Convert to Brushes doesn't work on Blender 5.x yet** (its geometry library is bundled for Blender 4.2-4.5 only).
+- The items below are new in this release and still very much work in progress.
 
 - **L4D2 Preview render engine: live lighting.** In a Rendered viewport the engine shows the last build's map (game textures, its lightmaps, props, sky). *Lighting: Live* keeps the Hammerless light compiler running on that map (`hlvrad -live`) and the lighting follows light edits at a bake's quality: on a 2.4M-sample map with an RTX 4090 a moved lamp shows in about 0.04 s and settles in about 1 s, a sun edit in about 3 s. *Lighting: Baked* shows the last bake with a Bake button and runs nothing in the background. When Live can't start, the last bake is shown with the reason.
 - Live settings: Live Quality (As Baked / Draft) and Update Pace (Fast / Balanced / Light, for slower machines).
