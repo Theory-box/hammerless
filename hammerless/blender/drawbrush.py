@@ -9,6 +9,8 @@ from __future__ import annotations
 import math
 
 import bpy
+
+from .mapcollection import select_new
 import gpu
 from bpy.props import EnumProperty, IntProperty
 from bpy_extras import view3d_utils
@@ -231,7 +233,7 @@ class HL_OT_draw_brush(bpy.types.Operator):
             _outward(me)
             for o in context.selected_objects:
                 o.select_set(False)
-            obj.select_set(True)
+            select_new(context, obj)
             context.view_layer.objects.active = obj
             self.report({"INFO"}, f"Brush {abs(self.a1 - self.a0):g} x {abs(self.b1 - self.b0):g} x {abs(self.h):g}")
             return {"FINISHED"}

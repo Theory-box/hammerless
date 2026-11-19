@@ -20,7 +20,10 @@ obj = bpy.context.object
 bevel = obj.modifiers.new('Bevel', 'BEVEL')
 bevel.width = 0.2
 bevel.segments = 1
-asset = Path(bpy.utils.resource_path('LOCAL')) / 'datafiles/assets/geometry_nodes/smooth_by_angle.blend'
+assets = Path(bpy.utils.resource_path('LOCAL')) / 'datafiles/assets'
+asset = assets / 'geometry_nodes/smooth_by_angle.blend'
+if not asset.exists():                # (Blender 5 keeps it with the other essential node groups)
+    asset = assets / 'nodes/geometry_nodes_essentials.blend'
 with bpy.data.libraries.load(str(asset)) as (src, dst):
     dst.node_groups = ['Smooth by Angle']
 mod = obj.modifiers.new('Smooth by Angle', 'NODES')
@@ -29,11 +32,17 @@ angle = next(i.identifier for i in mod.node_group.interface.items_tree
              if i.item_type == 'SOCKET' and i.in_out == 'INPUT' and i.name == 'Angle')
 ignore = next(i.identifier for i in mod.node_group.interface.items_tree
               if i.item_type == 'SOCKET' and i.in_out == 'INPUT' and i.name == 'Ignore Sharpness')
-mod[ignore] = True
+def set_input(key, value):
+    try:
+        mod[key] = value
+    except TypeError:               # (Blender 5.2: a modifier's inputs are no longer its custom properties)
+        mod.properties.inputs[key]["value"] = value
+
+set_input(ignore, True)
 materials = SimpleNamespace(resolve=lambda mat: ('dev/dev_measuregeneric01', 0.25, 16))
 
 def exported(degrees):
-    mod[angle] = math.radians(degrees)
+    set_input(angle, math.radians(degrees))
     mod.node_group.interface_update(bpy.context)
     obj.update_tag()
     bpy.context.view_layer.update()

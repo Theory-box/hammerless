@@ -5,6 +5,8 @@ from collections import OrderedDict
 from pathlib import Path
 
 import bpy
+
+from .mapcollection import select_new
 import bpy.utils.previews
 from bpy.props import EnumProperty, IntProperty, PointerProperty, StringProperty
 
@@ -192,7 +194,7 @@ class HL_OT_model_place(bpy.types.Operator):
         obj = make_entity_object(context, kind, context.scene.cursor.location.copy(),
                                  keyvalues={'model': t.active}, name=Path(t.active).stem)
         for old in context.selected_objects: old.select_set(False)
-        obj.select_set(True); context.view_layer.objects.active = obj
+        select_new(context, obj); context.view_layer.objects.active = obj
         _remember(t)
         return {'FINISHED'}
 

@@ -16,6 +16,18 @@ ENTITIES, BRUSH_ENTITIES, VOLUMES, PREFABS, INSTANCES = "Entities", "Brush Entit
 VOLUME_CLASSES = {"hammerless_nav_region", "hammerless_nav_cut", "hammerless_no_bake", "hammerless_control"}
 
 
+def select_new(context, obj) -> None:
+    """Select an object the add-on has just made. It was linked into the active collection, which may be excluded
+    from the view layer (unticked in the Outliner) or hidden: Blender then refuses to select it (an error, with the
+    object already made). It goes into the scene's own collection as well then, so it shows and can be selected."""
+    if obj.name not in context.view_layer.objects:
+        if obj.name not in context.scene.collection.objects:
+            context.scene.collection.objects.link(obj)
+        context.view_layer.update()
+    if obj.name in context.view_layer.objects:
+        obj.select_set(True)
+
+
 def map_collection(scene):
     """The scene's map collection, or None (a scene from before: the whole scene is the map)."""
     coll = scene.hammerless.map_collection

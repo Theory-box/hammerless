@@ -10,6 +10,8 @@ without it breaking.
 from __future__ import annotations
 
 import bpy
+
+from .mapcollection import select_new
 from bpy.props import EnumProperty, IntProperty
 from mathutils import Matrix, Quaternion, Vector
 
@@ -192,7 +194,7 @@ class HL_OT_add_placed_character(bpy.types.Operator):
         obj = make_placed_character(context, self.character, context.scene.cursor.location.copy(), coll)
         for o in context.selected_objects:
             o.select_set(False)
-        obj.select_set(True)
+        select_new(context, obj)
         context.view_layer.objects.active = obj
         if not context.scene.hammerless.model_previews:
             self.report({"INFO"}, "Placed (model previews are off: Settings turns them on)")

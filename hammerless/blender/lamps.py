@@ -6,6 +6,8 @@ from __future__ import annotations
 import math
 
 import bpy
+
+from .mapcollection import select_new
 from mathutils import Matrix
 
 LAMP_OF = {"light": "POINT", "light_spot": "SPOT", "light_environment": "SUN", "hl_area_light": "AREA"}
@@ -48,7 +50,7 @@ def add_lamp(context, kind: str) -> bpy.types.Object:
         obj.rotation_euler = (math.radians(40), 0.0, math.radians(30))     # (pitch -50, as the old Sun entity)
     for o in context.selected_objects:
         o.select_set(False)
-    obj.select_set(True)
+    select_new(context, obj)
     context.view_layer.objects.active = obj
     return obj
 

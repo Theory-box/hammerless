@@ -2,7 +2,10 @@
 import sys
 from pathlib import Path
 import bpy
-from bpy_restrict_state import RestrictBlend
+try:
+    from bpy_restrict_state import RestrictBlend
+except ModuleNotFoundError:           # (Blender 5: the module is private)
+    from _bpy_restrict_state import RestrictBlend
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import hammerless

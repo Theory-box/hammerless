@@ -5,6 +5,8 @@ import os
 
 from .entitycontext import entity_object, selected_entities
 import bpy
+
+from .mapcollection import select_new
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 from mathutils import Vector
 
@@ -640,18 +642,30 @@ def export_finish(prep) -> tuple[str | None, str | None, Report]:
         rep2.warnings.append("The .blend isn't saved: the build goes to a temporary folder Blender deletes on quit "
                              "(the next build after a restart compiles everything again). Save the .blend first")
     # (the light compiler's copies of the game's models sit in "<map>.hlvrad_models\models\<folder>\<model>.dx90.vtx"
-    # under the build folder: past Windows' 260 characters they can't be written, and Valve's vrad lights the map)
+    # under the build folder: past Windows' 260 characters they can't be written, and the lighting fails)
     if len(path) + len(prep.map_name) + 110 > 259:
         rep2.warnings.append(f"The build folder '{os.path.dirname(path)}' is deep: files the light compiler needs "
-                             "would pass Windows' 260-character path limit (then Valve's vrad lights the map). Save "
+                             "would pass Windows' 260-character path limit (the lighting then fails). Save "
                              "the .blend in a shorter folder, use a shorter Map Name, or set Settings > Game & "
                              "Folders > Work Folder to a short path such as C:\\hammerless")
-    try:
-        path.encode("mbcs", "strict")
-    except (UnicodeEncodeError, LookupError):
-        rep2.warnings.append(f"The build folder '{os.path.dirname(path)}' has characters the map compilers can't "
-                             "read; if the compile fails, save the .blend in a folder with plain (English) "
-                             "letters or set Settings > Game & Folders > Work Folder")
+    # (the map compilers read paths in Windows' own code page: a folder, a Windows user name or a game folder with
+    # letters outside it can't be opened by them. Each place they use is checked, and named)
+    import tempfile
+    places = (("build folder", os.path.dirname(path), "save the .blend in a folder with plain (English) letters, or "
+                                                      "set Settings > Game & Folders > Work Folder to one"),
+              ("Windows temporary folder", tempfile.gettempdir(),
+               "it is under your Windows user name: set the TEMP and TMP environment variables to a folder with "
+               "plain letters, such as C:\Temp"),
+              ("add-on's folder", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+               "it is under your Windows user name: Blender's Preferences > File Paths > Extensions, or a Blender "
+               "install with a portable folder, can put it elsewhere"),
+              ("game folder", root or "", "move the Steam library to a folder with plain letters"))
+    for what, place, advice in places:
+        try:
+            place.encode("mbcs", "strict")
+        except (UnicodeEncodeError, LookupError):
+            rep2.warnings.append(f"The {what} '{place}' has characters the map compilers can't read: the build may "
+                                 f"fail or lose prop shadows. To fix it: {advice}")
     import json
     imported = prep.imported
     s_map = prep.map_name
@@ -956,7 +970,7 @@ class HL_OT_add_entity(bpy.types.Operator):
         if self.classname == 'commentary_zombie_spawner':
             from .spawner_behaviour import attach
             attach(obj)
-        obj.select_set(True)
+        select_new(context, obj)
         context.view_layer.objects.active = obj
         return {"FINISHED"}
 
@@ -1174,7 +1188,7 @@ class HL_OT_add_preset(bpy.types.Operator):
                 parent_to(obj, root)
         for o in context.selected_objects:
             o.select_set(False)
-        root.select_set(True)
+        select_new(context, root)
         context.view_layer.objects.active = root
         self.report({"INFO"}, f"Added {preset.label}: select '{root.name}' to move it or change its settings")
         return {"FINISHED"}

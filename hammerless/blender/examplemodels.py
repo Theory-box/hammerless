@@ -32,7 +32,8 @@ def flat_material(name: str, rgb, mottle: float = 0.08):
     mat.diffuse_color = (*rgb, 1.0)
     mat.use_nodes = True
     nt = mat.node_tree
-    bsdf = nt.nodes.get("Principled BSDF")
+    # (by type: a Blender in another language with New Data translated names the node in that language)
+    bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
     tex = nt.nodes.new("ShaderNodeTexImage")
     tex.image = img
     tex.location = (-300, 300)
@@ -46,7 +47,7 @@ def make_cursor_ring(name: str, where, collection):
     has Emission, so the game shows it self-lit (full bright, glowing in the dark). Returns the Custom Model."""
     import bmesh
     mat = flat_material("Example Cursor Glow", (1.0, 0.08, 0.04), mottle=0.0)
-    bsdf = mat.node_tree.nodes.get("Principled BSDF") if mat.node_tree else None
+    bsdf = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None) if mat.node_tree else None
     if bsdf is not None and "Emission Color" in bsdf.inputs:
         bsdf.inputs["Emission Color"].default_value = (1.0, 0.08, 0.04, 1.0)
         bsdf.inputs["Emission Strength"].default_value = 2.0
