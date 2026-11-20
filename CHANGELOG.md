@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Your own content folders are found.** Folders added to the game's `gameinfo.txt` search paths (the usual way to keep custom textures and models apart, e.g. `left4dead2_custom`) are now read like the game reads them: an imported Hammer map shows its custom textures and props, and they appear in the material and model browsers and pass Build's checks. Before, only the game's packed files and loose files in `left4dead2` itself were seen. Editing `gameinfo.txt` is picked up without restarting Blender.
+
 ## 0.20.36 (test release, 2026-11-19)
 
 - **Logic: the Vector Math node no longer stops the script when a position is missing.** A graph that measured the distance to an entity that had gone (killed, removed, swapped for another) threw a script error every time it ran; the Sleepers example did so on every tick once a sleeper woke. A distance to nothing is "very far", a length or dot product 0.
