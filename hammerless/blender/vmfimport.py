@@ -363,8 +363,8 @@ def game_map_names(context) -> list[str]:
     if content is None:
         return []
     names = {f[5:-4] for f in content.files if f.startswith("maps/") and f.endswith(".bsp") and "/" not in f[5:]}
-    for sub in ("left4dead2", "update", "left4dead2_dlc1", "left4dead2_dlc2", "left4dead2_dlc3"):
-        folder = os.path.join(root, sub, "maps")       # (the campaigns' maps are loose files here)
+    for sub in content.folders:
+        folder = os.path.join(sub, "maps")             # (the campaigns' maps are loose files here)
         try:
             names |= {f[:-4] for f in os.listdir(folder) if f.lower().endswith(".bsp")}
         except OSError:

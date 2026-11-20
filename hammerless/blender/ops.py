@@ -36,7 +36,15 @@ def game_root(context) -> str | None:
 def game_content(root: str | None) -> GameContent | None:
     if not root:
         return None
-    if root not in _content_cache:
+    have = _content_cache.get(root)
+    if have is not None:                 # (gameinfo.txt edited - a content folder added: read the game again)
+        from ..core.vpk import gameinfo_path
+        try:
+            if os.path.getmtime(gameinfo_path(root)) != have.stamp:
+                have = None
+        except OSError:
+            pass
+    if have is None:
         _content_cache[root] = GameContent(root)
         from ..core.surfaces import load_surfaces
         from .props import set_surface_list

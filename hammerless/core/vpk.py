@@ -73,11 +73,13 @@ class VPK:
 
 
 def find_game_vpks(game_root: str) -> list[str]:
-    """All *_dir.vpk files one level under the L4D2 install. Later content
-    (update, dlc) is listed first so it overrides the base game."""
+    """All *_dir.vpk files one level under the L4D2 install, and in gameinfo.txt's search folders outside it.
+    Later content (update, dlc) is listed first so it overrides the base game."""
     found = []
-    for sub in sorted(os.listdir(game_root), reverse=True):
-        d = os.path.join(game_root, sub)
+    inside = [os.path.join(game_root, sub) for sub in sorted(os.listdir(game_root), reverse=True)]
+    seen = {os.path.normcase(os.path.abspath(d)) for d in inside}
+    outside = [d for d in search_folders(game_root) if os.path.normcase(os.path.abspath(d)) not in seen]
+    for d in outside + inside:
         if not os.path.isdir(d):
             continue
         for name in sorted(os.listdir(d)):
@@ -86,12 +88,59 @@ def find_game_vpks(game_root: str) -> list[str]:
     return found
 
 
+def gameinfo_path(game_root: str) -> str:
+    return os.path.join(game_root, "left4dead2", "gameinfo.txt")
+
+
+def search_folders(game_root: str) -> list[str]:
+    """The folders the game looks for files in, in its order: the "Game" lines of gameinfo.txt's SearchPaths (where
+    mappers add their own content folders, e.g. left4dead2_custom). Always holds the game's own left4dead2 folder;
+    only folders that exist."""
+    main = os.path.join(game_root, "left4dead2")
+    out: list[str] = []
+    try:
+        with open(gameinfo_path(game_root), encoding="latin-1") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    inside = False
+    for raw in lines:
+        line = raw.split("//")[0].strip()
+        if not inside:
+            inside = line.lower().strip('"') == "searchpaths"
+            continue
+        if line.startswith("}"):
+            break
+        parts = line.replace('"', " ").split(None, 1)
+        if len(parts) != 2 or "game" not in parts[0].lower().split("+"):
+            continue
+        path = parts[1].strip().replace("\\", "/")
+        low = path.lower()
+        if low.startswith("|gameinfo_path|"):
+            full = os.path.join(main, path[len("|gameinfo_path|"):])
+        elif low.startswith("|all_source_engine_paths|"):
+            full = os.path.join(game_root, path[len("|all_source_engine_paths|"):])
+        else:
+            full = path if os.path.isabs(path) else os.path.join(game_root, path)
+        full = os.path.normpath(full)
+        if full.endswith("*") or full.lower().endswith(".vpk"):     # (wildcards, single VPKs: not folders)
+            continue
+        if os.path.isdir(full) and os.path.normcase(full) not in [os.path.normcase(o) for o in out]:
+            out.append(full)
+    if os.path.normcase(os.path.normpath(main)) not in [os.path.normcase(o) for o in out]:
+        out.append(os.path.normpath(main))
+    return out
+
+
 def model_bounds(mdl_bytes: bytes) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     """Hull min/max from a studiohdr_t (.mdl) header."""
     # id, version, checksum, name[64], length, eyeposition, illumposition, hull_min, hull_max
     mins = struct.unpack_from("<3f", mdl_bytes, 104)
     maxs = struct.unpack_from("<3f", mdl_bytes, 116)
     return mins, maxs
+
+
+LOOSE_KINDS = ("materials", "models", "particles", "sound", "scripts", "maps")
 
 
 class GameContent:
@@ -108,11 +157,37 @@ class GameContent:
         self.files: set[str] = set()
         for v in self.vpks:
             self.files.update(v.entries)
+        # Loose files. The game's own folder is looked in file by file (Hammerless writes there while Blender runs);
+        # the other search folders of gameinfo.txt - a mapper's own content folders - are listed once, so their
+        # materials and models are found, browsable and, like in the game, win over the packed files.
+        self.folders = search_folders(game_root)
+        main = os.path.normcase(os.path.normpath(os.path.join(game_root, "left4dead2")))
+        self.loose_files: dict[str, str] = {}
+        for folder in self.folders:
+            if os.path.normcase(folder) == main:
+                continue
+            for sub in LOOSE_KINDS:
+                for base, _dirs, names in os.walk(os.path.join(folder, sub)):
+                    rel = os.path.relpath(base, folder).replace("\\", "/").lower()
+                    for name in names:
+                        self.loose_files.setdefault(f"{rel}/{name.lower()}", os.path.join(base, name))
+        self.files.update(self.loose_files)
+        try:
+            self.stamp = os.path.getmtime(gameinfo_path(game_root))
+        except OSError:
+            self.stamp = 0.0
 
     def read(self, path: str) -> bytes | None:
-        """A game file: from the VPKs, else a loose file in the game folder (Hammerless's own custom
-        models and materials are written there)."""
+        """A game file: a loose file in one of the mapper's content folders, else from the VPKs, else a loose file
+        in the game folder (Hammerless's own custom models and materials are written there)."""
         path = path.lower().replace("\\", "/")
+        own = self.loose_files.get(path)
+        if own:
+            try:
+                with open(own, "rb") as f:
+                    return f.read()
+            except OSError:
+                pass
         for v in self.vpks:
             if path in v.entries:
                 try:
@@ -126,8 +201,12 @@ class GameContent:
         return None
 
     def _loose(self, path: str) -> str | None:
-        full = os.path.join(self.game_root, "left4dead2", *path.split("/"))
-        return full if os.path.isfile(full) else None
+        """The loose file, looked for now in every search folder (so one added while Blender runs is found)."""
+        for folder in self.folders:
+            full = os.path.join(folder, *path.split("/"))
+            if os.path.isfile(full):
+                return full
+        return None
 
     def has_material(self, name: str) -> bool:
         """In the game's VPKs, or a loose file in its folder (Custom Models' materials, materials installed by hand:
