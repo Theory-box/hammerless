@@ -1445,6 +1445,21 @@ class HL_PT_debug(_Sub, bpy.types.Panel):
             col.label(text="Automated route walkthrough is Campaign-only.")
 
 
+class HL_PT_developer(_Sub, bpy.types.Panel):
+    bl_label = "Developer"
+    bl_parent_id = "HL_PT_settings"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Logs (to look at, or send with a bug report):")
+        col = layout.column(align=True)
+        col.operator("hammerless.open_logs", text="Failed Builds", icon="ERROR").place = "FAILED"
+        col.operator("hammerless.open_logs", text="Build Folder", icon="FILE_FOLDER").place = "BUILD"
+        col.operator("hammerless.open_logs", text="Save Build Log", icon="TEXT").place = "LOG"
+        col.operator("hammerless.open_logs", text="Freeze Log", icon="TIME").place = "FREEZE"
+        col.operator("hammerless.open_logs", text="Game Console Log", icon="CONSOLE").place = "GAME"
+
+
 class HL_PT_collection(bpy.types.Panel):
     bl_space_type = "PROPERTIES"
     bl_region_type = "WINDOW"
@@ -1528,7 +1543,7 @@ CLASSES = (HL_UL_keyvalues, HL_UL_outputs, HL_MT_weather,
            HL_PT_light_advanced,
            HL_PT_visibility, HL_PT_navmesh, HL_PT_view_nav, HL_PT_sound, HL_PT_control_volumes, HL_PT_director,
            HL_PT_logic,
-           HL_PT_settings, HL_PT_folders, HL_PT_compilers, HL_PT_scene, HL_PT_game, HL_PT_debug,
+           HL_PT_settings, HL_PT_folders, HL_PT_compilers, HL_PT_scene, HL_PT_game, HL_PT_debug, HL_PT_developer,
            HL_PT_collection, *CATEGORY_MENUS, HL_MT_add)
 
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A failed build keeps its logs.** When a build fails (the map's checks, the compile, an unexpected error), its logs are copied to `failed builds/<date time> <map name>/` in the build folder before the next build writes over them: the build log text, the compile's step-by-step log, the problem list, and the versions and settings it was built with. The newest 30 are kept. Cancelling a build keeps nothing.
+- **Settings > Developer.** Buttons that open where each log is: Failed Builds, the Build Folder, Save Build Log (writes the `hammerless_log` text to a file and shows it), the Freeze Log, and the game's console log.
 - **Compiler errors take you to the spot.** When a compiler error says where it is (for example `Overlay touching too many faces`, which names the overlay's material and position on its next line), the Problems list entry now carries that place: clicking it moves the 3D cursor and the view there and selects the entity standing at it (the overlay, a prop). The message also shows the compiler's detail line. Before, only errors naming a brush could be clicked.
 
 ## 0.20.38 (test release, 2026-11-20)

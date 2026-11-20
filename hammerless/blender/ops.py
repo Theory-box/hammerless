@@ -272,6 +272,56 @@ def write_log(lines: list[str], append: bool = False) -> None:
     txt.write("\n".join(lines) + "\n")
 
 
+FAILED_BUILDS = "failed builds"      # (in the build folder: one folder of logs per build that failed)
+FAILED_KEPT = 30
+
+
+def keep_failed_build(context, reason: str = "", base: str | None = None) -> str | None:
+    """A failed build's logs, copied to "<build folder>/failed builds/<date time> <map>/" before the next build
+    writes over them: the hammerless_log text, the compile's last-build log, the problem list and what it was built
+    with. Returns the folder, or None (never raises: it must not turn a failed build into a crash)."""
+    import platform
+    import shutil
+    import time
+    try:
+        s = context.scene.hammerless
+        name = s.map_name or "map"
+        top = os.path.join(work_dir(context), FAILED_BUILDS)
+        folder = os.path.join(top, f"{time.strftime('%Y-%m-%d %H.%M.%S')} {name}")
+        os.makedirs(folder, exist_ok=True)
+        txt = bpy.data.texts.get(LOG_TEXT)
+        with open(os.path.join(folder, "hammerless_log.txt"), "w", encoding="utf-8", errors="replace") as f:
+            f.write(txt.as_string() if txt else "(no hammerless_log text)\n")
+        base = base or os.path.join(work_dir(context), name)
+        last = base + ".lastbuild.log"
+        if os.path.exists(last):
+            shutil.copy2(last, os.path.join(folder, os.path.basename(last)))
+        try:
+            from .. import bl_info
+            version = ".".join(str(v) for v in bl_info.get("version", ()))
+        except Exception:
+            version = "?"
+        from . import vmfimport
+        lines = [f"Build failed: {reason}".rstrip(), f"When: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                 f"Hammerless {version}, Blender {bpy.app.version_string}, {platform.platform()}",
+                 f"Map: {name} ({'imported Hammer map' if vmfimport.imported(context.scene) else 'made in Blender'}), "
+                 f"{len(context.scene.objects)} objects, units per meter {s.units_per_meter:g}"]
+        for key in ("compile_preset", "game_mode", "map_tool", "vis_tool", "light_tool", "model_compiler", "nav_source",
+                    "auto_seal", "auto_detail", "lightmap_scale", "lightmap_scale_imported", "adaptive_lightmaps"):
+            if hasattr(s, key):
+                lines.append(f"{key}: {getattr(s, key)}")
+        lines += ["", "Problems:"] + [f"  {p.severity}: {p.name}" for p in s.problems]
+        with open(os.path.join(folder, "info.txt"), "w", encoding="utf-8", errors="replace") as f:
+            f.write("\n".join(lines) + "\n")
+        old = sorted(d for d in os.listdir(top) if os.path.isdir(os.path.join(top, d)))
+        for d in old[:-FAILED_KEPT]:
+            shutil.rmtree(os.path.join(top, d), ignore_errors=True)
+        return folder
+    except Exception as ex:
+        print("Hammerless: couldn't keep the failed build's logs:", ex)
+        return None
+
+
 def error_text(what: str, ex: BaseException) -> str:
     """An unexpected error as a message someone can act on and report: what stopped, the error, the kind of error
     and the add-on's file, line and function it came from; the whole traceback goes to the hammerless_log text and
@@ -1665,7 +1715,8 @@ class HL_OT_build(bpy.types.Operator):
         from .problems import store
         store(context, rep, new_build=True)
         surface_report(self, rep)
-        if not path:
+        if not path:                 # (the map's checks or its export found an error: nothing was compiled)
+            keep_failed_build(context, rep.errors[0] if rep.errors else "stopped before compiling")
             return {"CANCELLED"}
         if not root:
             self.report({"ERROR"}, "Left 4 Dead 2 not found: set Settings > Game & Folders > L4D2 Folder to the 'Left 4 Dead 2' folder (the one with left4dead2.exe)")
@@ -1803,6 +1854,7 @@ class HL_OT_build(bpy.types.Operator):
                 return self._export_done(context)
             except Exception as ex:
                 self.report({"ERROR"}, error_text("The build", ex))
+                keep_failed_build(context, f"{type(ex).__name__}: {ex}")
                 if self._timer is not None:
                     context.window_manager.event_timer_remove(self._timer)
                     self._timer = None
@@ -1839,6 +1891,7 @@ class HL_OT_build(bpy.types.Operator):
 
     def _cancel_build(self, context):
         """Esc or Cancel: everything this build runs stops (the compile, nav mesh and analysis, Cycles bake)."""
+        self._user_cancel = True
         self._job.cancel()
         self._stop_nav()
         self._stop_bake()
@@ -2162,6 +2215,11 @@ class HL_OT_build(bpy.types.Operator):
         BUILD_PROGRESS["vis"] = ""
 
     def _finish(self, context, result):
+        if (result == {"CANCELLED"} and not getattr(self, "_user_cancel", False)
+                and not (self._job is not None and self._job.cancelled)):
+            summ = self._job.summary if self._job is not None else None
+            keep_failed_build(context, summ.errors[0] if summ and summ.errors else "",
+                              self._job.base if self._job is not None else None)
         self._stop_nav()                         # (a failed or leaking build: nobody reads the nav any more)
         self._stop_bake()
         _BUILDING.discard(getattr(self, "_key", None))
@@ -2181,6 +2239,76 @@ class HL_OT_build(bpy.types.Operator):
         from .lightview import _redraw
         _redraw()
         return result
+
+
+class HL_OT_open_logs(bpy.types.Operator):
+    bl_idname = "hammerless.open_logs"
+    bl_label = "Open Logs"
+    bl_description = "Open where Hammerless keeps this log, in the file browser"
+    place: bpy.props.EnumProperty(items=[
+        ("BUILD", "Build Folder", "This map's build folder: <map>.lastbuild.log (the last build, step by step) and "
+                                  "<map>.buildhistory.log (every build)"),
+        ("FAILED", "Failed Builds", "The logs of builds that failed, one folder each, kept when the next build "
+                                    "writes over the others. Send a folder with a bug report"),
+        ("LOG", "Save Build Log", "Write the hammerless_log text (what Build printed: the map's checks, the compile, "
+                                  "errors) to a file in the build folder and show it"),
+        ("FREEZE", "Freeze Log", "hammerless_freeze.log: where Blender was each time it stopped responding for a "
+                                 "while with the add-on working"),
+        ("GAME", "Game Console Log", "console.log in the game's folder: what Left 4 Dead 2 printed (script errors, "
+                                     "the map loading)")])
+
+    @classmethod
+    def description(cls, context, properties):
+        return next((d for k, _n, d in cls.__annotations__["place"].keywords["items"] if k == properties.place),
+                    cls.bl_description)
+
+    def execute(self, context):
+        import subprocess
+        import sys
+        s = context.scene.hammerless
+        file = None
+        try:
+            if self.place == "BUILD":
+                folder = work_dir(context)
+            elif self.place == "FAILED":
+                folder = os.path.join(work_dir(context), FAILED_BUILDS)
+                os.makedirs(folder, exist_ok=True)
+            elif self.place == "LOG":
+                folder = work_dir(context)
+                txt = bpy.data.texts.get(LOG_TEXT)
+                if txt is None:
+                    self.report({"WARNING"}, "No build log yet: it is written by Build and Check the Map")
+                    return {"CANCELLED"}
+                file = os.path.join(folder, f"{s.map_name or 'map'}.hammerless_log.txt")
+                with open(file, "w", encoding="utf-8", errors="replace") as f:
+                    f.write(txt.as_string())
+            elif self.place == "FREEZE":
+                from .watchdog import LOG_PATH
+                folder, file = os.path.dirname(LOG_PATH), LOG_PATH
+                if not os.path.exists(file):
+                    self.report({"INFO"}, "No freeze log: Blender hasn't frozen with the add-on working")
+                    return {"CANCELLED"}
+            else:
+                root = game_root(context)
+                if not root:
+                    self.report({"WARNING"}, "Left 4 Dead 2 not found: set Settings > Game & Folders > L4D2 Folder")
+                    return {"CANCELLED"}
+                folder = cc.Tools(root).gamedir
+                file = os.path.join(folder, "console.log")
+                if not os.path.exists(file):
+                    file = None
+        except OSError as ex:
+            self.report({"ERROR"}, f"Couldn't open it: {ex}")
+            return {"CANCELLED"}
+        if bpy.app.background or os.environ.get("HAMMERLESS_NO_WINDOWS"):     # (tests: nothing to show)
+            self.report({"INFO"}, file or folder)
+            return {"FINISHED"}
+        if sys.platform == "win32" and file:
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(file)])
+        else:
+            bpy.ops.wm.path_open(filepath=folder)
+        self.report({"INFO"}, file or folder)
+        return {"FINISHED"}
 
 
 class HL_OT_start_fresh(bpy.types.Operator):
@@ -2630,7 +2758,7 @@ class HL_OT_reset_keyvalues(bpy.types.Operator):
 
 
 CLASSES = (HL_OT_pick_sky, HL_OT_pick_model, HL_OT_pick_material, HL_OT_refresh_previews, HL_OT_load_game_data, HL_OT_add_entity, HL_OT_set_entity_class, HL_OT_set_brush_entity, HL_OT_add_preset, HL_OT_validate,
-           HL_OT_export_vmf, HL_OT_build, HL_OT_cancel_build, HL_OT_start_fresh, HL_OT_launch, HL_OT_load_leak,
+           HL_OT_export_vmf, HL_OT_open_logs, HL_OT_build, HL_OT_cancel_build, HL_OT_start_fresh, HL_OT_launch, HL_OT_load_leak,
            HL_OT_kv_add, HL_OT_kv_remove, HL_OT_output_add, HL_OT_output_remove, HL_OT_reset_keyvalues, HL_OT_kv_set,
            HL_OT_control_enable, HL_OT_toggle_vis_preview)
 
