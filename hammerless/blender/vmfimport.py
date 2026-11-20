@@ -293,7 +293,46 @@ def _entity_object(e: Block, k: int, coll, upm: float):
 
 # ---------------------------------------------------------------- the operator
 
-class HL_OT_import_vmf(bpy.types.Operator, ImportHelper):
+class _HammerUnits:
+    """An import option: work in Hammer's own units."""
+    hammer_units: bpy.props.BoolProperty(
+        name="Hammer Units (1:1)", default=False,
+        description="One Blender unit is one Hammer unit, so sizes and positions read the same numbers as in Hammer "
+                    "(a 552 unit wall is 552, not 10.5 m). Sets this file's Units per Meter to 1, shows plain "
+                    "numbers instead of meters, and widens the grid and the view distance to fit. Off: real-world "
+                    "meters at the file's Units per Meter (52.49 by default)")
+
+    def apply_units(self, context) -> None:
+        if not self.hammer_units:
+            return
+        s = context.scene.hammerless
+        if imported(context.scene) and abs(s.units_per_meter - 1.0) > 1e-6:
+            self.report({"WARNING"}, "Hammer Units left off: this file already holds an imported map at "
+                                     f"{s.units_per_meter:g} units per meter. Use a new file")
+            return
+        hammer_units_view(context)
+
+
+def hammer_units_view(context) -> None:
+    """The file set up for 1 Blender unit = 1 Hammer unit: the scale, plain numbers, and every 3D view's grid and
+    view distance (a map is thousands of units across)."""
+    scene = context.scene
+    scene.hammerless.units_per_meter = 1.0
+    scene.unit_settings.system = "NONE"
+    scene.unit_settings.scale_length = 1.0
+    for screen in bpy.data.screens:
+        for area in screen.areas:
+            for space in area.spaces:
+                if space.type == "VIEW_3D":
+                    space.overlay.grid_scale = 64.0
+                    space.clip_start = max(space.clip_start, 4.0)
+                    space.clip_end = max(space.clip_end, 200000.0)
+    for cam in bpy.data.cameras:
+        cam.clip_start = max(cam.clip_start, 4.0)
+        cam.clip_end = max(cam.clip_end, 200000.0)
+
+
+class HL_OT_import_vmf(bpy.types.Operator, ImportHelper, _HammerUnits):
     bl_idname = "hammerless.import_vmf"
     bl_label = "Import Hammer Map"
     bl_description = ("Bring in a Hammer map (.vmf): its brushes, displacements, entities and props as objects. "
@@ -311,6 +350,7 @@ class HL_OT_import_vmf(bpy.types.Operator, ImportHelper):
         except OSError as ex:
             self.report({"ERROR"}, f"Couldn't read the map: {ex}")
             return {"CANCELLED"}
+        self.apply_units(context)
         try:
             n_brushes, n_ents = import_text(context, text, self.filepath)
         except Exception as ex:
@@ -377,7 +417,7 @@ def _search_maps(self, context, edit_text):
     return [n for n in game_map_names(context) if t in n.lower()]
 
 
-class HL_OT_import_game_map(bpy.types.Operator):
+class HL_OT_import_game_map(bpy.types.Operator, _HammerUnits):
     bl_idname = "hammerless.import_game_map"
     bl_label = "Import L4D2 Map"
     bl_description = ("Bring in one of the game's own maps (c1m1_hotel...) to look at or remix: decompiled from the "
@@ -397,10 +437,11 @@ class HL_OT_import_game_map(bpy.types.Operator):
         if not data:
             self.report({"ERROR"}, "Left 4 Dead 2 or the map wasn't found (Settings > Game & Folders)")
             return {"CANCELLED"}
+        self.apply_units(context)
         return import_bsp(self, context, data, self.map)
 
 
-class HL_OT_import_bsp(bpy.types.Operator, ImportHelper):
+class HL_OT_import_bsp(bpy.types.Operator, ImportHelper, _HammerUnits):
     bl_idname = "hammerless.import_bsp"
     bl_label = "Import Compiled Map"
     bl_description = "Bring in a compiled Left 4 Dead 2 map (.bsp), decompiled into brushes, terrain, entities and props"
@@ -415,6 +456,7 @@ class HL_OT_import_bsp(bpy.types.Operator, ImportHelper):
         except OSError as ex:
             self.report({"ERROR"}, f"Couldn't read the map: {ex}")
             return {"CANCELLED"}
+        self.apply_units(context)
         return import_bsp(self, context, data, os.path.splitext(os.path.basename(self.filepath))[0])
 
 
