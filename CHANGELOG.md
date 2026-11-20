@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.37 (test release, 2026-11-20)
 
 - **Your own content folders are found.** Folders added to the game's `gameinfo.txt` search paths (the usual way to keep custom textures and models apart, e.g. `left4dead2_custom`) are now read like the game reads them: an imported Hammer map shows its custom textures and props, and they appear in the material and model browsers and pass Build's checks. Before, only the game's packed files and loose files in `left4dead2` itself were seen. Editing `gameinfo.txt` is picked up without restarting Blender.
 
