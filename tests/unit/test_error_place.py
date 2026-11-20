@@ -48,5 +48,15 @@ class ErrorPlace(unittest.TestCase):
         self.assertEqual(s.problems, [])
 
 
+    def test_patch_name_too_long_says_what_to_do(self):
+        s = parse_log("Error: Generated env_cubemap patch name : maps/nh1_hoods_survival_hammerless_0/maps/"
+                      "nh1_hoods_survival_hammerless_0/street/ma_floor_concrete_sidewalk_a_blend_a_wet_wvt_patch"
+                      "_-784_-101_44 too long! (max = 128)")
+        self.assertEqual(len(s.errors), 1)
+        self.assertIn("Map Name is too long", s.errors[0])
+        self.assertIn("'street/ma_floor_concrete_sidewalk_a_blend_a_wet'", s.errors[0])
+        self.assertIn("at least 9 character", s.errors[0])
+
+
 if __name__ == "__main__":
     unittest.main()

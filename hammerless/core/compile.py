@@ -460,8 +460,25 @@ class LogSummary:
     problems: list = field(default_factory=list)
 
 
+def _patch_name_too_long(line: str) -> str:
+    """vbsp names the copies it makes of a material "maps/<map name>/<material>_wvt_patch" (a blend material on a
+    plain brush) and "maps/<map name>/<that>_<x>_<y>_<z>" (its reflections): the map's name can be in it twice, and
+    the whole name must stay under 128 characters."""
+    m = re.search(r"patch name\s*:\s*(\S+)\s+too long", line, re.I)
+    name = m.group(1) if m else ""
+    material = re.sub(r"^(?:maps/[^/]+/)+", "", name)
+    material = re.sub(r"(_wvt_patch)?(_-?\d+_-?\d+_-?\d+)?$", "", material)
+    over = len(name) - 127
+    return ("The Map Name is too long for material '" + (material or "?") + "': the compiler's copy of it is named "
+            f"with the map's name in front ({'twice here, ' if name.lower().count('maps/') > 1 else ''}"
+            f"{len(name)} characters, the limit is 127). "
+            + (f"Shorten the Map Name by at least {-(-over // max(1, name.lower().count('maps/')))} character(s)"
+               if over > 0 else "Use a shorter Map Name") + " (Map panel), then build again")
+
+
 ERROR_PATTERNS = [
     (re.compile(r"\*+\s*leaked\s*\*+", re.I), "Map leaks: there's a hole to the void. Import the leak line to find it."),
+    (re.compile(r"patch name\s*:.*too long", re.I), _patch_name_too_long),
     (re.compile(r"MAX_MAP_\w+", re.I), None),
     (re.compile(r"^\s*Error[: ]", re.I), None),
     (re.compile(r"plane with no normal", re.I), None),
@@ -561,6 +578,8 @@ def parse_log(text: str, vmf_path: str | None = None) -> LogSummary:
                     s.errors.append(msg or line.strip())
                     break
                 message, point = error_place(lines, i)
+                if callable(msg):
+                    msg = msg(line)
                 s.errors.append(msg or message)
                 if point is not None and not msg:
                     from .mapcheck import Problem
