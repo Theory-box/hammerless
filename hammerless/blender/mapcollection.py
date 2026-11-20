@@ -55,7 +55,26 @@ def map_objects(scene) -> set:
     whole scene's when there's no map collection."""
     coll = map_collection(scene)
     objs = coll.all_objects if coll is not None else scene.objects
-    return {o.name for o in objs}
+    names = {o.name for o in objs}
+    return names & _ONLY[0] if _ONLY[0] is not None else names
+
+
+_ONLY: list = [None]
+
+
+class only_objects:
+    """While open, the map is these objects alone (Export VMF > Selected): map_objects leaves the rest out, as if
+    they were outside the map collection."""
+    def __init__(self, names):
+        self.names = set(names)
+
+    def __enter__(self):
+        _ONLY[0] = self.names
+        return self
+
+    def __exit__(self, *exc):
+        _ONLY[0] = None
+        return False
 
 
 def in_map(obj, names: set) -> bool:

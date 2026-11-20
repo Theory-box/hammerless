@@ -571,6 +571,67 @@ def export_vmf(op, context, defer_scripts: bool = False) -> tuple[str | None, st
     return out
 
 
+def selection_family(context) -> set:
+    """The selected objects' names with what belongs to them: everything parented under them, and - for a part of
+    an imported brush entity - the entity it is a part of."""
+    names = set()
+    for obj in context.selected_objects:
+        names.add(obj.name)
+        names.update(c.name for c in obj.children_recursive)
+        p = obj.parent
+        while p is not None and p.get("hl_vmf_kind") == "entity":
+            names.add(p.name)
+            p = p.parent
+    return names
+
+
+def export_selected(op, context) -> tuple[str | None, Report]:
+    """The selected objects alone as <map>_selected.vmf in the build folder, to open or paste into another map in
+    Hammer. Only what they are: nothing a whole map needs is added, the map's own file and the game aren't touched."""
+    from ..core.build import piece_vmf
+    from ..core.vmf import VMFWriter
+    from . import vmfimport
+    from .extract import fill_triangles, write_textures
+    from .mapcollection import only_objects
+    s = context.scene.hammerless
+    rep = Report()
+    names = selection_family(context)
+    if not names:
+        rep.errors.append("Nothing is selected")
+        return None, rep
+    root = game_root(context)
+    gamedir = os.path.join(root, "left4dead2") if root else None
+    content = game_content(root)
+    base = None
+    with only_objects(names):
+        ir, mats = extract_scene(context, rep, gamedir, content, defer_textures=True)
+        if not rep.errors and vmfimport.imported(context.scene):
+            writer = VMFWriter()
+            doc, world, ents = vmfimport.rebuild(context, writer, mats, rep)
+            base = (doc, world, ents, writer)
+    if rep.errors:
+        return None, rep
+    write_textures(mats.texture_writes, rep)
+    fill_triangles(ir)
+    text, rep2 = piece_vmf(ir, base)
+    rep2.errors[:0] = rep.errors
+    if text is None:
+        return None, rep2
+    try:
+        path = os.path.join(work_dir(context), f"{s.map_name or 'map'}_selected.vmf")
+        with open(path, "w", encoding="latin-1" if base is not None else "utf-8", errors="replace") as f:
+            f.write(text)
+    except OSError as ex:
+        rep2.errors.append(f"Can't write the file ({ex}): set Settings > Game & Folders > Work Folder to a folder you "
+                           "can write to")
+        return None, rep2
+    if any(e.classname.startswith("prop_") and (e.keyvalues.get("model") or "").startswith("models/hammerless/")
+           for e in ir.entities):
+        rep2.warnings.append("The selection has Custom Models: their model files are made by Build, so build the "
+                             "map once before opening this file in Hammer")
+    return path, rep2
+
+
 def asset_print(rep, root: str, map_name: str, tops=("materials", "models")) -> str:
     """cc.asset_fingerprint of the map's exported files: the one export_finish made (on its thread), else now."""
     made = getattr(rep, "asset_prints", None) or {}
@@ -1235,8 +1296,28 @@ class HL_OT_export_vmf(bpy.types.Operator):
     bl_label = "Export VMF"
     bl_description = ("Write the map as a Hammer .vmf file without compiling it (to open in Valve's Hammer "
                       "editor). Build does this for you")
+    selected: bpy.props.BoolProperty(name="Selected Only", default=False, options={"SKIP_SAVE"})
+
+    @classmethod
+    def description(cls, context, properties):
+        if properties.selected:
+            return ("Write only the selected objects as <map name>_selected.vmf, to open or paste into another map "
+                    "in Hammer. Just those brushes, props and entities: no sky box, sun, Director or spawns are "
+                    "added, and the map's own file isn't touched")
+        return cls.bl_description
 
     def execute(self, context):
+        if self.selected:
+            path, rep = export_selected(self, context)
+            for line in rep.errors:
+                self.report({"ERROR"}, line)
+            if not path:
+                return {"CANCELLED"}
+            for line in rep.warnings:
+                self.report({"WARNING"}, line)
+            n_solids, n_ents = getattr(rep, "piece", (0, 0))
+            self.report({"INFO"}, f"Exported the selection ({n_solids} brushes, {n_ents} entities): {path}")
+            return {"FINISHED"}
         path, _root, rep = export_vmf(self, context)
         surface_report(self, rep)
         if path:

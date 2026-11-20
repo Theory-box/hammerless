@@ -543,6 +543,63 @@ def tag_light_layers(entities) -> int:
     return n
 
 
+def piece_vmf(ir: MapIR, base=None) -> tuple[str | None, Report]:
+    """Part of a map as VMF text, to open or paste into another map in Hammer: only what ir holds (and, of an
+    imported map, the blocks base kept). Nothing a whole map needs is added or checked: no seal, sun, Director,
+    spawns or helper entities. base: as build_vmf's."""
+    report = Report()
+    if base is not None:
+        doc, world, base_entities, w = base
+    else:
+        base_entities = []
+        w = VMFWriter()
+        world = Block("world")
+        world.kv("id", w.new_id()).kv("mapversion", 1).kv("classname", "worldspawn")
+    detail = [b for b in ir.brushes if b.detail == "DETAIL"]
+    for b in ir.brushes:
+        if b.detail != "DETAIL":
+            world.add(w.solid(b))
+    n_patches = 0
+    for t in ir.terrains:
+        try:
+            patches = build_patches(t)
+        except ValueError as ex:
+            report.errors.append(f"Terrain '{t.source}': {ex}")
+            return None, report
+        for brush, disp in patches:
+            world.add(w.solid(brush, {0: disp}))
+            n_patches += 1
+    entities = [e for e in ir.entities if e.classname not in PSEUDO_ENTITIES]
+    for e in entities:
+        if e.classname in ("light", "light_spot") and not any(
+                e.keyvalues.get(k, "").strip() for k in ATTENUATION_KEYS):
+            e.keyvalues = {**e.keyvalues, "_constant_attn": "0", "_linear_attn": "0", "_quadratic_attn": "1"}
+    entities = [zombie_ladder_entity(e, report) if e.classname == "func_ladder" else e for e in entities]
+    entities = [mover_entity(e, report) if e.classname == "func_movelinear" else e for e in entities]
+    ent_blocks = [w.entity(e, [w.solid(b) for b in e.brushes]) for e in entities]
+    if detail:
+        ent_blocks.append(w.entity(Entity("func_detail"), [w.solid(b) for b in detail]))
+    kept = [e for e in base_entities if e is not None]
+    from .overlays import resolve as resolve_overlays
+    try:
+        resolve_overlays(world, kept + ent_blocks, w, report)
+    except ValueError as exc:
+        report.errors.append(str(exc))
+        return None, report
+    n_solids = len(world.blocks("solid")) + sum(len(e.blocks("solid")) for e in kept + ent_blocks)
+    n_ents = len(kept) + len(ent_blocks)
+    if not n_solids and not n_ents:
+        report.errors.append("Nothing in the selection is part of the map (brushes, terrain, props, entities, lights)")
+        return None, report
+    report.piece = (n_solids, n_ents)
+    if base is not None:
+        from .vmfimport import write_document
+        text = write_document(doc, world, base_entities, ent_blocks)
+    else:
+        text = w.document(world, ent_blocks)
+    return text, report
+
+
 def build_vmf(ir: MapIR, content=None, base=None) -> tuple[str | None, Report]:
     """The map as VMF text. base: an imported map (core/vmfimport): (document, world block, entity blocks,
     writer): it is written back as it was, with what ir adds (the scene's own objects) after it; the map

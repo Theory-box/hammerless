@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.20.38 (test release, 2026-11-20)
+
+- **Export VMF: All or Selected.** Settings > Game & Folders now has two buttons. All writes the whole map as before. Selected writes only the selected objects to `<map name>_selected.vmf` in the build folder, to open or paste into another map in Hammer: just those brushes, terrain, props, entities and lights. Nothing a whole map needs is added (no sky box, sun, Director, spawns or helper entities), logic graphs aren't compiled into it, and the map's own file and the game aren't touched. In an imported map the selected brushes are written as they were imported, with your edits; selecting one part of a brush entity brings the entity with just that part.
+
 ## 0.20.37 (test release, 2026-11-20)
 
 - **Your own content folders are found.** Folders added to the game's `gameinfo.txt` search paths (the usual way to keep custom textures and models apart, e.g. `left4dead2_custom`) are now read like the game reads them: an imported Hammer map shows its custom textures and props, and they appear in the material and model browsers and pass Build's checks. Before, only the game's packed files and loose files in `left4dead2` itself were seen. Editing `gameinfo.txt` is picked up without restarting Blender.

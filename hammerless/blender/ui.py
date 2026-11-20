@@ -1364,7 +1364,10 @@ class HL_PT_folders(_Sub, bpy.types.Panel):
         col = layout.column(align=True)
         col.operator("hammerless.load_game_data", icon="FILE_REFRESH")
         col.operator("hammerless.refresh_previews", icon="SHADING_TEXTURE")
-        col.operator("hammerless.export_vmf", icon="EXPORT")
+        row = col.row(align=True)
+        row.label(text="Export VMF", icon="EXPORT")
+        row.operator("hammerless.export_vmf", text="All").selected = False
+        row.operator("hammerless.export_vmf", text="Selected").selected = True
         layout.separator()
         layout.operator("hammerless.start_fresh", text="Start Fresh (delete this map's build)", icon="TRASH")
 
