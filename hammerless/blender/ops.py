@@ -304,11 +304,16 @@ def keep_failed_build(context, reason: str = "", base: str | None = None) -> str
         last = base + ".lastbuild.log"
         if os.path.exists(last):
             shutil.copy2(last, os.path.join(folder, os.path.basename(last)))
-        try:
-            from .. import bl_info
-            version = ".".join(str(v) for v in bl_info.get("version", ()))
-        except Exception:
-            version = "?"
+        version = "?"
+        try:              # (installed as an extension the package has no bl_info: the manifest has the version)
+            manifest = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "blender_manifest.toml")
+            with open(manifest, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("version"):
+                        version = line.split("=", 1)[1].strip().strip('"')
+                        break
+        except (OSError, IndexError):
+            pass
         from . import vmfimport
         lines = [f"Build failed: {reason}".rstrip(), f"When: {time.strftime('%Y-%m-%d %H:%M:%S')}",
                  f"Hammerless {version}, Blender {bpy.app.version_string}, {platform.platform()}",
