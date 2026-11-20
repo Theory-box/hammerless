@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Compiler errors take you to the spot.** When a compiler error says where it is (for example `Overlay touching too many faces`, which names the overlay's material and position on its next line), the Problems list entry now carries that place: clicking it moves the 3D cursor and the view there and selects the entity standing at it (the overlay, a prop). The message also shows the compiler's detail line. Before, only errors naming a brush could be clicked.
+
 ## 0.20.38 (test release, 2026-11-20)
 
 - **Export VMF: All or Selected.** Settings > Game & Folders now has two buttons. All writes the whole map as before. Selected writes only the selected objects to `<map name>_selected.vmf` in the build folder, to open or paste into another map in Hammer: just those brushes, terrain, props, entities and lights. Nothing a whole map needs is added (no sky box, sun, Director, spawns or helper entities), logic graphs aren't compiled into it, and the map's own file and the game aren't touched. In an imported map the selected brushes are written as they were imported, with your edits; selecting one part of a brush entity brings the entity with just that part.

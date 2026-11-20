@@ -46,6 +46,12 @@ def store(context, rep, new_build: bool = False) -> None:
         if loc is not None:
             item.location = Vector(loc) / scale
             item.has_location = True
+            if not item.source:      # (a place only: the entity standing there, if one does - an overlay, a prop)
+                at = Vector(loc) / scale
+                near = min((((o.matrix_world.translation - at).length, o.name) for o in context.scene.objects
+                            if o.type in ("EMPTY", "LIGHT") or o.hammerless.role == "ENTITY"), default=None)
+                if near and near[0] <= 2.0 / scale:
+                    item.source = near[1]
     s.problems_checked = True
     set_problem_index(s, -1)      # no jump on refill
     _redraw(context)

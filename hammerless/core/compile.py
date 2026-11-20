@@ -514,16 +514,57 @@ def failure_reason(log: list[str]) -> str:
     return reason + (": " + " | ".join(reversed(tail)) if tail else "")
 
 
+_NUM = r"(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)"
+_SEP = r"[\s,]+"
+# A place in the map, as the compilers print one: "at 12.0 -40.5 96.0", "origin: 1 2 3", "(1 2 3)", "(1, 2, 3)"
+_PLACE = re.compile(r"(?:\b(?:at|near|origin|position|pos|point|center|centre)\b[\s:=(\[]*" + _NUM + _SEP + _NUM + _SEP
+                    + _NUM + r"|[(\[]\s*" + _NUM + _SEP + _NUM + _SEP + _NUM + r"\s*[)\]])", re.I)
+
+
+def error_place(lines: list[str], i: int) -> tuple[str, tuple | None]:
+    """A compiler error with where it is, when the compiler said: (message, position in map units or None). The
+    position is read from the error's line, else from the line after it (the compilers often print the place on
+    the next one: "Overlay <material> at x y z"), which then joins the message."""
+    import math
+    message = lines[i].strip()
+
+    def place(text):
+        m = _PLACE.search(text)
+        if not m:
+            return None
+        try:
+            p = tuple(float(v) for v in m.groups() if v is not None)
+        except ValueError:
+            return None
+        return p if len(p) == 3 and all(math.isfinite(v) and abs(v) < 131072 for v in p) else None
+    point = place(message)
+    if point is None and i + 1 < len(lines):
+        after = lines[i + 1].strip()
+        if after and not after.startswith(("!!", "====")) and not any(p.search(after) for p, _ in ERROR_PATTERNS):
+            point = place(after)
+            if point is not None:
+                message += ": " + after
+    return message, point
+
+
 def parse_log(text: str, vmf_path: str | None = None) -> LogSummary:
     s = LogSummary()
-    for line in text.splitlines():
+    lines = text.splitlines()
+    placed = []
+    for i, line in enumerate(lines):
         if 'bad surface extents' in line.lower():
             continue  # multiline diagnostic handled below, including Valve's unprefixed error
         for pat, msg in ERROR_PATTERNS:
             if pat.search(line):
                 if "leaked" in pat.pattern:
                     s.leaked = True
-                s.errors.append(msg or line.strip())
+                    s.errors.append(msg or line.strip())
+                    break
+                message, point = error_place(lines, i)
+                s.errors.append(msg or message)
+                if point is not None and not msg:
+                    from .mapcheck import Problem
+                    placed.append(Problem("ERROR", message, "", point))
                 break
         else:
             if any(p.search(line) for p in WARNING_PATTERNS):
@@ -531,6 +572,7 @@ def parse_log(text: str, vmf_path: str | None = None) -> LogSummary:
     from .compilerdiagnostics import surface_errors
     s.problems = surface_errors(text, vmf_path)
     s.errors.extend(p.message for p in s.problems)
+    s.problems += list({p.message: p for p in placed}.values())
     s.errors = list(dict.fromkeys(s.errors))
     s.warnings = list(dict.fromkeys(s.warnings))
     return s
@@ -1427,6 +1469,8 @@ class CompileJob:
                 if self.failed and not self.summary.errors and not self.summary.leaked:
                     self.summary.errors = [failure_reason(self.log)]
                 self.summary.errors = name_brushes(self.summary.errors, self.vmf)
+                for p in self.summary.problems:           # (the same naming: a problem is matched to its error)
+                    p.message = name_brushes([p.message], self.vmf)[0]
                 self.summary.warnings = name_brushes(self.summary.warnings, self.vmf)
                 try:                     # (kept on disk: what the last build did and why, e.g. a full compile)
                     with open(self.base + ".lastbuild.log", "w", encoding="utf-8", errors="replace") as f:
