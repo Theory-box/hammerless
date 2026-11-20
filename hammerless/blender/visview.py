@@ -25,8 +25,8 @@ _handlers = []
 
 
 def _base(context) -> str:
-    from .ops import work_dir
-    return os.path.join(work_dir(context), context.scene.hammerless.map_name)
+    from .ops import build_dir, work_dir
+    return os.path.join(build_dir(context), context.scene.hammerless.map_name)
 
 
 def _sources(context) -> dict:

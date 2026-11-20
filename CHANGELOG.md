@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Quiet until used.** In a Blender file that doesn't use the add-on, it now does nothing you can see: the Sky view (Environment > Show in Viewport) is off by default, so no skybox appears in every new file and the game's files aren't read at startup. Turn it on in a map file as before; a file where you never changed it now opens with it off.
+- **No build folder until something is built.** Looking at the Hammerless panels or views in a saved file no longer creates `hammerless_build` beside it; Build, Export and bakes make it when they write.
 - **"patch name too long" says what to do.** The compiler names its copies of some materials with the map's name in front, sometimes twice, and the whole name has a 127 character limit. The error now names the material and says by how many characters to shorten the Map Name.
 
 ## 0.20.39 (test release, 2026-11-20)

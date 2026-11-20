@@ -148,8 +148,8 @@ def _shader():
 
 
 def bsp_path(context) -> str:
-    from .ops import work_dir
-    return os.path.join(work_dir(context), f"{context.scene.hammerless.map_name}.bsp")
+    from .ops import build_dir, work_dir
+    return os.path.join(build_dir(context), f"{context.scene.hammerless.map_name}.bsp")
 
 
 def shown() -> bool:
@@ -380,7 +380,7 @@ class HL_OT_lightmap_delete(bpy.types.Operator):
 
     def execute(self, context):
         from ..core import compile as cc
-        from .ops import game_root, work_dir
+        from .ops import game_root, build_dir, work_dir
         s = context.scene.hammerless
         base = os.path.join(work_dir(context), s.map_name)
         if cc.compile_running(base + ".vmf"):
@@ -412,7 +412,7 @@ def bake_status(context) -> tuple[str, str]:
     """("BUSY" | "NONE" | "UNLIT" | "READY", message) for this map's last build. Checked at most
     twice a second: the panel redraws on every mouse move and this reads files."""
     from ..core import compile as cc
-    from .ops import work_dir
+    from .ops import build_dir, work_dir
     s = context.scene.hammerless
     key = (s.map_name, s.output_dir, bpy.data.filepath)
     now = time.monotonic()

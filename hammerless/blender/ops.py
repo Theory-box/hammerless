@@ -254,11 +254,19 @@ def _start_nav_analysis(mesh, vmf_path: str, bsp_path: str, root: str) -> dict:
     return box
 
 
-def work_dir(context) -> str:
+def build_dir(context) -> str:
+    """Where this map's build goes. Only the path: for code that looks (panels, views), which must not make the
+    folder in a file that never builds. work_dir makes it."""
     s = context.scene.hammerless
     d = bpy.path.abspath(s.output_dir or "//hammerless_build")
     if d.startswith("//") or not os.path.isabs(d):  # unsaved .blend
         d = os.path.join(bpy.app.tempdir or os.path.expanduser("~"), "hammerless_build")
+    return d
+
+
+def work_dir(context) -> str:
+    """The build folder, made if it isn't there: for code about to write into it."""
+    d = build_dir(context)
     os.makedirs(d, exist_ok=True)
     return d
 

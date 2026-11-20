@@ -1032,7 +1032,7 @@ class HL_SceneSettings(bpy.types.PropertyGroup):
     sky_choice: EnumProperty(name="Sky", items=_sky_choice_items, get=_sky_choice_get, set=_sky_choice_set,
                              description="The map's sky: every skybox in Left 4 Dead 2, or Custom to type a name")
     sky_custom: BoolProperty(default=False, options={"HIDDEN"})
-    show_sky: BoolProperty(name="Show in Viewport", default=True, update=_sky_view,
+    show_sky: BoolProperty(name="Show in Viewport", default=False, update=_sky_view,
                            description="Draw the sky behind the scene in the 3D viewport (any shading mode; "
                                        "nothing is added to the scene)")
     sky_view_exposure: FloatProperty(name="Brightness", default=0.0, soft_min=-4.0, soft_max=4.0, step=10,

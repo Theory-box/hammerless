@@ -30,8 +30,8 @@ _view = {"path": None, "mtime": None, "data": None, "props": None, "content": No
 
 
 def bsp_path(context) -> str:
-    from .ops import work_dir
-    return os.path.join(work_dir(context), f"{context.scene.hammerless.map_name}.bsp")
+    from .ops import build_dir, work_dir
+    return os.path.join(build_dir(context), f"{context.scene.hammerless.map_name}.bsp")
 
 
 def view_load(context, path: str) -> str | None:

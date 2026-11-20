@@ -289,9 +289,9 @@ def _built_ago(context) -> str:
     import time
     key = (context.scene.hammerless.map_name, int(time.monotonic() // 3))
     if _built_cache["key"] != key:
-        from .ops import work_dir
+        from .ops import build_dir, work_dir
         try:
-            t = os.path.getmtime(os.path.join(work_dir(context), context.scene.hammerless.map_name + ".bsp"))
+            t = os.path.getmtime(os.path.join(build_dir(context), context.scene.hammerless.map_name + ".bsp"))
         except (OSError, AttributeError):
             t = None
         _built_cache.update(key=key, t=t)
@@ -319,8 +319,8 @@ def _leaked(context) -> bool:
         return _leak_cache["value"]
     value = False
     try:
-        from .ops import work_dir
-        base = os.path.join(work_dir(context), context.scene.hammerless.map_name)
+        from .ops import build_dir, work_dir
+        base = os.path.join(build_dir(context), context.scene.hammerless.map_name)
         value = os.path.getmtime(base + ".lin") >= os.path.getmtime(base + ".vmf") - 1.0
     except OSError:
         pass
