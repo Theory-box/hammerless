@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.39 (test release, 2026-11-20)
 
 - **A failed build keeps its logs.** When a build fails (the map's checks, the compile, an unexpected error), its logs are copied to `failed builds/<date time> <map name>/` in the build folder before the next build writes over them: the build log text, the compile's step-by-step log, the problem list, and the versions and settings it was built with. The newest 30 are kept. Cancelling a build keeps nothing.
 - **Settings > Developer.** Buttons that open where each log is: Failed Builds, the Build Folder, Save Build Log (writes the `hammerless_log` text to a file and shows it), the Freeze Log, and the game's console log.
