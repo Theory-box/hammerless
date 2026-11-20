@@ -58,5 +58,15 @@ class ErrorPlace(unittest.TestCase):
         self.assertIn("at least 9 character", s.errors[0])
 
 
+    def test_gpu_failure_says_what_to_do(self):
+        s = parse_log("Error: GPU: vkQueueWaitIdle(queue) failed (-4)\n")
+        self.assertEqual(len(s.errors), 1)
+        self.assertIn("stopped answering", s.errors[0])
+        self.assertIn("vkQueueWaitIdle(queue) failed (-4)", s.errors[0])
+        self.assertIn("Exact Lighting", s.errors[0])
+        s = parse_log("Error: GPU: vkAllocateMemory(dev, &ai, NULL, &b.mem) failed (-2): out of memory\n")
+        self.assertIn("couldn't finish", s.errors[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -50,7 +50,9 @@ static VkQueue queue;
 static VkCommandBuffer cmd;
 static VkDeviceSize scratch_align = 256;
 
-#define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) Error("GPU: %s failed (%d)", #x, (int)r_); } while (0)
+#define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) Error("GPU: %s failed (%d)%s", #x, (int)r_, \
+    r_ == VK_ERROR_DEVICE_LOST ? ": the graphics card stopped answering (its driver was reset)" : \
+    r_ == VK_ERROR_OUT_OF_DEVICE_MEMORY || r_ == VK_ERROR_OUT_OF_HOST_MEMORY ? ": out of memory" : ""); } while (0)
 
 /* ------------------------------------------------------------------ buffers */
 typedef struct { VkBuffer buf; VkDeviceMemory mem; VkDeviceAddress addr; void *map; VkDeviceSize size; } gbuf_t;
@@ -609,6 +611,41 @@ static int JobSize(double per_item, double budget, int most) {
     return k < 64 ? 64 : k > most ? most : (int)k;
 }
 
+/* The budgets above are an RTX 4090's. A card many times slower would pass Windows' 2 seconds in one such job and
+ * be reset (the device is lost: every call after fails). So a job is sent in parts sized to this card: the part
+ * of a job sent at once starts small and follows the time the parts take (aiming at JOB_SECONDS, never over a whole
+ * job). The answers don't depend on the parts: a point's work is its own (and gi.comp's turn of the ray set, which
+ * comes from a point's place in its job, is told the place: Place). HL_GPU_JOBPART=<fraction> fixes the part. */
+#define JOB_SECONDS 0.25
+static double job_part = 1.0 / 32, job_fixed = -1;
+/* how much of what is left to send now (job: the whole job's size; whole: the part must be a multiple of it,
+ * unless it is the last) */
+static int Part(int left, int job, int whole) {
+    if (job_fixed < 0) {
+        const char *e = getenv("HL_GPU_JOBPART");
+        job_fixed = e && atof(e) > 0 ? atof(e) : 0;
+    }
+    double part = job_fixed > 0 ? job_fixed : job_part;
+    int k = (int)(job * (part > 1 ? 1 : part));
+    if (k < 64) k = 64;
+    if (k > job) k = job;
+    if (whole > 1) k -= k % whole;
+    if (k < whole) k = whole;
+    return k < left ? k : left;
+}
+/* a part took this long: the next ones' size */
+static void Paced(double started, int k, int job) {
+    double sec = Seconds() - started;
+    double sent = (double)k / (double)(job > 0 ? job : 1);          /* (the part of a job this was) */
+    if (sec < 1e-4) sec = 1e-4;
+    double want = sent * JOB_SECONDS / sec;                         /* (the part that would take JOB_SECONDS) */
+    if (want > job_part * 2) want = job_part * 2;                   /* (grow by doubling, shrink at once) */
+    if (sent >= job_part * 0.5 || want < job_part) job_part = want; /* (a short last part says nothing about growing) */
+    if (job_part > 1) job_part = 1;
+    if (job_part < 1.0 / 65536) job_part = 1.0 / 65536;
+    if (getenv("HLGPUDBG")) printf("gpu part %d of job %d: %.3f s, next part %.4f\n", k, job, sec, job_part);
+}
+
 static gbuf_t in_buf, out_buf;
 
 /* the lights of one style slot at groups of points: per point 16 floats (4 normals' colours, then "lit") */
@@ -622,8 +659,9 @@ void GPU_Gather(const gpugroup_t *groups, int n, int slot, float *out) {
     size_t per = slot < 0 ? (size_t)GPU_GroupFloats() : 64;     /* (out floats a group: slot -1, every slot's and layer's) */
     pc.skymapW = w, pc.skymapH = h, pc.haveSkyMap = HaveSkyMap(), pc.sunExtent = g_SunAngularExtent;
     int chunk = JobSize(4.0 * (pc.nskyFull + 30 + nlights), RAY_BUDGET, GATHER_CHUNK);
-    for (int at = 0; at < n; at += chunk) {
-        int k = n - at < chunk ? n - at : chunk;
+    for (int at = 0, k; at < n; at += k) {
+        k = Part(n - at, chunk, 1);
+        double started = Seconds();
         Ensure(&in_buf, sizeof(gpugroup_t) * (size_t)k);
         Ensure(&out_buf, per * 4 * (size_t)k);
         memcpy(in_buf.map, groups + at, sizeof(gpugroup_t) * (size_t)k);
@@ -633,6 +671,7 @@ void GPU_Gather(const gpugroup_t *groups, int n, int slot, float *out) {
         VkDeviceSize sizes[1] = {per * 4 * (VkDeviceSize)k};
         RunOut(&prog_gather, &shadow_tlas, bufs, &pc, sizeof(pc), 4 * (uint32_t)k, outs, sizes, 1);
         memcpy(out + per * (size_t)at, out_buf.map, per * 4 * (size_t)k);
+        Paced(started, k, chunk);
     }
 }
 
@@ -674,8 +713,9 @@ void GPU_Ambient(const float *points, int n, const float skylight[4], float *out
     pc.haveSkyMap = HaveSkyMap(), pc.skymapW = w, pc.skymapH = h, pc.fix = g_bFixQuirks;
     memcpy(pc.skylight, skylight, 16);
     int chunk = JobSize(NUMVERTEXNORMALS, WALK_BUDGET, POINT_CHUNK);
-    for (int at = 0; at < n; at += chunk) {
-        int k = n - at < chunk ? n - at : chunk;
+    for (int at = 0, k; at < n; at += k) {
+        k = Part(n - at, chunk, 1);
+        double started = Seconds();
         Ensure(&in_buf, 12 * (size_t)k);
         Ensure(&out_buf, 72 * (size_t)k);
         memcpy(in_buf.map, points + 3 * (size_t)at, 12 * (size_t)k);
@@ -684,6 +724,7 @@ void GPU_Ambient(const float *points, int n, const float skylight[4], float *out
         WalkBuffers(bufs, &anorms);
         Run(&prog_ambient, &shadow_tlas, bufs, &pc, sizeof(pc), (uint32_t)k);
         memcpy(out + 18 * (size_t)at, out_buf.map, 72 * (size_t)k);
+        Paced(started, k, chunk);
     }
 }
 
@@ -725,12 +766,19 @@ void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *ou
     /* (out NULL, -live's change passes: only the layers' answers are wanted, and a point's turn of the ray set needn't
      * be a bake's (it comes from the point's place in its job), so the jobs can be bigger: fewer waits) */
     int chunk = JobSize(4.0 * rays, RAY_BUDGET, out ? GATHER_CHUNK : 8 * GATHER_CHUNK);
-    for (int at = 0; at < n; at += chunk) {
-        int k = n - at < chunk ? n - at : chunk;
+    for (int at = 0, k; at < n; at += k) {
+        int place = at % chunk;                       /* (where this part starts in its job) */
+        k = Part(n - at < chunk - place ? n - at : chunk - place, chunk, 1);
+        double started = Seconds();
         Ensure(&in_buf, sizeof(gpugroup_t) * (size_t)k);
         Ensure(&out_buf, 64 * 4 * (size_t)k);
         Ensure(&gi_layerout, 4 * 4 * 12 * (size_t)k * (pc.nlayers ? pc.nlayers : 1));
         memcpy(in_buf.map, groups + at, sizeof(gpugroup_t) * (size_t)k);
+        if (place) {                                  /* (pad[0]: gi.comp's pad0, a group's place in its job + 1) */
+            gpugroup_t *sent = (gpugroup_t *)in_buf.map;
+            for (int i = 0; i < k; i++)
+                if (sent[i].pad[0] <= 0) sent[i].pad[0] = place + i + 1;
+        }
         pc.ngroups = k;
         gbuf_t *bufs[10] = {NULL, &in_buf, &gi_tris, &walkbufs[4], &lightdata, &out_buf, &walkbufs[0], &gi_layers,
                             &gi_layerofs, &gi_layerout};
@@ -740,6 +788,7 @@ void GPU_GIGather(const gpugroup_t *groups, int n, int rays, int seed, float *ou
         if (out) memcpy(out + 64 * (size_t)at, out_buf.map, 64 * 4 * (size_t)k);
         if (pc.nlayers)
             memcpy(layerout + 48 * (size_t)pc.nlayers * at, gi_layerout.map, 192 * (size_t)pc.nlayers * k);
+        Paced(started, k, chunk);
     }
 }
 
@@ -756,8 +805,9 @@ void GPU_ClearPairs(const int *pairs, int n, uint32_t *bits) {
     struct { int n; } pc;
     int chunk = JobSize(1.0, RAY_BUDGET, 1 << 23) & ~31;       /* (whole words of bits a job) */
     memset(bits, 0, 4 * (((size_t)n + 31) / 32));
-    for (int at = 0; at < n; at += chunk) {
-        int k = n - at < chunk ? n - at : chunk;
+    for (int at = 0, k; at < n; at += k) {
+        k = Part(n - at, chunk, 32);
+        double started = Seconds();
         Ensure(&in_buf, 8 * (size_t)k);
         Ensure(&out_buf, 4 * (((size_t)k + 31) / 32));
         memcpy(in_buf.map, pairs + 2 * (size_t)at, 8 * (size_t)k);
@@ -766,14 +816,16 @@ void GPU_ClearPairs(const int *pairs, int n, uint32_t *bits) {
         gbuf_t *bufs[4] = {NULL, &patch_ends, &in_buf, &out_buf};
         Run(&prog_vis, &shadow_tlas, bufs, &pc, sizeof(pc), (uint32_t)k);
         memcpy(bits + at / 32, out_buf.map, 4 * (((size_t)k + 31) / 32));
+        Paced(started, k, chunk);
     }
 }
 
 void GPU_PropIndirect(const float *points, int n, float *out) {
     struct { int npoints, nskyFull, fast, fix; } pc = {0, (int)(g_flSkySampleScale * 162.0f), g_bFast, g_bFixQuirks};
     int chunk = JobSize(pc.nskyFull, WALK_BUDGET, POINT_CHUNK);
-    for (int at = 0; at < n; at += chunk) {
-        int k = n - at < chunk ? n - at : chunk;
+    for (int at = 0, k; at < n; at += k) {
+        k = Part(n - at, chunk, 1);
+        double started = Seconds();
         Ensure(&in_buf, 28 * (size_t)k);
         Ensure(&out_buf, 12 * (size_t)k);
         memcpy(in_buf.map, points + 7 * (size_t)at, 28 * (size_t)k);
@@ -782,5 +834,6 @@ void GPU_PropIndirect(const float *points, int n, float *out) {
         WalkBuffers(bufs, &skydirs);
         Run(&prog_propind, &shadow_tlas, bufs, &pc, sizeof(pc), (uint32_t)k);
         memcpy(out + 3 * (size_t)at, out_buf.map, 12 * (size_t)k);
+        Paced(started, k, chunk);
     }
 }

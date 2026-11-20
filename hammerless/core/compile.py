@@ -476,7 +476,20 @@ def _patch_name_too_long(line: str) -> str:
                if over > 0 else "Use a shorter Map Name") + " (Map panel), then build again")
 
 
+def _gpu_failed(line: str) -> str:
+    """A Vulkan call of ours failed in the middle of the work (hlvrad's "GPU: <call> failed (<code>)")."""
+    detail = line.strip()
+    detail = detail[len("Error:"):].strip() if detail.lower().startswith("error:") else detail
+    lost = "(-4)" in detail
+    return ("The graphics card " + ("stopped answering during the light bake (Windows reset its driver)"
+                                    if lost else "couldn't finish the light bake")
+            + f" [{detail}]. Build again: if it keeps happening, update the graphics driver, or turn on Lighting > "
+              "Advanced > Exact Lighting (match vrad), which bakes on the processor (slower). Please report it with "
+              "the folder from Settings > Developer > Failed Builds and the name of your graphics card")
+
+
 ERROR_PATTERNS = [
+    (re.compile(r"\bGPU: .* failed \(-?\d+\)", re.I), _gpu_failed),
     (re.compile(r"\*+\s*leaked\s*\*+", re.I), "Map leaks: there's a hole to the void. Import the leak line to find it."),
     (re.compile(r"patch name\s*:.*too long", re.I), _patch_name_too_long),
     (re.compile(r"MAX_MAP_\w+", re.I), None),
