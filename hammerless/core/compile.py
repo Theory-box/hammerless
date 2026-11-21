@@ -222,6 +222,19 @@ def use_hlvrad(opts: "CompileOptions") -> bool:
     return opts.light_tool == "HAMMERLESS" and opts.rad != "SKIP" and not hlvrad_unsupported(opts)
 
 
+def content_dir_args(tools: "Tools") -> list[str]:
+    """-contentdir for each of gameinfo.txt's search folders but the game's own (a mapper's custom content): hlvrad
+    reads materials and textures there for texture shadows. Without them a see-through texture kept in such a
+    folder isn't found, and its prop or brush casts a solid shadow."""
+    from .vpk import search_folders
+    main = os.path.normcase(os.path.normpath(tools.gamedir))
+    out = []
+    for folder in search_folders(tools.root):
+        if os.path.normcase(os.path.normpath(folder)) != main:
+            out += ["-contentdir", folder]
+    return out
+
+
 def prepare_hlvrad(tools: "Tools", base: str) -> str:
     """Copy the map's prop models out of the game for hlvrad (prop shadows and detail props); returns the folder."""
     from .radprep import export_prop_models
@@ -878,6 +891,7 @@ class CompileJob:
                         # (the last build's lighting where nothing is baked now: copied when the build starts, see
                         # _keep_last_light)
                         sky += ["-keeplight", self.base + ".keep.bsp"]
+                sky += content_dir_args(tools)
                 remix = [HLVRAD] + vrad + opts.hlvrad_args() + game + sky + [
                     "-remix", self.base + ".hllayers", "-modeldir", self.base + ".hlvrad_models", self.base]
                 if not opts.light_exact:

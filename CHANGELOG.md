@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.20.40 (test release, 2026-11-20)
 
+- **Custom see-through textures no longer cast solid shadows.** The light compiler read materials and textures only from the game's packed files and the `left4dead2` folder, so a prop or brush whose alpha-tested or translucent material lives in your own content folder (one added to `gameinfo.txt`) was treated as solid: decal planes on a window prop threw dark blocks on the wall, tree cards cast solid shadows. The build now tells the light compiler those folders (also for live lighting).
 - **Light bake on slower graphics cards.** The GPU light compiler sent its work in jobs sized for a very fast card; on a card many times slower one job could run past the two seconds Windows allows, the driver was reset and the bake stopped with `GPU: vkQueueWaitIdle(queue) failed (-4)`. Jobs are now sent in parts sized to the card: they start small and follow the time they take. The lighting is the same to the byte whatever the parts (checked against the previous build, and with the parts forced tiny).
 - A GPU failure during the bake now says what happened and what to try, in place of the raw Vulkan call.
 - **Quiet until used.** In a Blender file that doesn't use the add-on, it now does nothing you can see: the Sky view (Environment > Show in Viewport) is off by default, so no skybox appears in every new file and the game's files aren't read at startup. Turn it on in a map file as before; a file where you never changed it now opens with it off.

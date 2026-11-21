@@ -122,6 +122,10 @@ int main(int argc, char **argv) {
         else if (!_stricmp(a, "-both")) g_bHDR = 1, g_bLDR = 1;
         else if (!_stricmp(a, "-game") && i + 1 < argc) g_gamedir = argv[++i];
         else if (!_stricmp(a, "-modeldir") && i + 1 < argc) g_modeldir = argv[++i];
+        else if (!_stricmp(a, "-contentdir") && i + 1 < argc) {      /* (loose game files: a custom content folder) */
+            i++;
+            if (g_numcontentdirs < MAX_CONTENT_DIRS) g_contentdirs[g_numcontentdirs++] = argv[i];
+        }
         else if (!_stricmp(a, "-lights") && i + 1 < argc) designer_lights = argv[++i];
         else if (!_stricmp(a, "-bounce") && i + 1 < argc) g_numbounce = atoi(argv[++i]);
         else if (!_stricmp(a, "-threads") && i + 1 < argc) g_numthreads = atoi(argv[++i]);

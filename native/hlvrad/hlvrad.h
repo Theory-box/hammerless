@@ -202,6 +202,10 @@ void DispUVToSurfNormal(const dispsurf_t *d, float u, float v, vec3_t out);
 
 /* staticprops.c */
 extern const char *g_modeldir, *g_gamedir;
+#define MAX_CONTENT_DIRS 32
+extern const char *g_contentdirs[MAX_CONTENT_DIRS];      /* (-contentdir: the mapper's own content folders,
+                                                            gameinfo.txt's other search paths, in its order) */
+extern int g_numcontentdirs;
 void AddStaticPropsForRayTrace(void);
 
 /* embree.c (-embree) */

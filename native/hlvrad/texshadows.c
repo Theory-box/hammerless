@@ -234,7 +234,8 @@ static unsigned char *ReadFileAt(const char *path, int *len) {
     return d;
 }
 
-/* a game file: from -modeldir (when the build put it there), the game's VPKs, else loose in the game folder */
+/* a game file: from -modeldir (when the build put it there), loose in a -contentdir folder (the mapper's own
+ * content: it wins over the game's, as in the game), the game's VPKs, else loose in the game folder */
 static unsigned char *ReadGameFile(const char *relpath, int *len) {
     char rel[1100], path[2300];
     snprintf(rel, sizeof(rel), "%s", relpath);
@@ -243,6 +244,10 @@ static unsigned char *ReadGameFile(const char *relpath, int *len) {
     unsigned char *d;
     if (g_modeldir) {
         snprintf(path, sizeof(path), "%s/%s", g_modeldir, rel);
+        if ((d = ReadFileAt(path, len))) return d;
+    }
+    for (int i = 0; i < g_numcontentdirs; i++) {
+        snprintf(path, sizeof(path), "%s/%s", g_contentdirs[i], rel);
         if ((d = ReadFileAt(path, len))) return d;
     }
     if ((d = ReadVPKFile(rel, len))) return d;

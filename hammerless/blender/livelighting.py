@@ -277,7 +277,7 @@ def start(context) -> str | None:
     args += ["-threads", str(max(2, (os.cpu_count() or 4) // 2)), "-game", tools.gamedir]
     if os.path.exists(base + ".hlsky"):
         args += ["-skymap", base + ".hlsky"]
-    args += ["-modeldir", base + ".hlvrad_models", base]
+    args += cc.content_dir_args(tools) + ["-modeldir", base + ".hlvrad_models", base]
     try:
         ents, unfollowed = _match(scene_lights(context), _bsp_lights(raw))
     except Exception as ex:

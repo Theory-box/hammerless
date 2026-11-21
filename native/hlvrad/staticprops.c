@@ -14,6 +14,8 @@
 #define PROP_RECORD 72
 
 const char *g_modeldir;
+const char *g_contentdirs[MAX_CONTENT_DIRS];
+int g_numcontentdirs;
 int g_bTextureShadows;
 const char *g_gamedir;
 unsigned char *ReadModelFile(const char *model, const char *ext, int *len);
